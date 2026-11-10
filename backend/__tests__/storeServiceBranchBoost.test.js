@@ -2138,6 +2138,85 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(created.procucevVendorCount).toBe(1);
       storeService.selectVendorsPerCategory.mockRestore();
     });
+
+    test('syncBuyerAccountsFromDB handles storage-off, matched activeId, unmatched activeId, and error branches', async () => {
+      // 1. pool.hasStorage() = false
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(false);
+      storeService.buyerAccounts = [{ id: 'ba-mem' }];
+      const resNoStorage = await storeService.syncBuyerAccountsFromDB(100);
+      expect(resNoStorage).toEqual([{ id: 'ba-mem' }]);
+
+      // 2. pool.hasStorage() = true, res with matching activeId
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const acc1 = { id: 'ba-1', organizationName: 'Org 1' };
+      const acc2 = { id: 'ba-2', organizationName: 'Org 2' };
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce({
+        accounts: [acc1, acc2],
+        activeId: 'ba-2',
+      });
+      const resMatched = await storeService.syncBuyerAccountsFromDB(200);
+      expect(resMatched).toEqual([acc1, acc2]);
+      expect(storeService.activeBuyerAccount).toEqual(acc2);
+
+      // 3. activeId does not match any account
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce({
+        accounts: [acc1, acc2],
+        activeId: 'ba-unknown',
+      });
+      await storeService.syncBuyerAccountsFromDB(200);
+      expect(storeService.activeBuyerAccount).toEqual(acc1);
+
+      // 4. activeId is null, and activeBuyerAccount is null
+      storeService.activeBuyerAccount = null;
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce({
+        accounts: [acc2],
+        activeId: null,
+      });
+      await storeService.syncBuyerAccountsFromDB(200);
+      expect(storeService.activeBuyerAccount).toEqual(acc2);
+
+      // 5. error thrown from domainQueries
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockRejectedValueOnce(new Error('D1 timeout'));
+      const resErr = await storeService.syncBuyerAccountsFromDB(500);
+      expect(resErr).toBeDefined();
+    });
+
+    test('getBootstrapData D1 fallback hydrations for buyerAccounts, evaluations, and auditLogs', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      storeService.buyerAccounts = [];
+      storeService.activeBuyerAccount = null;
+      storeService.evaluations = [];
+      storeService.auditLogs = [];
+
+      const acc = { id: 'ba-boot-1', organizationName: 'Boot Org' };
+      const ev = { id: 'ev-1', rfqNumber: 'RFQ1' };
+      const al = { id: 'al-1', action: 'downloaded RFQ specification' };
+
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce({
+        accounts: [acc],
+        activeId: 'ba-boot-1',
+      });
+      jest.spyOn(domainQueries, 'getEvaluationsFromDB').mockResolvedValueOnce([ev]);
+      jest.spyOn(domainQueries, 'getAuditLogsFromDB').mockResolvedValueOnce([al]);
+
+      const data = await storeService.getBootstrapData();
+      expect(data.buyerAccounts).toEqual([acc]);
+      expect(data.evaluations).toEqual([ev]);
+      expect(data.auditLogs).toEqual([al]);
+
+      // Error catch branches when fetching DB bootstrap collections
+      storeService.buyerAccounts = [];
+      storeService.evaluations = [];
+      storeService.auditLogs = [];
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockRejectedValueOnce(new Error('ba fail'));
+      jest.spyOn(domainQueries, 'getEvaluationsFromDB').mockRejectedValueOnce(new Error('ev fail'));
+      jest.spyOn(domainQueries, 'getAuditLogsFromDB').mockRejectedValueOnce(new Error('al fail'));
+
+      const dataErr = await storeService.getBootstrapData();
+      expect(dataErr.buyerAccounts).toEqual([]);
+      expect(dataErr.evaluations).toEqual([]);
+      expect(dataErr.auditLogs).toEqual([]);
+    });
   });
 });
 

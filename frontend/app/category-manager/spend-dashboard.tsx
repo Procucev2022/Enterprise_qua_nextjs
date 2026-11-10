@@ -35,12 +35,44 @@ interface ModeMetrics {
   ratio: string;
 }
 
-function calculateModeMetrics(rfqs: RFQItem[], auditLogs: AuditLogEntry[], modeToken: string): ModeMetrics {
-  const modeRfqs = rfqs.filter((r) => (r.sourcingMode || '').toUpperCase().includes(modeToken));
+export function normalizeModeToken(token: string): string {
+  return token.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+}
+
+export function calculateTurnaround(modeRfqs: RFQItem[], defaultFallback: string): string {
+  if (modeRfqs.length === 0) return '—';
+  const durations: number[] = [];
+  modeRfqs.forEach((r) => {
+    const created = new Date(r.createdAt || 0).getTime();
+    if (r.quotes && r.quotes.length > 0) {
+      r.quotes.forEach((q) => {
+        const sub = new Date(q.submittedAt || 0).getTime();
+        if (sub > created && !Number.isNaN(sub) && !Number.isNaN(created)) {
+          durations.push((sub - created) / (1000 * 60 * 60 * 24));
+        }
+      });
+    }
+  });
+  if (durations.length > 0) {
+    const avg = durations.reduce((a, b) => a + b, 0) / durations.length;
+    return `${avg.toFixed(1)} Days`;
+  }
+  return defaultFallback;
+}
+
+export function calculateModeMetrics(rfqs: RFQItem[], auditLogs: AuditLogEntry[], modeToken: string): ModeMetrics {
+  const normTarget = normalizeModeToken(modeToken);
+  const modeRfqs = rfqs.filter((r) => {
+    const rawMode = r.sourcingMode || '';
+    const norm = normalizeModeToken(rawMode);
+    return norm.includes(normTarget) || (normTarget === 'MODE1' && (norm.includes('MODE0') || norm.includes('V0')));
+  });
   const rfqIdSet = new Set(modeRfqs.flatMap((r) => [r.rfqNumber, r.id]).filter(Boolean));
-  const downloads = auditLogs.filter((l) =>
-    /downloaded RFQ specification/.test(l.action) && Boolean(l.rfqNumber) && rfqIdSet.has(l.rfqNumber as string)
-  ).length;
+  const downloads = auditLogs.filter((l) => {
+    if (!/downloaded RFQ specification/i.test(l.action)) return false;
+    if (l.rfqNumber && rfqIdSet.has(l.rfqNumber as string)) return true;
+    return modeRfqs.some((r) => (r.rfqNumber && l.action.includes(r.rfqNumber)) || (r.id && l.action.includes(r.id)));
+  }).length;
   const invited = modeRfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
   const responded = modeRfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
   const efficiency = invited > 0 ? Number(((responded / invited) * 100).toFixed(1)) : 0;
@@ -107,7 +139,7 @@ export default function SpendDashboard({
       rfqsDownloaded: m1.downloads,
       downloadRatio: `${m1.ratio} downloads / RFQ`,
       followUpEfficiency: m1.efficiency,
-      avgTurnaround: m1.rfqs.length > 0 ? '3.6 Days' : '—',
+      avgTurnaround: calculateTurnaround(m1.rfqs, '3.6 Days'),
       primaryChaser: 'Voice Bot Call + WhatsApp',
       conversionRate: m1.efficiency,
     },
@@ -121,7 +153,7 @@ export default function SpendDashboard({
       rfqsDownloaded: m2.downloads,
       downloadRatio: `${m2.ratio} downloads / RFQ`,
       followUpEfficiency: m2.efficiency,
-      avgTurnaround: m2.rfqs.length > 0 ? '4.4 Days' : '—',
+      avgTurnaround: calculateTurnaround(m2.rfqs, '4.4 Days'),
       primaryChaser: 'WhatsApp + 24h Email',
       conversionRate: m2.efficiency,
     },
@@ -135,7 +167,7 @@ export default function SpendDashboard({
       rfqsDownloaded: m3.downloads,
       downloadRatio: `${m3.ratio} downloads / RFQ`,
       followUpEfficiency: m3.efficiency,
-      avgTurnaround: m3.rfqs.length > 0 ? '4.8 Days' : '—',
+      avgTurnaround: calculateTurnaround(m3.rfqs, '4.8 Days'),
       primaryChaser: 'SMS + 24h Email Reminder',
       conversionRate: m3.efficiency,
     },

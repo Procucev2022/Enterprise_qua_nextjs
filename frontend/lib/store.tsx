@@ -46,6 +46,7 @@ import { UI_STRINGS, formatString } from './uiStrings';
 import {
   createRFQ,
   fetchRFQList,
+  fetchAllRFQs,
   updateRFQ as updateRFQRequest,
   deleteRFQ as deleteRFQRequest,
   fetchVendorRfqCredits,
@@ -707,7 +708,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingRFQs(true);
     }
     try {
-      const result = await fetchRFQList({ limit: 500 });
+      const isCM = currentRole === 'category_manager' || currentRole === 'admin';
+      let result = isCM ? await fetchAllRFQs({ limit: 500 }) : await fetchRFQList({ limit: 500 });
+      if (!result.success && isCM) {
+        result = await fetchRFQList({ limit: 500 });
+      }
       if (!result.success) {
         console.error('Failed to load RFQs:', result.error);
         return;
@@ -905,16 +910,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const ensureVendors = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.vendors) {
-      return;
-    }
     return ensureBootstrapData(force);
   };
 
   const ensureVendorEvaluations = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.evaluations) {
-      return;
-    }
     return ensureBootstrapData(force);
   };
 

@@ -778,6 +778,18 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     const resBuyer = mockRes();
     await buyerAccountController.getBuyerAccounts({ query: { limit: '2' } }, resBuyer, next);
     expect(resBuyer.json).toHaveBeenCalled();
+
+    // buyerAccountController when buyerAccounts is empty and DB storage is available
+    const origAccounts = storeService.buyerAccounts;
+    storeService.buyerAccounts = [];
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValueOnce(true);
+    const syncSpy = jest.spyOn(storeService, 'syncBuyerAccountsFromDB').mockResolvedValueOnce([]);
+    const resBuyerSync = mockRes();
+    await buyerAccountController.getBuyerAccounts({ query: { limit: '50' } }, resBuyerSync, next);
+    expect(syncSpy).toHaveBeenCalledWith(50);
+    expect(resBuyerSync.json).toHaveBeenCalled();
+    storeService.buyerAccounts = origAccounts;
+
     const resBuyerInvalid = mockRes();
     await buyerAccountController.getBuyerAccounts({ query: { limit: 'abc' } }, resBuyerInvalid, next);
     expect(resBuyerInvalid.json).toHaveBeenCalled();
