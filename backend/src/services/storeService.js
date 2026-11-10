@@ -1092,7 +1092,10 @@ class StoreService {
           action: `Deleted buyer account for ${deletedAccount.organizationName || id}`,
         });
       }
-      return true;
+      return {
+        deleted: true,
+        activeAccount: this.activeBuyerAccount,
+      };
     } catch (error) {
       logger.error('Failed to durably delete buyer account and reconcile active account', error, 'STORE_SERVICE');
       const persistError = new Error('The buyer account could not be deleted from storage. Try again.');

@@ -1503,7 +1503,7 @@ describe('Store Service — remaining branch coverage', () => {
       expect(freshStore.activeBuyerAccount).toBe(deleted);
       releaseDelete();
 
-      await expect(deletionPromise).resolves.toBe(true);
+      await expect(deletionPromise).resolves.toEqual({ deleted: true, activeAccount });
       expect(freshStore.buyerAccounts).toEqual([activeAccount]);
       expect(freshStore.activeBuyerAccount).toBe(activeAccount);
       expect(freshStore.getAuditLogs().some((entry) => entry.action.includes('Deleted buyer account for Current Buyer'))).toBe(true);
@@ -1537,7 +1537,10 @@ describe('Store Service — remaining branch coverage', () => {
       const onlyAccount = { id: 'buyer-delete-local', organizationName: 'Local Buyer' };
       local.buyerAccounts.push(onlyAccount);
       local.activeBuyerAccount = onlyAccount;
-      await expect(local.deleteBuyerAccountDurably(onlyAccount.id)).resolves.toBe(true);
+      await expect(local.deleteBuyerAccountDurably(onlyAccount.id)).resolves.toEqual({
+        deleted: true,
+        activeAccount: null,
+      });
       expect(local.buyerAccounts).toEqual([]);
       expect(local.activeBuyerAccount).toBeNull();
     });

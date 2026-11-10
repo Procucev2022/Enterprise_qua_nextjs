@@ -228,12 +228,16 @@ async function deleteBuyerAccount(req, res, next) {
     const { id } = req.params;
     if (!await assertBuyerAccountAccess(req, res, id)) return;
     logger.info(`Deleting buyer account ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
-    const deleted = await storeService.deleteBuyerAccountDurably(id);
-    if (!deleted) {
+    const deletion = await storeService.deleteBuyerAccountDurably(id);
+    if (!deletion?.deleted) {
       logger.warn(`Buyer account not found for deletion: ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
-    res.json({ success: true, message: `Buyer account ${id} deleted successfully.` });
+    res.json({
+      success: true,
+      message: `Buyer account ${id} deleted successfully.`,
+      data: { activeAccount: deletion.activeAccount || null },
+    });
   } catch (err) {
     logger.error('Error deleting buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
     next(err);

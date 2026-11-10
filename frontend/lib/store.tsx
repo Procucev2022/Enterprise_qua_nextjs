@@ -210,7 +210,7 @@ interface AppContextType {
   checkBuyerPaymentLinkStatus: (linkId: string) => Promise<string | null>;
   addBuyerAccount: (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>) => BuyerAccount;
   updateBuyerAccount: (id: string, updates: Partial<BuyerAccount>) => void;
-  deleteBuyerAccount: (id: string) => void;
+  deleteBuyerAccount: (id: string) => Promise<boolean>;
   alignActiveBuyerAccount: (accountId: string) => void;
   importPublicBuyerDatabase: (accounts: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>[]) => number;
 
@@ -1181,29 +1181,64 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
   };
 
-  const deleteBuyerAccount = (id: string) => {
-    setBuyerAccounts((prev) => prev.filter((acc) => acc.id !== id));
-
-    fetch(`/api/buyer-accounts/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: authFetchHeaders(),
-    })
-      .then(async (res) => {
-        const json = await res.json().catch(() => null);
-        if (!res.ok || !json?.success) {
-          showToast(
-            'Delete Failed',
-            json?.error || 'Could not delete buyer account from backend.',
-            'warning'
-          );
-        }
-      })
-      .catch((err) => {
-        console.error('Failed to sync buyer account deletion to backend:', err);
+  const deleteBuyerAccount = async (id: string): Promise<boolean> => {
+    try {
+      const response = await fetch(`/api/buyer-accounts/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: authFetchHeaders(),
       });
+      const json = await response.json().catch((error: unknown) => {
+        logger.log('ERROR', 'Buyer account deletion response could not be parsed', {
+          error,
+          accountId: id,
+          status: response.status,
+        }, 'BUYER_ACCOUNT');
+        return null;
+      });
+      if (!response.ok || !json?.success) {
+        logApiResponseFailure('Buyer account deletion request failed', response, 'BUYER_ACCOUNT', {
+          accountId: id,
+          responseError: json?.error,
+        });
+        showToast(
+          'Delete Failed',
+          json?.error || 'The account was not confirmed as deleted. Refresh the buyer list and retry.',
+          'warning'
+        );
+        return false;
+      }
 
-    addAuditLog(`Deleted buyer account record ID ${id}`);
-    showToast('Account Removed', 'Buyer account removed from database.', 'info');
+      const activeAccount = json.data?.activeAccount && typeof json.data.activeAccount === 'object'
+        ? json.data.activeAccount as BuyerAccount
+        : null;
+      setBuyerAccounts((previous) => {
+        const remainingAccounts = previous.filter((account) => account.id !== id);
+        if (activeBuyerAccount?.id !== id || !activeAccount) return remainingAccounts;
+        const replacementIndex = remainingAccounts.findIndex((account) => account.id === activeAccount.id);
+        if (replacementIndex === -1) return [activeAccount, ...remainingAccounts];
+        return remainingAccounts.map((account) => account.id === activeAccount.id ? activeAccount : account);
+      });
+      if (activeBuyerAccount?.id === id) {
+        setActiveBuyerAccount(activeAccount);
+        setSessionCache('activeBuyerAccount', activeAccount);
+        loadedEntitiesRef.current.activeBuyerAccount = true;
+      }
+
+      addAuditLog(`Deleted buyer account record ID ${id}`);
+      showToast('Account Removed', 'Buyer account deleted from the database.', 'info');
+      return true;
+    } catch (error) {
+      logger.log('ERROR', 'Buyer account deletion request could not reach the backend', {
+        error,
+        accountId: id,
+      }, 'BUYER_ACCOUNT');
+      showToast(
+        'Delete Failed',
+        'Could not confirm the deletion with the server. Refresh the buyer list before retrying.',
+        'warning'
+      );
+      return false;
+    }
   };
 
   const alignActiveBuyerAccount = (accountId: string) => {

@@ -1247,11 +1247,14 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
 
     test('deleteBuyerAccount and setActiveAccount success paths', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-      jest.spyOn(storeService, 'deleteBuyerAccountDurably').mockResolvedValue(true);
+      jest.spyOn(storeService, 'deleteBuyerAccountDurably').mockResolvedValue({ deleted: true, activeAccount: mockBuyer });
       const reqDel = { user: adminUser, params: { id: 'buyer-test-1' } };
       const resDel = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await buyerAccountController.deleteBuyerAccount(reqDel, resDel, jest.fn());
-      expect(resDel.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      expect(resDel.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: { activeAccount: mockBuyer },
+      }));
 
       jest.spyOn(storeService, 'alignActiveBuyerAccountDurably').mockResolvedValue(mockBuyer);
       const reqActive = { user: adminUser, params: { id: 'buyer-test-1' } };

@@ -292,6 +292,14 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
       const isRfqEndpoint = typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url);
       const isVendorsEndpoint = typeof url === 'string' && /\/api\/vendors(\?|$)/.test(url);
+      const isBuyerAccountEndpoint = typeof url === 'string' && /^\/api\/buyer-accounts\/[^/?]+$/.test(url);
+      if (isBuyerAccountEndpoint && init?.method === 'DELETE') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { activeAccount: null } }),
+        });
+      }
       if (isVendorsEndpoint && init?.method === 'POST') {
         allocatedVendors += 1;
         const sent = JSON.parse(init.body || '{}');
@@ -657,6 +665,17 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // that route for these assertions to resolve.
     mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
       const match = typeof url === 'string' && url.match(/\/api\/buyer-accounts\/([^/]+)$/);
+      if (match && init?.method === 'DELETE') {
+        const existingActiveAccount = contextValue.buyerAccounts.find((account: BuyerAccount) => account.id === 'buyer-acc-1');
+        const activeAccount = existingActiveAccount
+          ? { ...existingActiveAccount, id: 'buyer-acc-promoted', organizationName: 'Promoted Buyer' }
+          : null;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { activeAccount } }),
+        });
+      }
       if (match && init?.method === 'PUT') {
         const id = match[1];
         const sent = JSON.parse(init.body || '{}');
@@ -718,10 +737,137 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     // 5. Delete Buyer Account (active account vs other)
-    act(() => {
-      contextValue.deleteBuyerAccount(newAcc.id);
+    await act(async () => {
+      expect(await contextValue.deleteBuyerAccount(newAcc.id)).toBe(true);
     });
     expect(contextValue.buyerAccounts.some((a: BuyerAccount) => a.id === newAcc.id)).toBe(false);
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-promoted');
+    expect(contextValue.buyerAccounts.some((account: BuyerAccount) => account.id === 'buyer-acc-promoted')).toBe(true);
+  });
+
+  it.each([
+    ['HTTP failure', { ok: false, status: 503, statusText: 'Service Unavailable', json: async () => ({ success: false, error: 'Database unavailable' }) }],
+    ['unconfirmed response', { ok: true, status: 200, statusText: 'OK', json: async () => ({ success: false, error: 'Deletion not confirmed' }) }],
+    ['malformed response', { ok: true, status: 200, statusText: 'OK', json: async () => { throw new SyntaxError('Invalid JSON'); } }],
+  ])('keeps buyer-account state when deletion returns a %s', async (_label, failureResponse) => {
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return null;
+    };
+    render(<AppProvider><Consumer /></AppProvider>);
+    await waitFor(() => expect(contextValue.dbConnected).toBe(true));
+    act(() => contextValue.alignActiveBuyerAccount('buyer-acc-1'));
+
+    const previousImplementation = mockFetch.getMockImplementation();
+    mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      if (typeof url === 'string' && url.endsWith('/buyer-acc-1') && init?.method === 'DELETE') {
+        return Promise.resolve(failureResponse);
+      }
+      return previousImplementation?.(url, init) ?? Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: {} }),
+      });
+    });
+
+    let deleted: boolean | undefined;
+    await act(async () => {
+      deleted = await contextValue.deleteBuyerAccount('buyer-acc-1');
+    });
+
+    expect(deleted).toBe(false);
+    expect(contextValue.buyerAccounts.some((account: BuyerAccount) => account.id === 'buyer-acc-1')).toBe(true);
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-1');
+    expect(logger.getLogs({ level: 'ERROR', category: 'BUYER_ACCOUNT' })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ message: 'Buyer account deletion request failed' })])
+    );
+  });
+
+  it('updates an existing active-account replacement after confirmed deletion', async () => {
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return null;
+    };
+    render(<AppProvider><Consumer /></AppProvider>);
+    await waitFor(() => expect(contextValue.dbConnected).toBe(true));
+    act(() => contextValue.alignActiveBuyerAccount('buyer-acc-1'));
+
+    const existingReplacement = contextValue.buyerAccounts.find((account: BuyerAccount) => account.id === 'buyer-acc-2');
+    const previousImplementation = mockFetch.getMockImplementation();
+    mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      if (typeof url === 'string' && url.endsWith('/buyer-acc-1') && init?.method === 'DELETE') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: { activeAccount: { ...existingReplacement, organizationName: 'Updated Active Buyer' } },
+          }),
+        });
+      }
+      return previousImplementation?.(url, init);
+    });
+
+    await act(async () => {
+      expect(await contextValue.deleteBuyerAccount('buyer-acc-1')).toBe(true);
+    });
+
+    expect(contextValue.buyerAccounts.some((account: BuyerAccount) => account.id === 'buyer-acc-1')).toBe(false);
+    expect(contextValue.buyerAccounts.find((account: BuyerAccount) => account.id === 'buyer-acc-2')?.organizationName)
+      .toBe('Updated Active Buyer');
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-2');
+  });
+
+  it('preserves the active buyer when a different account is deleted successfully', async () => {
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return null;
+    };
+    render(<AppProvider><Consumer /></AppProvider>);
+    await waitFor(() => expect(contextValue.dbConnected).toBe(true));
+    act(() => contextValue.alignActiveBuyerAccount('buyer-acc-1'));
+
+    await act(async () => {
+      expect(await contextValue.deleteBuyerAccount('buyer-acc-2')).toBe(true);
+    });
+
+    expect(contextValue.buyerAccounts.some((account: BuyerAccount) => account.id === 'buyer-acc-2')).toBe(false);
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-1');
+  });
+
+  it('logs network failures and preserves buyer-account state when deletion is unconfirmed', async () => {
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return null;
+    };
+    render(<AppProvider><Consumer /></AppProvider>);
+    await waitFor(() => expect(contextValue.dbConnected).toBe(true));
+    const previousImplementation = mockFetch.getMockImplementation();
+    mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      if (typeof url === 'string' && url.endsWith('/buyer-acc-1') && init?.method === 'DELETE') {
+        return Promise.reject(new Error('connection reset'));
+      }
+      return previousImplementation?.(url, init) ?? Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: {} }),
+      });
+    });
+
+    let deleted: boolean | undefined;
+    await act(async () => {
+      deleted = await contextValue.deleteBuyerAccount('buyer-acc-1');
+    });
+
+    expect(deleted).toBe(false);
+    expect(contextValue.buyerAccounts.some((account: BuyerAccount) => account.id === 'buyer-acc-1')).toBe(true);
+    expect(logger.getLogs({ level: 'ERROR', category: 'BUYER_ACCOUNT' })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ message: 'Buyer account deletion request could not reach the backend' })])
+    );
   });
 
   it('handles buyer vendors, matching, reminders, and profile completion with dual-stream category resolution', async () => {

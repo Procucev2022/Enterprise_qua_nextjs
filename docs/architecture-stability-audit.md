@@ -574,3 +574,9 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Database sink failures now generate a redacted, rate-limited fallback diagnostic. The diagnostic is appended to local `app.log`/`error.log` when disk logging is available and emitted to stdout; repeated failures are summarized in the next diagnostic.
 - Regression coverage exercises asynchronous and synchronous failure paths, redaction, local fallback persistence, and throttling.
 - Full workspace quality gate passed on 2026-11-10: backend 208 suites / 5,937 tests and frontend 149 suites / 3,778 tests; all 161 backend and 171 frontend executable files met every per-file 90% threshold. Build, typecheck, lint, schema parity, schema checker regressions, and schema-file verification passed. Live database migration was skipped by the quality pipeline.
+
+## Buyer account deletion UI and database coherence
+
+- The frontend previously removed a buyer account from local state and recorded a successful audit action before the DELETE request completed. HTTP failures left the stale browser state looking deleted, while network failures only wrote to the browser console.
+- The client now changes its account list only after the backend confirms the durable deletion. The API returns the active account selected by the deletion transaction, and the client updates its active-account cache when that deleted account was active. HTTP, malformed-response, and transport failures use the centralized frontend logger and preserve the existing account state.
+- Regression coverage verifies active-account replacement and state preservation for HTTP rejection, unsuccessful API responses, malformed JSON, and network failure. Focused frontend store and backend deletion/controller suites passed; the repository pre-commit hook enforces the full workspace gate.
