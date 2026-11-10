@@ -610,4 +610,10 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - PR and deployment workflows used floating `ubuntu-latest` images and Actions releases that emitted Node.js 20 deprecation notices in the latest successful PR run. The floating runner also makes environment changes arrive without a repository change.
 - Workflows now target `ubuntu-24.04`. Checkout, setup-node, artifact upload/download, and github-script use their Node.js 24 compatible major releases. Automatic package-manager cache detection is disabled in setup-node while explicit npm caching remains configured in the PR quality workflow.
-- The workflow definitions were reviewed for stale runner labels and duplicate setup-node options. The next PR run is the verification for GitHub-hosted workflow compatibility; deployment jobs remain dependent on their configured Cloudflare secrets and environments.
+- The workflow definitions were reviewed for stale runner labels and duplicate setup-node options. PR #416 run `42862072274` passed backend, frontend, and master quality jobs on commit `486d16fa`; the Gemini review and Copilot request workflows also completed successfully. Deployment jobs remain dependent on their configured Cloudflare secrets and environments.
+
+## Worker binding synchronization failure diagnostics
+
+- Worker startup, scheduled invocations, and fetch requests previously swallowed errors while enumerating Cloudflare bindings into `process.env`. A failed copy could silently leave D1 or provider configuration unavailable.
+- Each boundary now records a structured `WORKER_ENV` error through the centralized logger, including the operation and exception trace. If the logger itself fails, a safe structured stdout fallback records the operation and error classes without exposing rejected values. Requests continue through the existing Worker fallback after the diagnostic.
+- `worker.test.mjs` covers module, scheduled, and fetch binding failures, non-`Error` rejections, and the logger-failure fallback.

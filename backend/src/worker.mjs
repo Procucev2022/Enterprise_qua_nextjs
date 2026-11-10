@@ -8,6 +8,52 @@
 import { httpServerHandler } from 'cloudflare:node';
 import { env, waitUntil } from 'cloudflare:workers';
 
+const WORKER_ENV_LOG_CATEGORY = 'WORKER_ENV';
+const WORKER_ENV_LOG_MESSAGE = 'Failed to synchronize Cloudflare Worker bindings into process.env';
+const WORKER_ENV_OPERATIONS = Object.freeze({
+  MODULE_INITIALIZATION: 'worker_module_initialization',
+  FETCH: 'worker_fetch',
+  SCHEDULED: 'worker_scheduled',
+});
+
+async function logWorkerEnvironmentSyncFailure(operation, error) {
+  try {
+    const loggerModule = await import('./services/loggerService.js');
+    const logger = loggerModule.logger || loggerModule.default?.logger;
+    if (typeof logger?.error === 'function') {
+      const normalizedError = error instanceof Error
+        ? error
+        : new Error('Worker binding synchronization failed with a non-Error value');
+      logger.error(WORKER_ENV_LOG_MESSAGE, {
+        operation,
+        error: normalizedError,
+        ...(error instanceof Error ? {} : { errorType: typeof error }),
+      }, WORKER_ENV_LOG_CATEGORY);
+      return;
+    }
+  } catch (loggingError) {
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'ERROR',
+      category: WORKER_ENV_LOG_CATEGORY,
+      message: WORKER_ENV_LOG_MESSAGE,
+      operation,
+      errorName: error instanceof Error ? error.name : typeof error,
+      loggerErrorName: loggingError instanceof Error ? loggingError.name : typeof loggingError,
+    }));
+    return;
+  }
+
+  console.error(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'ERROR',
+    category: WORKER_ENV_LOG_CATEGORY,
+    message: WORKER_ENV_LOG_MESSAGE,
+    operation,
+    errorName: error instanceof Error ? error.name : typeof error,
+  }));
+}
+
 // d1Bridge.js (required by the CommonJS backend, deep under app.js) cannot
 // reach `env` itself: `require('cloudflare:workers')` at call time throws
 // "Dynamic require of 'cloudflare:workers' is not supported" — the bundler
@@ -25,7 +71,9 @@ if (env && typeof env === 'object') {
         process.env[k] = String(v);
       }
     }
-  } catch {}
+  } catch (error) {
+    await logWorkerEnvironmentSyncFailure(WORKER_ENV_OPERATIONS.MODULE_INITIALIZATION, error);
+  }
 }
 
 // storeService.js's persistence writes are all fire-and-forget: `promise
@@ -83,7 +131,9 @@ async function scheduled(controller, workerEnv, ctx) {
           process.env[k] = v;
         }
       }
-    } catch {}
+    } catch (error) {
+      await logWorkerEnvironmentSyncFailure(WORKER_ENV_OPERATIONS.SCHEDULED, error);
+    }
   }
   const cron = controller.cron;
   const isEmailGateway = cron === EMAIL_GATEWAY_CRON || cron === '* * * * *' || cron === '*/5 * * * *';
@@ -149,7 +199,7 @@ const ZOHO_RECONCILIATION_CRON = '*/10 * * * *';
 const DAILY_RFQ_REPORT_CRON = '30 0 * * *';
 
 const originalFetch = httpHandler.fetch;
-httpHandler.fetch = function (request, workerEnv, ctx) {
+httpHandler.fetch = async function (request, workerEnv, ctx) {
   if (workerEnv && typeof workerEnv === 'object') {
     globalThis.__CF_ENV__ = workerEnv;
     try {
@@ -158,7 +208,9 @@ httpHandler.fetch = function (request, workerEnv, ctx) {
           process.env[k] = v;
         }
       }
-    } catch {}
+    } catch (error) {
+      await logWorkerEnvironmentSyncFailure(WORKER_ENV_OPERATIONS.FETCH, error);
+    }
   }
   return originalFetch.call(this, request, workerEnv, ctx);
 };

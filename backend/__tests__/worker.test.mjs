@@ -90,10 +90,89 @@ describe('Worker runtime bindings and fetch bridge', () => {
     expect(originalFetch).toHaveBeenCalled();
   });
 
-  test('continues serving requests when bindings enumeration throws', async () => {
-    bindings = new Proxy({}, { ownKeys() { throw new Error('unavailable'); } });
+  test('logs module and fetch binding-enumeration failures while continuing to serve requests', async () => {
+    const bindingError = new Error('unavailable');
+    bindings = new Proxy({}, { ownKeys() { throw bindingError; } });
     const worker = await loadWorker();
     expect(await worker.fetch({}, bindings, {})).toBe('response');
+    expect(loggerService.error).toHaveBeenNthCalledWith(
+      1,
+      'Failed to synchronize Cloudflare Worker bindings into process.env',
+      { operation: 'worker_module_initialization', error: bindingError },
+      'WORKER_ENV'
+    );
+    expect(loggerService.error).toHaveBeenNthCalledWith(
+      2,
+      'Failed to synchronize Cloudflare Worker bindings into process.env',
+      { operation: 'worker_fetch', error: bindingError },
+      'WORKER_ENV'
+    );
+  });
+
+  test('records non-Error binding failures without exposing the rejected value', async () => {
+    bindings = new Proxy({}, { ownKeys() { throw 'binding rejected'; } });
+    await loadWorker();
+    expect(loggerService.error).toHaveBeenCalledWith(
+      'Failed to synchronize Cloudflare Worker bindings into process.env',
+      expect.objectContaining({
+        operation: 'worker_module_initialization',
+        error: expect.any(Error),
+        errorType: 'string',
+      }),
+      'WORKER_ENV'
+    );
+  });
+
+  test('writes a safe structured fallback when the centralized logger fails', async () => {
+    const bindingError = new Error('binding unavailable');
+    bindings = new Proxy({}, { ownKeys() { throw bindingError; } });
+    loggerService.error.mockImplementation(() => { throw new Error('logger unavailable'); });
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    await loadWorker();
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(consoleError.mock.calls[0][0])).toMatchObject({
+      level: 'ERROR',
+      category: 'WORKER_ENV',
+      operation: 'worker_module_initialization',
+      errorName: 'Error',
+      loggerErrorName: 'Error',
+    });
+  });
+
+  test('uses stdout fallbacks when the centralized logger is unavailable', async () => {
+    bindings = new Proxy({}, { ownKeys() { throw 'binding unavailable'; } });
+    loggerService = undefined;
+    store.hydrateFromDB.mockRejectedValue(new Error('hydration unavailable'));
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const worker = await loadWorker();
+    await worker.scheduled({ cron: '* * * * *' }, {}, {});
+
+    expect(JSON.parse(consoleError.mock.calls[0][0])).toMatchObject({
+      level: 'ERROR',
+      category: 'WORKER_ENV',
+      operation: 'worker_module_initialization',
+      errorName: 'string',
+    });
+    expect(consoleError).toHaveBeenCalledWith('[CRON] hydration failed', expect.any(Error));
+  });
+
+  test('uses safe fallback metadata when both the binding and logger reject with non-Error values', async () => {
+    bindings = new Proxy({}, { ownKeys() { throw 'binding unavailable'; } });
+    loggerService.error.mockImplementation(() => { throw 'logger unavailable'; });
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    await loadWorker();
+
+    expect(JSON.parse(consoleError.mock.calls[0][0])).toMatchObject({
+      level: 'ERROR',
+      category: 'WORKER_ENV',
+      operation: 'worker_module_initialization',
+      errorName: 'string',
+      loggerErrorName: 'string',
+    });
   });
 
   test('supports namespace exports for CommonJS interop', async () => {
@@ -172,6 +251,11 @@ describe('Worker cron jobs', () => {
     store.hydrateFromDB.mockRejectedValue(error);
     const badBindings = new Proxy({}, { ownKeys() { throw new Error('binding failure'); } });
     await worker.scheduled({ cron: '* * * * *' }, badBindings, {});
+    expect(loggerService.error).toHaveBeenCalledWith(
+      'Failed to synchronize Cloudflare Worker bindings into process.env',
+      expect.objectContaining({ operation: 'worker_scheduled', error: expect.any(Error) }),
+      'WORKER_ENV'
+    );
     expect(loggerService.error).toHaveBeenCalledWith(
       'Scheduled Worker state hydration failed',
       error,
