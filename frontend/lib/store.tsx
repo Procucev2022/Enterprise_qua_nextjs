@@ -457,6 +457,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     taxonomy: initialTaxonomy.length > 0,
     bootstrap: initialVendors.length > 0 && initialEvaluations.length > 0,
   });
+  const activeBuyerAccountRequestGenerationRef = useRef(0);
   // Session bootstrap. The only source of truth is the token + session that
   // authClient persisted after a verified sign-in, so a page refresh on a deep
   // route keeps the user signed in and nobody is ever signed in by default.
@@ -822,24 +823,57 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const clearActiveBuyerAccount = () => {
+    setActiveBuyerAccount(null);
+    setSessionCache('activeBuyerAccount', null);
+    loadedEntitiesRef.current.activeBuyerAccount = false;
+  };
+
   const refreshActiveBuyerAccount = async () => {
+    const requestGeneration = activeBuyerAccountRequestGenerationRef.current;
     if (!authClient.getToken()) {
-      setActiveBuyerAccount(null);
-      setSessionCache('activeBuyerAccount', null);
-      loadedEntitiesRef.current.activeBuyerAccount = false;
+      clearActiveBuyerAccount();
       return;
     }
     try {
       const res = await fetch('/api/buyer-accounts/active', { headers: authFetchHeaders() });
-      const json = await res.json();
-      const acc = json.success && json.data ? json.data : null;
-      setActiveBuyerAccount(acc);
-      if (acc) {
-        setSessionCache('activeBuyerAccount', acc);
+      if (requestGeneration !== activeBuyerAccountRequestGenerationRef.current) return;
+      if (!res.ok) {
+        const metadata = {
+          operation: 'GET /api/buyer-accounts/active',
+          status: res.status,
+          statusText: res.statusText,
+        };
+        if (res.status === 404 || res.status === 409) {
+          logger.log('WARN', 'Active buyer account is not linked to this session', metadata, 'BUYER_ACCOUNT');
+        } else {
+          logApiResponseFailure('Active buyer account lookup failed', res, 'BUYER_ACCOUNT', {
+            operation: metadata.operation,
+          });
+        }
+        clearActiveBuyerAccount();
+        return;
       }
+      const json = await res.json();
+      if (requestGeneration !== activeBuyerAccountRequestGenerationRef.current) return;
+      const acc = json.success && json.data ? json.data : null;
+      if (!acc) {
+        logger.log('INFO', 'Active buyer account lookup returned no linked account', {
+          operation: 'GET /api/buyer-accounts/active',
+          status: res.status,
+          success: Boolean(json.success),
+        }, 'BUYER_ACCOUNT');
+      }
+      setActiveBuyerAccount(acc);
+      setSessionCache('activeBuyerAccount', acc);
       loadedEntitiesRef.current.activeBuyerAccount = true;
-    } catch {
-      setActiveBuyerAccount(null);
+    } catch (error) {
+      if (requestGeneration !== activeBuyerAccountRequestGenerationRef.current) return;
+      logger.log('ERROR', 'Active buyer account refresh failed', {
+        operation: 'GET /api/buyer-accounts/active',
+        error,
+      }, 'BUYER_ACCOUNT');
+      clearActiveBuyerAccount();
     }
   };
 
@@ -1046,6 +1080,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const loaders = dataLoadersRef.current;
     if (!isLoggedIn) {
+      activeBuyerAccountRequestGenerationRef.current += 1;
       setRfqs([]);
       setVendorOpportunities([]);
       setActiveBuyerAccount(null);
@@ -1062,6 +1097,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     // Reset entity cache when user logs in or switches
     if (!lastUserSessionIdRef.current || lastUserSessionIdRef.current !== currentUserSession?.id) {
+      activeBuyerAccountRequestGenerationRef.current += 1;
+      clearActiveBuyerAccount();
       clearSessionCache();
       loadedEntitiesRef.current = {};
       void loaders.refreshFromDB();

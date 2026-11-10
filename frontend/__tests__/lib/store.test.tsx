@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { AppProvider, useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount, VendorEvaluationRecord, ExtractedEntity } from '@/lib/types';
+import type { UserSession } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
@@ -1977,6 +1978,126 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     await waitFor(() => expect(contextValue.activeBuyerAccount).toBeNull());
+    expect(logger.getLogs({ category: 'BUYER_ACCOUNT' }).some((entry) =>
+      entry.message === 'Active buyer account lookup returned no linked account'
+    )).toBe(true);
+    authClient.setSession(null);
+  });
+
+  it('logs active buyer account HTTP, parsing, and transport failures', async () => {
+    authClient.setSession(
+      { id: 'account-error-user', email: 'buyer@procucev.com', name: 'Test User', role: 'buyer', orgId: 'org-1', orgName: 'Test Org' },
+      'account-error-token'
+    );
+    const account = { id: 'account-error-1', organizationName: 'Account Error Org' };
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => ({ success: true, data: account }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    });
+
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return <div>Test</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => expect(contextValue.activeBuyerAccount?.id).toBe('account-error-1'));
+
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        return Promise.resolve({ ok: false, status: 503, statusText: 'Service Unavailable' });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    });
+    await act(async () => contextValue.refreshActiveBuyerAccount());
+    expect(contextValue.activeBuyerAccount).toBeNull();
+    expect(logger.getLogs({ category: 'BUYER_ACCOUNT' }).some((entry) =>
+      entry.message === 'Active buyer account lookup failed' && entry.metadata?.status === 503
+    )).toBe(true);
+
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => { throw new SyntaxError('invalid JSON'); } });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    });
+    await act(async () => contextValue.refreshActiveBuyerAccount());
+    expect(logger.getLogs({ category: 'BUYER_ACCOUNT' }).some((entry) =>
+      entry.message === 'Active buyer account refresh failed' && entry.metadata?.error instanceof SyntaxError
+    )).toBe(true);
+
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        return Promise.reject(new TypeError('network unavailable'));
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    });
+    await act(async () => contextValue.refreshActiveBuyerAccount());
+    expect(logger.getLogs({ category: 'BUYER_ACCOUNT' }).some((entry) =>
+      entry.message === 'Active buyer account refresh failed' && entry.metadata?.error instanceof TypeError
+    )).toBe(true);
+    authClient.setSession(null);
+  });
+
+  it('ignores a delayed active account response after the signed-in user changes', async () => {
+    const firstUser: UserSession = { id: 'first-user', email: 'first@procucev.com', name: 'First User', role: 'buyer', orgId: 'org-1', orgName: 'First Org' };
+    const secondUser: UserSession = { id: 'second-user', email: 'second@procucev.com', name: 'Second User', role: 'buyer', orgId: 'org-2', orgName: 'Second Org' };
+    const firstAccount = { id: 'first-account', organizationName: 'First Org' };
+    const secondAccount = { id: 'second-account', organizationName: 'Second Org' };
+    authClient.setSession(firstUser, 'first-token');
+    let holdNextLookup = false;
+    let releaseHeldLookup: ((response: Response) => void) | null = null;
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        if (holdNextLookup) {
+          holdNextLookup = false;
+          return new Promise<Response>((resolve) => {
+            releaseHeldLookup = resolve;
+          });
+        }
+        const data = authClient.getToken() === 'second-token' ? secondAccount : firstAccount;
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => ({ success: true, data }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    });
+
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return <div>Test</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => expect(contextValue.activeBuyerAccount?.id).toBe('first-account'));
+
+    holdNextLookup = true;
+    const previousUserRequest = contextValue.refreshActiveBuyerAccount();
+    await waitFor(() => expect(releaseHeldLookup).toBeInstanceOf(Function));
+    await act(async () => {
+      authClient.setSession(secondUser, 'second-token');
+      contextValue.setCurrentUserSession(secondUser);
+    });
+    await waitFor(() => expect(contextValue.activeBuyerAccount?.id).toBe('second-account'));
+
+    await act(async () => {
+      releaseHeldLookup?.({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ success: true, data: firstAccount }),
+      } as Response);
+      await previousUserRequest;
+    });
+    expect(contextValue.activeBuyerAccount?.id).toBe('second-account');
     authClient.setSession(null);
   });
 
