@@ -6,6 +6,7 @@ const pool = require('../src/db/pool');
 describe('Approvals API & Controller', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
   });
 
   test('GET /api/approvals/summary returns approval summary metrics', async () => {
@@ -721,7 +722,11 @@ describe('Approvals API & Controller', () => {
     expect(constants.verifyApproverPassword('Srinu Sir', 'WrongPassword')).toBe(false);
     expect(constants.verifyApproverPassword('Srinu Sir', '')).toBe(false);
     expect(constants.verifyApproverPassword('', null)).toBe(false);
-    expect(constants.verifyApproverPassword('Unknown Approver', 'Procucev@2026')).toBe(true);
+    expect(constants.verifyApproverPassword('', 'Procucev@2026')).toBe(false);
+    expect(constants.verifyApproverPassword('   ', 'Procucev@2026')).toBe(false);
+    expect(constants.verifyApproverPassword(null, 'Procucev@2026')).toBe(false);
+    expect(constants.verifyApproverPassword('Unknown Approver', 'Procucev@2026')).toBe(false);
+    expect(constants.verifyApproverPassword('Srinu Sir', 'short')).toBe(false);
 
     // ProcessApprovalAction rejects on missing/invalid password with 401
     await expect(

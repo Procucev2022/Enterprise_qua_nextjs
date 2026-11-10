@@ -3014,20 +3014,27 @@ function verifyApproverPassword(approverName, submittedPassword) {
     return false;
   }
   const nameNorm = String(approverName || '').toLowerCase().trim();
-  let expectedPassword = process.env.APPROVER_PASSWORD || 'Procucev@2026';
-  if (nameNorm.includes('srinu') || nameNorm.includes('srinivas') || nameNorm.includes('srinivas.mukku')) {
+  if (!nameNorm) {
+    return false;
+  }
+
+  let expectedPassword = null;
+  if (nameNorm.includes('srinu') || nameNorm.includes('srinivas') || nameNorm.includes('mukku')) {
     expectedPassword = process.env.SRINU_APPROVER_PASSWORD || process.env.APPROVER_PASSWORD || 'Procucev@2026';
   } else if (nameNorm.includes('sudheer') || nameNorm.includes('kangala')) {
     expectedPassword = process.env.SUDHEER_APPROVER_PASSWORD || process.env.APPROVER_PASSWORD || 'Procucev@2026';
-  }
-
-  const expectedBuf = Buffer.from(String(expectedPassword), 'utf8');
-  const submittedBuf = Buffer.from(String(submittedPassword), 'utf8');
-
-  if (expectedBuf.length !== submittedBuf.length) {
+  } else {
+    // Only designated senior approvers are authorized to verify passwords
     return false;
   }
-  return crypto.timingSafeEqual(expectedBuf, submittedBuf);
+
+  try {
+    const expectedHash = crypto.createHash('sha256').update(String(expectedPassword), 'utf8').digest();
+    const submittedHash = crypto.createHash('sha256').update(String(submittedPassword), 'utf8').digest();
+    return crypto.timingSafeEqual(expectedHash, submittedHash);
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {

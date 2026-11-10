@@ -601,16 +601,6 @@ async function createApproval(data, actor = {}) {
  * For Buyer Credit Additions and Seller Credit Additions, updates credit balance and synchronizes corresponding internal task.
  */
 async function processApprovalAction(id, { action, remarks = '', password, approverName }, actor = {}) {
-  // 1. Password Verification (Rule 2)
-  const constants = require('../config/constants');
-  const approverToCheck = approverName || actor.name || actor.fullName || 'Srinu Sir';
-  const isPasswordValid = constants.verifyApproverPassword(approverToCheck, password);
-  if (!isPasswordValid) {
-    const err = new Error('Invalid approver password. Please check your credentials.');
-    err.statusCode = 401;
-    throw err;
-  }
-
   let item = memoryApprovals.find((a) => a.id === id || a.request_number === id);
 
   if (pool.hasStorage()) {
@@ -635,6 +625,16 @@ async function processApprovalAction(id, { action, remarks = '', password, appro
   }
 
   if (!item) return null;
+
+  // 1. Password Verification (Rule 2)
+  const constants = require('../config/constants');
+  const approverToCheck = approverName || (item && (item.approver_name || item.assigned_approver)) || actor.name || actor.fullName || 'Srinu Sir';
+  const isPasswordValid = constants.verifyApproverPassword(approverToCheck, password);
+  if (!isPasswordValid) {
+    const err = new Error('Invalid approver password. Please check your credentials.');
+    err.statusCode = 401;
+    throw err;
+  }
 
   const now = new Date().toISOString();
   const normalizedAction = (action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
