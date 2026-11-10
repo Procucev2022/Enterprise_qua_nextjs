@@ -419,32 +419,46 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
 
   if (email) {
     try {
-      const phoneToSync = body.contactPhone || patch.contactPhone;
-      const isRealPhone = Boolean(
-        phoneToSync &&
-        !String(phoneToSync).includes('9999999999') &&
-        !String(phoneToSync).includes('0000000000')
-      );
-      storeService.updateBuyerAccount(email, {
+      const syncedAccount = await storeService.updateBuyerAccountDurably(email, {
         organizationName: patch.companyName,
         contactPerson: patch.contactName,
-        ...(phoneToSync ? { phone: phoneToSync, mobileNumber: phoneToSync } : {}),
         city: patch.city,
         state: patch.state,
         pincode: patch.pincode,
         gstin: patch.gstNumber,
         pan: patch.panNumber,
         profileVerified: true,
-        ...(isRealPhone ? { phoneVerified: true } : {}),
         status: 'ACTIVE_VERIFIED',
         verificationStatus: 'verified',
         onboardingRequired: false,
         isAutoRegistered: false,
         tempPasswordRequired: false,
       });
-      await storeService.dispatchPendingQuoteNotifications(email);
+      if (!syncedAccount) {
+        logger.warn('Buyer organization profile saved but no buyer-account mirror was found to synchronize', {
+          email,
+          organizationId,
+          userId,
+        }, LOG_CATEGORY);
+      }
     } catch (syncErr) {
-      logger.warn('Failed to sync storeService buyerAccount in saveProfile', { error: syncErr.message, email }, LOG_CATEGORY);
+      logger.warn('Failed to durably sync storeService buyerAccount in saveProfile', {
+        error: syncErr,
+        email,
+        organizationId,
+        userId,
+      }, LOG_CATEGORY);
+    }
+
+    try {
+      await storeService.dispatchPendingQuoteNotifications(email);
+    } catch (dispatchErr) {
+      logger.warn('Failed to dispatch pending quote notifications after buyer profile save', {
+        error: dispatchErr,
+        email,
+        organizationId,
+        userId,
+      }, LOG_CATEGORY);
     }
   }
 

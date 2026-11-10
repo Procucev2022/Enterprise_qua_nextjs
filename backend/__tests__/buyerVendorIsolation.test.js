@@ -127,9 +127,7 @@ describe('Buyer-wise Vendor Isolation at Backend Level', () => {
 
   test('Unauthenticated public requests cannot see buyer-uploaded private vendors', async () => {
     const resVendors = await request(app).get('/api/vendors');
-    expect(resVendors.status).toBe(200);
-    const hasAlpha = resVendors.body.data.some((v) => v.email === 'vendor_alpha@isolated.test');
-    expect(hasAlpha).toBe(false);
+    expect(resVendors.status).toBe(401);
 
     const resBootstrap = await request(app).get('/api/bootstrap');
     expect(resBootstrap.status).toBe(200);

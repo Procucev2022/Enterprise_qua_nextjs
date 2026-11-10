@@ -200,6 +200,20 @@ describe('PaymentDuesDashboard', () => {
     expect(screen.getAllByText('2 Credits · Low')[0]).toBeInTheDocument();
   });
 
+  it('shows a link-only WhatsApp notification as delivery pending', async () => {
+    (paymentDuesClient.fetchPaymentDues as jest.Mock).mockResolvedValueOnce({
+      accounts: [{ ...mockAccounts[0], acknowledgementStatus: 'Delivery Pending' }],
+      total: 1,
+      summary: mockSummary,
+      page: 1,
+      limit: 25,
+    });
+
+    render(<PaymentDuesDashboard />);
+
+    expect(await screen.findAllByText('Delivery Pending')).not.toHaveLength(0);
+  });
+
   it('handles search input change and calls fetchPaymentDues', async () => {
     render(<PaymentDuesDashboard />);
 
@@ -1223,7 +1237,8 @@ describe('PaymentDuesDashboard', () => {
     window.removeEventListener('qua_payment_dues_updated', mockEventHandler);
   });
 
-    describe('Summary Cards Click and Modal Popup', () => {
+
+describe('Summary Cards Click and Modal Popup', () => {
     it('opens modal on clicking Low-Credit Accounts summary card and shows accounts', async () => {
       render(<PaymentDuesDashboard />);
       await waitFor(() => {

@@ -142,7 +142,9 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
  */
 async function loadIdentityUser(normalizedEmail, mobile) {
   if (!pool.hasStorage()) {
-    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+    const error = new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+    error.code = 'PERSISTENCE_UNAVAILABLE';
+    throw error;
   }
   try {
     return mobile
@@ -150,7 +152,10 @@ async function loadIdentityUser(normalizedEmail, mobile) {
       : await identityQueries.findUserByEmail(normalizedEmail);
   } catch (err) {
     logger.error('Account lookup failed', err, 'AUTH_SERVICE');
-    throw new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+    const unavailable = new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+    unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+    unavailable.cause = err;
+    throw unavailable;
   }
 }
 
@@ -589,10 +594,6 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
     throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_WRITE_FAILED);
   }
 
-  if (user.role === 'vendor') {
-    storeService.updateVendor(user.email, { tempPassword: null });
-  }
-
   logger.audit(`Password changed for ${user.email}`, user.email, { role: user.role, ipAddress });
   storeService.addAuditLog({
     userEmail: user.email,
@@ -694,22 +695,14 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   const normalizedEmail = email.trim().toLowerCase();
   const submittedMobile = String(mobile).trim();
 
-  let user = null;
-  if (pool.hasStorage()) {
-    try {
-      user = await loadIdentityUser(normalizedEmail, submittedMobile);
-    } catch {
-      user = null;
-    }
-  }
-
   if (isRegistration) {
     // For account creation / registration, do not block OTP dispatch on existing or non-existing accounts ("dont check existing vendor and buyer").
   } else {
+    const user = await loadIdentityUser(normalizedEmail, submittedMobile);
     if (!user) {
       logger.warn(
-        `OTP requested for an unrecognised email + mobile pair: ${normalizedEmail}`,
-        { ipAddress },
+        'OTP requested for an unrecognised email and mobile pair',
+        { ipAddress, hasEmail: Boolean(normalizedEmail), hasMobile: Boolean(submittedMobile) },
         'AUTH_SERVICE'
       );
       throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
@@ -742,6 +735,7 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
     // Emailing a code that was never stored would guarantee the visitor's correct
     // entry is rejected, so the failure is reported instead.
     logger.error('Failed to store the issued OTP', err, 'AUTH_SERVICE');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') throw err;
     throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
   }
 
@@ -755,7 +749,7 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
 
   storeService.addAuditLog({
     userEmail: normalizedEmail,
-    action: `Instant ${OTP_LENGTH}-digit OTP requested for email (${normalizedEmail}) and mobile (${submittedMobile}) [Registration: ${Boolean(isRegistration)}] — email: ${delivery.email}, SMS: ${delivery.sms}`,
+    action: `Instant ${OTP_LENGTH}-digit OTP requested [Registration: ${Boolean(isRegistration)}] — email: ${delivery.email}, SMS: ${delivery.sms}`,
     ipAddress,
   });
 
@@ -772,8 +766,13 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   }
 
   logger.info(
-    `OTP generated for ${normalizedEmail} and mobile ${submittedMobile} [Registration: ${Boolean(isRegistration)}]`,
-    { ipAddress, emailDelivery: delivery.email, smsDelivery: delivery.sms },
+    'OTP generated and delivery attempted',
+    {
+      ipAddress,
+      registration: Boolean(isRegistration),
+      emailDelivery: delivery.email,
+      smsDelivery: delivery.sms,
+    },
     'AUTH_SERVICE'
   );
 
@@ -897,16 +896,19 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
     try {
       user = await identityQueries.findUserByEmail(normalizedEmail);
     } catch (err) {
-      logger.warn('Failed to load identity user for Vendor Directory OTP', { error: err.message, email: normalizedEmail }, 'AUTH_SERVICE');
-      user = null;
+      logger.error('Failed to check account status for Vendor Directory OTP', err, 'AUTH_SERVICE');
+      const unavailable = new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      unavailable.cause = err;
+      throw unavailable;
     }
   }
 
   // Deactivated/inactive accounts cannot request OTP
   if (user && (user.isActive === false || user.status === 'inactive')) {
     logger.warn(
-      `Vendor directory OTP denied for inactive Procucev account: ${normalizedEmail}`,
-      { ipAddress, role: user?.role },
+      'Vendor Directory OTP denied for an inactive account',
+      { ipAddress, role: user?.role, hasEmail: true },
       'AUTH_SERVICE'
     );
     throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY);
@@ -920,6 +922,7 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
     await authSessionQueries.saveOtp(otpKey, code, expiresAt, normalizedEmail);
   } catch (err) {
     logger.error('Failed to store Vendor Directory OTP', err, 'AUTH_SERVICE');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') throw err;
     throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
   }
 
@@ -933,7 +936,7 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
     }
   } catch (err) {
     delivery = 'FAILED';
-    logger.warn('Failed to deliver Vendor Directory OTP email', { error: err.message, email: normalizedEmail }, 'AUTH_SERVICE');
+    logger.warn('Failed to deliver Vendor Directory OTP email', { error: err, hasRecipient: true }, 'AUTH_SERVICE');
   }
 
   storeService.addAuditLog({
@@ -943,8 +946,8 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
   });
 
   logger.info(
-    `Vendor Directory OTP generated for Category Manager: ${normalizedEmail}`,
-    { ipAddress, delivery },
+    'Vendor Directory OTP generated for an eligible company employee',
+    { ipAddress, delivery, hasRecipient: true },
     'AUTH_SERVICE'
   );
 
@@ -977,7 +980,11 @@ async function verifyVendorDirectoryOtp(email, code, ipAddress, userAgent) {
     try {
       user = await identityQueries.findUserByEmail(normalizedEmail);
     } catch (err) {
-      user = null;
+      logger.error('Failed to check account status during Vendor Directory OTP verification', err, 'AUTH_SERVICE');
+      const unavailable = new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      unavailable.cause = err;
+      throw unavailable;
     }
   }
 
@@ -1005,7 +1012,7 @@ async function verifyVendorDirectoryOtp(email, code, ipAddress, userAgent) {
 
   if (storedOtp.code !== cleanCode) {
     await authSessionQueries.incrementOtpAttempts(otpKey);
-    logger.warn(`Invalid Vendor Directory OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    logger.warn('Invalid Vendor Directory OTP submitted', { ipAddress, hasEmail: true }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_INVALID);
   }
 
@@ -1207,7 +1214,6 @@ async function registerUser(payload, ipAddress) {
 
   if (!isVendor) {
     try {
-      const existingBuyer = await storeService.getBuyerAccountByEmail(normalizedEmail);
       const buyerData = {
         organizationName: orgName || name,
         brandName: orgName || name,
@@ -1240,23 +1246,23 @@ async function registerUser(payload, ipAddress) {
         organizationId: result.user?.orgId || null,
         id: result.user?.id || undefined,
       };
-      if (!existingBuyer) {
-        storeService.addBuyerAccount(buyerData);
-      } else {
-        storeService.updateBuyerAccount(existingBuyer.id, buyerData);
+      const updatedBuyer = await storeService.updateBuyerAccountDurably(normalizedEmail, buyerData);
+      if (!updatedBuyer) {
+        await storeService.addBuyerAccountDurably(buyerData);
       }
     } catch (buyerSyncErr) {
-      logger.warn(
-        'Failed to sync buyer registration profile into storeService',
-        { error: buyerSyncErr.message, email: normalizedEmail },
-        'AUTH_SERVICE'
-      );
+      logger.error('Identity registration succeeded but buyer profile mirror persistence failed', {
+        error: buyerSyncErr,
+        email: normalizedEmail,
+        userId: result.user?.id || null,
+        repairRequired: true,
+      }, 'AUTH_SERVICE');
     }
   }
 
   if (isVendor) {
     try {
-      const existingVendor = await storeService.getVendorByIdWithDBFallback(normalizedEmail, 'all');
+      const existingVendor = await storeService.getVendorByIdWithDBFallback(normalizedEmail, 'all', { fresh: true });
       if (!existingVendor) {
         const vendorData = {
           name: orgName || name,
@@ -1280,12 +1286,9 @@ async function registerUser(payload, ipAddress) {
           vendorSelectedCategories: [],
           clientMappedCategories: [],
         };
-        const createdVendor = storeService.addVendor(vendorData, normalizedEmail);
-        if (createdVendor) {
-          await storeService.confirmVendorPersisted(createdVendor);
-        }
+        await storeService.addVendorDurably(vendorData, normalizedEmail, null);
       } else {
-        storeService.updateVendor(existingVendor.id, {
+        const updatedVendor = await storeService.updateVendorDurably(existingVendor.id, {
           ...(gstin ? { gst: gstin, gstin } : {}),
           ...(city ? { city } : {}),
           ...(state ? { state } : {}),
@@ -1294,13 +1297,21 @@ async function registerUser(payload, ipAddress) {
           ...(mobile ? { phone: mobile } : {}),
           ...(orgName ? { name: orgName, brandName: orgName } : {}),
         });
+        if (!updatedVendor) {
+          logger.warn('Vendor registration profile was not mirrored because the vendor record was not found', {
+            email: normalizedEmail,
+            userId: result.user?.id || null,
+            repairRequired: true,
+          }, 'AUTH_SERVICE');
+        }
       }
     } catch (vendorSyncErr) {
-      logger.warn(
-        'Failed to sync vendor registration profile into storeService',
-        { error: vendorSyncErr.message, email: normalizedEmail },
-        'AUTH_SERVICE'
-      );
+      logger.error('Identity registration succeeded but vendor profile mirror persistence failed', {
+        error: vendorSyncErr,
+        email: normalizedEmail,
+        userId: result.user?.id || null,
+        repairRequired: true,
+      }, 'AUTH_SERVICE');
     }
   }
 
@@ -1429,15 +1440,24 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     throw new Error('Invalid mobile SMS verification OTP.');
   }
 
-  // Consume used OTPs
-  try {
-    await Promise.all([
+  // Consume used OTPs before changing identity state. If any delete fails, fail
+  // closed so the account is not verified while a reusable code may remain.
+  const otpCleanup = await Promise.allSettled([
       authSessionQueries.deleteOtp(emailOtpKey),
       authSessionQueries.deleteOtp(mobileOtpKey),
       authSessionQueries.deleteOtp(emailCombinedKey),
     ]);
-  } catch {
-    // Ignore cleanup error
+  const failedCleanup = otpCleanup.find((result) => result.status === 'rejected');
+  if (failedCleanup) {
+    logger.error(
+      'Failed to consume buyer onboarding OTP records; refusing to verify the account',
+      { userId: dbUser.id, error: failedCleanup.reason },
+      'AUTH_SERVICE'
+    );
+    const unavailable = new Error(AUTH_MESSAGES.AUTH_STORAGE_UNAVAILABLE);
+    unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+    unavailable.cause = failedCleanup.reason;
+    throw unavailable;
   }
 
   // 5. Update user identity record
@@ -1454,36 +1474,55 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   }
 
   // 6. Update buyer account in storeService
-  const updatedBuyer = storeService.updateBuyerAccount(normalizedEmail, {
-    companyName: companyName || dbUser.orgName,
-    organizationName: companyName || dbUser.orgName,
-    contactName: contactName || dbUser.name,
-    contactPerson: contactName || dbUser.name,
-    phone: cleanedMobile,
-    mobileNumber: cleanedMobile,
-    city: city || '',
-    state: state || '',
-    pincode: pincode || '',
-    address: effectiveAddress,
-    gstin: effectiveGstin,
-    pan: effectivePan,
-    profileVerified: true,
-    status: 'ACTIVE_VERIFIED',
-    verificationStatus: 'verified',
-    onboardingRequired: false,
-    emailVerified: true,
-    phoneVerified: true,
-    isApproved: true,
-    isAutoRegistered: false,
-    tempPasswordRequired: false,
-  });
+  try {
+    const updatedBuyer = await storeService.updateBuyerAccountDurably(normalizedEmail, {
+      companyName: companyName || dbUser.orgName,
+      organizationName: companyName || dbUser.orgName,
+      contactName: contactName || dbUser.name,
+      contactPerson: contactName || dbUser.name,
+      phone: cleanedMobile,
+      mobileNumber: cleanedMobile,
+      city: city || '',
+      state: state || '',
+      pincode: pincode || '',
+      address: effectiveAddress,
+      gstin: effectiveGstin,
+      pan: effectivePan,
+      profileVerified: true,
+      status: 'ACTIVE_VERIFIED',
+      verificationStatus: 'verified',
+      onboardingRequired: false,
+      emailVerified: true,
+      phoneVerified: true,
+      isApproved: true,
+      isAutoRegistered: false,
+      tempPasswordRequired: false,
+    });
+    if (!updatedBuyer) {
+      logger.warn('Buyer identity onboarding completed but no buyer-account mirror was found', {
+        email: normalizedEmail,
+        userId: dbUser.id,
+      }, 'AUTH_SERVICE');
+    }
+  } catch (buyerSyncErr) {
+    // Identity state is canonical and has already committed. Keep onboarding
+    // usable, but surface the mirror failure for repair instead of launching an
+    // unobserved whole-record upsert in the background.
+    logger.warn('Buyer identity onboarding completed but buyer-account mirror sync failed', {
+      error: buyerSyncErr,
+      email: normalizedEmail,
+      userId: dbUser.id,
+    }, 'AUTH_SERVICE');
+  }
 
   // Also update organization profile in database if available
   if (dbUser.orgId) {
     try {
-      await buyerProfileQueries.updateProfile(
-        dbUser.orgId,
-        {
+      const profileWrite = await buyerProfileQueries.updateProfile({
+        organizationId: dbUser.orgId,
+        userId: dbUser.id,
+        actor: normalizedEmail,
+        patch: {
           companyName: companyName || dbUser.orgName,
           contactName: contactName || dbUser.name,
           city: city || undefined,
@@ -1493,9 +1532,15 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
           gstNumber: effectiveGstin || undefined,
           panNumber: effectivePan || undefined,
         },
-        normalizedEmail,
-        dbUser.id
-      );
+      });
+      if (!profileWrite.updated) {
+        logger.warn('Buyer identity onboarding completed but organization profile was not updated', {
+          email: normalizedEmail,
+          userId: dbUser.id,
+          organizationId: dbUser.orgId,
+          reason: profileWrite.reason,
+        }, 'AUTH_SERVICE');
+      }
     } catch (profileErr) {
       logger.warn('Failed to update DB organization profile during onboarding', { error: profileErr.message }, 'AUTH_SERVICE');
     }

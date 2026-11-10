@@ -11,6 +11,7 @@ import {
   IngestionSummary,
 } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -381,7 +382,7 @@ export default function InitialSetupModal() {
           if (which === 'vendor') setVendorJob(freshJob);
           else setPoJob(freshJob);
         } catch (err) {
-          console.warn(`Could not refresh ${which} ingestion job progress:`, err);
+          logger.log('WARN', 'Could not refresh ingestion job progress', { error: err, jobType: which }, 'VENDOR_INGESTION');
         }
       }
     }, 2000);
@@ -401,7 +402,7 @@ export default function InitialSetupModal() {
           headers: authFetchHeaders(),
         });
       } catch (e) {
-        console.warn('Error cancelling job on close:', e);
+        logger.log('WARN', 'Could not cancel background ingestion job when closing setup', { error: e }, 'VENDOR_INGESTION');
       }
     }
     setVendorJob(null);
@@ -436,7 +437,7 @@ export default function InitialSetupModal() {
           }
         }
       } catch (err) {
-        console.warn('Could not initialize vendor ingestion session:', err);
+        logger.log('WARN', 'Could not initialize vendor ingestion session', { error: err }, 'VENDOR_INGESTION');
       }
     };
 
@@ -511,7 +512,7 @@ export default function InitialSetupModal() {
             showToast('Upload Error', errMsg, 'warning');
           }
         } catch (err: any) {
-          console.error('Streaming upload error:', err);
+          logger.log('ERROR', 'Vendor master streaming upload failed', { error: err }, 'VENDOR_INGESTION');
           const errMsg = err?.message || 'Streaming upload failed';
           setVendorUploadError(errMsg);
           showToast('Upload Error', errMsg, 'warning');
@@ -695,7 +696,7 @@ export default function InitialSetupModal() {
                 });
               }
             } catch (e) {
-              console.warn('Job start error:', e);
+              logger.log('WARN', 'Vendor master background job could not start; local parsing fallback will be used', { error: e }, 'VENDOR_INGESTION');
               setVendorJob({
                 id: `job-${Date.now()}`,
                 jobType: 'VENDOR_MASTER',
@@ -750,7 +751,7 @@ export default function InitialSetupModal() {
 
           showToast('Vendor Master Uploaded', `Loaded ${parsedVendors.length.toLocaleString('en-IN')} vendors from ${file.name}.`, 'success');
         } catch (err: any) {
-          console.error('Vendor Master Parse Error:', err);
+          logger.log('ERROR', 'Vendor master file parsing failed', { error: err }, 'VENDOR_INGESTION');
           showToast('Parsing Error', `Could not parse file: ${err.message || 'Unknown format'}`, 'warning');
           setVendorJob(null);
         } finally {
@@ -825,7 +826,7 @@ export default function InitialSetupModal() {
             showToast('PO Upload Error', errMsg, 'warning');
           }
         } catch (err: any) {
-          console.error('Streaming upload error:', err);
+          logger.log('ERROR', 'Purchase order streaming upload failed', { error: err }, 'PURCHASE_ORDER_INGESTION');
           const errMsg = err?.message || 'Streaming PO upload failed';
           setPoUploadError(errMsg);
           showToast('Upload Error', errMsg, 'warning');
@@ -1018,7 +1019,7 @@ export default function InitialSetupModal() {
                 });
               }
             } catch (e) {
-              console.warn('Job start error:', e);
+              logger.log('WARN', 'Purchase order background job could not start; local parsing fallback will be used', { error: e }, 'PURCHASE_ORDER_INGESTION');
               setPoJob({
                 id: `job-po-${Date.now()}`,
                 jobType: 'PO_DUMP',
@@ -1047,7 +1048,7 @@ export default function InitialSetupModal() {
 
           showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length.toLocaleString('en-IN')} PO line items from ${file.name}.`, 'success');
         } catch (err: any) {
-          console.error('PO Dump Parse Error:', err);
+          logger.log('ERROR', 'Purchase order dump parsing failed', { error: err }, 'PURCHASE_ORDER_INGESTION');
           const errMsg = `Could not parse PO file: ${err.message || 'Unknown format'}`;
           setPoUploadError(errMsg);
           showToast('Parsing Error', errMsg, 'warning');
@@ -1415,7 +1416,7 @@ export default function InitialSetupModal() {
         }
       })
       .catch((err) => {
-        console.warn('Backend AI cross-match API error:', err);
+        logger.log('WARN', 'Backend AI cross-match API failed; category matching continues without it', { error: err }, 'VENDOR_INGESTION');
       });
 
     setTimeout(() => {
@@ -1458,7 +1459,7 @@ export default function InitialSetupModal() {
         'success'
       );
     } catch (err: any) {
-      console.error('Ingestion confirmation error:', err);
+      logger.log('ERROR', 'Historical purchase ingestion confirmation failed', { error: err }, 'HISTORICAL_INGESTION');
       const msg = err?.message || 'An unexpected error occurred during ingestion. Please try again.';
       setSubmissionError(msg);
       showToast('Ingestion Error', msg, 'warning');
@@ -1478,7 +1479,7 @@ export default function InitialSetupModal() {
         'info'
       );
     } catch (err) {
-      console.error('Retry error:', err);
+      logger.log('ERROR', 'Historical purchase onboarding retry failed', { error: err }, 'HISTORICAL_INGESTION');
       showToast('Retry Failed', 'Could not complete retry dispatch.', 'warning');
     } finally {
       setIsRetryingFailedEmails(false);

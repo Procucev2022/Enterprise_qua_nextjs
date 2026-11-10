@@ -8,6 +8,7 @@
 //   - documents attached to the email are stored on the RFQ;
 //   - an email retried after some of its RFQs were created does not raise them twice.
 
+const crypto = require('crypto');
 const googleapis = require('googleapis');
 const emailGatewayService = require('../src/services/emailGatewayService');
 const emailGatewayQueries = require('../src/db/emailGatewayQueries');
@@ -16,11 +17,14 @@ const rfqIngestionService = require('../src/services/rfqIngestionService');
 const rfqAttachmentService = require('../src/services/rfqAttachmentService');
 const storeService = require('../src/services/storeService');
 const mailerService = require('../src/services/mailerService');
+const domainQueries = require('../src/db/domainQueries');
 const dbPool = require('../src/db/pool');
 const { logger } = require('../src/services/loggerService');
+const cryptoService = require('../src/services/cryptoService');
 const {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_DELIVERY_KIND,
   RFQ_NOT_CREATED_NOTIFICATION,
 } = require('../src/config/constants');
 const fixtures = require('./fixtures/sampleRequisitionEmail');
@@ -65,8 +69,12 @@ function twoGroups() {
 
 let notice;
 let ack;
+let originalAesEncryptionKey;
+let originalAesSecretKey;
 
 beforeEach(() => {
+  originalAesEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+  originalAesSecretKey = process.env.AES_SECRET_KEY;
   emailGatewayService.resetAutoReplyMemory();
   rfqIngestionService.primeTaxonomyIndex(taxonomyFixture.CATEGORY_TAXONOMY_FIXTURE);
   jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockResolvedValue(0);
@@ -82,6 +90,10 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.restoreAllMocks();
+  if (originalAesEncryptionKey === undefined) delete process.env.AES_ENCRYPTION_KEY;
+  else process.env.AES_ENCRYPTION_KEY = originalAesEncryptionKey;
+  if (originalAesSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+  else process.env.AES_SECRET_KEY = originalAesSecretKey;
   rfqIngestionService.resetTaxonomyIndex();
   emailGatewayService.runtime.isPolling = false;
   emailGatewayService.runtime.lastError = null;
@@ -249,6 +261,55 @@ describe('the buyer is told when no RFQ was created', () => {
     notice.mockRejectedValue(new Error('all providers down'));
     const result = await emailGatewayService.processMessage(raw(), config());
     expect(result.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+    const queued = emailGatewayQueries.recordProcessed.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.status === INGESTION_OUTCOME.ACK_PENDING && JSON.parse(entry.detail).deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED);
+    expect(queued).toEqual(expect.objectContaining({ fromAddress: SENDER, subject: expect.any(String) }));
+  });
+
+  test('a provider-declined rejection notice is queued for retry', async () => {
+    mockExtraction({ status: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND, lineItems: [] });
+    notice.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+    const queued = emailGatewayQueries.recordProcessed.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.status === INGESTION_OUTCOME.ACK_PENDING && JSON.parse(entry.detail).deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED);
+    expect(queued).toEqual(expect.objectContaining({ fromAddress: SENDER }));
+    expect(JSON.parse(queued.detail)).toMatchObject({ reason: 'NO_LINE_ITEMS', originalSubject: expect.any(String) });
+    expect(JSON.parse(queued.detail)).not.toHaveProperty('deliveryError');
+    expect(logger.error).toHaveBeenCalledWith(
+      'RFQ-not-created email provider did not accept the notice',
+      expect.objectContaining({
+        error: expect.objectContaining({ code: 'EMAIL_DELIVERY_NOT_ACCEPTED', providerReason: 'SMTP not configured' }),
+        reason: 'NO_LINE_ITEMS',
+      }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
+  test('uses a stable hashed retry key when the inbound email has no Message-ID', async () => {
+    mockExtraction({ status: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND, lineItems: [] });
+    notice.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+    const sourceWithoutMessageId = raw().toString('utf8').replace(/^Message-ID:.*\r?\n/m, '');
+
+    const result = await emailGatewayService.processMessage(Buffer.from(sourceWithoutMessageId), config());
+
+    expect(result.message.messageId).toBe('');
+    const fallbackIdentity = [
+      result.message.fromAddress,
+      result.message.sentAt,
+      result.message.subject,
+      result.message.bodyText,
+    ].map((value) => String(value || '')).join('\0');
+    const expectedKey = `${crypto.createHash('sha256').update(fallbackIdentity).digest('hex')}#notice-rfq_not_created#ack`;
+    const queued = emailGatewayQueries.recordProcessed.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.status === INGESTION_OUTCOME.ACK_PENDING && JSON.parse(entry.detail).deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED);
+
+    expect(queued.messageId).toBe(expectedKey);
   });
 
   test('our own notice subject is recognised as ours', () => {
@@ -267,7 +328,8 @@ describe('free trial credits are enforced the same way as on the portal', () => 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ sourcingMode: 'mode_0' }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({ deferPersistence: true, deferSideEffects: true })
     );
   });
 
@@ -284,6 +346,25 @@ describe('free trial credits are enforced the same way as on the portal', () => 
     expect(create).not.toHaveBeenCalled();
   });
 
+  test('durable credit enforcement ignores a stale cached zero balance and attempts the atomic create', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+    storeService.getBuyerAccountByEmail.mockReturnValue(buyerAccount({ remainingFreeRFQs: 0 }));
+    jest.spyOn(emailGatewayService, 'resolveBuyerSourcingMode').mockReturnValue('mode_2');
+    mockExtraction();
+    const exhausted = Object.assign(new Error('free RFQ credits exhausted'), {
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+      remaining: 0,
+    });
+    const createDurably = jest.spyOn(storeService, 'createRFQDurably').mockRejectedValue(exhausted);
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(createDurably).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe(INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED);
+  });
+
   test('Govardhan 17 Oct rule: buyer raising RFQ via email defaults to V0 even with remaining free trial credits', async () => {
     storeService.getBuyerAccountByEmail.mockReturnValue(buyerAccount({ remainingFreeRFQs: 5 }));
     mockExtraction();
@@ -294,7 +375,8 @@ describe('free trial credits are enforced the same way as on the portal', () => 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ sourcingMode: 'mode_0' }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({ deferPersistence: true, deferSideEffects: true })
     );
   });
 
@@ -443,6 +525,45 @@ describe('a retried email does not raise the same RFQ twice', () => {
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(emailGatewayQueries.findProcessed).not.toHaveBeenCalled();
   });
+
+  test('treats an atomic credit rejection as final instead of retrying the same email indefinitely', async () => {
+    mockExtraction();
+    const exhausted = Object.assign(new Error('free RFQ credits exhausted'), {
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+      remaining: 0,
+    });
+    const createDurably = jest.spyOn(storeService, 'createRFQDurably').mockRejectedValue(exhausted);
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED);
+    expect(result.detail).toContain('0 left');
+    expect(createDurably).toHaveBeenCalledTimes(1);
+    expect(notice).toHaveBeenCalled();
+  });
+
+  test('keeps already committed groups and reports when later email groups exhaust the balance', async () => {
+    mockExtraction();
+    jest.spyOn(emailGatewayService, 'processLineItemsAndGroups').mockReturnValue(twoGroups());
+    const exhausted = Object.assign(new Error('free RFQ credits exhausted'), {
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+      remaining: 0,
+    });
+    const created = { id: 'rfq-partial-1', rfqNumber: 'RFQ-PARTIAL-1' };
+    const createDurably = jest.spyOn(storeService, 'createRFQDurably')
+      .mockResolvedValueOnce(created)
+      .mockRejectedValueOnce(exhausted);
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(result.rfqs).toEqual([created]);
+    expect(result.detail).toContain('Remaining email groups were skipped');
+    expect(createDurably).toHaveBeenCalledTimes(2);
+    expect(notice).toHaveBeenCalled();
+  });
 });
 
 describe('emailGatewayQueries.findProcessed', () => {
@@ -587,9 +708,138 @@ describe('acknowledgements that could not be sent are retried later', () => {
     expect(emailGatewayQueries.recordProcessed).not.toHaveBeenCalled();
   });
 
+  test('persists buyer quote retry references without duplicating quote data', async () => {
+    const delivery = {
+      rfqId: 'rfq-buyer-retry-77',
+      rfqNumber: 'RFQ-BUYER-RETRY-77',
+      quoteId: 'quote-buyer-retry-77',
+      recipientName: 'Retry Buyer',
+      quotesCount: 2,
+    };
+
+    await emailGatewayService.queueAcknowledgement('message#notice-buyer_quote_received', {
+      to: 'buyer@example.test',
+      deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+      ...delivery,
+    });
+
+    expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'message#notice-buyer_quote_received#ack',
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      fromAddress: 'buyer@example.test',
+      rfqId: delivery.rfqId,
+      rfqNumber: delivery.rfqNumber,
+      detail: JSON.stringify({
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+        quoteId: delivery.quoteId,
+        recipientName: delivery.recipientName,
+        quotesCount: delivery.quotesCount,
+      }),
+    }));
+  });
+
+  test('encrypts onboarding credentials before persisting a pending acknowledgement', async () => {
+    process.env.AES_ENCRYPTION_KEY = 'email-flow-test-encryption-key';
+    delete process.env.AES_SECRET_KEY;
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const password = 'PrivateTempPassword123';
+    const messageId = 'rfq-secure-77#ack';
+
+    await emailGatewayService.queueAcknowledgement('rfq-secure-77', {
+      to: SENDER,
+      rfqNumber: 'RFQ-SECURE-77',
+      rfqTitle: 'Secure Pumps',
+      buyerName: 'Secure Buyer',
+      tempPassword: password,
+    });
+
+    const saved = emailGatewayQueries.recordProcessed.mock.calls[0][0];
+    const detail = JSON.parse(saved.detail);
+    expect(saved.messageId).toBe(messageId);
+    expect(saved.detail).not.toContain(password);
+    expect(detail).not.toHaveProperty('tempPassword');
+    expect(cryptoService.decrypt(detail.encryptedTempPassword, {
+      additionalData: `email-gateway-ack:${messageId}`,
+    })).toBe(password);
+  });
+
+  test('does not persist plaintext onboarding credentials when encryption is unavailable', async () => {
+    delete process.env.AES_ENCRYPTION_KEY;
+    delete process.env.AES_SECRET_KEY;
+    const password = 'DoNotPersistPlaintext123';
+
+    await emailGatewayService.queueAcknowledgement('rfq-no-key-77', {
+      to: SENDER,
+      buyerName: 'Buyer without key',
+      tempPassword: password,
+    });
+
+    const saved = emailGatewayQueries.recordProcessed.mock.calls[0][0];
+    const detail = JSON.parse(saved.detail);
+    expect(saved.detail).not.toContain(password);
+    expect(detail).not.toHaveProperty('tempPassword');
+    expect(detail.credentialDeliveryUnavailable).toBe(true);
+  });
+
+  test('abandons failed credential delivery instead of persisting credentials without encryption', async () => {
+    delete process.env.AES_ENCRYPTION_KEY;
+    delete process.env.AES_SECRET_KEY;
+    const password = 'CredentialsNeedEncryption';
+
+    await emailGatewayService.queueAcknowledgement('credentials-no-key', {
+      to: SENDER,
+      buyerName: 'Buyer without key',
+      deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+      tempPassword: password,
+    });
+
+    const saved = emailGatewayQueries.recordProcessed.mock.calls[0][0];
+    const detail = JSON.parse(saved.detail);
+    expect(saved.status).toBe(INGESTION_OUTCOME.ACK_ABANDONED);
+    expect(saved.detail).not.toContain(password);
+    expect(detail).not.toHaveProperty('tempPassword');
+    expect(detail.credentialDeliveryUnavailable).toBe(true);
+  });
+
+  test('logs when an acknowledgement retry cannot be durably persisted', async () => {
+    emailGatewayQueries.recordProcessed.mockResolvedValueOnce(false);
+
+    await emailGatewayService.queueAcknowledgement('rfq-ledger-failure-77', {
+      to: SENDER,
+      rfqNumber: 'RFQ-LEDGER-FAILURE-77',
+      rfqTitle: 'Ledger Failure Pumps',
+    });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Pending RFQ acknowledgement could not be persisted',
+      expect.objectContaining({ messageId: 'rfq-ledger-failure-77#ack' }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
+  test('logs failed persistence for a typed email notice', async () => {
+    emailGatewayQueries.recordProcessed.mockResolvedValueOnce(false);
+
+    await emailGatewayService.queueAcknowledgement('typed-notice-failure', {
+      to: SENDER,
+      deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED,
+      reason: 'NO_LINE_ITEMS',
+    });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed email delivery could not be persisted in the gateway retry ledger',
+      expect.objectContaining({
+        messageId: 'typed-notice-failure#ack',
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED,
+      }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
   describe('retryPendingAcknowledgements', () => {
     const NOW = Date.parse('2026-10-14T17:00:00Z');
     const row = (overrides = {}) => ({
+      retry_claim_token: 'test-claim-token',
       message_id: '<m@x>#rfq-0#ack',
       rfq_number: 'RFQ-1',
       from_address: SENDER,
@@ -599,18 +849,162 @@ describe('acknowledgements that could not be sent are retried later', () => {
       ...overrides,
     });
 
+    beforeEach(() => {
+      jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
+      jest.spyOn(emailGatewayQueries, 'updateClaimedAcknowledgement').mockResolvedValue(true);
+    });
+
     test('sends a pending acknowledgement and marks it sent', async () => {
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([row()]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([row()]);
       const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
       expect(ack).toHaveBeenCalledWith({ to: SENDER, buyerName: 'Asha', rfqNumber: 'RFQ-1', rfqTitle: 'Pumps' });
-      expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
-        expect.objectContaining({ messageId: '<m@x>#rfq-0#ack', status: INGESTION_OUTCOME.ACK_SENT })
+      expect(emailGatewayQueries.completeClaimedAcknowledgement).toHaveBeenCalledWith(
+        '<m@x>#rfq-0#ack', 'test-claim-token', INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry'
       );
       expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
     });
 
+    test('does not deliver an acknowledgement when another poller already owns the claim', async () => {
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([]);
+
+      await expect(emailGatewayService.retryPendingAcknowledgements({ now: NOW })).resolves.toEqual({
+        sent: 0,
+        abandoned: 0,
+        stillPending: 0,
+      });
+      expect(ack).not.toHaveBeenCalled();
+    });
+
+    test('reports provider acceptance when the current claim can no longer be completed', async () => {
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([row()]);
+      emailGatewayQueries.completeClaimedAcknowledgement.mockResolvedValueOnce(false);
+
+      await expect(emailGatewayService.retryPendingAcknowledgements({ now: NOW })).resolves.toEqual({
+        sent: 0,
+        abandoned: 0,
+        stillPending: 1,
+      });
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Email provider accepted an acknowledgement but its claimed completion was not persisted',
+        expect.objectContaining({ messageId: '<m@x>#rfq-0#ack' }),
+        'EMAIL_GATEWAY'
+      );
+    });
+
+    test('keeps a provider-declined acknowledgement pending and logs the delivery outcome', async () => {
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([row()]);
+      ack.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(emailGatewayQueries.recordProcessed).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        'Pending RFQ acknowledgement retry failed; event remains pending',
+        expect.objectContaining({
+          messageId: '<m@x>#rfq-0#ack',
+          rfqNumber: 'RFQ-1',
+          fromAddress: SENDER,
+          error: expect.objectContaining({ code: 'EMAIL_DELIVERY_NOT_ACCEPTED', providerReason: 'SMTP not configured' }),
+        }),
+        'EMAIL_GATEWAY'
+      );
+    });
+
+    test('retries an encrypted standalone buyer credential notice with its original template', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'email-flow-test-encryption-key';
+      const messageId = 'source-message#notice-buyer_credentials#ack';
+      const password = 'retry-credential-password';
+      const encryptedTempPassword = cryptoService.encrypt(password, {
+        additionalData: `email-gateway-ack:${messageId}`,
+      }).encoded;
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({
+          message_id: messageId,
+          rfq_number: null,
+          detail: JSON.stringify({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+            buyerName: 'Credential Buyer',
+            encryptedTempPassword,
+          }),
+        }),
+      ]);
+      const credentials = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(credentials).toHaveBeenCalledWith({
+        to: SENDER,
+        recipientName: 'Credential Buyer',
+        tempPassword: password,
+        contactPhone: '',
+      });
+      expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(emailGatewayQueries.completeClaimedAcknowledgement).toHaveBeenCalledWith(
+        messageId, 'test-claim-token', INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry'
+      );
+    });
+
+    test('retries an RFQ-not-created notice with its persisted rejection reason', async () => {
+      const messageId = 'source-message#notice-rfq_not_created#ack';
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({
+          message_id: messageId,
+          detail: JSON.stringify({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED,
+            buyerName: 'Notice Buyer',
+            reason: 'NO_LINE_ITEMS',
+          }),
+        }),
+      ]);
+      const noticeRetry = jest.spyOn(mailerService, 'sendRfqNotCreatedEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(noticeRetry).toHaveBeenCalledWith({
+        to: SENDER,
+        buyerName: 'Notice Buyer',
+        reason: 'NO_LINE_ITEMS',
+        originalSubject: 'Pumps',
+        count: undefined,
+        max: undefined,
+      });
+      expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(emailGatewayQueries.completeClaimedAcknowledgement).toHaveBeenCalledWith(
+        messageId, 'test-claim-token', INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry'
+      );
+    });
+
+    test('abandons a standalone credential retry when its encrypted password is missing', async () => {
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({
+          message_id: 'credential-without-password#ack',
+          detail: JSON.stringify({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+            buyerName: 'Missing Credential Buyer',
+          }),
+        }),
+      ]);
+      const credentials = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail');
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 1, stillPending: 0 });
+      expect(credentials).not.toHaveBeenCalled();
+      expect(emailGatewayQueries.completeClaimedAcknowledgement).toHaveBeenCalledWith(
+        'credential-without-password#ack', 'test-claim-token', INGESTION_OUTCOME.ACK_ABANDONED,
+        'Buyer credential retry has no encrypted credential'
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        'Buyer credential retry was abandoned because its encrypted password is missing',
+        expect.objectContaining({ messageId: 'credential-without-password#ack' }),
+        'EMAIL_GATEWAY'
+      );
+    });
+
     test('drops one older than 48 hours, or with no recipient or readable time', async () => {
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
         row({ processed_at: '2026-10-12 10:00:00' }),
         row({ from_address: null }),
         row({ processed_at: 'not a date' }),
@@ -618,24 +1012,123 @@ describe('acknowledgements that could not be sent are retried later', () => {
       const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
       expect(ack).not.toHaveBeenCalled();
       expect(outcome.abandoned).toBe(3);
-      expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
-        expect.objectContaining({ status: INGESTION_OUTCOME.ACK_ABANDONED })
+      expect(emailGatewayQueries.completeClaimedAcknowledgement).toHaveBeenCalledWith(
+        expect.any(String), 'test-claim-token', INGESTION_OUTCOME.ACK_ABANDONED,
+        'Acknowledgement not sent within 48 hours; dropped'
+      );
+    });
+
+    test('keeps an expired retry pending when claim ownership is lost before abandonment persists', async () => {
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({ processed_at: '2026-10-12 10:00:00' }),
+      ]);
+      emailGatewayQueries.completeClaimedAcknowledgement.mockResolvedValueOnce(false);
+
+      await expect(emailGatewayService.retryPendingAcknowledgements({ now: NOW })).resolves.toEqual({
+        sent: 0,
+        abandoned: 0,
+        stillPending: 1,
+      });
+      expect(ack).not.toHaveBeenCalled();
+    });
+
+    test('scrubs and abandons legacy plaintext credentials when encryption is unavailable', async () => {
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      const password = 'LegacyPlaintextMustBeScrubbed';
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({ detail: JSON.stringify({ buyerName: 'Legacy Buyer', tempPassword: password }) }),
+      ]);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 1, stillPending: 0 });
+      expect(ack).not.toHaveBeenCalled();
+      const scrubbed = emailGatewayQueries.completeClaimedAcknowledgement.mock.calls[0];
+      expect(scrubbed[2]).toBe(INGESTION_OUTCOME.ACK_ABANDONED);
+      expect(scrubbed[3]).not.toContain(password);
+      expect(JSON.parse(scrubbed[3])).not.toHaveProperty('tempPassword');
+    });
+
+    test('does not send legacy credentials when their encrypted rewrite cannot be persisted', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'email-flow-test-encryption-key';
+      delete process.env.AES_SECRET_KEY;
+      const password = 'LegacyRewriteMustPersistFirst';
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({ detail: JSON.stringify({ buyerName: 'Legacy Buyer', tempPassword: password }) }),
+      ]);
+      emailGatewayQueries.updateClaimedAcknowledgement.mockResolvedValue(false);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(ack).not.toHaveBeenCalled();
+      expect(emailGatewayQueries.updateClaimedAcknowledgement).toHaveBeenCalledWith(
+        '<m@x>#rfq-0#ack', 'test-claim-token', expect.any(String)
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        'Legacy plaintext onboarding credentials could not be scrubbed from the retry ledger',
+        expect.objectContaining({ messageId: '<m@x>#rfq-0#ack' }),
+        'EMAIL_GATEWAY'
+      );
+    });
+
+    test('keeps legacy retries pending when a no-key plaintext cleanup write fails', async () => {
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      const password = 'LegacyCleanupWriteFailed';
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({ detail: JSON.stringify({ buyerName: 'Legacy Buyer', tempPassword: password }) }),
+      ]);
+      emailGatewayQueries.completeClaimedAcknowledgement.mockResolvedValue(false);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(ack).not.toHaveBeenCalled();
+      expect(emailGatewayQueries.completeClaimedAcknowledgement.mock.calls[0][3]).not.toContain(password);
+    });
+
+    test('keeps encrypted onboarding credentials pending when the encryption key is unavailable', async () => {
+      const messageId = '<encrypted-without-key>#ack';
+      const encryptedTempPassword = cryptoService.encrypt('EncryptedRetryPassword', {
+        secretKey: 'email-flow-test-key-removed-before-retry',
+        additionalData: `email-gateway-ack:${messageId}`,
+      }).encoded;
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
+        row({
+          message_id: messageId,
+          detail: JSON.stringify({ buyerName: 'Encrypted Buyer', encryptedTempPassword }),
+        }),
+      ]);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(ack).not.toHaveBeenCalled();
+      expect(emailGatewayQueries.recordProcessed).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        'Pending buyer onboarding credentials could not be decrypted for retry',
+        expect.objectContaining({ messageId }),
+        'EMAIL_GATEWAY'
       );
     });
 
     test('stops when every provider is cooling down, carries on past other failures', async () => {
       jest
-        .spyOn(emailGatewayQueries, 'listByStatus')
+        .spyOn(emailGatewayQueries, 'claimPendingAcknowledgements')
         .mockResolvedValue([row(), row({ message_id: 'b#ack' }), row({ message_id: 'c#ack' })]);
       ack.mockRejectedValueOnce(new Error('one provider hiccup')).mockRejectedValueOnce(cooling());
       const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
       expect(ack).toHaveBeenCalledTimes(2);
       expect(outcome).toEqual({ sent: 0, abandoned: 0, stillPending: 2 });
-      expect(emailGatewayQueries.recordProcessed).not.toHaveBeenCalled();
+      expect(emailGatewayQueries.completeClaimedAcknowledgement).not.toHaveBeenCalled();
     });
 
     test('tolerates unreadable saved details and Date / ISO timestamps', async () => {
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
         row({ detail: '{not json', processed_at: new Date(NOW - 60000) }),
         row({ detail: null, processed_at: '2026-10-14T16:59:00Z' }),
       ]);
@@ -645,7 +1138,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
     });
 
     test('nothing pending', async () => {
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([]);
       await expect(emailGatewayService.retryPendingAcknowledgements()).resolves.toEqual({ sent: 0, abandoned: 0, stillPending: 0 });
     });
   });
@@ -662,14 +1155,32 @@ describe('acknowledgements that could not be sent are retried later', () => {
         .spyOn(emailGatewayService, 'retryPendingAcknowledgements')
         .mockResolvedValue({ sent: 1, abandoned: 0, stillPending: 0 });
       const result = await emailGatewayService.pollViaGmailApi(config());
-      expect(retry).toHaveBeenCalledTimes(1);
+      expect(retry).toHaveBeenCalledWith({
+        excludeDeliveryKinds: [
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+        ],
+      });
       expect(result.acknowledgements).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
     });
 
-    test('not on the vendor inbox', async () => {
+    test('vendor inbox retries only vendor email-gateway notice kinds', async () => {
       const retry = jest.spyOn(emailGatewayService, 'retryPendingAcknowledgements');
       await emailGatewayService.pollViaGmailApi({ ...config(), isVendorMailbox: true });
-      expect(retry).not.toHaveBeenCalled();
+      expect(retry).toHaveBeenCalledWith({
+        deliveryKinds: [
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+        ],
+      });
     });
 
     test('a retry failure never breaks the poll', async () => {
@@ -693,5 +1204,274 @@ describe('emailGatewayQueries.listByStatus', () => {
     await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 500)).resolves.toEqual([{ message_id: 'a' }]);
     expect(rows).toHaveBeenCalledWith(expect.stringContaining('order by processed_at asc'), ['ACK_PENDING', 50], { d1: true });
     await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 0)).resolves.toEqual([]);
+  });
+
+  test.each([
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS, '%#notice-buyer\\_credentials#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED, '%#notice-rfq\\_not\\_created#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE, '%#notice-vendor\\_quote\\_failure#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT, '%#notice-vendor\\_portal\\_redirect#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER, '%#notice-vendor\\_unauthorized\\_sender#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK, '%#notice-vendor\\_quote\\_ack#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK, '%#notice-vendor\\_inquiry\\_ack#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER, '%#notice-buyer\\_unauthorized\\_sender#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED, '%#notice-buyer\\_quote\\_received#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER, '%#notice-buyer\\_profile\\_completion\\_reminder#ack'],
+  ])('can query the allowlisted %s notice suffix for its owning poll lane', async (deliveryKind, messageIdPattern) => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([{ message_id: 'notice#ack' }]);
+
+    await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 5, {
+      deliveryKinds: [deliveryKind],
+    })).resolves.toEqual([{ message_id: 'notice#ack' }]);
+
+    expect(rows).toHaveBeenCalledWith(
+      expect.stringContaining("message_id LIKE $3 ESCAPE '\\'"),
+      ['ACK_PENDING', 5, messageIdPattern],
+      { d1: true }
+    );
+  });
+
+  test('keeps bounded no-storage retries in memory and applies poll-lane filters', async () => {
+    const originalLimit = EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS;
+    EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS = 2;
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
+    const logSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    emailGatewayQueries.recordProcessed.mockRestore();
+    const vendorMessageId = 'memory-vendor-message#notice-vendor_inquiry_ack#ack';
+    const buyerMessageId = 'memory-buyer-message#ack';
+
+    try {
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: vendorMessageId,
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK }),
+        fromAddress: 'sales@vendor.in',
+      })).resolves.toBe(true);
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: buyerMessageId,
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        detail: JSON.stringify({ buyerName: 'Buyer' }),
+        fromAddress: 'buyer@example.com',
+      })).resolves.toBe(true);
+
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ message_id: vendorMessageId }),
+          expect.objectContaining({ message_id: buyerMessageId }),
+        ])
+      );
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, 5, {
+        deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK],
+      })).resolves.toEqual([expect.objectContaining({ message_id: vendorMessageId })]);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, 5, {
+        excludeDeliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK],
+      })).resolves.toEqual([expect.objectContaining({ message_id: buyerMessageId })]);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, 5, {
+        deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED],
+      })).resolves.toEqual([]);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_SENT)).resolves.toEqual([]);
+
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: vendorMessageId,
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK }),
+        fromAddress: 'sales@vendor.in',
+      })).resolves.toBe(true);
+
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: 'memory-third-message#ack',
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        fromAddress: 'third@example.com',
+      })).resolves.toBe(false);
+      expect(logSpy).toHaveBeenCalledWith(
+        'In-memory email acknowledgement retry queue reached its capacity',
+        expect.objectContaining({ pendingLimit: 2 }),
+        'EMAIL_GATEWAY'
+      );
+
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: vendorMessageId,
+        status: INGESTION_OUTCOME.ACK_SENT,
+      })).resolves.toBe(true);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING)).resolves.toEqual([
+        expect.objectContaining({ message_id: buyerMessageId }),
+      ]);
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: buyerMessageId,
+        status: INGESTION_OUTCOME.ACK_ABANDONED,
+      })).resolves.toBe(true);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING)).resolves.toEqual([]);
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: 'memory-completed-message',
+        status: INGESTION_OUTCOME.INGESTED,
+      })).resolves.toBe(true);
+    } finally {
+      EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS = originalLimit;
+      emailGatewayQueries.clearMemoryPendingAcknowledgements();
+    }
+  });
+
+  test('fails closed when a scoped query has no allowed delivery kinds', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows');
+
+    await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 5, {
+      deliveryKinds: ['UNKNOWN_NOTICE'],
+    })).resolves.toEqual([]);
+
+    expect(rows).not.toHaveBeenCalled();
+  });
+
+  test('can exclude vendor notices from buyer acknowledgement retries', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([]);
+
+    await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 5, {
+      excludeDeliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE],
+    })).resolves.toEqual([]);
+
+    expect(rows).toHaveBeenCalledWith(
+      expect.stringContaining("message_id NOT LIKE $3 ESCAPE '\\'"),
+      ['ACK_PENDING', 5, '%#notice-vendor\\_quote\\_failure#ack'],
+      { d1: true }
+    );
+  });
+});
+
+describe('emailGatewayQueries pending acknowledgement claims', () => {
+  const NOW = Date.parse('2026-10-14T17:00:00Z');
+
+  beforeEach(() => {
+    emailGatewayQueries.clearMemoryPendingAcknowledgements();
+  });
+
+  test('claims a bounded filtered batch with one token and reads only rows owned by that claim', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows')
+      .mockResolvedValueOnce([{ message_id: 'claimed-row#ack' }])
+      .mockResolvedValueOnce([{ message_id: 'claimed-row#ack', retry_claim_token: 'claim-token' }]);
+
+    await expect(emailGatewayQueries.claimPendingAcknowledgements(500, {
+      deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK],
+      excludeDeliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE],
+      now: NOW,
+    })).resolves.toEqual([{ message_id: 'claimed-row#ack', retry_claim_token: 'claim-token' }]);
+
+    const [claimSql, claimParams] = rows.mock.calls[0];
+    expect(claimSql).toContain('insert into email_ingestion_retry_claims');
+    expect(claimSql).toContain('messages.message_id LIKE $6 ESCAPE');
+    expect(claimSql).toContain('messages.message_id NOT LIKE $7 ESCAPE');
+    expect(claimSql).toContain('on conflict (message_id) do update');
+    expect(claimSql).toContain('where email_ingestion_retry_claims.claimed_at <= $4');
+    expect(claimSql).toContain('returning message_id');
+    expect(claimParams).toEqual([
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      '2026-10-14T17:00:00.000Z',
+      INGESTION_OUTCOME.ACK_PENDING,
+      '2026-10-14T16:55:00.000Z',
+      50,
+      '%#notice-vendor\\_quote\\_ack#ack',
+      '%#notice-vendor\\_quote\\_failure#ack',
+    ]);
+    expect(rows).toHaveBeenNthCalledWith(2, expect.stringContaining('claims.claim_token = $1'), [
+      claimParams[0], INGESTION_OUTCOME.ACK_PENDING, 50,
+    ], { d1: true });
+  });
+
+  test.each([
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS, '%#notice-buyer\\_credentials#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED, '%#notice-rfq\\_not\\_created#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER, '%#notice-buyer\\_unauthorized\\_sender#ack'],
+  ])('claims the supported %s delivery kind', async (deliveryKind, messageIdPattern) => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows')
+      .mockResolvedValueOnce([{ message_id: 'claimed-buyer-row#ack' }])
+      .mockResolvedValueOnce([{ message_id: 'claimed-buyer-row#ack', retry_claim_token: 'claim-token' }]);
+
+    await expect(emailGatewayQueries.claimPendingAcknowledgements(5, {
+      deliveryKinds: [deliveryKind],
+      now: NOW,
+    })).resolves.toEqual([{ message_id: 'claimed-buyer-row#ack', retry_claim_token: 'claim-token' }]);
+
+    expect(rows.mock.calls[0][0]).toContain('messages.message_id LIKE $6 ESCAPE');
+    expect(rows.mock.calls[0][1][5]).toBe(messageIdPattern);
+  });
+
+  test('does not query the database when a scoped claim has no allowed delivery kind', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows');
+
+    await expect(emailGatewayQueries.claimPendingAcknowledgements(5, {
+      deliveryKinds: ['UNKNOWN_NOTICE'],
+    })).resolves.toEqual([]);
+
+    expect(rows).not.toHaveBeenCalled();
+  });
+
+  test('memory claims expire, reject stale owners, and complete only for the current token', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
+    emailGatewayQueries.recordProcessed.mockRestore();
+    await emailGatewayQueries.recordProcessed({
+      messageId: 'memory-claim#ack',
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      fromAddress: 'buyer@example.com',
+      detail: JSON.stringify({ buyerName: 'Buyer' }),
+    });
+
+    const [firstClaim] = await emailGatewayQueries.claimPendingAcknowledgements(1, { now: NOW });
+    await expect(emailGatewayQueries.claimPendingAcknowledgements(1, {
+      now: NOW + EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS - 1,
+    })).resolves.toEqual([]);
+    const [reclaimed] = await emailGatewayQueries.claimPendingAcknowledgements(1, {
+      now: NOW + EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS + 1,
+    });
+
+    expect(reclaimed.retry_claim_token).not.toBe(firstClaim.retry_claim_token);
+    await expect(emailGatewayQueries.updateClaimedAcknowledgement(
+      'memory-claim#ack', firstClaim.retry_claim_token, 'stale detail'
+    )).resolves.toBe(false);
+    await expect(emailGatewayQueries.completeClaimedAcknowledgement(
+      'memory-claim#ack', firstClaim.retry_claim_token, INGESTION_OUTCOME.ACK_SENT, 'stale completion'
+    )).resolves.toBe(false);
+    await expect(emailGatewayQueries.updateClaimedAcknowledgement(
+      'memory-claim#ack', reclaimed.retry_claim_token, 'scrubbed detail'
+    )).resolves.toBe(true);
+    await expect(emailGatewayQueries.completeClaimedAcknowledgement(
+      'memory-claim#ack', reclaimed.retry_claim_token, INGESTION_OUTCOME.ACK_SENT, 'sent'
+    )).resolves.toBe(true);
+    await expect(emailGatewayQueries.claimPendingAcknowledgements(1, { now: NOW + 1000000 })).resolves.toEqual([]);
+  });
+
+  test('requires a current database claim when repairing or completing a retry', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ message_id: 'row#ack' }]);
+
+    await expect(emailGatewayQueries.updateClaimedAcknowledgement('row#ack', 'token', '{}')).resolves.toBe(false);
+    await expect(emailGatewayQueries.completeClaimedAcknowledgement(
+      'row#ack', 'token', INGESTION_OUTCOME.ACK_SENT, 'sent'
+    )).resolves.toBe(true);
+    expect(rows.mock.calls[0][0]).toContain('claim_token = $2');
+    expect(rows.mock.calls[1][0]).toContain('set status = $3');
+    expect(rows.mock.calls[1][0]).toContain('processed_at = CURRENT_TIMESTAMP');
+    expect(rows.mock.calls[1][0]).toContain('returning message_id');
+  });
+
+  test('fails closed and logs database errors while claiming and completing', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(dbPool, 'rows').mockRejectedValue(new Error('database unavailable'));
+
+    await expect(emailGatewayQueries.claimPendingAcknowledgements()).resolves.toEqual([]);
+    await expect(emailGatewayQueries.completeClaimedAcknowledgement(
+      'row#ack', 'token', INGESTION_OUTCOME.ACK_SENT, 'sent'
+    )).resolves.toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Email acknowledgement retries could not be atomically claimed', expect.any(Error), 'EMAIL_GATEWAY'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Claimed email acknowledgement completion could not be recorded', expect.any(Error), 'EMAIL_GATEWAY'
+    );
   });
 });

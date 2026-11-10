@@ -1,6 +1,17 @@
-import { createPaymentLink, createBuyerPaymentLink, getVendorPaymentLinkStatus, getBuyerPaymentLinkStatus } from '@/lib/subscriptionPaymentClient';
+import { createPaymentLink, createBuyerPaymentLink, getVendorPaymentLinkStatus, getBuyerPaymentLinkStatus, fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
+
+const originalRemoteSyncEnabled = logger.isRemoteSyncEnabled;
+
+beforeEach(() => {
+  logger.isRemoteSyncEnabled = false;
+});
+
+afterEach(() => {
+  logger.isRemoteSyncEnabled = originalRemoteSyncEnabled;
+});
 
 describe('subscriptionPaymentClient.createPaymentLink', () => {
   const originalFetch = global.fetch;
@@ -356,5 +367,74 @@ describe('subscriptionPaymentClient.getVendorPaymentLinkStatus / getBuyerPayment
     global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => { throw new Error('bad json'); } });
 
     expect(await getBuyerPaymentLinkStatus('buyer-1', 'pl-b1')).toBeNull();
+  });
+});
+
+describe('subscriptionPaymentClient failure diagnostics', () => {
+  beforeEach(() => {
+    jest.spyOn(logger, 'error');
+  });
+
+  test('logs link creation, status, and pricing failures without payment or account data', async () => {
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Payment service offline'));
+    await createPaymentLink('private-vendor-id', 'private-plan');
+
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => ({ success: false, error: 'Provider unavailable' }),
+    });
+    await createBuyerPaymentLink('private-buyer-id', 'private-plan');
+
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      json: async () => ({ success: false }),
+    });
+    await getVendorPaymentLinkStatus('private-vendor-id', 'private-link-id');
+
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Status service offline'));
+    await getBuyerPaymentLinkStatus('private-buyer-id', 'private-link-id');
+
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: false }),
+    });
+    await fetchSubscriptionPricing();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Subscription payment vendor link request failed',
+      expect.objectContaining({ accountType: 'vendor', method: 'POST', errorMessage: 'Payment service offline' }),
+      'SUBSCRIPTION_PAYMENT_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Subscription payment buyer link creation failed',
+      expect.objectContaining({ status: 503, failureKind: 'SERVER', errorName: 'HttpError' }),
+      'SUBSCRIPTION_PAYMENT_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Subscription payment vendor link status lookup failed',
+      expect.objectContaining({ status: 502, failureKind: 'SERVER' }),
+      'SUBSCRIPTION_PAYMENT_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Subscription payment buyer link status lookup failed',
+      expect.objectContaining({ accountType: 'buyer', errorMessage: 'Status service offline' }),
+      'SUBSCRIPTION_PAYMENT_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Subscription payment pricing fetch failed',
+      expect.objectContaining({ status: 200, failureKind: 'INVALID_RESPONSE', errorName: 'InvalidPaymentResponse' }),
+      'SUBSCRIPTION_PAYMENT_CLIENT'
+    );
+
+    for (const [, metadata] of jest.mocked(logger.error).mock.calls) {
+      expect(metadata).not.toHaveProperty('vendorId');
+      expect(metadata).not.toHaveProperty('buyerAccountId');
+      expect(metadata).not.toHaveProperty('paymentUrl');
+      expect(metadata).not.toHaveProperty('paymentLinkId');
+      expect(metadata).not.toHaveProperty('plan');
+    }
   });
 });

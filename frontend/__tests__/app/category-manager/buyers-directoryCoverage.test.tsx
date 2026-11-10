@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, within } from '@testing-library/react';
-import BuyersDirectory from '@/app/category-manager/buyers-directory';
+import BuyersDirectory, { isPendingBuyer } from '@/app/category-manager/buyers-directory';
 import { useApp } from '@/lib/store';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { CURRENCY, RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
@@ -12,6 +12,10 @@ jest.mock('@/lib/store', () => ({
 
 jest.mock('@/lib/reportsClient', () => ({
   exportReportToExcel: jest.fn(),
+}));
+
+jest.mock('@/lib/documentVaultClient', () => ({
+  fetchDocuments: jest.fn().mockResolvedValue([]),
 }));
 
 type Fields = Record<string, unknown>;
@@ -515,6 +519,31 @@ describe('BuyersDirectory dossier credits', () => {
 });
 
 describe('BuyersDirectory dossier communications and payments', () => {
+  test('restores saved plan filters and treats a missing buyer as not pending', () => {
+    window.sessionStorage.setItem('buyer_directory_state', JSON.stringify({
+      searchTerm: '',
+      selectedMode: 'all',
+      selectedStatus: 'all',
+      selectedPlan: 'growth_tier',
+      selectedSource: 'all',
+      currentPage: 1,
+      sortColumn: null,
+      sortOrder: 'asc',
+    }));
+    mockStore({
+      buyerAccounts: [
+        makeBuyer({ id: 'growth-plan', organizationName: 'Growth Plan Buyer', subscriptionPlan: 'growth_tier' }),
+        makeBuyer({ id: 'custom-plan', organizationName: 'Custom Plan Buyer', subscriptionPlan: 'custom_enterprise' }),
+      ],
+    });
+
+    render(<BuyersDirectory />);
+
+    expect(screen.getByText('Growth Plan Buyer')).toBeInTheDocument();
+    expect(screen.queryByText('Custom Plan Buyer')).not.toBeInTheDocument();
+    expect(isPendingBuyer(null)).toBe(false);
+  });
+
   test('opens communications tab and displays communication channels sub-tabs', async () => {
     mockStore({
       buyerAccounts: [

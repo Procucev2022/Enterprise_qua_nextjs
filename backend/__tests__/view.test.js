@@ -33,21 +33,27 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
 
   test('fails loudly and sets a non-zero exit code when DATABASE_URL is unset', async () => {
     let freshView;
+    let logger;
     jest.isolateModules(() => {
       jest.doMock('../src/db/pool', () => ({ pool: null, query: jest.fn(), checkDomainDBHealth: jest.fn() }));
+      logger = require('../src/services/loggerService').logger;
       freshView = require('../src/db/view');
     });
     const originalExitCode = process.exitCode;
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const loggerErrorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
     await freshView.view();
 
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('DATABASE_URL is not set'));
+    expect(loggerErrorSpy).toHaveBeenCalledWith(
+      'Database viewer cannot start because DATABASE_URL is not configured',
+      {},
+      'DATABASE_VIEW'
+    );
     expect(process.exitCode).toBe(1);
     process.exitCode = originalExitCode;
   });
 
-  test('prints a summary table and the raw records for vendors and RFQs when configured', async () => {
+  test('keeps CLI summaries free of contact and budget fields unless raw output is explicitly requested', async () => {
     const vendorRow = {
       id: 'v-1',
       email: 'v@x.com',
@@ -67,10 +73,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       created_at: '2026-01-01T00:00:00.000Z',
       raw: { id: 'rfq-1', title: 'Test RFQ' },
     };
-    const queryMock = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [vendorRow] })
-      .mockResolvedValueOnce({ rows: [rfqRow] });
+    const queryMock = jest.fn((sql) => Promise.resolve({ rows: [sql.includes('FROM vendors') ? vendorRow : rfqRow] }));
     const healthMock = jest.fn().mockResolvedValue({ providerLabel: 'Neon PostgreSQL', poolStatus: 'ACTIVE (max 10 connections)' });
 
     let freshView;
@@ -79,7 +82,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       freshView = require('../src/db/view');
     });
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'table').mockImplementation(() => {});
+    const tableSpy = jest.spyOn(console, 'table').mockImplementation(() => {});
 
     await freshView.view();
 
@@ -88,6 +91,19 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
     expect(queryMock).toHaveBeenCalledWith(expect.stringContaining('FROM rfqs'));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Vendors (1)'));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('RFQs (1)'));
+    expect(logSpy).not.toHaveBeenCalledWith(JSON.stringify([vendorRow.raw], null, 2));
+    expect(logSpy).not.toHaveBeenCalledWith(JSON.stringify([rfqRow.raw], null, 2));
+    expect(tableSpy.mock.calls[0][0][0]).not.toHaveProperty('email');
+    expect(tableSpy.mock.calls[1][0][0]).not.toHaveProperty('budget');
+
+    logSpy.mockClear();
+    const originalArgv = process.argv;
+    process.argv = [...originalArgv, '--show-raw'];
+    try {
+      await freshView.view();
+    } finally {
+      process.argv = originalArgv;
+    }
     expect(logSpy).toHaveBeenCalledWith(JSON.stringify([vendorRow.raw], null, 2));
     expect(logSpy).toHaveBeenCalledWith(JSON.stringify([rfqRow.raw], null, 2));
   });
@@ -197,26 +213,42 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       });
 
       let freshView;
+      let logger;
       jest.isolateModules(() => {
         jest.doMock('../src/db/pool', () => ({ pool: {}, query: mockQuery }));
+        logger = require('../src/services/loggerService').logger;
+        jest.spyOn(logger, 'warn').mockImplementation(() => {});
         freshView = require('../src/db/view');
       });
 
       const allData = await freshView.getAllPostgresData();
       expect(allData.vendors).toEqual({ rows: [], columns: [], count: 0, pkColumn: 'id' });
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Failed to discover PostgreSQL tables; using the known table list',
+        expect.objectContaining({ knownTableCount: expect.any(Number) }),
+        'DATABASE_VIEW'
+      );
     });
 
     test('handles fetch errors gracefully and falls back to empty array', async () => {
       const mockQuery = jest.fn().mockRejectedValue(new Error('table does not exist'));
 
       let freshView;
+      let logger;
       jest.isolateModules(() => {
         jest.doMock('../src/db/pool', () => ({ pool: {}, query: mockQuery }));
+        logger = require('../src/services/loggerService').logger;
+        jest.spyOn(logger, 'error').mockImplementation(() => {});
         freshView = require('../src/db/view');
       });
 
       const tableData = await freshView.fetchPostgresTable('unknown_table');
       expect(tableData).toEqual({ rows: [], columns: [], count: 0, pkColumn: 'id' });
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to inspect PostgreSQL table',
+        expect.objectContaining({ tableName: 'unknown_table' }),
+        'DATABASE_VIEW'
+      );
     });
   });
 
@@ -248,6 +280,27 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toContain('text/html');
       expect(res.text).toContain('Neon PostgreSQL Database Viewer');
+    });
+
+    test('rejects non-loopback hosts and cross-origin requests before database access', async () => {
+      const remoteHostResponse = await request(app).get('/api/all-data').set('Host', 'attacker.example');
+      expect(remoteHostResponse.status).toBe(403);
+      expect(remoteHostResponse.body.error).toContain('same-machine');
+
+      const remoteOriginResponse = await request(app)
+        .get('/api/all-data')
+        .set('Host', 'localhost:5005')
+        .set('Origin', 'https://attacker.example');
+      expect(remoteOriginResponse.status).toBe(403);
+    });
+
+    test('allows same-machine requests with a matching local origin', async () => {
+      const res = await request(app)
+        .get('/api/overview')
+        .set('Host', 'localhost:5005')
+        .set('Origin', 'http://localhost:5005');
+      expect(res.status).toBe(200);
+      expect(res.body.domainHealth).toBeDefined();
     });
 
     test('GET /api/overview returns domain health and counts', async () => {
@@ -481,13 +534,14 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       const fakeServer = new EventEmitter();
       fakeServer.address = () => ({ port: 5005 });
       fakeServer.close = (cb) => cb && cb();
-      fakeServer.listen = jest.fn((port, cb) => {
+      fakeServer.listen = jest.fn((port, host, cb) => {
         process.nextTick(() => cb && cb());
       });
       jest.spyOn(http, 'createServer').mockReturnValue(fakeServer);
 
       const serverHandle = await freshView.startViewerServer();
-      expect(serverHandle.url).toBe('http://localhost:5005');
+      expect(serverHandle.url).toBe('http://127.0.0.1:5005');
+      expect(fakeServer.listen).toHaveBeenCalledWith(expect.any(Number), '127.0.0.1', expect.any(Function));
       await serverHandle.close();
     });
 
@@ -503,7 +557,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       fakeServer.close = (cb) => cb && cb();
 
       let listenCallCount = 0;
-      fakeServer.listen = jest.fn((port, cb) => {
+      fakeServer.listen = jest.fn((port, host, cb) => {
         listenCallCount += 1;
         if (listenCallCount === 1) {
           const err = new Error('Port in use');
@@ -517,7 +571,8 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       jest.spyOn(http, 'createServer').mockReturnValue(fakeServer);
 
       const serverHandle = await freshView.startViewerServer(5005);
-      expect(serverHandle.url).toBe('http://localhost:61234');
+      expect(serverHandle.url).toBe('http://127.0.0.1:61234');
+      expect(fakeServer.listen).toHaveBeenNthCalledWith(2, 0, '127.0.0.1', expect.any(Function));
       await serverHandle.close();
     });
 
@@ -590,21 +645,23 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
 
     test('logs the failure and exits 1 when view() rejects', async () => {
       let freshView;
+      let logger;
       jest.isolateModules(() => {
         jest.doMock('../src/db/pool', () => ({
           pool: {},
           query: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')),
           checkDomainDBHealth: jest.fn().mockResolvedValue({ providerLabel: 'Neon PostgreSQL', poolStatus: 'ACTIVE' }),
         }));
+        logger = require('../src/services/loggerService').logger;
         freshView = require('../src/db/view');
       });
       jest.spyOn(console, 'log').mockImplementation(() => {});
-      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const loggerErrorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
       const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
 
       await freshView.runCli({ once: true });
 
-      expect(errorSpy).toHaveBeenCalledWith('[db:view] Failed:', 'ECONNREFUSED');
+      expect(loggerErrorSpy).toHaveBeenCalledWith('Database viewer CLI failed', expect.any(Error), 'DATABASE_VIEW');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 

@@ -25,11 +25,67 @@ function cmRecord(overrides = {}) {
   };
 }
 
+function toSessionRow(session) {
+  return {
+    id: session.id,
+    user_uuid: session.userUuid,
+    email: session.email,
+    role: session.role,
+    auth_method: session.authMethod,
+    login_at: session.loginAt,
+    last_activity_at: session.lastActivityAt,
+    logout_at: session.logoutAt,
+    duration_seconds: session.durationSeconds,
+    logout_reason: session.logoutReason,
+    status: session.status,
+    ip_address: session.ipAddress,
+    user_agent: session.userAgent,
+    created_at: session.createdAt,
+  };
+}
+
 describe('Category Manager Vendor Directory Authentication', () => {
   const validEmail = 'cm.lead@procucev.com';
 
   beforeEach(() => {
+    const persistedSessions = new Map();
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(pool, 'query').mockImplementation(async (sql, values = []) => {
+      if (sql.includes('INSERT INTO vendor_directory_sessions')) {
+        const [id, userUuid, email, role, authMethod, loginAt, lastActivityAt, status, ipAddress, userAgent, createdAt] = values;
+        persistedSessions.set(id, {
+          id,
+          userUuid,
+          email,
+          role,
+          authMethod,
+          loginAt,
+          lastActivityAt,
+          status,
+          ipAddress,
+          userAgent,
+          createdAt,
+          logoutAt: null,
+          durationSeconds: 0,
+          logoutReason: null,
+        });
+      } else if (sql.includes('SET last_activity_at = $2')) {
+        const session = persistedSessions.get(values[0]);
+        if (session) session.lastActivityAt = values[1];
+      } else if (sql.includes('SET logout_at = $2')) {
+        const session = persistedSessions.get(values[0]);
+        if (session) {
+          [session.logoutAt, session.durationSeconds, session.logoutReason, session.status] = values.slice(1);
+        }
+      }
+      return { rowCount: 1 };
+    });
+    jest.spyOn(pool, 'rows').mockImplementation(async (sql, values = []) => {
+      if (!sql.includes('FROM vendor_directory_sessions')) return [];
+      const session = persistedSessions.get(values[0]);
+      if (!session || (sql.includes('status = $2') && session.status !== values[1])) return [];
+      return [toSessionRow(session)];
+    });
     vendorDirectorySessionQueries.clearMemoryStoreForTesting();
   });
 
@@ -113,17 +169,21 @@ describe('Category Manager Vendor Directory Authentication', () => {
       expect(res.body.success).toBe(true);
     });
 
-    test('handles identity query database throw gracefully and still allows OTP dispatch', async () => {
+    test('returns retryable service unavailable when the identity lookup fails', async () => {
       jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValue(new Error('DB failure'));
-      jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValue(true);
-      jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue({ success: true });
+      const saveOtpSpy = jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValue(true);
 
       const res = await request(app)
         .post('/api/auth/vendor-directory/request-otp')
         .send({ email: validEmail });
 
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
+      expect(res.status).toBe(503);
+      expect(res.body).toMatchObject({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.AUTH_STORAGE_UNAVAILABLE,
+      });
+      expect(saveOtpSpy).not.toHaveBeenCalled();
     });
 
     test('handles saveOtp storage failure (400)', async () => {
@@ -182,6 +242,28 @@ describe('Category Manager Vendor Directory Authentication', () => {
       expect(decoded.user.sessionId).toBe(res.body.sessionId);
     });
 
+    test('returns a retryable storage error instead of issuing a token for a memory-only session', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(cmRecord());
+      jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValue({
+        code: '654321',
+        expiresAt: Date.now() + 60000,
+        attempts: 0,
+      });
+      pool.query.mockRejectedValue(new Error('D1 unavailable'));
+
+      const res = await request(app)
+        .post('/api/auth/vendor-directory/verify-otp')
+        .send({ email: validEmail, code: '654321' });
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE,
+      });
+      expect(res.body.token).toBeUndefined();
+    });
+
     test('successfully verifies OTP and provisions directory session for employee not pre-existing in DB', async () => {
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
       jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValue({
@@ -200,6 +282,28 @@ describe('Category Manager Vendor Directory Authentication', () => {
       expect(res.body.user.email).toBe('mukul.rai@procucev.com');
       expect(res.body.user.name).toBe('Mukul Rai');
       expect(deleteOtpSpy).toHaveBeenCalled();
+    });
+
+    test('returns retryable service unavailable when identity lookup fails during OTP verification', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValue(new Error('DB failure'));
+      jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValue({
+        code: '123456',
+        expiresAt: Date.now() + 60000,
+        attempts: 0,
+      });
+      const deleteOtpSpy = jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValue(true);
+
+      const res = await request(app)
+        .post('/api/auth/vendor-directory/verify-otp')
+        .send({ email: validEmail, code: '123456' });
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE,
+      });
+      expect(deleteOtpSpy).not.toHaveBeenCalled();
     });
 
     test('rejects missing or malformed inputs (400)', async () => {

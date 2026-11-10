@@ -193,21 +193,36 @@ describe('buyerProfileController 100% Branch Coverage', () => {
     );
     expect(resByAccountId.statusCode).toBe(200);
     expect(resByAccountId.data.data.organizationName).toBe('Alpha Org');
+    expect(resByAccountId.data.meta).toEqual({ source: 'local_account_cache', degraded: true });
 
-    // 3. Fallbacks when account and DB profile are null
+    // 3. A DB failure is exposed as retryable when no local account exists.
     storeService.getBuyerAccounts.mockReturnValue([]);
-    buyerProfileQueries.findProfileByIdentifier.mockResolvedValue({ found: false });
-    const resEmpty = mockRes();
+    buyerProfileQueries.findProfileByIdentifier.mockResolvedValue({ found: false, reason: 'DB_ERROR', error: 'identity database unavailable' });
+    const resDatabaseError = mockRes();
     await buyerProfileController.getBuyerProfileDetails(
-      { query: {} },
-      resEmpty,
+      { query: { email: 'missing@buyer.test' } },
+      resDatabaseError,
       next
     );
-    expect(resEmpty.statusCode).toBe(200);
-    expect(resEmpty.data.data.organizationName).toBe('Buyer Organization');
-    expect(resEmpty.data.data.totalSpend).toBe('₹0');
+    expect(resDatabaseError.statusCode).toBe(503);
+    expect(resDatabaseError.data.retryable).toBe(true);
 
-    // 4. Outer catch block (hitting line 204)
+    // 4. A completed lookup without a matching account is a true 404.
+    buyerProfileQueries.findProfileByIdentifier.mockResolvedValue({ found: false, reason: 'USER_NOT_FOUND' });
+    const resNotFound = mockRes();
+    await buyerProfileController.getBuyerProfileDetails(
+      { query: { name: 'Missing Buyer' } },
+      resNotFound,
+      next
+    );
+    expect(resNotFound.statusCode).toBe(404);
+
+    // 5. An absent identifier is rejected before a database lookup.
+    const resEmpty = mockRes();
+    await buyerProfileController.getBuyerProfileDetails({ query: {} }, resEmpty, next);
+    expect(resEmpty.statusCode).toBe(400);
+
+    // 6. Outer catch block (hitting line 204)
     storeService.getBuyerAccounts.mockImplementation(() => { throw new Error('store crash'); });
     await buyerProfileController.getBuyerProfileDetails(
       { query: { name: 'Crash' } },

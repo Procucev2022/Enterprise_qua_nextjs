@@ -20,6 +20,7 @@ import {
 } from '@/lib/internalTaskClient';
 import { DEFAULT_INTERNAL_MEMBERS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 
 describe('internalTaskClient', () => {
   const originalFetch = global.fetch;
@@ -29,8 +30,9 @@ describe('internalTaskClient', () => {
     jest.spyOn(authClient, 'getToken').mockReturnValue('mock-jwt-token');
   });
 
-  afterAll(() => {
+  afterEach(() => {
     global.fetch = originalFetch;
+    jest.restoreAllMocks();
   });
 
   test('fetchTaskTypes returns task types list on success and handles failures', async () => {
@@ -433,6 +435,7 @@ describe('internalTaskClient', () => {
 
 
   test('approveCreditTask and rejectCreditTask handle approve/reject workflows', async () => {
+    const errorLog = jest.spyOn(logger, 'error');
     // Approve success
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
@@ -453,7 +456,8 @@ describe('internalTaskClient', () => {
 
     // Approve exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network drop'));
-    expect((await approveCreditTask('tsk_1')).success).toBe(false);
+    const appException = await approveCreditTask('tsk_1');
+    expect(appException).toEqual({ success: false, error: 'Network drop' });
 
     // Reject success
     global.fetch = jest.fn().mockResolvedValueOnce({
@@ -473,10 +477,24 @@ describe('internalTaskClient', () => {
 
     // Reject exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Server error'));
-    expect((await rejectCreditTask('tsk_2')).success).toBe(false);
+    const rejectException = await rejectCreditTask('tsk_2');
+    expect(rejectException).toEqual({ success: false, error: 'Server error' });
+    expect(errorLog).toHaveBeenNthCalledWith(
+      1,
+      'Credit task approval request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Network drop' }),
+      'INTERNAL_TASK_CLIENT'
+    );
+    expect(errorLog).toHaveBeenNthCalledWith(
+      2,
+      'Credit task rejection request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Server error' }),
+      'INTERNAL_TASK_CLIENT'
+    );
   });
 
   test('addTaskActivity logs comment and handles errors', async () => {
+    const errorLog = jest.spyOn(logger, 'error');
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -495,9 +513,15 @@ describe('internalTaskClient', () => {
     // Exception branch
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network drop'));
     expect((await addTaskActivity('tsk_1', 'error note')).success).toBe(false);
+    expect(errorLog).toHaveBeenCalledWith(
+      'Task activity submission request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Network drop' }),
+      'INTERNAL_TASK_CLIENT'
+    );
   });
 
   test('checkTaskReminders checks deadlines and alerts', async () => {
+    const errorLog = jest.spyOn(logger, 'error');
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({ success: true, dispatched: 3 }),
@@ -512,7 +536,21 @@ describe('internalTaskClient', () => {
 
     // Exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Err'));
-    expect((await checkTaskReminders()).success).toBe(false);
+    expect(await checkTaskReminders()).toEqual({ success: false, error: 'Err' });
+    expect(errorLog).toHaveBeenCalledWith(
+      'Task reminder check request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Err' }),
+      'INTERNAL_TASK_CLIENT'
+    );
+
+    // Unknown transport rejections must resolve with a useful fallback.
+    global.fetch = jest.fn().mockRejectedValueOnce(null);
+    expect(await checkTaskReminders()).toEqual({ success: false, error: 'Failed to check reminders.' });
+    expect(errorLog).toHaveBeenLastCalledWith(
+      'Task reminder check request failed',
+      expect.objectContaining({ errorName: 'UnknownError', errorMessage: 'Failed to check reminders.' }),
+      'INTERNAL_TASK_CLIENT'
+    );
   });
 
 

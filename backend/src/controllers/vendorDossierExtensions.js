@@ -1,5 +1,6 @@
 const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
 const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
@@ -188,63 +189,7 @@ async function getVendorCommunications(req, res, next) {
 
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const comms = await paymentDuesQueries.getCommunicationHistory(vendor.id);
-    const combined = [...comms];
-
-    const hasOnboarding = combined.some((c) => c.subject && c.subject.includes('Onboarding'));
-    if (!hasOnboarding) {
-      combined.push({
-        id: `comm-vendor-reg-${vendor.id}`,
-        accountId: vendor.id,
-        accountType: 'vendor',
-        channel: 'EMAIL',
-        subject: 'Supplier Network Onboarding & Verification Confirmation',
-        sender: 'Procucev Supplier Operations',
-        recipient: vendor.email || '',
-        message: `Welcome ${vendor.contactPerson || vendor.name} to the Procucev Supplier Network. Catalog indexed across ${vendor.majorCategory || 'Industrial Supplies'}. Free quotation credits allocated.`,
-        deliveryStatus: 'Delivered',
-        notificationStatus: 'Delivered',
-        acknowledgementStatus: 'Acknowledged',
-        sentAt: vendor.createdAt || new Date().toISOString(),
-        direction: 'OUTGOING',
-      });
-    }
-
-    const allRfqs = storeService.getRFQs ? storeService.getRFQs() : [];
-    const vendorEmail = (vendor.email || '').toLowerCase();
-    const vendorName = (vendor.name || '').toLowerCase();
-    const relatedRfqs = allRfqs.filter((r) => {
-      const isAssigned = (r.assignedVendors || []).some(
-        (v) => (v.id && v.id === vendor.id) || (v.email && v.email.toLowerCase() === vendorEmail)
-      );
-      const hasQuote = (r.quotes || []).some(
-        (q) => (q.vendorId && q.vendorId === vendor.id) || (q.vendorName && q.vendorName.toLowerCase() === vendorName)
-      );
-      return isAssigned || hasQuote;
-    });
-
-    relatedRfqs.forEach((rfq, idx) => {
-      const commId = `comm-vrfq-${rfq.id}-${idx}`;
-      if (!combined.some((c) => c.id === commId)) {
-        combined.push({
-          id: commId,
-          accountId: vendor.id,
-          accountType: 'vendor',
-          channel: 'EMAIL',
-          subject: `Opportunity Invitation: RFQ ${rfq.rfqNumber || rfq.id}`,
-          sender: 'Qua AI Matchmaking Dispatcher',
-          recipient: vendor.email || '',
-          message: `Direct opportunity invitation sent for "${rfq.title || 'Procurement'}" under ${rfq.sourcingMode || 'Mode 1'}. Target submission deadline active.`,
-          deliveryStatus: 'Delivered',
-          notificationStatus: 'Dispatched',
-          acknowledgementStatus: 'Acknowledged',
-          sentAt: rfq.createdAt || new Date().toISOString(),
-          direction: 'OUTGOING',
-        });
-      }
-    });
-
-    combined.sort((a, b) => new Date(b.sentAt || 0).getTime() - new Date(a.sentAt || 0).getTime());
-    return res.json({ success: true, data: combined });
+    return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching vendor communications', err, 'VENDOR_CONTROLLER');
     next(err);
@@ -286,16 +231,26 @@ async function recordVendorCommunication(req, res, next) {
       notes || null,
     ].filter(Boolean).join(' | ');
 
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
+    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
+    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10)
+      ? normalizedVendorPhone
+      : vendor.phone;
+    const shouldDispatchEmail = isStaff && normalizedChannel === 'EMAIL' && Boolean(emailTo);
+    const shouldDispatchSms = isStaff && normalizedChannel === 'SMS' && Boolean(smsTo);
+    const deliveryPending = shouldDispatchEmail || shouldDispatchSms;
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: vendor.id,
       accountType: 'vendor',
       channel: normalizedChannel,
-      recipient: recipient || vendor.email || vendor.phone || '',
       subject: subject || null,
       message: message || '',
-      notificationStatus: 'Delivered',
-      deliveryStatus: 'Delivered',
-      acknowledgementStatus: 'Acknowledgement Pending',
+      notificationStatus: deliveryPending ? 'Delivery Pending' : 'Delivered',
+      deliveryStatus: deliveryPending ? 'Pending' : 'Delivered',
+      acknowledgementStatus: deliveryPending ? 'Delivery Pending' : 'Acknowledgement Pending',
       communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
       notes: commNotes || null,
       metadata: {
@@ -303,40 +258,109 @@ async function recordVendorCommunication(req, res, next) {
         callOutcome: callOutcome || null,
         duration: duration || null,
         nextFollowupDate: nextFollowupDate || null,
+        ...(shouldDispatchEmail ? {
+          deliveryEmailSubject: `[Procucev] ${subject || 'Supplier Communication'}`,
+          ...(req.user?.email ? { deliveryReplyTo: req.user.email } : {}),
+        } : {}),
+        ...(shouldDispatchSms ? {
+          deliveryRecipientName: vendor.companyName || vendor.name || 'Supplier',
+          deliveryEntityType: 'supplier_dossier',
+        } : {}),
       },
+      recipient: shouldDispatchEmail
+        ? emailTo
+        : shouldDispatchSms
+          ? smsTo
+          : recipient || vendor.email || vendor.phone || '',
     });
 
-    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
-    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
-    const smsService = require('../services/smsService');
-    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
-    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
-    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10) ? recipient : vendor.phone;
-    if (isStaff && normalizedChannel === 'EMAIL' && emailTo) {
+    let deliveryRecord = record;
+    if (deliveryPending && pool.hasStorage()) {
       try {
-        const mailerService = require('../services/mailerService');
-        if (typeof mailerService.deliver === 'function') {
-          mailerService.deliver({
+        const eventOutboxService = require('../services/eventOutboxService');
+        await eventOutboxService.dispatchDueEventOutboxJobs(1);
+      } catch (dispatchError) {
+        logger.error('Immediate supplier dossier delivery failed; durable recovery will retry', {
+          error: dispatchError,
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      }
+      try {
+        const current = await paymentDuesQueries.getCommunicationById(record.id);
+        if (current) deliveryRecord = current;
+        else logger.error('Supplier dossier communication disappeared after durable delivery was queued', {
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      } catch (lookupError) {
+        logger.error('Supplier dossier delivery state could not be reloaded after queueing', {
+          error: lookupError,
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      }
+    } else {
+      let deliveryError = null;
+      if (shouldDispatchEmail) {
+        try {
+          const mailerService = require('../services/mailerService');
+          if (typeof mailerService.deliver !== 'function') {
+            throw new Error('Shared email delivery service is unavailable.');
+          }
+          const result = await mailerService.deliver({
             to: emailTo,
             subject: '[Procucev] ' + (subject || 'Supplier Communication'),
             text: message || commNotes || '',
             replyTo: req.user?.email || undefined,
-          }, 'SUPPLIER_DOSSIER_COMM').catch((err) => logger.warn('Async vendor email dispatch error', { error: err.message }));
+          }, 'SUPPLIER_DOSSIER_COMM');
+          if (!result?.sent) deliveryError = new Error(result?.reason || 'Email provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Supplier dossier email dispatch failed', { error, vendorId: vendor.id, communicationId: record.id }, 'VENDOR_CONTROLLER');
         }
-      } catch (mailErr) {
-        logger.warn('Failed to dispatch external email for vendor communication', { error: mailErr.message });
+      } else if (shouldDispatchSms) {
+        try {
+          const result = await smsService.sendActionCenterSms({
+            mobile: smsTo,
+            recipientName: vendor.companyName || vendor.name || 'Supplier',
+            message: message || subject || 'Supplier notification',
+            entityType: 'supplier_dossier',
+          });
+          if (!result?.success) deliveryError = new Error(result?.error || 'SMS provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Supplier dossier SMS dispatch failed', { error, vendorId: vendor.id, communicationId: record.id }, 'VENDOR_CONTROLLER');
+        }
       }
-    } else if (isStaff && normalizedChannel === 'SMS' && smsTo) {
-      try {
-        const smsService = require('../services/smsService');
-        smsService.sendActionCenterSms({
-          mobile: smsTo,
-          recipientName: vendor.companyName || vendor.name || 'Supplier',
-          message: message || subject || 'Supplier notification',
-          entityType: 'supplier_dossier',
-        }).catch((err) => logger.warn('Async vendor SMS dispatch error', { error: err.message }));
-      } catch (smsErr) {
-        logger.warn('Failed to dispatch external SMS for vendor communication', { error: smsErr.message });
+
+      if (deliveryPending) {
+        const delivered = !deliveryError;
+        const status = delivered ? 'Delivered' : 'Failed';
+        try {
+          const updated = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+            communicationId: record.id,
+            notificationStatus: delivered ? 'Notification Sent' : 'Failed',
+            deliveryStatus: status,
+            acknowledgementStatus: delivered ? 'Acknowledgement Pending' : 'Failed',
+          });
+          if (updated) {
+            deliveryRecord = updated;
+          } else {
+            logger.error('Supplier dossier delivery result could not be matched to its persisted communication', {
+              vendorId: vendor.id,
+              communicationId: record.id,
+              deliveryStatus: status,
+            }, 'VENDOR_CONTROLLER');
+          }
+        } catch (statusError) {
+          logger.error('Supplier dossier delivery result could not be saved; communication remains pending', {
+            error: statusError,
+            vendorId: vendor.id,
+            communicationId: record.id,
+            providerAccepted: delivered,
+          }, 'VENDOR_CONTROLLER');
+        }
       }
     }
 
@@ -387,7 +411,7 @@ async function recordVendorCommunication(req, res, next) {
       }
     }
 
-    return res.status(201).json({ success: true, data: record, completedTask, followupTask });
+    return res.status(201).json({ success: true, data: deliveryRecord, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording vendor communication', err, 'VENDOR_CONTROLLER');
     next(err);
@@ -412,28 +436,7 @@ async function getVendorPaymentHistory(req, res, next) {
 
     const payments = [];
     const planName = vendor.subscriptionPlan || 'Preferred Partner';
-    const planLower = planName.toLowerCase();
-    const baseAmount = planLower.includes('connect') ? 1999 : (planLower.includes('select') ? 9999 : 5999);
-    const regDate = vendor.createdAt || new Date().toISOString();
-
-    payments.push({
-      id: `vpay-init-${vendor.id}`,
-      paymentId: `vpay-init-${vendor.id}`,
-      invoiceNo: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
-      invoiceNumber: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
-      description: `Plan: ${planName}`,
-      subscriptionPlan: planName,
-      amount: baseAmount,
-      currency: 'INR',
-      gateway: 'Zoho Corporate Payments',
-      paymentMethod: 'UPI / NetBanking / Corporate Card',
-      status: 'PAID',
-      gatewayRef: `ZOHO-VINIT-${vendor.id.slice(0, 8)}`,
-      date: regDate,
-      transactionDate: regDate,
-      receiptUrl: `/api/vendors/${vendor.id}/payment-links/vpay-init-${vendor.id}/invoice`,
-    });
-
+    // Subscription state is not proof of a payment; only provider records count.
     for (const link of links) {
       const linkDate = link.createdAt || new Date().toISOString();
       payments.push({
@@ -566,7 +569,14 @@ async function addQuoteCredits(req, res, next) {
         if (inTx && typeof client.query === 'function') {
           try {
             await client.query('ROLLBACK');
-          } catch (_) {}
+          } catch (rollbackError) {
+            logger.error('Vendor quote-credit transaction rollback failed', {
+              error: rollbackError,
+              operation: 'rollback-vendor-quote-credit-transaction',
+              vendorId: vendor.id,
+              transactionId: tx.id,
+            }, 'VENDOR_CONTROLLER');
+          }
         }
         logger.error('Failed to update vendor credits atomically in PostgreSQL transaction', dbErr, 'VENDOR_CONTROLLER');
         return res.status(500).json({
@@ -586,7 +596,14 @@ async function addQuoteCredits(req, res, next) {
         queryCache.invalidate('vendor_credits');
         queryCache.invalidate('vendors');
       }
-    } catch (_) {}
+    } catch (cacheError) {
+      logger.warn('Vendor quote-credit write committed but local query-cache invalidation failed', {
+        error: cacheError,
+        operation: 'invalidate-vendor-quote-credit-cache',
+        vendorId: vendor.id,
+        cacheTags: ['vendor_credits', 'vendors'],
+      }, 'VENDOR_CONTROLLER');
+    }
 
     // Update in-memory vendor balance only after database transaction succeeds
     storeService.updateVendor(vendor.id, {
@@ -630,7 +647,6 @@ async function requestCreditApproval(req, res, next) {
 
     const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
     const internalTaskQueries = require('../db/internalTaskQueries');
-    const approvalQueries = require('../db/approvalQueries');
 
     const validation = validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, req.body);
     if (!validation.isValid) {
@@ -641,12 +657,12 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
+    const { amount, reason, approverName, initiatorName, idempotencyKey } = validation.sanitizedData;
 
     const vendorLabel = vendor.name || vendor.id;
     const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
 
-    const task = await internalTaskQueries.createInternalTask(
+    const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
         taskCategory: 'CREDIT_MANAGEMENT',
         taskType: 'Add Credits',
@@ -672,13 +688,10 @@ async function requestCreditApproval(req, res, next) {
         name: initiatorName,
         email: req.user?.email || 'cm@procucev.com',
         role: 'category_manager',
-      }
-    );
-
-    // Link to Approvals section
-    await approvalQueries.createApproval(
+      },
       {
         module: 'Seller Credit Addition',
+        idempotencyKey,
         request_type: 'Seller Credit Addition',
         project: vendorLabel,
         applicant_name: vendorLabel,
@@ -692,7 +705,6 @@ async function requestCreditApproval(req, res, next) {
         assigned_approver: approverName,
         status: 'Pending',
         details: taskReason,
-        internal_task_id: task.id,
         seller_id: vendor.id,
         history: [
           {
@@ -703,12 +715,6 @@ async function requestCreditApproval(req, res, next) {
             remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
           },
         ],
-      },
-      {
-        fullName: initiatorName,
-        name: initiatorName,
-        email: req.user?.email || 'cm@procucev.com',
-        role: 'category_manager',
       }
     );
 

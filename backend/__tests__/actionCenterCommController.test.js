@@ -112,6 +112,34 @@ describe('actionCenterCommController', () => {
 
       dispatchSpy.mockRestore();
     });
+
+    it('reports durable pending delivery as queued instead of sent', async () => {
+      req.body = {
+        entityType: 'ticket',
+        entityId: 'tkt-queued',
+        channel: 'EMAIL',
+        recipientEmail: 'client@example.com',
+        message: 'Please review the update.',
+      };
+      const dispatchSpy = jest
+        .spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication')
+        .mockResolvedValueOnce({
+          success: true,
+          queued: true,
+          communication: { id: 'comm-queued', deliveryStatus: 'Pending' },
+        });
+
+      await actionCenterCommController.dispatchCommunication(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        queued: true,
+        message: 'Communication was saved and queued for delivery.',
+      }));
+      dispatchSpy.mockRestore();
+    });
+
     it('returns 404 when communicationId was provided but record not found', async () => {
       req.body = {
         communicationId: 'comm-nonexistent',

@@ -2,15 +2,16 @@ const express = require('express');
 const router = express.Router();
 const vendorController = require('../controllers/vendorController');
 const accountDocumentController = require('../controllers/accountDocumentController');
-const { authenticate, optionalAuthenticate, requireRole, requireVendorDirectorySession } = require('../middleware/auth');
+const { authenticate, requireRole, requireVendorDirectorySession } = require('../middleware/auth');
 
-router.get('/', optionalAuthenticate, vendorController.getVendors);
+router.get('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendors);
 router.post('/', authenticate, vendorController.createVendor);
 router.post('/bulk-import', authenticate, vendorController.bulkImportVendors);
+router.post('/bulk-import/invitations', authenticate, vendorController.sendBulkImportInvitations);
 router.post('/bulk-delete', authenticate, vendorController.bulkDeleteVendors);
 router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
-router.get('/presence', optionalAuthenticate, vendorController.getVendorsPresence);
-router.post('/heartbeat', optionalAuthenticate, vendorController.recordVendorHeartbeat);
+router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendorsPresence);
+router.post('/heartbeat', authenticate, requireRole('vendor'), vendorController.recordVendorHeartbeat);
 router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImportSessionStatus);
 // Protected Vendor Directory — Category Manager with active directory session only.
 router.get('/public', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendors);
@@ -19,7 +20,7 @@ router.get('/public/:id', authenticate, requireRole('category_manager'), require
 
 router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
-router.get('/:id', optionalAuthenticate, vendorController.getVendorById);
+router.get('/:id', authenticate, requireRole('admin', 'category_manager', 'buyer', 'vendor'), vendorController.getVendorById);
 router.put('/:id', authenticate, vendorController.updateVendor);
 router.delete('/:id', authenticate, vendorController.deleteVendor);
 router.post('/:id/rating-revision', authenticate, vendorController.reviseRating);

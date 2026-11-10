@@ -63,7 +63,7 @@ BUYER'S OFFICIAL REMARKS & PERFORMANCE NOTES:
 NETWORK VISIBILITY NOTICE:
 This updated aggregate rating is now active in your verified supplier ledger and will be displayed to all enterprise buyers issuing RFQs in your mapped categories.
 
-SHA-256 AUDIT SEAL: ${email.shaSignature}
+SHA-256 RECORD DIGEST: ${email.shaSignature}
 `;
     navigator.clipboard.writeText(rawEmailText.trim());
     setCopied(true);
@@ -140,7 +140,7 @@ SHA-256 AUDIT SEAL: ${email.shaSignature}
                 <Clock size={11} /> Dispatched: <strong className="text-slate-700 dark:text-gray-300">{email.dispatchedAt}</strong>
               </span>
               <span className="font-mono bg-white dark:bg-gray-900 px-2 py-0.5 rounded border border-slate-200 dark:border-gray-800">
-                Audit: {email.shaSignature.slice(0, 16)}...
+                Record hash: {email.shaSignature.slice(0, 16)}...
               </span>
             </div>
           </div>
@@ -239,7 +239,7 @@ SHA-256 AUDIT SEAL: ${email.shaSignature}
                 <div className="text-slate-400">Procucev Autonomous Sourcing Orchestration Engine</div>
               </div>
               <div className="font-mono text-[9px] text-slate-400 bg-slate-50 dark:bg-gray-950 px-2 py-1 rounded border border-slate-200 dark:border-gray-800">
-                SHA-256: {email.shaSignature}
+                SHA-256 record hash: {email.shaSignature}
               </div>
             </div>
           </div>

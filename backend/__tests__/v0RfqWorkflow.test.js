@@ -1,6 +1,7 @@
 const storeService = require('../src/services/storeService');
 const mailerService = require('../src/services/mailerService');
 const domainQueries = require('../src/db/domainQueries');
+const { RFQ_DOWNLOAD_ERRORS } = require('../src/config/constants');
 
 describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
   let inviteEmailSpy;
@@ -176,7 +177,7 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
       const res6 = await storeService.unlockRFQForVendor(vendor.id, rfq6.id);
       expect(res6.success).toBe(false);
       expect(res6.creditsExhausted).toBe(true);
-      expect(res6.error).toContain('You have used all 5 free RFQ download credits');
+      expect(res6.error).toBe(RFQ_DOWNLOAD_ERRORS.CREDITS_EXHAUSTED);
 
       // Previously unlocked RFQs remain unlocked
       expect(storeService.isRfqUnlockedForVendor(vendor.id, rfq1.id)).toBe(true);

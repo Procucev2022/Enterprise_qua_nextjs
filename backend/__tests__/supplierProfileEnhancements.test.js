@@ -2,6 +2,7 @@ const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensi
 const storeService = require('../src/services/storeService');
 const domainQueries = require('../src/db/domainQueries');
 const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+const pool = require('../src/db/pool');
 const zohoReconciliationService = require('../src/services/zohoReconciliationService');
 
 describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
@@ -190,38 +191,26 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
   });
 
   describe('getVendorCommunications & recordVendorCommunication', () => {
-    test('getVendorCommunications returns combined onboarding & rfq logs', async () => {
+    test('getVendorCommunications returns persisted communication records unchanged', async () => {
       const existingOnboarding = { id: 'c-onb', subject: 'Supplier Network Onboarding' };
       const existingRfq = { id: 'comm-vrfq-rfq-1-0' };
       jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValue([existingOnboarding, existingRfq]);
+      const getRfqs = jest.spyOn(storeService, 'getRFQs');
       const req = { user: adminUser, params: { id: 'v-test-1' } };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await vendorDossierExtensions.getVendorCommunications(req, res, jest.fn());
 
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          data: expect.any(Array),
-        })
-      );
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: [existingOnboarding, existingRfq] });
+      expect(getRfqs).not.toHaveBeenCalled();
     });
 
-    test('getVendorCommunications generates default onboarding communication when none exists', async () => {
+    test('getVendorCommunications returns empty history when no persisted communication exists', async () => {
       jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValue([]);
       const req = { user: adminUser, params: { id: 'v-test-1' } };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await vendorDossierExtensions.getVendorCommunications(req, res, jest.fn());
 
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          data: expect.arrayContaining([
-            expect.objectContaining({
-              subject: expect.stringContaining('Supplier Network Onboarding'),
-            }),
-          ]),
-        })
-      );
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: [] });
     });
 
     test('getVendorCommunications returns 404 for missing vendor', async () => {
@@ -325,9 +314,9 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       expect(resNoEmail.status).toHaveBeenCalledWith(201);
     });
 
-    test('getVendorCommunications matches RFQs by vendorName and quote details', async () => {
+    test('getVendorCommunications does not infer history from RFQ assignments or quotes', async () => {
       jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValue([]);
-      jest.spyOn(storeService, 'getRFQs').mockReturnValue([
+      const getRfqs = jest.spyOn(storeService, 'getRFQs').mockReturnValue([
         {
           id: 'rfq-2',
           rfqNumber: 'RFQ-002',
@@ -338,12 +327,8 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       const req = { user: adminUser, params: { id: 'v-test-1' } };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await vendorDossierExtensions.getVendorCommunications(req, res, jest.fn());
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          data: expect.any(Array),
-        })
-      );
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: [] });
+      expect(getRfqs).not.toHaveBeenCalled();
     });
 
     test('getVendorPaymentHistory handles bare links and completed status', async () => {
@@ -358,7 +343,7 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           summary: expect.objectContaining({
-            totalSuccessfulPayments: 2,
+            totalSuccessfulPayments: 1,
             pendingPayments: 1,
           }),
         })
@@ -367,13 +352,8 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
   });
 
   describe('getVendorPaymentHistory', () => {
-    test('returns payment summary and list including initial plan and payment links across plans', async () => {
-      for (const [plan, expectedBase] of [
-        ['connect', 1999],
-        ['premium', 5999],
-        ['select', 9999],
-        ['Preferred Partner', 5999],
-      ]) {
+    test('returns payment summary from provider payment links only across plans', async () => {
+      for (const plan of ['connect', 'premium', 'select', 'Preferred Partner']) {
         const v = { ...mockVendor, id: `v-${plan}`, subscriptionPlan: plan };
         jest.spyOn(storeService, 'getVendorById').mockReturnValue(v);
         const mockLinks = [
@@ -393,14 +373,16 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
           expect.objectContaining({
             success: true,
             summary: expect.objectContaining({
-              totalAmountPaid: expectedBase + 5000,
+              totalAmountPaid: 5000,
+              totalSuccessfulPayments: 1,
               failedPayments: 1,
               pendingPayments: 1,
               totalRefundedAmount: 1000,
             }),
-            payments: expect.any(Array),
+            payments: expect.arrayContaining([expect.objectContaining({ id: `lnk-${plan}-1`, status: 'PAID' })]),
           })
         );
+        expect(res.json.mock.calls[0][0].payments).toHaveLength(4);
       }
     });
 
@@ -656,7 +638,14 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       const testVendor = { id: 'v-comm-dispatch', name: 'Comm Vendor', email: 'vcomm@example.com', phone: '9157154504' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(testVendor);
       const internalTaskQueries = require('../src/db/internalTaskQueries');
-      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'comm-db-1' });
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'comm-db-1',
+        notificationStatus: 'Delivery Pending',
+        deliveryStatus: 'Pending',
+        acknowledgementStatus: 'Delivery Pending',
+      });
+      const deliveryStatusSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus')
+        .mockImplementation(async (status) => ({ id: 'comm-db-1', ...status }));
       jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'task-comp-1' });
 
       // EMAIL success & catch
@@ -674,6 +663,12 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       const resEmail = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await vendorDossierExtensions.recordVendorCommunication(reqEmail, resEmail, jest.fn());
       expect(deliverSpy).toHaveBeenCalled();
+      expect(deliveryStatusSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+        communicationId: 'comm-db-1',
+        notificationStatus: 'Failed',
+        deliveryStatus: 'Failed',
+        acknowledgementStatus: 'Failed',
+      }));
       expect(resEmail.status).toHaveBeenCalledWith(201);
 
       // SMS success & catch
@@ -692,6 +687,38 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       expect(smsSpy).toHaveBeenCalled();
       expect(resSms.status).toHaveBeenCalledWith(201);
 
+      deliverSpy.mockResolvedValueOnce({ sent: true, messageId: 'supplier-email-provider-1' });
+      await vendorDossierExtensions.recordVendorCommunication(reqEmail, resEmail, jest.fn());
+      expect(deliveryStatusSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+        communicationId: 'comm-db-1',
+        notificationStatus: 'Notification Sent',
+        deliveryStatus: 'Delivered',
+        acknowledgementStatus: 'Acknowledgement Pending',
+      }));
+
+      smsSpy.mockResolvedValueOnce({ success: true, messageId: 'supplier-sms-provider-1' });
+      await vendorDossierExtensions.recordVendorCommunication(reqSms, resSms, jest.fn());
+      expect(deliveryStatusSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+        communicationId: 'comm-db-1',
+        notificationStatus: 'Notification Sent',
+        deliveryStatus: 'Delivered',
+        acknowledgementStatus: 'Acknowledgement Pending',
+      }));
+
+      const { logger } = require('../src/services/loggerService');
+      jest.spyOn(logger, 'error').mockImplementation(() => {});
+      deliveryStatusSpy.mockRejectedValueOnce(Object.assign(new Error('D1 unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' }));
+      deliverSpy.mockResolvedValueOnce({ sent: true, messageId: 'supplier-email-provider-2' });
+      await vendorDossierExtensions.recordVendorCommunication(reqEmail, resEmail, jest.fn());
+      expect(resEmail.json).toHaveBeenLastCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ deliveryStatus: 'Pending', acknowledgementStatus: 'Delivery Pending' }),
+      }));
+      expect(logger.error).toHaveBeenCalledWith(
+        'Supplier dossier delivery result could not be saved; communication remains pending',
+        expect.objectContaining({ communicationId: 'comm-db-1', providerAccepted: true }),
+        'VENDOR_CONTROLLER'
+      );
+
       // EMAIL synchronous throw catch
       deliverSpy.mockImplementationOnce(() => { throw new Error('Synchronous mailer failure'); });
       await vendorDossierExtensions.recordVendorCommunication(reqEmail, resEmail, jest.fn());
@@ -702,6 +729,74 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
 
       deliverSpy.mockRestore();
       smsSpy.mockRestore();
+    });
+
+    test('recordVendorCommunication dispatches configured SMS only through durable recovery', async () => {
+      const eventOutboxService = require('../src/services/eventOutboxService');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'vendor-durable-sms-1', deliveryStatus: 'Pending',
+      });
+      jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+        id: 'vendor-durable-sms-1', deliveryStatus: 'Delivered',
+      });
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'vendor-sms-task' });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication');
+      const smsService = require('../src/services/smsService');
+      const directSendSpy = jest.spyOn(smsService, 'sendActionCenterSms');
+      const req = {
+        user: adminUser,
+        params: { id: 'v-test-1' },
+        body: { channel: 'SMS', recipient: 'invalid', subject: 'Profile update', message: 'Details' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.recordVendorCommunication(req, res, jest.fn());
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        recipient: mockVendor.phone,
+        metadata: expect.objectContaining({
+          deliveryRecipientName: mockVendor.companyName || mockVendor.name,
+          deliveryEntityType: 'supplier_dossier',
+        }),
+      }));
+      expect(dispatchSpy).toHaveBeenCalledWith(1);
+      expect(directSendSpy).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ deliveryStatus: 'Delivered' }),
+      }));
+    });
+
+    test('recordVendorCommunication retains default subject when durable email has no subject or actor email', async () => {
+      const eventOutboxService = require('../src/services/eventOutboxService');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'vendor-durable-email-defaults', deliveryStatus: 'Pending',
+      });
+      jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+        id: 'vendor-durable-email-defaults', deliveryStatus: 'Delivered',
+      });
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'vendor-email-task' });
+      const req = {
+        user: { role: 'admin', id: 'admin-without-email' },
+        params: { id: 'v-test-1' },
+        body: { channel: 'EMAIL', message: 'Details' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.recordVendorCommunication(req, res, jest.fn());
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        recipient: mockVendor.email,
+        metadata: expect.objectContaining({
+          deliveryEmailSubject: '[Procucev] Supplier Communication',
+        }),
+      }));
+      expect(recordSpy.mock.calls[0][0].metadata).not.toHaveProperty('deliveryReplyTo');
     });
   });
 });

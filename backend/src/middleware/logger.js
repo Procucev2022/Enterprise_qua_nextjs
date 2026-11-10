@@ -11,6 +11,9 @@ function requestLogger(req, res, next) {
   const start = Date.now();
   const headers = req.headers || {};
   const requestId = headers['x-request-id'] || `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const requestPath = req.originalUrl.split('?')[0];
+  req.requestId = requestId;
+  if (typeof res.setHeader === 'function') res.setHeader('X-Request-Id', requestId);
 
   /**
    * A request that never produces a response used to leave no trace at all,
@@ -25,10 +28,10 @@ function requestLogger(req, res, next) {
 
     logger.log(
       'WARN',
-      `${req.method} ${req.originalUrl} -> connection closed with no response after ${Date.now() - start}ms`,
+      `${req.method} ${requestPath} -> connection closed with no response after ${Date.now() - start}ms`,
       {
         method: req.method,
-        url: req.originalUrl,
+        url: requestPath,
         durationMs: Date.now() - start,
         requestId,
         ipAddress: req.ip || req.connection?.remoteAddress,
@@ -40,19 +43,16 @@ function requestLogger(req, res, next) {
   res.on('finish', () => {
     const duration = Date.now() - start;
     const status = res.statusCode || 200;
-    const color = status >= 400 ? '\x1b[31m' : status >= 300 ? '\x1b[33m' : '\x1b[32m';
 
-    // Console output for local dev terminal
-    console.log(`${req.method} ${req.originalUrl} ${color}${status}\x1b[0m (${duration}ms)`);
-
-    // Structured persistent logging
+    // The shared logger handles both structured persistence and stdout output.
+    // Avoid a second unstructured line for every request.
     const level = status >= 500 ? 'ERROR' : status >= 400 ? 'WARN' : 'INFO';
     logger.log(
       level,
-      `${req.method} ${req.originalUrl} -> ${status} (${duration}ms)`,
+      `${req.method} ${requestPath} -> ${status} (${duration}ms)`,
       {
         method: req.method,
-        url: req.originalUrl,
+        url: requestPath,
         statusCode: status,
         durationMs: duration,
         requestId,

@@ -61,13 +61,13 @@ import {
   createInternalTask,
   updateInternalTask,
   deleteInternalTask,
-  getExportTasksUrl,
   fetchInternalAssignees,
   completeInternalTask,
   approveCreditTask,
   rejectCreditTask,
   addTaskActivity,
   checkTaskReminders,
+  getExportTasksUrl,
   exportTasksToCsv,
   type InternalTeamMember,
 } from '@/lib/internalTaskClient';
@@ -1152,7 +1152,8 @@ export default function InternalTasksDashboard() {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const due = new Date(dueDateStr);
+    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(dueDateStr);
+    const due = isDateOnly ? new Date(`${dueDateStr}T00:00:00`) : new Date(dueDateStr);
     due.setHours(0, 0, 0, 0);
     const diffTime = due.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));

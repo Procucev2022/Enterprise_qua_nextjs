@@ -3,7 +3,7 @@ jest.mock('../src/db/buyerProfileQueries', () => ({ findProfileByUserId: jest.fn
 jest.mock('../src/services/loggerService', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), audit: jest.fn() } }));
 jest.mock('../src/services/storeService', () => ({
   reset: jest.fn(), addAuditLog: jest.fn(), notifyBuyer: jest.fn(), getVendorById: jest.fn(),
-  updateVendor: jest.fn(), empanelIngestedVendor: jest.fn(),
+  getVendorByIdWithDBFallback: jest.fn(), updateVendorDurably: jest.fn(), empanelIngestedVendor: jest.fn(),
 }));
 jest.mock('../src/services/mailerService', () => ({}));
 jest.mock('../src/services/vendorCategorizationService', () => ({
@@ -67,6 +67,8 @@ beforeEach(() => {
   queries.saveBuyerReview.mockImplementation(async (_id, _org, review) => ({ ...MAPPING, buyerMajorCategory: review.majorCategory, buyerMinorCategories: review.minorCategories, status: review.status }));
   queries.saveAiSuggestion.mockResolvedValue({ ...MAPPING });
   store.empanelIngestedVendor.mockReturnValue({ id: 'live-vendor-1' });
+  store.getVendorByIdWithDBFallback.mockResolvedValue(null);
+  store.updateVendorDurably.mockResolvedValue({ id: 'existing-vendor' });
 });
 
 afterEach(() => jest.useRealTimers());
@@ -370,12 +372,12 @@ describe('buyer category review and vendor empanelment', () => {
   test('skips contactless mappings and updates an existing scoped vendor without duplicating it', async () => {
     expect(await service.empanelApprovedVendor(CONTEXT, SESSION.id, null)).toBeNull();
     expect(await service.empanelApprovedVendor(CONTEXT, SESSION.id, { ...MAPPING, email: '' })).toBeNull();
-    store.getVendorById.mockReturnValue({ id: 'existing-vendor' });
-    store.updateVendor.mockReturnValue({ id: 'existing-vendor' });
+    store.getVendorByIdWithDBFallback.mockResolvedValue({ id: 'existing-vendor' });
+    store.updateVendorDurably.mockResolvedValue({ id: 'existing-vendor' });
     const mapping = { ...MAPPING, buyerMajorCategory: 'Mechanical', buyerMinorCategories: ['Valves'] };
     expect(await service.empanelApprovedVendor(CONTEXT, SESSION.id, mapping)).toEqual({ id: 'existing-vendor' });
-    expect(store.getVendorById).toHaveBeenCalledWith(mapping.email, 'all');
-    expect(store.updateVendor).toHaveBeenCalledWith('existing-vendor', expect.objectContaining({ minorCategories: ['Valves'], contactPerson: 'Supplier Contact', gstin: VENDOR_ROW.gstin }));
+    expect(store.getVendorByIdWithDBFallback).toHaveBeenCalledWith(mapping.email, 'all', { fresh: true });
+    expect(store.updateVendorDurably).toHaveBeenCalledWith('existing-vendor', expect.objectContaining({ minorCategories: ['Valves'], contactPerson: 'Supplier Contact', gstin: VENDOR_ROW.gstin }));
     expect(queries.attachVendorId).toHaveBeenCalledWith(MAPPING.id, CONTEXT.organizationId, 'existing-vendor');
   });
 

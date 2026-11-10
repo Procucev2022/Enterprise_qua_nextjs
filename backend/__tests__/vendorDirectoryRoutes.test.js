@@ -14,7 +14,10 @@ describe('Protected Vendor Directory Routes (/api/vendors/public*)', () => {
   let validDirectoryToken;
 
   beforeEach(async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    // This route suite intentionally uses the no-database test mode and the
+    // session module's in-memory adapter. Configured-database failures are
+    // covered by vendorDirectorySessionQueries/auth middleware tests.
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     vendorDirectorySessionQueries.clearMemoryStoreForTesting();
     jest.spyOn(authSessionQueries, 'isTokenRevoked').mockResolvedValue(false);
 

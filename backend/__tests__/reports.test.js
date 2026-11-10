@@ -995,6 +995,7 @@ describe('Reports Controller & Endpoints Suite', () => {
       const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const querySpy = jest.spyOn(pool, 'query').mockRejectedValue(new Error('DB Timeout'));
       const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue(true);
+      const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue({ hydrated: true });
 
       storeService.rfqs = [
         {
@@ -1012,12 +1013,14 @@ describe('Reports Controller & Endpoints Suite', () => {
       hasStorageSpy.mockRestore();
       querySpy.mockRestore();
       syncSpy.mockRestore();
+      hydrateSpy.mockRestore();
     });
 
     test('getDailyActivityReport with pool.hasStorage and auditLogs with timestamp in range', async () => {
       const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue(true);
       const buyersSpy = jest.spyOn(storeService, 'getBuyerAccounts').mockResolvedValue([]);
+      const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue({ hydrated: true });
       const domainQueries = require('../src/db/domainQueries');
       const countSpy = jest.spyOn(domainQueries, 'countVendorsCreatedBetween').mockResolvedValue(5);
 
@@ -1036,6 +1039,7 @@ describe('Reports Controller & Endpoints Suite', () => {
       syncSpy.mockRestore();
       buyersSpy.mockRestore();
       countSpy.mockRestore();
+      hydrateSpy.mockRestore();
     });
   });
 
@@ -1052,6 +1056,8 @@ describe('Reports Controller & Endpoints Suite', () => {
 
     test('getSellerReports with sellerSummary requestType calls loadAllVendorsForReport', async () => {
       const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue({ hydrated: true });
+      const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue([]);
       const vendorsSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
         rows: [
           {
@@ -1091,7 +1097,9 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(resFallback.body.success).toBe(true);
 
       hasStorageSpy.mockRestore();
+      syncSpy.mockRestore();
       vendorsSpy.mockRestore();
+      hydrateSpy.mockRestore();
     });
 
     test('sellerCategoryReport with vendor without majorCategory', async () => {

@@ -3,6 +3,8 @@ const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const authService = require('../src/services/authService');
 const pool = require('../src/db/pool');
+const { queryCache } = require('../src/db/queryCache');
+const { logger } = require('../src/services/loggerService');
 const accountDocumentQueries = require('../src/db/accountDocumentQueries');
 const accountDocumentController = require('../src/controllers/accountDocumentController');
 
@@ -325,6 +327,7 @@ describe('Account Documents & Credit Workflows API', () => {
     it('handles fallback vendor balances and database sync branches', async () => {
       const origHasStorage = pool.hasStorage;
       const origQuery = pool.query;
+      const origHydrated = storeService.isHydratedFromDB;
 
       try {
         // Create vendor with no freeQuotationCredits but credits property
@@ -354,6 +357,9 @@ describe('Account Documents & Credit Workflows API', () => {
         delete createdV3.credits;
 
         // Test with pool.hasStorage = true (success branch)
+        // This test supplies a fake database connection, so bypass the app's
+        // real lazy-hydration gate before exercising the credit transaction.
+        storeService.isHydratedFromDB = true;
         pool.hasStorage = () => true;
         pool.query = jest.fn().mockResolvedValue({ rowCount: 1 });
 
@@ -387,11 +393,13 @@ describe('Account Documents & Credit Workflows API', () => {
         const failingClient = {
           query: jest.fn().mockImplementation((sql) => {
             if (sql.includes('UPDATE vendors')) throw new Error('Postgres write failure');
+            if (sql === 'ROLLBACK') throw new Error('Postgres rollback failure');
             return { rowCount: 1 };
           }),
           release: jest.fn(),
         };
         pool.pool = { connect: jest.fn().mockResolvedValue(failingClient) };
+        const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
         const res3 = await request(app)
           .post(`/api/vendors/${createdV3.id}/add-quote-credits`)
@@ -401,6 +409,14 @@ describe('Account Documents & Credit Workflows API', () => {
         expect(res3.body.success).toBe(false);
         expect(failingClient.query).toHaveBeenCalledWith('ROLLBACK');
         expect(failingClient.release).toHaveBeenCalled();
+        expect(errorLogSpy).toHaveBeenCalledWith(
+          'Vendor quote-credit transaction rollback failed',
+          expect.objectContaining({
+            operation: 'rollback-vendor-quote-credit-transaction',
+            vendorId: createdV3.id,
+          }),
+          'VENDOR_CONTROLLER'
+        );
 
         // Test with client without release function
         pool.pool = null;
@@ -415,6 +431,51 @@ describe('Account Documents & Credit Workflows API', () => {
       } finally {
         pool.hasStorage = origHasStorage;
         pool.query = origQuery;
+        storeService.isHydratedFromDB = origHydrated;
+      }
+    });
+
+    it('logs cache invalidation failure after the quote-credit transaction commits', async () => {
+      const { addQuoteCredits } = require('../src/controllers/vendorDossierExtensions');
+      const originalPoolInstance = pool.pool;
+      const originalHydratedState = storeService.isHydratedFromDB;
+      const cacheError = new Error('query cache is unavailable');
+      const client = {
+        query: jest.fn().mockResolvedValue({ rowCount: 1 }),
+        release: jest.fn(),
+      };
+      const warningLogSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(queryCache, 'invalidate').mockImplementation(() => {
+        throw cacheError;
+      });
+      jest.spyOn(storeService, 'updateVendor').mockReturnValue(mockVendor);
+      pool.pool = { connect: jest.fn().mockResolvedValue(client) };
+      storeService.isHydratedFromDB = true;
+
+      try {
+        const response = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+        await addQuoteCredits({
+          user: { role: 'admin' },
+          params: { id: mockVendor.id },
+          body: { amount: 1 },
+        }, response, jest.fn());
+
+        expect(client.query).toHaveBeenCalledWith('COMMIT');
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+        expect(warningLogSpy).toHaveBeenCalledWith(
+          'Vendor quote-credit write committed but local query-cache invalidation failed',
+          expect.objectContaining({
+            error: cacheError,
+            operation: 'invalidate-vendor-quote-credit-cache',
+            vendorId: mockVendor.id,
+            cacheTags: ['vendor_credits', 'vendors'],
+          }),
+          'VENDOR_CONTROLLER'
+        );
+      } finally {
+        pool.pool = originalPoolInstance;
+        storeService.isHydratedFromDB = originalHydratedState;
       }
     });
 
@@ -784,19 +845,13 @@ describe('Account Documents & Credit Workflows API', () => {
     it('vendorDossierExtensions deep branch coverage: RFQ comms, payment statuses, task/mail failures', async () => {
       const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensions');
       const internalTaskQueries = require('../src/db/internalTaskQueries');
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
       const mailerService = require('../src/services/mailerService');
       const smsService = require('../src/services/smsService');
 
       // 1. getVendorCommunications with assigned RFQ
-      jest.spyOn(storeService, 'getRFQs').mockReturnValueOnce([
-        {
-          id: 'rfq-comm-1',
-          rfqNumber: 'RFQ-COMM-101',
-          title: 'Steel Pipe Order',
-          sourcingMode: 'Mode 1',
-          assignedVendors: [{ id: mockVendor.id }],
-          quotes: [{ vendorId: mockVendor.id }],
-        },
+      jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValueOnce([
+        { id: 'comm-rfq-101', subject: 'RFQ-COMM-101 invitation', channel: 'EMAIL', status: 'SENT' },
       ]);
       const resComm = await request(app)
         .get(`/api/vendors/${mockVendor.id}/communications`)
@@ -1405,6 +1460,68 @@ describe('Account Documents & Credit Workflows API', () => {
       });
       expect(specificCat.every(d => d.category.toLowerCase() === 'rfq')).toBe(true);
     });
+
+    it('logs buyer and seller workflow aggregation failures while preserving the partial result', async () => {
+      const originalHasStorage = pool.hasStorage;
+      const originalRfqs = storeService.rfqs;
+      const originalEvaluations = storeService.evaluations;
+      const buyerError = new Error('RFQ workflow source unavailable');
+      const sellerError = new Error('Seller workflow source unavailable');
+      const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      try {
+        pool.hasStorage = () => false;
+        storeService.rfqs = new Proxy([], {
+          get(target, property, receiver) {
+            if (property === 'filter') throw buyerError;
+            return Reflect.get(target, property, receiver);
+          },
+        });
+
+        const buyerDocuments = await accountDocumentQueries.listAccountDocuments({
+          accountType: 'buyer',
+          accountId: 'buyer-workflow-error',
+        });
+        expect(buyerDocuments).toEqual([]);
+        expect(errorLogSpy).toHaveBeenCalledWith(
+          'Buyer RFQ workflow documents could not be aggregated for the account dossier',
+          expect.objectContaining({
+            error: buyerError,
+            operation: 'aggregate-buyer-rfq-documents',
+            accountType: 'buyer',
+            accountIdPresent: true,
+          }),
+          'ACCOUNT_DOCUMENT_QUERIES'
+        );
+
+        storeService.evaluations = new Proxy([], {
+          get(target, property, receiver) {
+            if (property === 'find') throw sellerError;
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        const sellerDocuments = await accountDocumentQueries.listAccountDocuments({
+          accountType: 'seller',
+          accountId: 'seller-workflow-error',
+        });
+
+        expect(sellerDocuments).toEqual([]);
+        expect(errorLogSpy).toHaveBeenCalledWith(
+          'Seller evaluation and quotation workflow documents could not be aggregated for the account dossier',
+          expect.objectContaining({
+            error: sellerError,
+            operation: 'aggregate-seller-workflow-documents',
+            accountType: 'seller',
+            accountIdPresent: true,
+          }),
+          'ACCOUNT_DOCUMENT_QUERIES'
+        );
+      } finally {
+        pool.hasStorage = originalHasStorage;
+        storeService.rfqs = originalRfqs;
+        storeService.evaluations = originalEvaluations;
+      }
+    });
   });
 
   describe('accountDocumentController edge cases & error handler branches', () => {
@@ -1528,8 +1645,9 @@ describe('Account Documents & Credit Workflows API', () => {
         pool.query = async () => { throw new Error('Postgres fail'); };
         const dbBuyerCrash = await accountDocumentController.findBuyerSafe('buyer-db-crash');
         expect(dbBuyerCrash).toBeUndefined();
-        const userFallback = await accountDocumentController.findBuyerSafe('non-existent', { role: 'buyer', email: mockBuyer.corporateEmail });
-        expect(userFallback).toBeDefined();
+        await expect(accountDocumentController.findBuyerSafe('non-existent', {
+          role: 'buyer', email: mockBuyer.corporateEmail,
+        })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
         const memVendor = await accountDocumentController.findVendorSafe(mockVendor.id);
         expect(memVendor.id).toBe(mockVendor.id);
         const nullVendor = await accountDocumentController.findVendorSafe('missing-vendor');

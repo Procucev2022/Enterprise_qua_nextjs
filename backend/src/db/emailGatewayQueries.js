@@ -10,10 +10,14 @@
 // authoritative check is this table, keyed on the message's own Message-ID.
 // ==============================================================================
 
+const crypto = require('crypto');
 const pool = require('./pool');
 const { logger } = require('../services/loggerService');
+const { EMAIL_GATEWAY_CONFIG, EMAIL_GATEWAY_DELIVERY_KIND } = require('../config/constants');
 
+const RETRYABLE_DELIVERY_KINDS = new Set(Object.values(EMAIL_GATEWAY_DELIVERY_KIND));
 const memoryProcessedMessageIds = new Set();
+const memoryPendingAcknowledgements = new Map();
 
 /** Outcomes recorded against a considered message. */
 const INGESTION_OUTCOME = {
@@ -152,24 +156,226 @@ async function findProcessed(messageId) {
 
 /**
  * Oldest-first ledger rows in one status, for work the poller retries (pending
- * acknowledgements). Empty on a ledger error: a retry can always wait a poll.
+ * acknowledgements). Optional allowlisted kinds scope vendor retries so they do
+ * not scan or starve behind unrelated buyer acknowledgement rows.
  */
-async function listByStatus(status, limit = 5) {
-  if (!status || !pool.hasStorage()) return [];
+async function listByStatus(status, limit = 5, { deliveryKinds = null, excludeDeliveryKinds = null } = {}) {
+  if (!status) return [];
   const capped = Math.min(Math.max(Number(limit) || 5, 1), 50);
+  const scopedDeliveryKinds = Array.isArray(deliveryKinds)
+    ? [...new Set(deliveryKinds.filter((kind) => RETRYABLE_DELIVERY_KINDS.has(kind)))]
+    : [];
+  if (deliveryKinds !== null && deliveryKinds !== undefined && scopedDeliveryKinds.length === 0) return [];
+  const scopedExcludedKinds = Array.isArray(excludeDeliveryKinds)
+    ? [...new Set(excludeDeliveryKinds.filter((kind) => RETRYABLE_DELIVERY_KINDS.has(kind)))]
+    : [];
+  if (!pool.hasStorage()) {
+    return [...memoryPendingAcknowledgements.values()]
+      .filter((row) => row.status === String(status))
+      .filter((row) => scopedDeliveryKinds.length === 0 || scopedDeliveryKinds.some((kind) =>
+        row.message_id.includes(`#notice-${kind.toLowerCase()}#ack`)
+      ))
+      .filter((row) => scopedExcludedKinds.every((kind) =>
+        !row.message_id.includes(`#notice-${kind.toLowerCase()}#ack`)
+      ))
+      .sort((left, right) => new Date(left.processed_at).getTime() - new Date(right.processed_at).getTime())
+      .slice(0, capped);
+  }
+  const messageIdPatterns = [];
+  const deliveryKindClauses = [];
+  if (scopedDeliveryKinds.length > 0) {
+    const includeFilters = scopedDeliveryKinds.map((kind) => {
+      messageIdPatterns.push(`%#notice-${kind.toLowerCase().replace(/[\\%_]/g, '\\$&')}#ack`);
+      return `message_id LIKE $${messageIdPatterns.length + 2} ESCAPE '\\'`;
+    });
+    deliveryKindClauses.push(`(${includeFilters.join(' or ')})`);
+  }
+  scopedExcludedKinds.forEach((kind) => {
+    messageIdPatterns.push(`%#notice-${kind.toLowerCase().replace(/[\\%_]/g, '\\$&')}#ack`);
+    deliveryKindClauses.push(`message_id NOT LIKE $${messageIdPatterns.length + 2} ESCAPE '\\'`);
+  });
+  const deliveryKindClause = deliveryKindClauses.length > 0 ? `and ${deliveryKindClauses.join(' and ')}` : '';
   try {
     return await pool.rows(
       `select message_id, rfq_id, rfq_number, from_address, subject, status, detail, processed_at
          from email_ingestion_log
         where status = $1
+          ${deliveryKindClause}
         order by processed_at asc
         limit $2`,
-      [String(status), capped],
+      [String(status), capped, ...messageIdPatterns],
       { d1: true }
     );
   } catch (err) {
     logger.error('Email ingestion ledger could not be listed by status', err, 'EMAIL_GATEWAY');
     return [];
+  }
+}
+
+/**
+ * Atomically reserve pending acknowledgement rows for one poller. The token is
+ * unique per claim batch; the insert/upsert conflict predicate is the
+ * cross-isolate compare-and-swap that prevents two pollers from sending the
+ * same retry concurrently. Expired claims are reclaimable after a crashed
+ * worker or a provider call that never settled.
+ */
+async function claimPendingAcknowledgements(limit = 5, {
+  deliveryKinds = null,
+  excludeDeliveryKinds = null,
+  now = Date.now(),
+} = {}) {
+  const capped = Math.min(Math.max(Number(limit) || 5, 1), 50);
+  const scopedDeliveryKinds = Array.isArray(deliveryKinds)
+    ? [...new Set(deliveryKinds.filter((kind) => RETRYABLE_DELIVERY_KINDS.has(kind)))]
+    : [];
+  const scopedExcludedKinds = Array.isArray(excludeDeliveryKinds)
+    ? [...new Set(excludeDeliveryKinds.filter((kind) => RETRYABLE_DELIVERY_KINDS.has(kind)))]
+    : [];
+  if (deliveryKinds !== null && deliveryKinds !== undefined && scopedDeliveryKinds.length === 0) return [];
+
+  const claimToken = crypto.randomUUID();
+  const claimedAt = new Date(now).toISOString();
+  const reclaimBefore = new Date(now - EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS).toISOString();
+  if (!pool.hasStorage()) {
+    return [...memoryPendingAcknowledgements.values()]
+      .filter((row) => row.status === INGESTION_OUTCOME.ACK_PENDING)
+      .filter((row) => scopedDeliveryKinds.length === 0 || scopedDeliveryKinds.some((kind) =>
+        row.message_id.includes(`#notice-${kind.toLowerCase()}#ack`)
+      ))
+      .filter((row) => scopedExcludedKinds.every((kind) =>
+        !row.message_id.includes(`#notice-${kind.toLowerCase()}#ack`)
+      ))
+      .filter((row) => {
+        if (!row.retry_claimed_at) return true;
+        const timestamp = Date.parse(row.retry_claimed_at);
+        return !Number.isFinite(timestamp) || timestamp <= now - EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS;
+      })
+      .sort((left, right) => new Date(left.processed_at).getTime() - new Date(right.processed_at).getTime())
+      .slice(0, capped)
+      .map((row) => {
+        row.retry_claim_token = claimToken;
+        row.retry_claimed_at = new Date(now).toISOString();
+        return { ...row };
+      });
+  }
+
+  const patterns = [];
+  const filters = [];
+  if (scopedDeliveryKinds.length > 0) {
+    const includeFilters = scopedDeliveryKinds.map((kind) => {
+      patterns.push(`%#notice-${kind.toLowerCase().replace(/[\\%_]/g, '\\$&')}#ack`);
+      return `messages.message_id LIKE $${patterns.length + 5} ESCAPE '\\'`;
+    });
+    filters.push(`(${includeFilters.join(' or ')})`);
+  }
+  scopedExcludedKinds.forEach((kind) => {
+    patterns.push(`%#notice-${kind.toLowerCase().replace(/[\\%_]/g, '\\$&')}#ack`);
+    filters.push(`messages.message_id NOT LIKE $${patterns.length + 5} ESCAPE '\\'`);
+  });
+  const filterClause = filters.length > 0 ? `and ${filters.join(' and ')}` : '';
+
+  try {
+    const claimedRows = await pool.rows(
+      `insert into email_ingestion_retry_claims (message_id, claim_token, claimed_at)
+       select messages.message_id, $1, $2
+         from email_ingestion_log messages
+         left join email_ingestion_retry_claims claims on claims.message_id = messages.message_id
+        where messages.status = $3
+          and (claims.message_id is null or claims.claimed_at <= $4)
+          ${filterClause}
+        order by messages.processed_at asc
+        limit $5
+       on conflict (message_id) do update set
+         claim_token = excluded.claim_token,
+         claimed_at = excluded.claimed_at
+       where email_ingestion_retry_claims.claimed_at <= $4
+       returning message_id`,
+      [claimToken, claimedAt, INGESTION_OUTCOME.ACK_PENDING, reclaimBefore, capped, ...patterns],
+      { d1: true }
+    );
+    if (claimedRows.length === 0) return [];
+    return await pool.rows(
+      `select messages.message_id, messages.rfq_id, messages.rfq_number, messages.from_address,
+              messages.subject, messages.status, messages.detail, messages.processed_at,
+              claims.claim_token as retry_claim_token
+         from email_ingestion_log messages
+         join email_ingestion_retry_claims claims on claims.message_id = messages.message_id
+        where claims.claim_token = $1 and messages.status = $2
+        order by messages.processed_at asc
+        limit $3`,
+      [claimToken, INGESTION_OUTCOME.ACK_PENDING, capped],
+      { d1: true }
+    );
+  } catch (err) {
+    logger.error('Email acknowledgement retries could not be atomically claimed', err, 'EMAIL_GATEWAY');
+    return [];
+  }
+}
+
+/** Persist an acknowledgement payload repair only while its poller still owns the claim. */
+async function updateClaimedAcknowledgement(messageId, claimToken, detail) {
+  if (!messageId || !claimToken) return false;
+  const key = String(messageId);
+  if (!pool.hasStorage()) {
+    const row = memoryPendingAcknowledgements.get(key);
+    if (!row || row.status !== INGESTION_OUTCOME.ACK_PENDING || row.retry_claim_token !== claimToken) return false;
+    row.detail = detail ? String(detail).slice(0, 2000) : null;
+    return true;
+  }
+  try {
+    const rows = await pool.rows(
+      `update email_ingestion_log
+          set detail = $3
+        where message_id = $1
+          and status = $4
+          and exists (
+            select 1 from email_ingestion_retry_claims
+             where message_id = $1 and claim_token = $2
+          )
+        returning message_id`,
+      [key, String(claimToken), detail ? String(detail).slice(0, 2000) : null, INGESTION_OUTCOME.ACK_PENDING],
+      { d1: true }
+    );
+    return rows.length > 0;
+  } catch (err) {
+    logger.error('Claimed email acknowledgement detail could not be updated', err, 'EMAIL_GATEWAY');
+    return false;
+  }
+}
+
+/** Complete a retry only when the current poller still owns its claim. */
+async function completeClaimedAcknowledgement(messageId, claimToken, status, detail) {
+  if (!messageId || !claimToken || ![INGESTION_OUTCOME.ACK_SENT, INGESTION_OUTCOME.ACK_ABANDONED].includes(status)) {
+    return false;
+  }
+  const key = String(messageId);
+  if (!pool.hasStorage()) {
+    const row = memoryPendingAcknowledgements.get(key);
+    if (!row || row.status !== INGESTION_OUTCOME.ACK_PENDING || row.retry_claim_token !== claimToken) return false;
+    memoryPendingAcknowledgements.delete(key);
+    memoryProcessedMessageIds.add(key);
+    return true;
+  }
+  try {
+    const rows = await pool.rows(
+      `update email_ingestion_log
+          set status = $3,
+              detail = $4,
+              processed_at = CURRENT_TIMESTAMP
+        where message_id = $1
+          and status = $5
+          and exists (
+            select 1 from email_ingestion_retry_claims
+             where message_id = $1 and claim_token = $2
+          )
+        returning message_id`,
+      [key, String(claimToken), status, detail ? String(detail).slice(0, 2000) : null, INGESTION_OUTCOME.ACK_PENDING],
+      { d1: true }
+    );
+    return rows.length > 0;
+  } catch (err) {
+    logger.error('Claimed email acknowledgement completion could not be recorded', err, 'EMAIL_GATEWAY');
+    return false;
   }
 }
 
@@ -199,7 +405,40 @@ async function recordProcessed({
   rfqNumber = null,
 }) {
   if (!messageId) return false;
-  memoryProcessedMessageIds.add(String(messageId));
+  const key = String(messageId);
+  if (!pool.hasStorage()) {
+    if (status === INGESTION_OUTCOME.ACK_PENDING) {
+      const previous = memoryPendingAcknowledgements.get(key);
+      const pendingLimit = Math.max(Number(EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS) || 1, 1);
+      if (!memoryPendingAcknowledgements.has(key) && memoryPendingAcknowledgements.size >= pendingLimit) {
+        logger.error('In-memory email acknowledgement retry queue reached its capacity', {
+          messageId: key,
+          pendingCount: memoryPendingAcknowledgements.size,
+          pendingLimit,
+        }, 'EMAIL_GATEWAY');
+        return false;
+      }
+      memoryPendingAcknowledgements.set(key, {
+        message_id: key,
+        rfq_id: rfqId || null,
+        rfq_number: rfqNumber || null,
+        from_address: fromAddress ? String(fromAddress).slice(0, 320) : null,
+        subject: subject ? String(subject).slice(0, 2000) : null,
+        status: String(status),
+        detail: detail ? String(detail).slice(0, 2000) : null,
+        processed_at: new Date().toISOString(),
+        retry_claim_token: previous?.status === INGESTION_OUTCOME.ACK_PENDING ? previous.retry_claim_token || null : null,
+        retry_claimed_at: previous?.status === INGESTION_OUTCOME.ACK_PENDING ? previous.retry_claimed_at || null : null,
+      });
+    } else if (
+      status === INGESTION_OUTCOME.ACK_SENT
+      || status === INGESTION_OUTCOME.ACK_ABANDONED
+    ) {
+      memoryPendingAcknowledgements.delete(key);
+    }
+    memoryProcessedMessageIds.add(key);
+    return true;
+  }
   try {
     // email_ingestion_log has already been ported to D1 (see d1Bridge.js).
     // CURRENT_TIMESTAMP (not now()) and CAST(... AS INTEGER) (not ::int, below
@@ -218,7 +457,7 @@ async function recordProcessed({
          detail = excluded.detail,
          processed_at = CURRENT_TIMESTAMP`,
       [
-        String(messageId),
+        key,
         rfqId,
         rfqNumber,
         fromAddress ? String(fromAddress).slice(0, 320) : null,
@@ -228,11 +467,16 @@ async function recordProcessed({
       ],
       { d1: true }
     );
+    memoryProcessedMessageIds.add(key);
     return true;
   } catch (err) {
     logger.error('Email ingestion outcome could not be recorded', err, 'EMAIL_GATEWAY');
     return false;
   }
+}
+
+function clearMemoryPendingAcknowledgements() {
+  memoryPendingAcknowledgements.clear();
 }
 
 /**
@@ -244,7 +488,7 @@ async function recordProcessed({
 async function listRecent(limit = 15) {
   const capped = Math.min(Math.max(Number(limit) || 15, 1), 100);
   try {
-    return await pool.rows(
+    const rows = await pool.rows(
       `select message_id, rfq_id, rfq_number, from_address, subject, status, detail, processed_at
          from email_ingestion_log
         order by processed_at desc
@@ -252,6 +496,22 @@ async function listRecent(limit = 15) {
       [capped],
       { d1: true }
     );
+    return rows.map((row) => {
+      if (!row || typeof row.detail !== 'string') return row;
+      try {
+        const detail = JSON.parse(row.detail);
+        if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return row;
+        const hasCredentials = Object.prototype.hasOwnProperty.call(detail, 'tempPassword') ||
+          Object.prototype.hasOwnProperty.call(detail, 'encryptedTempPassword');
+        if (!hasCredentials) return row;
+        delete detail.tempPassword;
+        delete detail.encryptedTempPassword;
+        detail.credentialFieldsRedacted = true;
+        return { ...row, detail: JSON.stringify(detail) };
+      } catch {
+        return row;
+      }
+    });
   } catch (err) {
     logger.error('Email ingestion ledger could not be listed', err, 'EMAIL_GATEWAY');
     return [];
@@ -281,6 +541,10 @@ module.exports = {
   countFailedAttempts,
   findProcessed,
   listByStatus,
+  claimPendingAcknowledgements,
+  updateClaimedAcknowledgement,
+  completeClaimedAcknowledgement,
+  clearMemoryPendingAcknowledgements,
   toLedgerTimestamp,
   listRecent,
   countsByStatus,

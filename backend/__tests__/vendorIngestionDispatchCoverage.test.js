@@ -119,11 +119,11 @@ describe('buyer review and live vendor empanelment', () => {
   });
 
   test('updates existing private vendors by email instead of creating duplicates', async () => {
-    store.getVendorById.mockReturnValue({ id: 'existing-private' });
-    store.updateVendor.mockReturnValue({ id: 'existing-private' });
+    store.getVendorByIdWithDBFallback.mockResolvedValue({ id: 'existing-private' });
+    store.updateVendorDurably.mockResolvedValue({ id: 'existing-private' });
     await service.empanelApprovedVendor(context, sessionId, mapping);
-    expect(store.getVendorById).toHaveBeenCalledWith(mapping.email, 'all');
-    expect(store.updateVendor).toHaveBeenCalledWith('existing-private', expect.objectContaining({
+    expect(store.getVendorByIdWithDBFallback).toHaveBeenCalledWith(mapping.email, 'all', { fresh: true });
+    expect(store.updateVendorDurably).toHaveBeenCalledWith('existing-private', expect.objectContaining({
       contactPerson: vendorRecord.contactPerson, phone: vendorRecord.phone, location: vendorRecord.address, gstin: vendorRecord.gstin,
     }));
     expect(store.empanelIngestedVendor).not.toHaveBeenCalled();

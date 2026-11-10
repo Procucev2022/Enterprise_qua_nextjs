@@ -21,6 +21,7 @@ import { useApp } from '@/lib/store';
 import authClient from '@/lib/authClient';
 import type { BuyerAccount, RFQItem } from '@/lib/types';
 import { formatCurrency } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 interface BuyerDetailsModalProps {
   isOpen: boolean;
@@ -41,6 +42,9 @@ export default function BuyerDetailsModal({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [liveProfile, setLiveProfile] = useState<any>(null);
   const [loadingProfile, setLoadingProfile] = useState<boolean>(false);
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
+  const [profileSyncWarning, setProfileSyncWarning] = useState<string | null>(null);
+  const [profileRetryToken, setProfileRetryToken] = useState(0);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -65,14 +69,27 @@ export default function BuyerDetailsModal({
   useEffect(() => {
     if (!isOpen) {
       setLiveProfile(null);
+      setProfileLoadError(null);
+      setProfileSyncWarning(null);
       return;
     }
     let isMounted = true;
     setLoadingProfile(true);
+    setLiveProfile(null);
+    setProfileLoadError(null);
+    setProfileSyncWarning(null);
 
     const emailParam = rfq?.raisedByEmail || account?.corporateEmail || '';
     const nameParam = buyerName || rfq?.buyerAccountName || account?.organizationName || '';
     const idParam = buyerAccountId || account?.id || '';
+
+    if (!emailParam && !nameParam && !idParam) {
+      setProfileLoadError(UI_STRINGS.buyerProfile.detailsIdentifierMissing);
+      setLoadingProfile(false);
+      return () => {
+        isMounted = false;
+      };
+    }
 
     const token = authClient.getToken();
     const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
@@ -80,13 +97,31 @@ export default function BuyerDetailsModal({
     const url = `/api/buyer-profile/details?email=${encodeURIComponent(emailParam)}&name=${encodeURIComponent(nameParam)}&accountId=${encodeURIComponent(idParam)}`;
 
     fetch(url, { headers })
-      .then((res) => (res.ok ? res.json() : null))
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.success) {
+          const error = new Error(json?.error || UI_STRINGS.buyerProfile.detailsLoadError);
+          error.name = 'BuyerProfileApiError';
+          throw error;
+        }
+        return json;
+      })
       .then((json) => {
         if (isMounted && json?.success && json?.data) {
           setLiveProfile(json.data);
+          setProfileLoadError(null);
+          if (json.meta?.degraded) setProfileSyncWarning(UI_STRINGS.buyerProfile.detailsLocalFallback);
         }
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        if (isMounted) {
+          setProfileLoadError(
+            error instanceof Error && error.name === 'BuyerProfileApiError'
+              ? error.message
+              : UI_STRINGS.buyerProfile.detailsLoadError
+          );
+        }
+      })
       .finally(() => {
         if (isMounted) setLoadingProfile(false);
       });
@@ -94,7 +129,7 @@ export default function BuyerDetailsModal({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, buyerName, buyerAccountId, rfq?.raisedByEmail, rfq?.buyerAccountName, account?.corporateEmail, account?.id, account?.organizationName]);
+  }, [isOpen, buyerName, buyerAccountId, rfq?.raisedByEmail, rfq?.buyerAccountName, account?.corporateEmail, account?.id, account?.organizationName, profileRetryToken]);
 
   if (!isOpen) return null;
 
@@ -258,8 +293,12 @@ export default function BuyerDetailsModal({
                 <h2 id="buyer-details-title" className="text-base sm:text-lg font-black text-slate-900 dark:text-white truncate">
                   {displayOrgName}
                 </h2>
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60">
-                  <CheckCircle2 size={11} /> Verified Buyer
+                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold border ${
+                  isVerified
+                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border-emerald-200/60 dark:border-emerald-800/60'
+                    : 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200/60 dark:border-amber-800/60'
+                }`}>
+                  <CheckCircle2 size={11} /> {isVerified ? UI_STRINGS.buyerProfile.verifiedBuyer : UI_STRINGS.buyerProfile.unverifiedBuyer}
                 </span>
                 {loadingProfile && (
                   <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
@@ -281,6 +320,27 @@ export default function BuyerDetailsModal({
             <X size={20} />
           </button>
         </div>
+
+        {(profileLoadError || profileSyncWarning) && (
+          <div
+            role={profileLoadError ? 'alert' : 'status'}
+            className={`mx-5 mt-4 rounded-lg border px-3 py-2 text-xs ${
+              profileLoadError
+                ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200'
+                : 'border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200'
+            }`}
+          >
+            <p>{profileLoadError || profileSyncWarning}</p>
+            <button
+              type="button"
+              className="mt-1 font-semibold underline underline-offset-2"
+              onClick={() => setProfileRetryToken((current) => current + 1)}
+              disabled={loadingProfile}
+            >
+              {UI_STRINGS.buyerProfile.retryDetails}
+            </button>
+          </div>
+        )}
 
         {/* Modal Body */}
         <div className="p-5 space-y-4 text-xs">

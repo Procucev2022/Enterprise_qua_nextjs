@@ -5,6 +5,45 @@
 
 import type { DocumentVaultItem, DocumentVaultSummary } from './types';
 import { authClient } from './authClient';
+import { logger } from './logger';
+
+const DOCUMENT_VAULT_LOG_CATEGORY = 'DOCUMENT_VAULT_CLIENT';
+
+function logDocumentVaultFailure(
+  operation: string,
+  error: unknown,
+  metadata: Record<string, unknown> = {}
+): void {
+  const errorDetails = error instanceof Error
+    ? { error, errorName: error.name, errorMessage: error.message }
+    : {
+        errorName: 'UnknownError',
+        errorMessage: typeof error === 'string' ? error : 'Unknown document vault failure',
+      };
+  logger.error(`Document vault ${operation} failed`, { ...metadata, ...errorDetails }, DOCUMENT_VAULT_LOG_CATEGORY);
+}
+
+async function requestDocumentVault(
+  operation: string,
+  input: RequestInfo | URL,
+  init: RequestInit
+): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error: unknown) {
+    logDocumentVaultFailure(operation, error, { method: init.method ?? 'GET' });
+    throw error;
+  }
+}
+
+async function readDocumentVaultJson<T>(operation: string, response: Response): Promise<T> {
+  try {
+    return await response.json() as T;
+  } catch (error: unknown) {
+    logDocumentVaultFailure(operation, error, { status: response.status });
+    throw error;
+  }
+}
 
 function getAuthHeaders(): HeadersInit {
   const token = authClient.getToken();
@@ -41,32 +80,36 @@ export async function fetchDocuments(params: {
   }
 
   const url = `/api/document-vault${query.toString() ? `?${query.toString()}` : ''}`;
-  const res = await fetch(url, {
+  const res = await requestDocumentVault('fetch documents', url, {
     method: 'GET',
     headers: getAuthHeaders(),
   });
 
   if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
+    const errorBody = await readDocumentVaultJson<{ error?: string }>('fetch documents error response', res)
+      .catch((): { error?: string } => ({}));
+    logDocumentVaultFailure('fetch documents', errorBody.error || `HTTP ${res.status}`, { status: res.status });
     throw new Error(errorBody.error || `Failed to fetch documents (${res.status})`);
   }
 
-  const data = await res.json();
+  const data = await readDocumentVaultJson<{ documents?: DocumentVaultItem[] }>('fetch documents response', res);
   return data.documents || [];
 }
 
 export async function fetchDocumentVaultSummary(): Promise<DocumentVaultSummary> {
-  const res = await fetch('/api/document-vault/summary', {
+  const res = await requestDocumentVault('fetch summary', '/api/document-vault/summary', {
     method: 'GET',
     headers: getAuthHeaders(),
   });
 
   if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
+    const errorBody = await readDocumentVaultJson<{ error?: string }>('fetch summary error response', res)
+      .catch((): { error?: string } => ({}));
+    logDocumentVaultFailure('fetch summary', errorBody.error || `HTTP ${res.status}`, { status: res.status });
     throw new Error(errorBody.error || `Failed to fetch vault summary (${res.status})`);
   }
 
-  const data = await res.json();
+  const data = await readDocumentVaultJson<{ summary?: DocumentVaultSummary }>('fetch summary response', res);
   return (
     data.summary || {
       totalDocuments: 0,
@@ -87,14 +130,16 @@ export async function createDocument(payload: {
   description?: string;
   isActive?: boolean;
 }): Promise<{ success: boolean; document?: DocumentVaultItem; error?: string }> {
-  const res = await fetch('/api/document-vault', {
+  const res = await requestDocumentVault('create document', '/api/document-vault', {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(payload),
   });
 
-  const data = await res.json().catch(() => ({}));
+  const data = await readDocumentVaultJson<{ error?: string; document?: DocumentVaultItem }>('create document response', res)
+    .catch((): { error?: string; document?: DocumentVaultItem } => ({}));
   if (!res.ok) {
+    logDocumentVaultFailure('create document', data.error || `HTTP ${res.status}`, { status: res.status });
     return {
       success: false,
       error: data.error || `Failed to create document (${res.status})`,
@@ -116,14 +161,16 @@ export async function updateDocument(
     isActive?: boolean;
   }
 ): Promise<{ success: boolean; document?: DocumentVaultItem; error?: string }> {
-  const res = await fetch(`/api/document-vault/${encodeURIComponent(id)}`, {
+  const res = await requestDocumentVault('update document', `/api/document-vault/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify(updates),
   });
 
-  const data = await res.json().catch(() => ({}));
+  const data = await readDocumentVaultJson<{ error?: string; document?: DocumentVaultItem }>('update document response', res)
+    .catch((): { error?: string; document?: DocumentVaultItem } => ({}));
   if (!res.ok) {
+    logDocumentVaultFailure('update document', data.error || `HTTP ${res.status}`, { status: res.status });
     return {
       success: false,
       error: data.error || `Failed to update document (${res.status})`,
@@ -137,13 +184,15 @@ export async function updateDocument(
 }
 
 export async function deleteDocument(id: string): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch(`/api/document-vault/${encodeURIComponent(id)}`, {
+  const res = await requestDocumentVault('delete document', `/api/document-vault/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
 
-  const data = await res.json().catch(() => ({}));
+  const data = await readDocumentVaultJson<{ error?: string }>('delete document response', res)
+    .catch((): { error?: string } => ({}));
   if (!res.ok) {
+    logDocumentVaultFailure('delete document', data.error || `HTTP ${res.status}`, { status: res.status });
     return {
       success: false,
       error: data.error || `Failed to delete document (${res.status})`,
