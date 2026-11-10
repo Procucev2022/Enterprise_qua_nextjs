@@ -357,6 +357,7 @@ describe('PostgreSQL migration runner', () => {
         '0024_buyer_quote_onboarding_outbox',
         '0025_vendor_owner_lookup_indexes',
         '0026_action_center_delivery_outbox',
+        '0027_email_gateway_retry_claims',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

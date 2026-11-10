@@ -1663,6 +1663,8 @@ const EMAIL_GATEWAY_CONFIG = {
   DEFAULT_MAX_PER_POLL: 10,
   // Keep no-storage delivery retries useful without letting local fallback state grow without bound.
   MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS: 100,
+  // A crashed or timed-out poll may release a pending delivery after this lease expires.
+  ACK_RETRY_CLAIM_LEASE_MS: 5 * 60 * 1000,
   // Inbound requisitions circulate to category-matched vendors upon creation, transitioning to Quotes Pending.
   INGESTED_STATUS: 'Quotes Pending',
   // Default sourcing mode for email-ingested RFQs: Version 2 (Hybrid Sourcing).

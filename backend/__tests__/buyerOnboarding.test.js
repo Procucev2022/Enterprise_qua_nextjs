@@ -47,6 +47,8 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockResolvedValue(0);
     jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
     jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue('audit-log-101');
+    jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
+    jest.spyOn(emailGatewayQueries, 'updateClaimedAcknowledgement').mockResolvedValue(true);
     jest.spyOn(mailerService, 'isConfigured').mockReturnValue(true);
     jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockResolvedValue({ success: true, messageId: 'msg-onboard-101' });
     jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ success: true, messageId: 'msg-remind-101' });
@@ -837,8 +839,9 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     test('retryPendingAcknowledgements sends onboarding email when tempPassword is saved in detail', async () => {
       process.env.AES_ENCRYPTION_KEY = 'buyer-onboarding-test-encryption-key';
       delete process.env.AES_SECRET_KEY;
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
         {
+          retry_claim_token: 'buyer-onboarding-test-claim',
           message_id: 'msg-ack-test#ack',
           from_address: 'retry.ack.buyer@domain.com',
           subject: 'RFQ Requisition',
@@ -862,7 +865,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
           rfqNumber: 'RFQ-RETRY-001',
         })
       );
-      const rewrittenDetail = JSON.parse(emailGatewayQueries.recordProcessed.mock.calls[0][0].detail);
+      const rewrittenDetail = JSON.parse(emailGatewayQueries.updateClaimedAcknowledgement.mock.calls[0][2]);
       expect(rewrittenDetail).not.toHaveProperty('tempPassword');
       expect(rewrittenDetail).toHaveProperty('encryptedTempPassword');
       expect(cryptoService.decrypt(rewrittenDetail.encryptedTempPassword, {
@@ -1037,7 +1040,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     test('retryPendingAcknowledgements handles invalid JSON detail and sending failures', async () => {
       process.env.AES_ENCRYPTION_KEY = 'buyer-onboarding-test-encryption-key';
       delete process.env.AES_SECRET_KEY;
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValue([
         {
           id: 'ack-bad-json',
           message_id: 'msg-bad#ack',

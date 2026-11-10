@@ -19,6 +19,8 @@ describe('emailGatewayService remaining branch coverage', () => {
     originalAesSecretKey = process.env.AES_SECRET_KEY;
     emailGatewayService.resetAutoReplyMemory();
     jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockResolvedValue(0);
+    jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
+    jest.spyOn(emailGatewayQueries, 'updateClaimedAcknowledgement').mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -358,7 +360,7 @@ describe('emailGatewayService remaining branch coverage', () => {
       process.env.AES_ENCRYPTION_KEY = 'email-gateway-branches-test-key';
       delete process.env.AES_SECRET_KEY;
       const messageId = 'ack-1';
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([
         {
           message_id: messageId,
           from_address: 'buyer@procucev.com',
@@ -378,7 +380,7 @@ describe('emailGatewayService remaining branch coverage', () => {
         },
       ]);
       jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockResolvedValueOnce({ messageId: 'm-ack' });
-      jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValueOnce(true);
+      jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValueOnce(true);
 
       const res = await emailGatewayService.retryPendingAcknowledgements();
       expect(res.sent).toBe(1);
@@ -433,7 +435,7 @@ describe('emailGatewayService remaining branch coverage', () => {
       },
     ])('retries $deliveryKind notices from the durable email ledger', async ({ deliveryKind, method, detail }) => {
       const messageId = `notice-${deliveryKind}`;
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([
         {
           message_id: messageId,
           from_address: 'sales@vendor.in',
@@ -448,7 +450,7 @@ describe('emailGatewayService remaining branch coverage', () => {
         },
       ]);
       const deliverySpy = jest.spyOn(mailerService, method).mockResolvedValueOnce({ sent: true });
-      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
 
       const result = await emailGatewayService.retryPendingAcknowledgements();
 
@@ -475,16 +477,15 @@ describe('emailGatewayService remaining branch coverage', () => {
             cc: 'buyer@example.com',
           };
       expect(deliverySpy).toHaveBeenCalledWith('sales@vendor.in', expect.objectContaining(expectedDeliveryContext));
-      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
-        messageId,
-        status: INGESTION_OUTCOME.ACK_SENT,
-      }));
+      expect(recordSpy).toHaveBeenCalledWith(
+        messageId, undefined, INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry'
+      );
     });
 
     test('reconstructs a vendor quote acknowledgement from its persisted RFQ and quote IDs', async () => {
       const quote = { id: 'quote-ack-1', vendorId: 'vendor-1', vendorName: 'Apex Valves', unitPrice: 120 };
       const rfq = { id: 'rfq-ack-1', rfqNumber: 'RFQ-ACK-01', title: 'Industrial valves', quotes: [quote] };
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([{
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([{
         message_id: 'notice-vendor-quote-ack',
         rfq_id: rfq.id,
         from_address: 'sales@vendor.in',
@@ -500,7 +501,7 @@ describe('emailGatewayService remaining branch coverage', () => {
       }]);
       jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
       const deliverySpy = jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValueOnce({ sent: true });
-      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
 
       const result = await emailGatewayService.retryPendingAcknowledgements();
 
@@ -512,10 +513,9 @@ describe('emailGatewayService remaining branch coverage', () => {
         quote,
         buyerEmail: 'buyer@example.com',
       }));
-      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
-        messageId: 'notice-vendor-quote-ack',
-        status: INGESTION_OUTCOME.ACK_SENT,
-      }));
+      expect(recordSpy).toHaveBeenCalledWith(
+        'notice-vendor-quote-ack', undefined, INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry'
+      );
     });
 
     test('reconstructs a vendor issue acknowledgement from its persisted inquiry and message IDs', async () => {
@@ -550,11 +550,11 @@ describe('emailGatewayService remaining branch coverage', () => {
           inquiryMessageId: inquiryMessage.id,
         }),
       };
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([row]);
       jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
       jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@example.com');
       const deliverySpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValueOnce({ sent: true });
-      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
 
       const result = await emailGatewayService.retryPendingAcknowledgements();
 
@@ -568,10 +568,9 @@ describe('emailGatewayService remaining branch coverage', () => {
         reason: EMAIL_GATEWAY_MESSAGES.VENDOR_ISSUE_REPLY_REASON,
         cc: 'buyer@example.com',
       }));
-      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
-        messageId: row.message_id,
-        status: INGESTION_OUTCOME.ACK_SENT,
-      }));
+      expect(recordSpy).toHaveBeenCalledWith(
+        row.message_id, undefined, INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry'
+      );
     });
 
     test('retries a vendor inquiry acknowledgement from process-local storage', async () => {
@@ -592,6 +591,7 @@ describe('emailGatewayService remaining branch coverage', () => {
         inquiries: [inquiry],
       };
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      emailGatewayQueries.completeClaimedAcknowledgement.mockRestore();
       jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
       jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@example.com');
       const deliverySpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValueOnce({ sent: true });
@@ -640,7 +640,7 @@ describe('emailGatewayService remaining branch coverage', () => {
           inquiryMessageId: 'missing-message-id',
         }),
       };
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([row]);
       jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
       const deliverySpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail');
 
@@ -702,7 +702,7 @@ describe('emailGatewayService remaining branch coverage', () => {
           ...detail,
         }),
       };
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([row]);
       if (rfq) {
         jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
       }
@@ -759,17 +759,19 @@ describe('emailGatewayService remaining branch coverage', () => {
         processed_at: new Date().toISOString(),
         detail: JSON.stringify({ deliveryKind, quoteId: quote.id, ...detail }),
       };
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([row]);
       jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
       const quoteDelivery = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
       const reminderDelivery = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
       const markReminder = jest.spyOn(storeService, 'markQuoteAckSent').mockImplementation(() => {});
-      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
 
       const result = await emailGatewayService.retryPendingAcknowledgements();
 
       expect(result.sent).toBe(1);
-      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({ messageId: row.message_id, status: INGESTION_OUTCOME.ACK_SENT }));
+      expect(recordSpy).toHaveBeenCalledWith(
+        row.message_id, undefined, INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry'
+      );
       if (deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER) {
         expect(reminderDelivery).toHaveBeenCalledWith({
           to: row.from_address,
@@ -799,7 +801,7 @@ describe('emailGatewayService remaining branch coverage', () => {
           quoteId: 'quote-missing-rfq',
         }),
       };
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([row]);
       const loadRfq = jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB');
       const sendQuote = jest.spyOn(mailerService, 'sendQuoteReceivedEmail');
 
@@ -811,7 +813,7 @@ describe('emailGatewayService remaining branch coverage', () => {
     });
 
     test('keeps malformed quote acknowledgement rows pending without attempting delivery', async () => {
-      const listSpy = jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
+      const listSpy = jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([
         {
           message_id: 'notice-missing-rfq-id',
           from_address: 'sales@vendor.in',
@@ -861,9 +863,9 @@ describe('emailGatewayService remaining branch coverage', () => {
         processed_at: new Date().toISOString(),
         detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER }),
       };
-      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([row]);
       const deliverySpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValueOnce({ sent: true });
-      jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+      jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
 
       const result = await emailGatewayService.retryPendingAcknowledgements();
 

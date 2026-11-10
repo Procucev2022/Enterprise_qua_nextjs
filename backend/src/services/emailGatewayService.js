@@ -1604,25 +1604,21 @@ async function retryPendingAcknowledgements({
   excludeDeliveryKinds = null,
 } = {}) {
   const outcome = { sent: 0, abandoned: 0, stillPending: 0 };
-  const rows = await emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, limit, {
+  const rows = await emailGatewayQueries.claimPendingAcknowledgements(limit, {
     deliveryKinds,
     excludeDeliveryKinds,
+    now,
   });
   for (const row of rows) {
-    const record = (status, detail) =>
-      emailGatewayQueries.recordProcessed({
-        messageId: row.message_id,
-        status,
-        detail,
-        fromAddress: row.from_address,
-        subject: row.subject,
-        rfqNumber: row.rfq_number,
-      });
+    const record = (status, detail) => status === INGESTION_OUTCOME.ACK_PENDING
+      ? emailGatewayQueries.updateClaimedAcknowledgement(row.message_id, row.retry_claim_token, detail)
+      : emailGatewayQueries.completeClaimedAcknowledgement(row.message_id, row.retry_claim_token, status, detail);
 
     const queuedAt = ledgerTime(row.processed_at);
     if (!row.from_address || !Number.isFinite(queuedAt) || now - queuedAt > ACK_RETRY_MAX_AGE_MS) {
-      await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Acknowledgement not sent within 48 hours; dropped');
-      outcome.abandoned += 1;
+      const abandoned = await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Acknowledgement not sent within 48 hours; dropped');
+      if (abandoned) outcome.abandoned += 1;
+      else outcome.stillPending += 1;
       continue;
     }
 
@@ -1680,8 +1676,9 @@ async function retryPendingAcknowledgements({
       saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS
       && !retryTempPassword
     ) {
-      await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Buyer credential retry has no encrypted credential');
-      outcome.abandoned += 1;
+      const abandoned = await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Buyer credential retry has no encrypted credential');
+      if (abandoned) outcome.abandoned += 1;
+      else outcome.stillPending += 1;
       logger.error('Buyer credential retry was abandoned because its encrypted password is missing', {
         messageId: row.message_id,
         fromAddress: row.from_address,
@@ -1844,8 +1841,16 @@ async function retryPendingAcknowledgements({
           items: saved.items,
         }), 'RFQ acknowledgement retry');
       }
-      await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
-      outcome.sent += 1;
+      const completed = await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
+      if (completed) {
+        outcome.sent += 1;
+      } else {
+        outcome.stillPending += 1;
+        logger.error('Email provider accepted an acknowledgement but its claimed completion was not persisted', {
+          messageId: row.message_id,
+          rfqNumber: row.rfq_number,
+        }, 'EMAIL_GATEWAY');
+      }
     } catch (err) {
       outcome.stillPending += 1;
       logger.error('Pending RFQ acknowledgement retry failed; event remains pending', {
