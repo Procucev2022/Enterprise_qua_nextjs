@@ -1555,15 +1555,17 @@ async function getVendorCatalogueFromDB(limit = null, { fresh = false } = {}) {
   if (!pool.hasStorage()) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1'
-    : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000';
+    ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT $1'
+    : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT 1000';
   const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
     sql,
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000',
+      d1Text: hasLimit
+        ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT $1'
+        : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT 1000',
       useCache: !fresh,
       tag: 'catalogue',
       ttlMs: 60000,
@@ -1577,7 +1579,7 @@ async function getVendorCatalogueByVendorFromDB(vendorId, limit = 100) {
   const safeLimit = Number.isInteger(Number(limit)) && Number(limit) > 0
     ? Math.min(Number(limit), 500)
     : 100;
-  const sql = 'SELECT raw FROM vendor_catalogue WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2';
+  const sql = 'SELECT raw FROM vendor_catalogue WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2';
   const result = await pool.query(sql, [vendorId, safeLimit], {
     d1: true,
     d1Text: sql,

@@ -1077,7 +1077,10 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: product }] }) };
 
       await expect(domainQueries.getVendorCatalogueFromDB()).resolves.toEqual([product]);
-      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
+      expect(pool.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('ORDER BY created_at DESC, id DESC'),
+        []
+      );
     });
 
     test('getVendorCatalogueByVendorFromDB uses a bounded vendor-indexed read', async () => {
@@ -1089,6 +1092,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect.stringContaining('WHERE vendor_id = $1'),
         ['v-1', 101]
       );
+      expect(pool.pool.query.mock.calls[0][0]).toContain('ORDER BY created_at DESC, id DESC');
     });
 
     test('getCatalogueProductByIdFromDB reads one product and parses D1 text JSON', async () => {

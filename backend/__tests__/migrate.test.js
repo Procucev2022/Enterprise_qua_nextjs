@@ -359,10 +359,29 @@ describe('PostgreSQL migration runner', () => {
         '0026_action_center_delivery_outbox',
         '0027_email_gateway_retry_claims',
         '0028_zoho_reconciliation_claims',
+        '0029_vendor_catalogue_access_paths',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  test('vendor catalogue access path migrations create matching ordered and normalized indexes', () => {
+    const migrationsDir = path.resolve(__dirname, '../src/db/migrations');
+    const postgresSql = fs.readFileSync(path.join(migrationsDir, '0029_vendor_catalogue_access_paths.pg.sql'), 'utf8');
+    const d1Sql = fs.readFileSync(path.join(migrationsDir, '0029_vendor_catalogue_access_paths.d1.sql'), 'utf8');
+
+    for (const sql of [postgresSql, d1Sql]) {
+      expect(sql).toContain('DROP INDEX IF EXISTS idx_vendor_catalogue_vendor_id');
+      expect(sql).toContain('idx_vendor_catalogue_created_at_id');
+      expect(sql).toContain('ON vendor_catalogue (created_at, id)');
+      expect(sql).toContain('idx_vendor_catalogue_vendor_created_at_id');
+      expect(sql).toContain('ON vendor_catalogue (vendor_id, created_at, id)');
+      expect(sql).toContain('idx_vendor_catalogue_vendor_sku_normalized');
+      expect(sql).toContain('ON vendor_catalogue (vendor_id, lower(trim(sku)))');
+    }
+
+    expect(d1Sql).toContain('DROP INDEX IF EXISTS idx_vendor_catalogue_created_at');
   });
 
   test('rejects empty and reserved baseline migration files', () => {

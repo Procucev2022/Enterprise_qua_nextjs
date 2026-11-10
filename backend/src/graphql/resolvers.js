@@ -317,10 +317,13 @@ const rootResolvers = {
     return logs.slice(0, limit);
   },
 
-  catalogue: (args = {}) => {
+  catalogue: async (args = {}) => {
     const { category, search } = args;
     const limit = Math.min(args.limit || 50, 500);
-    let items = storeService.getVendorCatalogue(null, (category || search) ? null : limit);
+    const sourceLimit = (category || search) ? 500 : limit;
+    let items = pool.hasStorage()
+      ? await domainQueries.getVendorCatalogueFromDB(sourceLimit)
+      : storeService.getVendorCatalogue(null, sourceLimit);
     if (category) {
       items = items.filter((i) => i.category && i.category.toLowerCase().includes(category.toLowerCase()));
     }

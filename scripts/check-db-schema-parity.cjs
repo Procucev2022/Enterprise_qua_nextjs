@@ -35,6 +35,9 @@ const REQUIRED_ACCESS_PATHS = Object.freeze({
     { table: 'vendors', columns: ['lower(raw->>\'buyerId\')'], query: 'case-insensitive buyer vendor ownership lookup by buyer ID' },
     { table: 'vendors', columns: ['lower(raw->>\'buyerAccountId\')'], query: 'case-insensitive buyer vendor ownership lookup by account ID' },
     { table: 'vendors', columns: ['lower(raw->>\'buyerEmail\')'], query: 'case-insensitive buyer vendor ownership lookup by email' },
+    { table: 'vendor_catalogue', columns: ['created_at', 'id'], query: 'bounded catalogue listing by creation time' },
+    { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'], query: 'bounded vendor catalogue listing by creation time' },
+    { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'], query: 'normalized duplicate SKU check by vendor' },
   ],
   d1: [
     { table: 'organization', columns: ['organization_name', 'org_type_uuid'], query: 'identity registration organization reuse' },
@@ -44,6 +47,9 @@ const REQUIRED_ACCESS_PATHS = Object.freeze({
     { table: 'vendors', columns: ['lower(json_extract(raw, \'$.buyerId\'))'], query: 'case-insensitive buyer vendor ownership lookup by buyer ID' },
     { table: 'vendors', columns: ['lower(json_extract(raw, \'$.buyerAccountId\'))'], query: 'case-insensitive buyer vendor ownership lookup by account ID' },
     { table: 'vendors', columns: ['lower(json_extract(raw, \'$.buyerEmail\'))'], query: 'case-insensitive buyer vendor ownership lookup by email' },
+    { table: 'vendor_catalogue', columns: ['created_at', 'id'], query: 'bounded catalogue listing by creation time' },
+    { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'], query: 'bounded vendor catalogue listing by creation time' },
+    { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'], query: 'normalized duplicate SKU check by vendor' },
   ],
 });
 

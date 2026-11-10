@@ -82,6 +82,9 @@ test('critical access path comparison accepts a composite leftmost prefix and re
     ['vendor_buyer_id', { table: 'vendors', columns: ["lower(raw->>'buyerid')"] }],
     ['vendor_buyer_account', { table: 'vendors', columns: ["lower(raw->>'buyeraccountid')"] }],
     ['vendor_buyer_email', { table: 'vendors', columns: ["lower(raw->>'buyeremail')"] }],
+    ['catalogue_created', { table: 'vendor_catalogue', columns: ['created_at', 'id'] }],
+    ['catalogue_vendor_created', { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'] }],
+    ['catalogue_vendor_sku', { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'] }],
   ]);
   const d1Indexes = new Map([
     ['org_name_type', { table: 'organization', columns: ['organization_name', 'org_type_uuid'] }],
@@ -91,14 +94,21 @@ test('critical access path comparison accepts a composite leftmost prefix and re
     ['vendor_buyer_id', { table: 'vendors', columns: ["lower(json_extract(raw,'$.buyerid'))"] }],
     ['vendor_buyer_account', { table: 'vendors', columns: ["lower(json_extract(raw,'$.buyeraccountid'))"] }],
     ['vendor_buyer_email', { table: 'vendors', columns: ["lower(json_extract(raw,'$.buyeremail'))"] }],
+    ['catalogue_created', { table: 'vendor_catalogue', columns: ['created_at', 'id'] }],
+    ['catalogue_vendor_created', { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'] }],
+    ['catalogue_vendor_sku', { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'] }],
   ]);
 
   assert.deepEqual(compareRequiredAccessPaths(postgresIndexes, d1Indexes), { postgres: [], d1: [] });
   d1Indexes.delete('org_category_user');
+  d1Indexes.delete('catalogue_vendor_created');
   const result = compareRequiredAccessPaths(postgresIndexes, d1Indexes);
   assert.deepEqual(result.postgres, []);
-  assert.equal(result.d1.length, 1);
-  assert.equal(result.d1[0].query, 'buyer category reads and ordering by user');
+  assert.equal(result.d1.length, 2);
+  assert.deepEqual(result.d1.map((item) => item.query), [
+    'buyer category reads and ordering by user',
+    'bounded vendor catalogue listing by creation time',
+  ]);
 });
 
 test('schema comparison reports missing tables and unapproved columns while listing approved legacy drift', () => {

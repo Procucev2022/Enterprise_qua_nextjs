@@ -367,7 +367,8 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     await expect(rootResolvers.auditLogs({}, contextFor('buyer'))).rejects.toThrow();
   });
 
-  test('catalogue resolver filters by category and search (name/sku)', () => {
+  test('catalogue resolver filters by category and search (name/sku) in no-storage mode', async () => {
+    jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
     // The three unowned demo SKUs are gone, so the catalogue is empty until a
     // vendor publishes something.
     storeService.addProductToCatalogue(
@@ -381,20 +382,47 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       'vendor@resolver.test'
     );
 
-    const all = rootResolvers.catalogue();
+    const all = await rootResolvers.catalogue();
     expect(all.length).toBeGreaterThan(0);
 
-    const byCat = rootResolvers.catalogue({ category: 'Valves' });
+    const byCat = await rootResolvers.catalogue({ category: 'Valves' });
     expect(byCat.length).toBeGreaterThan(0);
 
-    const bySearchName = rootResolvers.catalogue({ search: 'Impeller' });
+    const bySearchName = await rootResolvers.catalogue({ search: 'Impeller' });
     expect(bySearchName.length).toBeGreaterThan(0);
 
-    const bySearchSku = rootResolvers.catalogue({ search: 'SKU' });
+    const bySearchSku = await rootResolvers.catalogue({ search: 'SKU' });
     expect(bySearchSku.length).toBeGreaterThan(0);
 
-    const limited = rootResolvers.catalogue({ limit: 1 });
+    const limited = await rootResolvers.catalogue({ limit: 1 });
     expect(limited.length).toBeLessThanOrEqual(1);
+  });
+
+  test('catalogue resolver uses a bounded database-backed query when storage is configured', async () => {
+    jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+    const products = [
+      { id: 'catalogue-1', name: 'Resolver Impeller', sku: 'IMP-1', category: 'Valves' },
+      { id: 'catalogue-2', name: 'Resolver Gasket', sku: 'GASKET-1', category: 'Seals' },
+    ];
+    const catalogueQuery = jest.spyOn(domainQueries, 'getVendorCatalogueFromDB').mockResolvedValue(products);
+    const memoryRead = jest.spyOn(storeService, 'getVendorCatalogue');
+
+    await expect(rootResolvers.catalogue({ limit: 1 })).resolves.toEqual([products[0]]);
+    await expect(rootResolvers.catalogue({ search: 'Impeller' })).resolves.toEqual([products[0]]);
+
+    expect(catalogueQuery.mock.calls).toEqual([[1], [500]]);
+    expect(memoryRead).not.toHaveBeenCalled();
+  });
+
+  test('catalogue resolver propagates configured storage failures instead of serving stale isolate data', async () => {
+    jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getVendorCatalogueFromDB').mockRejectedValue(new Error('D1 unavailable'));
+    const memoryRead = jest.spyOn(storeService, 'getVendorCatalogue').mockReturnValue([
+      { id: 'stale-catalogue-item', name: 'Stale item' },
+    ]);
+
+    await expect(rootResolvers.catalogue({ limit: 5 })).rejects.toThrow('D1 unavailable');
+    expect(memoryRead).not.toHaveBeenCalled();
   });
 
   test('aiFeed, systemConfig, dbHealth, optimizationMetrics, diagnoseLogErrors, auditPerformance resolvers execute', async () => {
