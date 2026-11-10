@@ -121,7 +121,7 @@ test('prints the report and appends the same content to the GitHub step summary'
   expect(error).toHaveBeenCalledWith(expect.stringContaining('Failed to append CI summary'));
 });
 
-test.each(['deploy-dev.yml', 'deploy-prod.yml'])('%s blocks deployment on both workspace coverage gates', (workflow) => {
+test.each(['deploy-stage.yml', 'deploy-prod.yml'])('%s blocks deployment on both workspace coverage gates', (workflow) => {
   const yaml = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows', workflow), 'utf8');
   const testsAt = yaml.indexOf('run: npm run test:coverage');
   const checkerAt = yaml.indexOf('run: npm run check:coverage');
