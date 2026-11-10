@@ -6,6 +6,7 @@ const storeService = require('../src/services/storeService');
 const zohoPaymentService = require('../src/services/zohoPaymentService');
 const zohoWebhookQueries = require('../src/db/zohoWebhookQueries');
 const zohoReconciliationService = require('../src/services/zohoReconciliationService');
+const { ZOHO_CONFIG } = require('../src/config/constants');
 
 describe('zohoReconciliationService', () => {
   beforeEach(() => {
@@ -47,6 +48,23 @@ describe('zohoReconciliationService', () => {
         { error: cleanupError },
         'ZOHO_RECONCILIATION'
       );
+    });
+
+    test('reuses an active scheduled reconciliation pass instead of repeating its database scan', async () => {
+      let resolveCleanup;
+      zohoWebhookQueries.purgeExpiredWebhookEvents.mockReturnValue(new Promise((resolve) => {
+        resolveCleanup = resolve;
+      }));
+      storeService.getPaymentLinksByStatusIn.mockResolvedValue([]);
+
+      const first = zohoReconciliationService.reconcileOnce();
+      const second = zohoReconciliationService.reconcileOnce();
+      await Promise.resolve();
+      expect(zohoWebhookQueries.purgeExpiredWebhookEvents).toHaveBeenCalledTimes(1);
+
+      resolveCleanup(0);
+      await expect(Promise.all([first, second])).resolves.toEqual([{ checked: 0 }, { checked: 0 }]);
+      expect(storeService.getPaymentLinksByStatusIn).toHaveBeenCalledTimes(1);
     });
 
     test('checks every CREATED/pending link and updates its status', async () => {
@@ -220,6 +238,46 @@ describe('zohoReconciliationService', () => {
         status: 'expired',
         rawResponse: expect.objectContaining({ error: expect.stringContaining('Payment Link does not exist') }),
       });
+    });
+
+    test('bounds concurrent on-demand status checks', async () => {
+      let activeRequests = 0;
+      let peakRequests = 0;
+      zohoPaymentService.getPaymentLinkStatus.mockImplementation(async () => {
+        activeRequests += 1;
+        peakRequests = Math.max(peakRequests, activeRequests);
+        await Promise.resolve();
+        activeRequests -= 1;
+        return { status: 'paid', rawResponse: {} };
+      });
+      const links = Array.from({ length: 12 }, (_, index) => ({
+        id: `pl-bounded-${index}`,
+        zohoPaymentLinkId: `zoho-bounded-${index}`,
+        status: 'active',
+      }));
+
+      await expect(zohoReconciliationService.reconcilePendingLinks(links)).resolves.toBe(links.length);
+
+      expect(peakRequests).toBeLessThanOrEqual(ZOHO_CONFIG.RECONCILIATION_MAX_CONCURRENCY);
+      expect(peakRequests).toBeGreaterThan(1);
+      expect(zohoPaymentService.getPaymentLinkStatus).toHaveBeenCalledTimes(links.length);
+    });
+
+    test('coalesces overlapping reconciliation requests for the same payment link', async () => {
+      let resolveStatus;
+      zohoPaymentService.getPaymentLinkStatus.mockReturnValue(new Promise((resolve) => {
+        resolveStatus = resolve;
+      }));
+      const link = { id: 'pl-overlap', zohoPaymentLinkId: 'zoho-overlap', status: 'active' };
+
+      const first = zohoReconciliationService.reconcilePendingLinks([link]);
+      const second = zohoReconciliationService.reconcilePendingLinks([link]);
+      await Promise.resolve();
+      expect(zohoPaymentService.getPaymentLinkStatus).toHaveBeenCalledTimes(1);
+
+      resolveStatus({ status: 'paid', rawResponse: {} });
+      await expect(Promise.all([first, second])).resolves.toEqual([1, 1]);
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledTimes(1);
     });
 
     test('does nothing when there is nothing pending', async () => {

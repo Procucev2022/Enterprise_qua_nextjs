@@ -20,7 +20,7 @@ const zohoPaymentService = require('./zohoPaymentService');
 const { ZOHO_CONFIG } = require('../config/constants');
 const { logger } = require('./loggerService');
 
-const runtime = { timer: null };
+const runtime = { timer: null, reconcilePromise: null, inFlightLinks: new Map() };
 
 // 'CREATED'/'pending' are this app's own placeholder status
 // (createPaymentLinkRecord's `status || 'CREATED'` fallback); 'active' is
@@ -98,7 +98,24 @@ async function reconcileLink(link) {
   return result;
 }
 
-async function reconcileOnce() {
+function reconcileLinkOnce(link) {
+  const linkId = typeof link?.id === 'string' ? link.id : '';
+  if (!linkId) return reconcileLink(link);
+
+  const existing = runtime.inFlightLinks.get(linkId);
+  if (existing) return existing;
+
+  let operation;
+  operation = Promise.resolve()
+    .then(() => reconcileLink(link))
+    .finally(() => {
+      if (runtime.inFlightLinks.get(linkId) === operation) runtime.inFlightLinks.delete(linkId);
+    });
+  runtime.inFlightLinks.set(linkId, operation);
+  return operation;
+}
+
+async function runReconciliationPass() {
   try {
     const purgedCount = await zohoWebhookQueries.purgeExpiredWebhookEvents();
     if (purgedCount > 0) {
@@ -111,12 +128,27 @@ async function reconcileOnce() {
   const pending = await storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
   for (const link of pending) {
     try {
-      await reconcileLink(link);
+      await reconcileLinkOnce(link);
     } catch (err) {
       logger.error(`Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION');
     }
   }
   return { checked: pending.length };
+}
+
+async function reconcileOnce() {
+  if (runtime.reconcilePromise) {
+    logger.info('Skipped an overlapping Zoho reconciliation poll', { operation: 'reconcile-once' }, 'ZOHO_RECONCILIATION');
+    return runtime.reconcilePromise;
+  }
+
+  const operation = runReconciliationPass();
+  runtime.reconcilePromise = operation;
+  try {
+    return await operation;
+  } finally {
+    if (runtime.reconcilePromise === operation) runtime.reconcilePromise = null;
+  }
 }
 
 /**
@@ -128,11 +160,21 @@ async function reconcileOnce() {
  */
 async function reconcilePendingLinks(links) {
   const pending = links.filter((l) => RECONCILABLE_STATUSES.includes(l.status));
-  await Promise.all(
-    pending.map((link) =>
-      reconcileLink(link).catch((err) => logger.error(`On-demand Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION'))
-    )
-  );
+  let nextIndex = 0;
+  const configuredConcurrency = Number(ZOHO_CONFIG.RECONCILIATION_MAX_CONCURRENCY);
+  const concurrency = Math.max(1, Math.floor(Number.isFinite(configuredConcurrency) ? configuredConcurrency : 1));
+  const workerCount = Math.min(pending.length, concurrency);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < pending.length) {
+      const link = pending[nextIndex];
+      nextIndex += 1;
+      try {
+        await reconcileLinkOnce(link);
+      } catch (err) {
+        logger.error(`On-demand Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION');
+      }
+    }
+  }));
   return pending.length;
 }
 
