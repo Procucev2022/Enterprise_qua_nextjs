@@ -2233,4 +2233,3 @@ module.exports = {
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
 };
-

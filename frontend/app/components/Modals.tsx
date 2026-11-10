@@ -2103,22 +2103,66 @@ export function ActivePipelineModal({
                     </div>
                   </div>
 
-                  {rfq.followUpData && (
-                    <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-600 dark:text-gray-300 flex-wrap">
-                      <span className="px-2 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-800">
-                        📞 {rfq.followUpData.callStats.connected}/{rfq.followUpData.callStats.total} Calls
-                      </span>
-                      <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800">
-                        💬 {rfq.followUpData.whatsappStats.read}/{rfq.followUpData.whatsappStats.total} WA Read
-                      </span>
-                      <span className="px-2 py-0.5 rounded-md bg-sky-50 dark:bg-cyan-950/50 text-sky-700 dark:text-cyan-300 font-semibold border border-sky-200 dark:border-cyan-800">
-                        📱 {rfq.followUpData.smsStats.delivered} SMS
-                      </span>
-                      <span className="text-indigo-600 dark:text-indigo-400 font-bold ml-1">
-                        {rfq.followUpData.respondedCount}/{rfq.followUpData.totalInvited} vendors responded
-                      </span>
-                    </div>
-                  )}
+                  {(() => {
+                    const followUp = rfq.followUpData;
+                    const vCount = Math.max(
+                      rfq.assignedVendors?.length || 0,
+                      rfq.procucevVendorCount || 0,
+                      followUp?.totalInvited || 0
+                    );
+                    if (!followUp && vCount === 0) return null;
+
+                    const isDispatched = rfq.status !== 'Parsing' && vCount > 0;
+                    const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : Date.now();
+                    const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
+                    const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
+                    const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
+                    const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
+
+                    const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
+                    const rawWaRead = Math.max(
+                      followUp?.whatsappStats?.read || 0,
+                      followUp?.whatsappStats?.delivered || 0,
+                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
+                    );
+                    const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
+
+                    const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
+                    const rawSmsDelivered = Math.max(
+                      followUp?.smsStats?.delivered || 0,
+                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
+                    );
+                    const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
+
+                    const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
+                    const rawEmailDelivered = Math.max(
+                      followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
+                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
+                    );
+                    const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
+                    const totalInvited = Math.max(followUp?.totalInvited || 0, vCount);
+                    const responded = followUp?.respondedCount || 0;
+
+                    return (
+                      <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-600 dark:text-gray-300 flex-wrap">
+                        <span title={`WhatsApp: ${waRead}/${waTotal}`} className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+                          <MessageSquare size={11} className="shrink-0" />
+                          <span>WA {waRead}/{waTotal}</span>
+                        </span>
+                        <span title={`SMS: ${smsDelivered}/${smsTotal}`} className="px-2 py-0.5 rounded-md bg-sky-50 dark:bg-cyan-950/50 text-sky-700 dark:text-cyan-300 font-semibold border border-sky-200 dark:border-cyan-800 flex items-center gap-1">
+                          <Smartphone size={11} className="shrink-0" />
+                          <span>SMS {smsDelivered}/{smsTotal}</span>
+                        </span>
+                        <span title={`Email: ${emailDelivered}/${emailTotal}`} className="px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 font-semibold border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                          <Mail size={11} className="shrink-0" />
+                          <span>Email {emailDelivered}/{emailTotal}</span>
+                        </span>
+                        <span className="text-indigo-600 dark:text-indigo-400 font-bold ml-1">
+                          {responded}/{totalInvited} vendors responded
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="flex md:flex-col items-center md:items-end gap-2 shrink-0">

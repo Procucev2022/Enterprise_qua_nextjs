@@ -1,4 +1,6 @@
 const storeService = require('../src/services/storeService');
+const pool = require('../src/db/pool');
+const domainQueries = require('../src/db/domainQueries');
 
 describe('Store Service — remaining branch coverage', () => {
   // A fresh instance needs no arranging: every collection starts empty, so the
@@ -708,6 +710,186 @@ describe('Store Service — remaining branch coverage', () => {
       const res = storeService.triggerBatchChaser(rfq.id);
       expect(res.success).toBe(true);
       expect(storeService.aiFeed.length).toBeLessThanOrEqual(100);
+    });
+
+    test('_reconcileRFQFollowUpStats covers null RFQ, empty vendors, draft status, and age stages', () => {
+      expect(storeService._reconcileRFQFollowUpStats(null)).toBeNull();
+
+      const rfqEmpty = { id: 'rfq-e', assignedVendors: [] };
+      expect(storeService._reconcileRFQFollowUpStats(rfqEmpty)).toBe(rfqEmpty);
+
+      const rfqDraft = { id: 'rfq-d', status: 'Draft', assignedVendors: [{ id: 'v-1' }] };
+      expect(storeService._reconcileRFQFollowUpStats(rfqDraft)).toBe(rfqDraft);
+
+      const rfqParsing = { id: 'rfq-p', status: 'Parsing', assignedVendors: [{ id: 'v-1' }] };
+      expect(storeService._reconcileRFQFollowUpStats(rfqParsing)).toBe(rfqParsing);
+
+      // Fresh RFQ (< 5 min)
+      const rfqFresh = {
+        id: 'rfq-fresh',
+        status: 'Quotes Pending',
+        createdAt: new Date().toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }, null]
+      };
+      const freshResult = storeService._reconcileRFQFollowUpStats(rfqFresh);
+      expect(freshResult.followUpData.smsStats.delivered).toBe(0);
+      expect(freshResult.followUpData.whatsappStats.delivered).toBe(0);
+      expect(freshResult.followUpData.emailStats.delivered).toBe(0);
+
+      // 5 min old RFQ (>= 300,000ms)
+      const rfq5m = {
+        id: 'rfq-5m',
+        status: 'Quotes Pending',
+        createdAt: new Date(Date.now() - 360000).toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }],
+        followUpData: { totalInvited: 1, vendors: [{ id: 'v-1' }] }
+      };
+      const res5m = storeService._reconcileRFQFollowUpStats(rfq5m);
+      expect(res5m.followUpData.smsStats.delivered).toBe(1);
+      expect(res5m.followUpData.whatsappStats.delivered).toBe(0);
+      expect(res5m.followUpData.emailStats.delivered).toBe(0);
+
+      // 12 hr old RFQ (>= 43,200,000ms)
+      const rfq12h = {
+        id: 'rfq-12h',
+        status: 'Quotes Pending',
+        createdAt: new Date(Date.now() - 44000000).toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }]
+      };
+      const res12h = storeService._reconcileRFQFollowUpStats(rfq12h);
+      expect(res12h.followUpData.smsStats.delivered).toBe(1);
+      expect(res12h.followUpData.whatsappStats.delivered).toBe(1);
+      expect(res12h.followUpData.emailStats.delivered).toBe(0);
+
+      // 24 hr old RFQ (>= 86,400,000ms)
+      const rfq24h = {
+        id: 'rfq-24h',
+        status: 'Quotes Pending',
+        createdAt: new Date(Date.now() - 90000000).toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }]
+      };
+      const res24h = storeService._reconcileRFQFollowUpStats(rfq24h);
+      expect(res24h.followUpData.smsStats.delivered).toBe(1);
+      expect(res24h.followUpData.whatsappStats.delivered).toBe(1);
+      expect(res24h.followUpData.emailStats.delivered).toBe(1);
+    });
+
+    test('covers additional branch conditions in _reconcileRFQFollowUpStats, createRFQ, and consumeBuyerRFQCredit', async () => {
+      // 1. _reconcileRFQFollowUpStats fallback vendor count branches
+      const rfqInvited = {
+        id: 'rfq-inv',
+        status: 'Quotes Pending',
+        followUpData: { totalInvited: 5, smsStats: { delivered: 0 }, whatsappStats: { delivered: 0 }, emailStats: { delivered: 0 } },
+      };
+      const resInv = storeService._reconcileRFQFollowUpStats(rfqInvited);
+      expect(resInv.followUpData.totalInvited).toBe(5);
+
+      const rfqSmsTotal = {
+        id: 'rfq-sms-tot',
+        status: 'Quotes Pending',
+        followUpData: { smsStats: { total: 3, delivered: 0 }, whatsappStats: { delivered: 0 }, emailStats: { delivered: 0 } },
+      };
+      const resSms = storeService._reconcileRFQFollowUpStats(rfqSmsTotal);
+      expect(resSms.followUpData.smsStats.total).toBe(3);
+
+      const rfqProcucevCount = {
+        id: 'rfq-proc-cnt',
+        status: 'Quotes Pending',
+        procucevVendorCount: 4,
+      };
+      const resProc = storeService._reconcileRFQFollowUpStats(rfqProcucevCount);
+      expect(resProc.procucevVendorCount).toBe(4);
+
+      const rfqDraftZero = {
+        id: 'rfq-draft-zero',
+        status: 'Draft',
+        assignedVendors: [],
+        followUpData: { totalInvited: 9 },
+      };
+      const resDraft = storeService._reconcileRFQFollowUpStats(rfqDraftZero);
+      expect(resDraft.followUpData.totalInvited).toBe(0);
+
+      // 2. createRFQ past delivery dates and source edge cases
+      const pastRfq = storeService.createRFQ({
+        title: 'Past Delivery RFQ',
+        deadline: '2020-01-01T00:00:00Z',
+        targetDeliveryDate: '2020-01-02T00:00:00Z',
+      });
+      expect(pastRfq.deadline).toBeDefined();
+
+      const aiNoFileRfq = storeService.createRFQ({
+        title: 'AI Ingest No File',
+        source: 'ai_extraction',
+      });
+      expect(aiNoFileRfq.source).toBe('manual_entry');
+
+      const emailGwNoBuyerRfq = storeService.createRFQ(
+        {
+          title: 'Email Gateway RFQ',
+          source: 'email_gateway',
+        },
+        null
+      );
+      expect(emailGwNoBuyerRfq.sourcingMode).toBe('mode_0');
+
+      const planBuyerRfq = storeService.createRFQ(
+        {
+          title: 'Plan Buyer RFQ',
+        },
+        {
+          id: 'buyer-v2-test',
+          corporateEmail: 'buyer-v2@example.com',
+          subscriptionPlan: 'version_2',
+        }
+      );
+      expect(planBuyerRfq.sourcingMode).toBe('mode_2');
+
+      // 3. tryConsumeFreeRFQ & refundFreeRFQ edge branches
+      const unregUnlimited = storeService.tryConsumeFreeRFQ({
+        id: 'unreg-unl',
+        corporateEmail: 'operations@procucev.com',
+      });
+      expect(unregUnlimited.ok).toBe(true);
+
+      const unregRegular = storeService.tryConsumeFreeRFQ({
+        id: 'unreg-reg',
+        corporateEmail: 'fresh-buyer@corp.com',
+      });
+      expect(unregRegular.ok).toBe(true);
+
+      const nonExistent = storeService.tryConsumeFreeRFQ('non-existent-buyer-id');
+      expect(nonExistent.ok).toBe(false);
+
+      const buyerWithEmail = storeService.addBuyerAccount({
+        id: 'buyer-refund-branch',
+        corporateEmail: 'refund-branch@corp.com',
+        remainingFreeRFQs: 3,
+      });
+      storeService.activeBuyerAccount = buyerWithEmail;
+      storeService.refundFreeRFQ({ id: 'buyer-refund-branch', email: 'refund-branch@corp.com' });
+      expect(storeService.getBuyerAccounts().find((b) => b.id === 'buyer-refund-branch').remainingFreeRFQs).toBe(4);
+
+      // 4. buyerAccounts fallback and updateBuyerAccount null id
+      const savedAccounts = storeService.buyerAccounts;
+      storeService.buyerAccounts = null;
+      expect(storeService.getBuyerAccounts(5)).toEqual([]);
+      expect(storeService.getBuyerAccounts()).toEqual([]);
+      storeService.buyerAccounts = savedAccounts;
+
+      expect(storeService.updateBuyerAccount(null, {})).toBeNull();
+
+      // 5. claimMigratedVendorProfile null email
+      expect(await storeService.claimMigratedVendorProfile(null)).toBeNull();
+
+      // 6. confirmRfqPersisted storage active path
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(true);
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValueOnce({});
+      const resConfirm = await storeService.confirmRfqPersisted({ id: 'rfq-confirm-branch-test' });
+      expect(resConfirm.persisted).toBe(true);
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(true);
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockRejectedValueOnce(new Error('DB upsert failed'));
+      await expect(storeService.confirmRfqPersisted({ id: 'rfq-confirm-branch-test' })).rejects.toThrow('DB upsert failed');
     });
   });
 });

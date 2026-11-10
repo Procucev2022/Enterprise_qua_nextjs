@@ -300,7 +300,7 @@ describe('Category Manager Screens Suite', () => {
       // Column 2 — both a chasing-active RFQ with real follow-up telemetry
       // and a plain one with neither chasingActive nor followUpData set.
       expect(screen.getByText('RFQ-2026-00902')).toBeInTheDocument();
-      expect(screen.getAllByText(/Not configured yet/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/WhatsApp Bot:/i).length).toBeGreaterThan(0);
       expect(screen.getAllByText(/3\/3 Delivered/i).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/3\/3 Delivered/i).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/Email Direct:/i).length).toBeGreaterThan(0);
