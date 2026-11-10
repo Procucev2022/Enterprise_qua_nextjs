@@ -23,7 +23,7 @@ env:
 jobs:
   backend-gate:
     name: Backend Tests, Migrations & Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       tests: ${{ steps.tests.outcome }}
@@ -48,12 +48,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
@@ -95,7 +96,7 @@ jobs:
 
       - name: Upload Backend Coverage & Test Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage
           path: backend/coverage/
@@ -103,7 +104,7 @@ jobs:
 
   frontend-gate:
     name: Frontend Build, Lint, Typecheck & Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
       tests: ${{ steps.tests.outcome }}
@@ -114,12 +115,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -153,7 +155,7 @@ jobs:
 
       - name: Upload Frontend Coverage & Test Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
           path: frontend/coverage/
@@ -163,7 +165,7 @@ jobs:
     name: Master Quality & PR Summary
     needs: [backend-gate, frontend-gate]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       CI_BACKEND_TESTS_STATUS: ${{ needs.backend-gate.outputs.tests }}
@@ -179,12 +181,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
@@ -192,14 +195,14 @@ jobs:
         run: npm ci --prefix backend --legacy-peer-deps
 
       - name: Download Backend Coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: backend-coverage
           path: backend/coverage
         continue-on-error: true
 
       - name: Download Frontend Coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: frontend-coverage
           path: frontend/coverage
@@ -212,7 +215,7 @@ jobs:
       - name: Post PR Summary Comment
         if: ${{ always() && github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
