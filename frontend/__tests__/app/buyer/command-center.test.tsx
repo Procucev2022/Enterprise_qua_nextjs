@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import CommandCenter from '@/app/buyer/command-center';
 import { useApp } from '@/lib/store';
 import { RFQItem, AIBotFeedItem } from '@/lib/types';
@@ -961,6 +961,193 @@ describe('app/buyer/command-center.tsx', () => {
     fireEvent.change(searchInput, { target: { value: '   ' } });
     expect(screen.getByText('RFQ-EDGE-001')).toBeInTheDocument();
     expect(screen.getByText('RFQ-EDGE-002')).toBeInTheDocument();
+  });
+
+  it('covers synthesized live outreach feeds, modal callbacks, and timer ticks', () => {
+    jest.useFakeTimers();
+
+    const oldDate = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+    const recentDate = new Date(Date.now() - 60 * 1000).toISOString();
+    const synthRfqs: any[] = [
+      {
+        id: 'rfq-synth-1',
+        rfqNumber: 'RFQ-SYNTH-001',
+        title: 'Industrial Generator',
+        category: 'Electrical',
+        createdAt: oldDate,
+        targetDeliveryDate: '2026-12-01',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_3',
+        quotesCount: 1,
+        budget: 150000,
+        source: 'manual_entry',
+        buyerAccountId: 'other-acc-id',
+        buyerEmail: 'buyer@procucev.com',
+        procucevVendorCount: 2,
+        assignedVendors: [],
+        followUpData: {
+          rfqNumber: 'RFQ-SYNTH-001',
+          autoChasingEnabled: true,
+          totalInvited: 2,
+          respondedCount: 1,
+          whatsappStats: { total: 2, delivered: 2, read: 1 },
+          smsStats: { total: 2, delivered: 2, clicked: 1 },
+          emailStats: { total: 2, delivered: 2, sent24h: 2 },
+          vendors: [],
+        },
+      },
+      {
+        id: 'rfq-synth-2',
+        rfqNumber: 'RFQ-SYNTH-002',
+        title: 'Steel Pipes',
+        category: 'Piping',
+        createdAt: oldDate,
+        targetDeliveryDate: '2026-12-01',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        budget: 20000,
+        source: 'web_portal',
+        buyerAccountId: 'active-acc-1',
+        assignedVendors: [
+          null,
+          {
+            id: 'v-101',
+            vendorName: 'Apex Metals',
+            mobile: '+919876543210',
+            email: 'sales@apexmetals.com',
+            whatsapp: { status: 'delivered' },
+            sms: { status: 'delivered' },
+          },
+          {
+            vendorId: 'v-fallback-102',
+            vendorName: 'No Contact Supplier',
+            phone: '',
+            email: '',
+          },
+        ],
+        followUpData: {
+          rfqNumber: 'RFQ-SYNTH-002',
+          autoChasingEnabled: true,
+          totalInvited: 2,
+          respondedCount: 0,
+          whatsappStats: { total: 1, delivered: 0, read: 0 },
+          smsStats: { total: 1, delivered: 0, clicked: 0 },
+          emailStats: { total: 1, delivered: 0, sent24h: 0 },
+          vendors: [
+            {
+              id: 'v-101',
+              name: 'Apex Metals',
+              phone: '+919876543210',
+              email: 'sales@apexmetals.com',
+              whatsapp: { status: 'read' },
+              sms: { status: 'delivered' },
+              emailSent: true,
+            },
+          ],
+        },
+      },
+      {
+        id: 'rfq-synth-3',
+        rfqNumber: 'RFQ-SYNTH-003',
+        title: 'Recent Requisition',
+        category: 'Services',
+        createdAt: recentDate,
+        targetDeliveryDate: '2026-12-15',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        budget: 5000,
+        source: 'web_portal',
+        buyerAccountId: 'active-acc-1',
+        assignedVendors: [
+          {
+            vendorName: 'Local Shop',
+            name: 'Local Shop',
+          },
+        ],
+        followUpData: null,
+      },
+      {
+        id: 'rfq-synth-4',
+        rfqNumber: 'RFQ-SYNTH-004',
+        title: 'Draft Requisition',
+        category: 'Services',
+        createdAt: recentDate,
+        targetDeliveryDate: '2026-12-15',
+        status: 'Draft',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        budget: 1000,
+        source: 'manual_entry',
+        buyerAccountId: 'active-acc-1',
+        assignedVendors: [],
+        followUpData: null,
+      },
+      {
+        id: 'rfq-synth-5',
+        rfqNumber: 'RFQ-SYNTH-005',
+        title: 'Queued Requisition',
+        category: 'Services',
+        createdAt: recentDate,
+        targetDeliveryDate: '2026-12-15',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        budget: 1000,
+        source: 'manual_entry',
+        buyerAccountId: 'active-acc-1',
+        assignedVendors: [],
+        followUpData: null,
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: synthRfqs,
+      aiFeed: [],
+      currentMode: 'mode_3',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: synthRfqs[0],
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: true,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 2,
+      activeSubscription: 'pro',
+      activeBuyerAccount: {
+        id: 'active-acc-1',
+        corporateEmail: 'buyer@procucev.com',
+      },
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+      isLoadingRFQs: false,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    // Advance fake timer to cover setInterval tick
+    act(() => {
+      jest.advanceTimersByTime(11000);
+    });
+
+    // Verify auto-generated supplier feed and vendors
+    expect(screen.getByText(/Autonomous Sourcing Engine Initialized: RFQ-SYNTH-001/i)).toBeInTheDocument();
+    expect(screen.getByText(/Autonomous Sourcing Engine Initialized: RFQ-SYNTH-002/i)).toBeInTheDocument();
+
+    // Trigger modal interactions
+    fireEvent.click(screen.getByText('Active Pipeline'));
+    fireEvent.click(screen.getByText('Intake Sources'));
+    fireEvent.click(screen.getByText('Supplier Quotes'));
+
+    jest.useRealTimers();
   });
 });
 

@@ -138,23 +138,18 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     const term = rfqSearchTerm.trim().toLowerCase();
     if (!term) return true;
 
-    const matchesLineItems = (rfq.extractedEntities || []).some(
-      (item) => ((item.itemName || '') + ' ' + (item.technicalSpecs || '') + ' ' + (item.category || '')).toLowerCase().includes(term)
-    );
-    const matchesVendors = (rfq.assignedVendors || []).some(
-      (v) => ((v.name || '') + ' ' + (v.contactPerson || '') + ' ' + (v.email || '')).toLowerCase().includes(term)
-    );
+    const searchTarget = [
+      rfq.rfqNumber,
+      rfq.title,
+      rfq.category,
+      rfq.status,
+      rfq.source,
+      rfq.sourcingMode,
+      ...(rfq.extractedEntities || []).flatMap((item) => [item.itemName, item.technicalSpecs, item.category]),
+      ...(rfq.assignedVendors || []).flatMap((v) => [v.name, v.contactPerson, v.email]),
+    ].filter(Boolean).join(' ').toLowerCase();
 
-    return (
-      (rfq.rfqNumber || '').toLowerCase().includes(term) ||
-      (rfq.title || '').toLowerCase().includes(term) ||
-      (rfq.category || '').toLowerCase().includes(term) ||
-      (rfq.status && rfq.status.toLowerCase().includes(term)) ||
-      (rfq.source && rfq.source.toLowerCase().includes(term)) ||
-      (rfq.sourcingMode && rfq.sourcingMode.toLowerCase().includes(term)) ||
-      matchesLineItems ||
-      matchesVendors
-    );
+    return searchTarget.includes(term);
   });
 
   const getModeBadge = (modeId: string) => {
@@ -204,15 +199,18 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     });
 
     if (feed.length === 0) {
+      void tick;
       const existingRfqChannels = new Set<string>();
       const buyerRfqs = (allRfqs || []).filter((r: any) => {
+        if (r.status === 'Draft' || r.status === 'Parsing') return false;
         if (activeBuyerAccount?.id && r.buyerAccountId && r.buyerAccountId !== activeBuyerAccount.id) {
-          if (activeBuyerAccount.corporateEmail && r.buyerEmail && activeBuyerAccount.corporateEmail.toLowerCase() === r.buyerEmail.toLowerCase()) {
-            return r.status !== 'Draft' && r.status !== 'Parsing';
-          }
-          return false;
+          return Boolean(
+            activeBuyerAccount.corporateEmail &&
+            r.buyerEmail &&
+            activeBuyerAccount.corporateEmail.toLowerCase() === r.buyerEmail.toLowerCase()
+          );
         }
-        return r.status !== 'Draft' && r.status !== 'Parsing';
+        return true;
       });
 
       for (const rfq of buyerRfqs) {
@@ -265,19 +263,23 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
           const vName = v.name || v.vendorName || 'Vendor';
           const vPhone = v.phone || v.mobile || v.mobileNumber || '';
           const vEmail = v.email || '';
+          const vId = v.id || v.vendorId || vName;
+          const vPhoneLabel = vPhone ? ` (${vPhone})` : '';
+          const vEmailLabel = vEmail ? ` (${vEmail})` : '';
+          const formattedTs = rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now';
 
           if (smsDue) {
             const smsKey = `${rfq.rfqNumber}-sms-${vName}`;
             if (!existingRfqChannels.has(smsKey)) {
               existingRfqChannels.add(smsKey);
               feed.push({
-                id: `feed-sms-${rfq.rfqNumber}-${v.id || v.vendorId || vName}`,
+                id: `feed-sms-${rfq.rfqNumber}-${vId}`,
                 type: 'sms',
                 channel: 'sms',
                 title: `SMS Alert Delivered: ${vName}`,
                 message: `DLT registered SMS gateway alert pushed to ${vPhone || vName} for ${rfq.rfqNumber}.`,
-                recipient: `${vName}${vPhone ? ' (' + vPhone + ')' : ''}`,
-                timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
+                recipient: `${vName}${vPhoneLabel}`,
+                timestamp: formattedTs,
                 timeAgo: 'Delivered',
                 rfqNumber: rfq.rfqNumber,
                 buyerAccountId: rfq.buyerAccountId || undefined,
@@ -291,13 +293,13 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             if (!existingRfqChannels.has(waKey)) {
               existingRfqChannels.add(waKey);
               feed.push({
-                id: `feed-wa-${rfq.rfqNumber}-${v.id || v.vendorId || vName}`,
+                id: `feed-wa-${rfq.rfqNumber}-${vId}`,
                 type: 'whatsapp',
                 channel: 'whatsapp',
                 title: `WhatsApp Invitation Delivered: ${vName}`,
-                message: `Interactive quotation link delivered with secure access token to ${vName}${vPhone ? ' (' + vPhone + ')' : ''} for ${rfq.rfqNumber}.`,
-                recipient: `${vName}${vPhone ? ' (' + vPhone + ')' : ''}`,
-                timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
+                message: `Interactive quotation link delivered with secure access token to ${vName}${vPhoneLabel} for ${rfq.rfqNumber}.`,
+                recipient: `${vName}${vPhoneLabel}`,
+                timestamp: formattedTs,
                 timeAgo: 'Delivered',
                 rfqNumber: rfq.rfqNumber,
                 buyerAccountId: rfq.buyerAccountId || undefined,
@@ -311,13 +313,13 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             if (!existingRfqChannels.has(emailKey)) {
               existingRfqChannels.add(emailKey);
               feed.push({
-                id: `feed-email-${rfq.rfqNumber}-${v.id || v.vendorId || vName}`,
+                id: `feed-email-${rfq.rfqNumber}-${vId}`,
                 type: 'email',
                 channel: 'email',
                 title: `Invitation Email Delivered: ${vName}`,
                 message: `RFQ ${rfq.rfqNumber} invitation delivered to ${vEmail || vName}. One-click bid link activated.`,
-                recipient: `${vName}${vEmail ? ' (' + vEmail + ')' : ''}`,
-                timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
+                recipient: `${vName}${vEmailLabel}`,
+                timestamp: formattedTs,
                 timeAgo: 'Delivered',
                 rfqNumber: rfq.rfqNumber,
                 buyerAccountId: rfq.buyerAccountId || undefined,
@@ -333,12 +335,18 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   }, [aiFeed, activeBuyerAccount, allRfqs, tick]);
 
   const filteredFeed = buyerScopedFeed.filter((item) => {
-    if (feedChannelFilter === 'all') return true;
-    if (feedChannelFilter === 'whatsapp') return item.type === 'whatsapp' || item.channel === 'whatsapp';
-    if (feedChannelFilter === 'sms') return item.type === 'sms' || item.channel === 'sms';
-    if (feedChannelFilter === 'email') return item.type === 'email' || item.channel === 'email';
-    if (feedChannelFilter === 'system') return item.type === 'scoring' || item.type === 'ingestion' || item.type === 'escalation' || item.type === 'approval';
-    return true;
+    switch (feedChannelFilter) {
+      case 'whatsapp':
+        return item.type === 'whatsapp' || item.channel === 'whatsapp';
+      case 'sms':
+        return item.type === 'sms' || item.channel === 'sms';
+      case 'email':
+        return item.type === 'email' || item.channel === 'email';
+      case 'system':
+        return item.type === 'scoring' || item.type === 'ingestion' || item.type === 'escalation' || item.type === 'approval';
+      default:
+        return true;
+    }
   });
 
   const channelFilterTabs = [
@@ -348,6 +356,23 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     { key: 'email' as const, label: 'Email (24h)', icon: <Mail size={11} />, activeClass: 'bg-amber-600 text-white' },
     { key: 'system' as const, label: 'System', activeClass: 'bg-indigo-600 text-white' },
   ];
+
+  const handleCloseModals = () => {
+    setActivePipelineModalOpen(false);
+    setIntakeSourcesModalOpen(false);
+    setSupplierQuotesModalOpen(false);
+  };
+
+  const handleOpenDeepDiveFromModal = (rfq: RFQItem) => {
+    handleCloseModals();
+    openRFQDeepDive(rfq);
+  };
+
+  const handleNavigateToMatrixFromModal = (rfq: RFQItem) => {
+    handleCloseModals();
+    setSelectedRFQForMatrix(rfq);
+    onNavigateToMatrix(rfq);
+  };
 
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
@@ -682,21 +707,21 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                           followUp?.whatsappStats?.delivered || 0,
                           Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
                         );
-                        const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
+                        const waRead = waDue ? (rawWaRead || waTotal) : 0;
 
                         const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
                         const rawSmsDelivered = Math.max(
                           followUp?.smsStats?.delivered || 0,
                           Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
                         );
-                        const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
+                        const smsDelivered = smsDue ? (rawSmsDelivered || smsTotal) : 0;
 
                         const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
                         const rawEmailDelivered = Math.max(
                           followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
                           Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
                         );
-                        const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
+                        const emailDelivered = emailDue ? (rawEmailDelivered || emailTotal) : 0;
                         const totalInvited = Math.max(followUp?.totalInvited || 0, vCount);
                         const responded = followUp?.respondedCount || 0;
 
@@ -866,49 +891,28 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       {/* Active Pipeline Details Modal */}
       <ActivePipelineModal
         isOpen={activePipelineModalOpen}
-        onClose={() => setActivePipelineModalOpen(false)}
+        onClose={handleCloseModals}
         rfqs={rfqs}
-        onOpenDeepDive={(rfq) => {
-          setActivePipelineModalOpen(false);
-          openRFQDeepDive(rfq);
-        }}
-        onNavigateToMatrix={(rfq) => {
-          setActivePipelineModalOpen(false);
-          setSelectedRFQForMatrix(rfq);
-          onNavigateToMatrix(rfq);
-        }}
+        onOpenDeepDive={handleOpenDeepDiveFromModal}
+        onNavigateToMatrix={handleNavigateToMatrixFromModal}
       />
 
       {/* Intake Sources Breakdown Modal */}
       <IntakeSourcesModal
         isOpen={intakeSourcesModalOpen}
-        onClose={() => setIntakeSourcesModalOpen(false)}
+        onClose={handleCloseModals}
         rfqs={rfqs}
-        onOpenDeepDive={(rfq) => {
-          setIntakeSourcesModalOpen(false);
-          openRFQDeepDive(rfq);
-        }}
-        onNavigateToMatrix={(rfq) => {
-          setIntakeSourcesModalOpen(false);
-          setSelectedRFQForMatrix(rfq);
-          onNavigateToMatrix(rfq);
-        }}
+        onOpenDeepDive={handleOpenDeepDiveFromModal}
+        onNavigateToMatrix={handleNavigateToMatrixFromModal}
       />
 
       {/* Supplier Quotes Overview Modal */}
       <SupplierQuotesModal
         isOpen={supplierQuotesModalOpen}
-        onClose={() => setSupplierQuotesModalOpen(false)}
+        onClose={handleCloseModals}
         rfqs={rfqs}
-        onNavigateToMatrix={(rfq) => {
-          setSupplierQuotesModalOpen(false);
-          setSelectedRFQForMatrix(rfq);
-          onNavigateToMatrix(rfq);
-        }}
-        onOpenDeepDive={(rfq) => {
-          setSupplierQuotesModalOpen(false);
-          openRFQDeepDive(rfq);
-        }}
+        onNavigateToMatrix={handleNavigateToMatrixFromModal}
+        onOpenDeepDive={handleOpenDeepDiveFromModal}
       />
     </div>
   );
