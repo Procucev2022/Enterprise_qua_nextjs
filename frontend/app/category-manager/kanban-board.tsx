@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
 import { MultiChannelChaserModal, VendorSurveyModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import {
   MessageSquare,
+  Smartphone,
+  Mail,
   Share2,
   AlertTriangle,
   FileCheck,
@@ -65,6 +67,14 @@ export default function KanbanBoard({
   const [selectedRfqForChaser, setSelectedRfqForChaser] = useState<string>('');
   const [targetVendor, setTargetVendor] = useState<string>('Vendor Pool');
   const [chaserInitialChannel, setChaserInitialChannel] = useState<'call' | 'whatsapp' | 'sms'>('whatsapp');
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick((t) => t + 1);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Group into 3 specification Kanban columns, driven by the real, live RFQ
   // pipeline — no static demo cards. A column stays empty (with its own
@@ -437,7 +447,15 @@ export default function KanbanBoard({
 
                 {(() => {
                   const followUp = rfq.followUpData;
-                  const totalVendors = followUp?.totalInvited || rfq.assignedVendors?.length || (Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0);
+                  const totalVendors = Math.max(
+                    rfq.assignedVendors?.length || 0,
+                    rfq.procucevVendorCount || 0,
+                    followUp?.totalInvited || 0,
+                    followUp?.smsStats?.total || 0,
+                    followUp?.whatsappStats?.total || 0,
+                    followUp?.emailStats?.total || 0,
+                    Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
+                  );
                   const isDispatched = rfq.status !== 'Parsing' && totalVendors > 0;
 
                   // Scheduled delivery rules: SMS (5m), WhatsApp (12h), Email (24h)
@@ -447,14 +465,14 @@ export default function KanbanBoard({
                   const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
                   const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
 
-                  const waTotal = followUp?.whatsappStats?.total || totalVendors;
+                  const waTotal = Math.max(followUp?.whatsappStats?.total || 0, totalVendors);
                   const rawWaDelivered = Math.max(
                     followUp?.whatsappStats?.delivered || 0,
                     Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v.whatsapp?.status === 'delivered' || v.whatsapp?.status === 'read').length : 0
                   );
-                  const waDelivered = waDue ? (rawWaDelivered === 0 ? waTotal : rawWaDelivered) : rawWaDelivered;
+                  const waDelivered = waDue ? (rawWaDelivered === 0 ? waTotal : Math.max(rawWaDelivered, waTotal)) : rawWaDelivered;
                   
-                  const smsTotal = followUp?.smsStats?.total || totalVendors;
+                  const smsTotal = Math.max(followUp?.smsStats?.total || 0, totalVendors);
                   const vendorSmsCount = Array.isArray(followUp?.vendors)
                     ? followUp.vendors.filter((v) => v.sms?.status === 'sent' || v.sms?.status === 'delivered').length
                     : 0;
@@ -462,9 +480,9 @@ export default function KanbanBoard({
                     followUp?.smsStats?.delivered || 0,
                     vendorSmsCount
                   );
-                  const smsDelivered = smsDue ? (rawSmsDelivered === 0 ? smsTotal : rawSmsDelivered) : rawSmsDelivered;
+                  const smsDelivered = smsDue ? (rawSmsDelivered === 0 ? smsTotal : Math.max(rawSmsDelivered, smsTotal)) : rawSmsDelivered;
 
-                  const emailTotal = followUp?.emailStats?.total || totalVendors;
+                  const emailTotal = Math.max(followUp?.emailStats?.total || 0, totalVendors);
                   const vendorEmailCount = Array.isArray(followUp?.vendors)
                     ? followUp.vendors.filter((v) => v.email24h?.is24hReminderSent || v.email24h?.status === 'reminded_24h' || (v as any).emailSent || (v as any).email?.status === 'delivered').length
                     : 0;
@@ -472,20 +490,20 @@ export default function KanbanBoard({
                     followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
                     vendorEmailCount
                   );
-                  const emailDelivered = emailDue ? (rawEmailDelivered === 0 ? emailTotal : rawEmailDelivered) : rawEmailDelivered;
+                  const emailDelivered = emailDue ? (rawEmailDelivered === 0 ? emailTotal : Math.max(rawEmailDelivered, emailTotal)) : rawEmailDelivered;
 
                   return (
                     <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">
                       <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300 font-semibold">
-                        <span>💬 WhatsApp Bot:</span>
+                        <span className="flex items-center gap-1.5"><MessageSquare size={11} /> WhatsApp Bot:</span>
                         <span className="mono">{waDelivered}/{waTotal} Delivered</span>
                       </div>
                       <div className="flex justify-between items-center text-sky-700 dark:text-cyan-300 font-semibold">
-                        <span>📱 SMS Direct:</span>
+                        <span className="flex items-center gap-1.5"><Smartphone size={11} /> SMS Direct:</span>
                         <span className="mono">{smsDelivered}/{smsTotal} Delivered</span>
                       </div>
                       <div className="flex justify-between items-center text-amber-700 dark:text-amber-300 font-semibold">
-                        <span>✉️ Email Direct:</span>
+                        <span className="flex items-center gap-1.5"><Mail size={11} /> Email Direct:</span>
                         <span className="mono">{emailDelivered}/{emailTotal} Delivered</span>
                       </div>
                     </div>
