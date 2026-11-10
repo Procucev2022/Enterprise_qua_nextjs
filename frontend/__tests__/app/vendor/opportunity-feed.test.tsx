@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import OpportunityFeed from '@/app/vendor/opportunity-feed';
 import { AppProvider, useApp } from '@/lib/store';
+import { logger } from '@/lib/logger';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { QuoteComparison, RFQItem, VendorOpportunity, VendorSubscriptionPlan } from '@/lib/types';
 
@@ -393,6 +394,48 @@ describe('OpportunityFeed: rendering from the RFQ API', () => {
     expect(screen.getByText('0 Targeted RFQs')).toBeInTheDocument();
     // The reminder banner names a real RFQ, so with none it must not render at all.
     expect(screen.queryByRole('button', { name: /Submit Quote Now/i })).not.toBeInTheDocument();
+  });
+
+  test('logs vendor profile HTTP failures without logging the vendor email', async () => {
+    logger.clearLogs();
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (url.includes('/api/vendors/')) {
+        return Promise.resolve({ ok: false, status: 503, json: async () => ({}) });
+      }
+      return baseImpl?.(url, init);
+    });
+
+    await renderFeed();
+
+    await waitFor(() => {
+      const [entry] = logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' });
+      expect(entry).toEqual(expect.objectContaining({
+        level: 'ERROR',
+        metadata: expect.objectContaining({ operation: 'load_vendor_profile', status: 503 }),
+      }));
+      expect(JSON.stringify(entry)).not.toContain(SELF_VENDOR_RECORD.email);
+    });
+  });
+
+  test('logs vendor profile transport failures while keeping the opportunity feed available', async () => {
+    logger.clearLogs();
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (url.includes('/api/vendors/')) return Promise.reject(new TypeError('Network request failed'));
+      return baseImpl?.(url, init);
+    });
+
+    await renderFeed();
+
+    await waitFor(() => {
+      const [entry] = logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' });
+      expect(entry).toEqual(expect.objectContaining({
+        level: 'ERROR',
+        metadata: expect.objectContaining({ operation: 'load_vendor_profile', errorName: 'TypeError' }),
+      }));
+    });
+    expect(screen.getByText(DIRECT_OWN.title as string)).toBeInTheDocument();
   });
 });
 

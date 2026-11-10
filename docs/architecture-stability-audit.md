@@ -546,3 +546,10 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Payment-link creation, post-checkout status lookups, and subscription pricing retrieval previously converted network, HTTP, malformed-response, and incomplete-data failures into UI result values without central diagnostics.
 - These paths now log operation, account type, status, and failure kind while retaining the existing fallback contracts. Logs omit account IDs, payment-link IDs/URLs, plan values, and server response text.
 - Regression tests cover vendor and buyer payment-link requests, status polling, pricing failures, and metadata privacy.
+
+## Vendor opportunity profile lookup diagnostics
+
+- The opportunity feed used a vendor-profile lookup to calculate category matches but discarded both non-success HTTP responses and transport/JSON errors. A failed lookup therefore silently hid category-match metadata.
+- HTTP failures now log the operation and status; rejected requests log the operation and error class. Both paths omit the vendor email and retain the existing feed fallback.
+- Regression coverage verifies both failure classes, metadata privacy, and continued RFQ rendering.
+- Focused frontend coverage passed 44 tests. The full quality gate passed on 2026-11-10: backend 208 suites / 5,935 tests and frontend 149 suites / 3,778 tests; all 161 backend and 171 frontend executable files met every 90% per-file threshold. Build, typecheck, lint, schema parity, schema checker regressions, and schema-file verification passed. Live database migration was skipped by the quality pipeline.
