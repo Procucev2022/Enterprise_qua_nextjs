@@ -394,22 +394,6 @@ export default function InternalTasksDashboard() {
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<InternalTask | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (isCreateModalOpen) {
-          setIsCreateModalOpen(false);
-        } else if (selectedTaskDetails) {
-          setSelectedTaskDetails(null);
-        } else if (isFilterDrawerOpen) {
-          setIsFilterDrawerOpen(false);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCreateModalOpen, selectedTaskDetails, isFilterDrawerOpen]);
-
   // Create Form State with Category Architecture
   const [newCategory, setNewCategory] = useState<InternalTaskCategory>('COMMUNICATION');
   const [newTaskType, setNewTaskType] = useState<string>('Phone Call');
@@ -1972,10 +1956,7 @@ export default function InternalTasksDashboard() {
               />
 
               <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="w-screen max-w-sm bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200"
-                >
+                <div className="w-screen max-w-sm bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200">
                   <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Filter className="w-4 h-4 text-blue-600" />
@@ -2161,16 +2142,8 @@ export default function InternalTasksDashboard() {
           {/* MODAL: CREATE INTERNAL TASK (With Categories & Approval Flow)  */}
           {/* ============================================================== */}
           {isCreateModalOpen && (
-            <div
-              role="dialog"
-              aria-modal="true"
-              className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
-              onClick={() => setIsCreateModalOpen(false)}
-            >
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto"
-              >
+            <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-950 flex items-center justify-center text-blue-600">
@@ -2537,7 +2510,6 @@ export default function InternalTasksDashboard() {
 
               <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
                 <div
-                  onClick={(e) => e.stopPropagation()}
                   className="w-screen max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200 text-xs"
                   data-testid="task-details-drawer"
                 >

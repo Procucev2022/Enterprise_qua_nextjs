@@ -116,6 +116,18 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState<boolean>(false);
   const [draggedColumnIndex, setDraggedColumnIndex] = useState<number | null>(null);
 
+  // Close column settings modal on Escape key
+  useEffect(() => {
+    if (!isColumnSettingsOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsColumnSettingsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isColumnSettingsOpen]);
+
   // Profile Modals
   const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null);
   const [selectedBuyerName, setSelectedBuyerName] = useState<string | null>(null);
@@ -129,44 +141,6 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState<boolean>(false);
   const [isAckModalOpen, setIsAckModalOpen] = useState<boolean>(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState<boolean>(false);
-
-  // Close modals on Escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (isEmailModalOpen) {
-          setIsEmailModalOpen(false);
-        } else if (isMessageModalOpen) {
-          setIsMessageModalOpen(false);
-        } else if (isWhatsAppModalOpen) {
-          setIsWhatsAppModalOpen(false);
-        } else if (isAckModalOpen) {
-          setIsAckModalOpen(false);
-        } else if (isHistoryModalOpen) {
-          setIsHistoryModalOpen(false);
-        } else if (isColumnSettingsOpen) {
-          setIsColumnSettingsOpen(false);
-        } else if (selectedBuyerId) {
-          setSelectedBuyerId(null);
-          setSelectedBuyerName(null);
-        } else if (selectedVendorId) {
-          setSelectedVendorId(null);
-          setSelectedVendorName(null);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    isEmailModalOpen,
-    isMessageModalOpen,
-    isWhatsAppModalOpen,
-    isAckModalOpen,
-    isHistoryModalOpen,
-    isColumnSettingsOpen,
-    selectedBuyerId,
-    selectedVendorId,
-  ]);
 
   // Form states for modals
   const [emailForm, setEmailForm] = useState({ recipient: '', subject: '', message: '', notes: '' });
@@ -1442,16 +1416,8 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 1. Email Modal */}
       {isEmailModalOpen && activeActionAccount && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
-          onClick={() => setIsEmailModalOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
-          >
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-950/40">
@@ -1554,16 +1520,8 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 2. In-App Message Modal */}
       {isMessageModalOpen && activeActionAccount && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
-          onClick={() => setIsMessageModalOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
-          >
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40">
@@ -1651,16 +1609,8 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 3. WhatsApp Modal */}
       {isWhatsAppModalOpen && activeActionAccount && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
-          onClick={() => setIsWhatsAppModalOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
-          >
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40">
@@ -1737,16 +1687,8 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 4. Acknowledgement Status Modal */}
       {isAckModalOpen && activeActionAccount && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
-          onClick={() => setIsAckModalOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-slate-900 rounded-xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
-          >
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950/40">
@@ -1829,16 +1771,8 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 5. Communication History & Audit Modal */}
       {isHistoryModalOpen && activeActionAccount && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
-          onClick={() => setIsHistoryModalOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-slate-900 rounded-xl max-w-2xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
-          >
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-2xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">

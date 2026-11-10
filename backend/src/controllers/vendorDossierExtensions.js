@@ -115,7 +115,7 @@ async function getCreditHistory(req, res, next) {
         totalAllocated += amt;
       } else if (/ADJUSTMENT|REFUND/.test(type)) {
         adjustedCredits += amt;
-      } else if (Number(t.amount || 0) < 0 || type.includes('UNLOCK') || type.includes('QUOTE')) {
+      } else if (Number(t.amount || 0) < 0 || type.includes('UNLOCK')) {
         totalConsumed += amt;
       }
     }
@@ -129,8 +129,6 @@ async function getCreditHistory(req, res, next) {
     }
 
     const curBal = creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed);
-    const utilizationRate = totalAllocated > 0 ? Math.min(100, Math.round((totalConsumed / totalAllocated) * 100)) : 0;
-    const quotesCount = Array.isArray(vendor.quotedRfqIds) ? vendor.quotedRfqIds.length : 0;
     const summary = {
       totalCreditsAllocated: totalAllocated,
       totalCreditsConsumed: totalConsumed,
@@ -140,21 +138,17 @@ async function getCreditHistory(req, res, next) {
       currentCreditBalance: curBal,
       isSubscribed: Boolean(creditInfo.isSubscribed),
       subscriptionPlan: creditInfo.subscriptionPlan || vendor.subscriptionPlan || 'Free Tier',
-      utilizationRate,
-      totalQuotesSubmitted: quotesCount,
     };
 
     const formattedTransactions = (transactions || []).map((t) => {
       const amt = Number(t.amount || 0);
-      const isDeduction = amt < 0 || String(t.transaction_type).includes('UNLOCK') || String(t.transaction_type).includes('QUOTE');
+      const isDeduction = amt < 0 || String(t.transaction_type).includes('UNLOCK');
       const txType = t.transaction_type || (isDeduction ? 'Credits Consumed' : 'Credits Added');
       let creditSource = 'Qua Quotation Engine';
       if (String(txType).includes('INITIAL')) {
         creditSource = 'Free Tier Allocation';
       } else if (String(txType).includes('UPGRADE')) {
         creditSource = 'Subscription Upgrade';
-      } else if (String(txType).includes('QUOTE')) {
-        creditSource = 'Quotation Submission';
       }
 
       const balAfter = Number(t.balance_after ?? 0);
