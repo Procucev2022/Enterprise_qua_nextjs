@@ -183,31 +183,31 @@ function serveVendorRFQs(rfqNumbers: string[]) {
       json: async () =>
         /\/api\/rfqs(\?|$)/.test(String(url))
           ? {
-              success: true,
-              data: rfqNumbers.map((rfqNumber, idx) => ({
-                id: `rfq-${idx}`,
-                rfqNumber,
-                title: `Opportunity ${rfqNumber}`,
-                category: "Engineering Spares - Mechanical",
-                sourcingMode: idx === 0 ? "mode_1" : "mode_3",
-                status: "Quotes Pending",
-                quotesCount: 0,
-                budget: 150000,
-                targetDeliveryDate: "2026-09-15",
-                createdAt: "2026-09-04T10:00:00.000Z",
-                deliveryLocation: "Pune Plant",
-                // Only the first RFQ matches MOCK_MY_VENDOR's addedByBuyerCompany,
-                // so isOwnBuyerRfq only unlocks that one — the rest stay locked
-                // below connect/select, matching this function's own doc comment.
-                buyerAccountName:
-                  idx === 0
-                    ? MOCK_MY_VENDOR.addedByBuyerCompany
-                    : "Some Other Buyer Ltd.",
-                extractedEntities: [],
-                quotes: [],
-                chasingActive: false,
-              })),
-            }
+            success: true,
+            data: rfqNumbers.map((rfqNumber, idx) => ({
+              id: `rfq-${idx}`,
+              rfqNumber,
+              title: `Opportunity ${rfqNumber}`,
+              category: "Engineering Spares - Mechanical",
+              sourcingMode: idx === 0 ? "mode_1" : "mode_3",
+              status: "Quotes Pending",
+              quotesCount: 0,
+              budget: 150000,
+              targetDeliveryDate: "2026-09-15",
+              createdAt: "2026-09-04T10:00:00.000Z",
+              deliveryLocation: "Pune Plant",
+              // Only the first RFQ matches MOCK_MY_VENDOR's addedByBuyerCompany,
+              // so isOwnBuyerRfq only unlocks that one — the rest stay locked
+              // below connect/select, matching this function's own doc comment.
+              buyerAccountName:
+                idx === 0
+                  ? MOCK_MY_VENDOR.addedByBuyerCompany
+                  : "Some Other Buyer Ltd.",
+              extractedEntities: [],
+              quotes: [] as any[],
+              chasingActive: false,
+            })),
+          }
           : { success: true, data: {} },
     }),
   );
@@ -387,7 +387,7 @@ describe("QuotationForm Comprehensive Suite", () => {
                 budget: 150000,
                 createdAt: "2026-09-01",
                 chasingActive: false,
-                quotes: [],
+                quotes: [] as any[],
                 extractedEntities: [],
               },
               {
@@ -403,7 +403,7 @@ describe("QuotationForm Comprehensive Suite", () => {
                 budget: 85000,
                 createdAt: "2026-09-01",
                 chasingActive: false,
-                quotes: [],
+                quotes: [] as any[],
                 extractedEntities: [],
               },
             ],
@@ -1380,5 +1380,106 @@ describe("QuotationForm Comprehensive Suite", () => {
     if (xBtn) {
       fireEvent.click(xBtn);
     }
+  });
+
+  test("submits quote for a V0 network RFQ, saves quotation under Your Bid, updates status to Quote Submitted, and decrements credits", async () => {
+    const v0Rfq = {
+      ...DEFAULT_RFQ,
+      id: "rfq-v0-123",
+      rfqNumber: "RFQ260611583677",
+      title: "Industrial Machinery and Spare Parts",
+      sourcingMode: "mode_0",
+      buyerAccountName: "Procucev Network Sourced",
+      quotes: [] as any[],
+    };
+
+    const updatedV0Rfq = {
+      ...v0Rfq,
+      quotes: [
+        {
+          id: "q-1",
+          vendorId: MOCK_MY_VENDOR.id,
+          vendorName: MOCK_MY_VENDOR.name,
+          vendorEmail: MOCK_MY_VENDOR.email,
+          totalPrice: 25000,
+          unitPrice: 25000,
+          submittedAt: new Date().toISOString(),
+        },
+      ],
+    };
+
+    let currentRfq = v0Rfq;
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      const method = options.method || "GET";
+      if (/\/api\/vendors\/[^/]+$/.test(url) && method === "GET") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { ...MOCK_MY_VENDOR, freeQuotationCredits: 5 },
+          }),
+        });
+      }
+      if (/\/api\/rfqs\/[^/]+\/quotes$/.test(url) && method === "POST") {
+        currentRfq = updatedV0Rfq;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: updatedV0Rfq,
+            freeCreditsRemaining: 4,
+          }),
+        });
+      }
+      if (/\/api\/rfqs(\?|$)/.test(url) && method === "GET") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: [currentRfq] }),
+        });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    authClient.setSession(
+      {
+        id: "user-1",
+        email: "vendor@test.com",
+        name: "Test Vendor Co",
+        role: "vendor",
+        orgId: "org-1",
+        orgName: "Test Vendor Co",
+      },
+      "fake-token-123",
+    );
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={jest.fn()} withSession customSubscription="free" />,
+    );
+
+    // Initial state: credits 5 Free Left, No bid submitted
+    await waitFor(() => {
+      expect(screen.getByText(/5 Free Left/i)).toBeInTheDocument();
+      expect(screen.getByText(/No bid submitted/i)).toBeInTheDocument();
+    });
+
+    const submitBtns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+    fireEvent.click(submitBtns[0]);
+
+    const priceInputs = document.querySelectorAll('input[type="number"]');
+    fireEvent.change(priceInputs[0], { target: { value: "25000" } });
+
+    const submitQuotationBtn = screen.getByRole("button", {
+      name: /Submit Quotation/i,
+    });
+    await act(async () => {
+      fireEvent.click(submitQuotationBtn);
+    });
+
+    // Verify credits decremented from 5 to 4 Free Left and "Your Bid" displays the submitted quotation
+    await waitFor(() => {
+      expect(screen.getByText(/4 Free Left/i)).toBeInTheDocument();
+      expect(screen.getByText("₹25,000")).toBeInTheDocument();
+      expect(screen.getByText("Quote Submitted")).toBeInTheDocument();
+    });
   });
 });

@@ -1288,7 +1288,11 @@ export default function IngestionWizard({
         return;
       }
 
-      adoptCreatedRFQ(result.rfq);
+      if (typeof result.remainingFreeRFQs === 'number') {
+        adoptCreatedRFQ(result.rfq, result.remainingFreeRFQs);
+      } else {
+        adoptCreatedRFQ(result.rfq);
+      }
       // For V3, the server's procucevVendorCount reflects only its own
       // auto-match and ignores the vendors the buyer explicitly picked from the
       // Top Procucev panel. Reconcile the confirmation count so it never

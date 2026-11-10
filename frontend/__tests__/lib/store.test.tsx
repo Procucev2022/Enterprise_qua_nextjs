@@ -109,180 +109,180 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // RFQs come from GET /api/rfqs as a bare array; /api/bootstrap returns the
     // reference-data object. Distinguished here or the store reads the wrong shape.
     const bootstrapPayload = {
-  success: true,
-  data: {
-    buyerAccounts: [
-      {
-        id: 'buyer-acc-1',
-        organizationName: 'Larsen & Toubro Limited',
-        industry: 'Engineering & Construction',
-        corporateEmail: 'buyer@procucev.com',
-        contactPerson: 'Vikram Malhotra',
-        phone: '+91 98201 44820',
-        sourcingMode: 'mode_1',
-        subscriptionPlan: 'version_1',
-        remainingFreeRFQs: 5,
-        totalRFQsCreated: 2,
-        totalSpend: '$450,000',
-        accountSource: 'direct_enterprise_signup',
-        syncTimestamp: '2026-08-29 10:00 UTC',
-        createdDate: '2026-08-29',
-      },
-      {
-        id: 'buyer-acc-2',
-        organizationName: 'Siemens Energy Ltd',
-        industry: 'Power',
-        corporateEmail: 'siemens@procucev.com',
-        contactPerson: 'Ravi Verma',
-        phone: '+91 98201 55667',
-        sourcingMode: 'mode_2',
-        subscriptionPlan: 'version_2',
-        remainingFreeRFQs: 10,
-        accountSource: 'direct_enterprise_signup',
-      },
-    ],
-    vendors: [
-      {
-        id: 'v-001',
-        name: 'Apex Industrial Dynamics Pvt Ltd',
-        contactPerson: 'Rajesh Nair',
-        email: 'rajesh@apexindustrial.in',
-        phone: '+91 98201 44820',
-        majorCategory: 'Engineering Spares - Mechanical',
-        minorCategories: ['Centrifugal Pumps', 'Slurry Pumps'],
-        clientMappedCategories: ['Centrifugal Pumps'],
-        vendorSelectedCategories: ['Centrifugal Pumps'],
-        location: 'Pune, Maharashtra',
-        rating: 4.8,
-        source: 'buyer_manual',
-        status: 'PREFERRED ENTERPRISE SUPPLIER',
-        score: 94,
-        evaluated: true,
-        hasRecord: true,
-      },
-      {
-        id: 'v-002',
-        name: 'Global Valve Systems Ltd',
-        contactPerson: 'Karan Mehra',
-        email: 'karan@globalvalves.in',
-        phone: '+91 98201 44777',
-        majorCategory: 'Engineering Spares - Mechanical',
-        minorCategories: ['Slurry Valves'],
-        clientMappedCategories: ['Slurry Valves'],
-        vendorSelectedCategories: [],
-        location: 'Delhi',
-        rating: 4.3,
-        source: 'platform_database',
-        status: 'REGISTERED / NOT EVALUATED',
-        score: 76,
-        evaluated: false,
-        hasRecord: false,
-      },
-      {
-        id: 'v-003',
-        name: 'Mumbai Tech Dynamics',
-        contactPerson: 'Sanjay Deshmukh',
-        email: 'sanjay@mumbaitech.in',
-        phone: '+91 98201 44666',
-        majorCategory: 'Electrical',
-        minorCategories: ['Switchgears'],
-        location: 'Mumbai',
-        rating: 0,
-        source: 'buyer_manual',
-        status: 'REGISTERED / NOT EVALUATED',
-        evaluated: false,
-      },
-      {
-        id: 'v-004',
-        name: 'MH Spares Ltd',
-        contactPerson: 'Nitin Patel',
-        email: 'nitin@mhspares.in',
-        phone: '+91 98201 44555',
-        majorCategory: 'Engineering Spares - Mechanical',
-        minorCategories: ['Custom Spares'],
-        location: 'MH Hub',
-        rating: 4.2,
-        source: 'buyer_excel',
-        status: 'PREFERRED ENTERPRISE SUPPLIER',
-        evaluated: true,
-      },
-    ],
-    evaluations: [
-      {
-        id: 'eval-1',
-        vendorId: 'v-001',
-        vendorName: 'Apex Industrial Dynamics Pvt Ltd',
-        contactPerson: 'Rajesh Nair',
-        email: 'rajesh@apexindustrial.in',
-        phone: '+91 98201 44820',
-        category: 'Engineering Spares - Mechanical',
-        submissionDate: '2026-08-29',
-        status: 'PREFERRED ENTERPRISE SUPPLIER',
-        overallScore: 92.4,
-        systemAction: 'Auto-Promoted to Preferred Tier',
-        moduleScores: {
-          commercial: { score: 92, weightedScore: 23.0, maxScore: 25, weight: 25, remarks: 'Fair price' },
-          technical: { score: 90, weightedScore: 13.5, maxScore: 15, weight: 15, remarks: 'High tech' },
-          quality: { score: 94, weightedScore: 18.8, maxScore: 20, weight: 20, remarks: 'High quality' },
-          delivery: { score: 93, weightedScore: 18.6, maxScore: 20, weight: 20, remarks: 'Fast delivery' },
-          financial: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Solid finances' },
-          governance: { score: 94, weightedScore: 9.4, maxScore: 10, weight: 10, remarks: 'Compliant' },
-        },
-        documents: [
-          { id: 'doc-1', name: 'ISO 9001.pdf', type: 'Quality', uploadDate: '2026-08-29', verified: true, status: 'Verified' },
+      success: true,
+      data: {
+        buyerAccounts: [
+          {
+            id: 'buyer-acc-1',
+            organizationName: 'Larsen & Toubro Limited',
+            industry: 'Engineering & Construction',
+            corporateEmail: 'buyer@procucev.com',
+            contactPerson: 'Vikram Malhotra',
+            phone: '+91 98201 44820',
+            sourcingMode: 'mode_1',
+            subscriptionPlan: 'version_1',
+            remainingFreeRFQs: 5,
+            totalRFQsCreated: 2,
+            totalSpend: '$450,000',
+            accountSource: 'direct_enterprise_signup',
+            syncTimestamp: '2026-08-29 10:00 UTC',
+            createdDate: '2026-08-29',
+          },
+          {
+            id: 'buyer-acc-2',
+            organizationName: 'Siemens Energy Ltd',
+            industry: 'Power',
+            corporateEmail: 'siemens@procucev.com',
+            contactPerson: 'Ravi Verma',
+            phone: '+91 98201 55667',
+            sourcingMode: 'mode_2',
+            subscriptionPlan: 'version_2',
+            remainingFreeRFQs: 10,
+            accountSource: 'direct_enterprise_signup',
+          },
         ],
-      },
-      {
-        id: 'eval-2',
-        vendorId: 'v-002',
-        vendorName: 'Global Valve Systems Ltd',
-        contactPerson: 'Karan Mehra',
-        email: 'karan@globalvalves.in',
-        phone: '+91 98201 44777',
-        category: 'Engineering Spares - Mechanical',
-        submissionDate: '2026-08-29',
-        status: 'CONDITIONAL / UNDER REVIEW',
-        overallScore: 76.0,
-        systemAction: 'Pending Review',
-        moduleScores: {
-          commercial: { score: 75, weightedScore: 18.75, maxScore: 25, weight: 25, remarks: 'Standard price' },
-          technical: { score: 80, weightedScore: 12.0, maxScore: 15, weight: 15, remarks: 'Acceptable tech' },
-          quality: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard quality' },
-          delivery: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard delivery' },
-          financial: { score: 70, weightedScore: 7.0, maxScore: 10, weight: 10, remarks: 'Stable' },
-          governance: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Compliant' },
+        vendors: [
+          {
+            id: 'v-001',
+            name: 'Apex Industrial Dynamics Pvt Ltd',
+            contactPerson: 'Rajesh Nair',
+            email: 'rajesh@apexindustrial.in',
+            phone: '+91 98201 44820',
+            majorCategory: 'Engineering Spares - Mechanical',
+            minorCategories: ['Centrifugal Pumps', 'Slurry Pumps'],
+            clientMappedCategories: ['Centrifugal Pumps'],
+            vendorSelectedCategories: ['Centrifugal Pumps'],
+            location: 'Pune, Maharashtra',
+            rating: 4.8,
+            source: 'buyer_manual',
+            status: 'PREFERRED ENTERPRISE SUPPLIER',
+            score: 94,
+            evaluated: true,
+            hasRecord: true,
+          },
+          {
+            id: 'v-002',
+            name: 'Global Valve Systems Ltd',
+            contactPerson: 'Karan Mehra',
+            email: 'karan@globalvalves.in',
+            phone: '+91 98201 44777',
+            majorCategory: 'Engineering Spares - Mechanical',
+            minorCategories: ['Slurry Valves'],
+            clientMappedCategories: ['Slurry Valves'],
+            vendorSelectedCategories: [],
+            location: 'Delhi',
+            rating: 4.3,
+            source: 'platform_database',
+            status: 'REGISTERED / NOT EVALUATED',
+            score: 76,
+            evaluated: false,
+            hasRecord: false,
+          },
+          {
+            id: 'v-003',
+            name: 'Mumbai Tech Dynamics',
+            contactPerson: 'Sanjay Deshmukh',
+            email: 'sanjay@mumbaitech.in',
+            phone: '+91 98201 44666',
+            majorCategory: 'Electrical',
+            minorCategories: ['Switchgears'],
+            location: 'Mumbai',
+            rating: 0,
+            source: 'buyer_manual',
+            status: 'REGISTERED / NOT EVALUATED',
+            evaluated: false,
+          },
+          {
+            id: 'v-004',
+            name: 'MH Spares Ltd',
+            contactPerson: 'Nitin Patel',
+            email: 'nitin@mhspares.in',
+            phone: '+91 98201 44555',
+            majorCategory: 'Engineering Spares - Mechanical',
+            minorCategories: ['Custom Spares'],
+            location: 'MH Hub',
+            rating: 4.2,
+            source: 'buyer_excel',
+            status: 'PREFERRED ENTERPRISE SUPPLIER',
+            evaluated: true,
+          },
+        ],
+        evaluations: [
+          {
+            id: 'eval-1',
+            vendorId: 'v-001',
+            vendorName: 'Apex Industrial Dynamics Pvt Ltd',
+            contactPerson: 'Rajesh Nair',
+            email: 'rajesh@apexindustrial.in',
+            phone: '+91 98201 44820',
+            category: 'Engineering Spares - Mechanical',
+            submissionDate: '2026-08-29',
+            status: 'PREFERRED ENTERPRISE SUPPLIER',
+            overallScore: 92.4,
+            systemAction: 'Auto-Promoted to Preferred Tier',
+            moduleScores: {
+              commercial: { score: 92, weightedScore: 23.0, maxScore: 25, weight: 25, remarks: 'Fair price' },
+              technical: { score: 90, weightedScore: 13.5, maxScore: 15, weight: 15, remarks: 'High tech' },
+              quality: { score: 94, weightedScore: 18.8, maxScore: 20, weight: 20, remarks: 'High quality' },
+              delivery: { score: 93, weightedScore: 18.6, maxScore: 20, weight: 20, remarks: 'Fast delivery' },
+              financial: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Solid finances' },
+              governance: { score: 94, weightedScore: 9.4, maxScore: 10, weight: 10, remarks: 'Compliant' },
+            },
+            documents: [
+              { id: 'doc-1', name: 'ISO 9001.pdf', type: 'Quality', uploadDate: '2026-08-29', verified: true, status: 'Verified' },
+            ],
+          },
+          {
+            id: 'eval-2',
+            vendorId: 'v-002',
+            vendorName: 'Global Valve Systems Ltd',
+            contactPerson: 'Karan Mehra',
+            email: 'karan@globalvalves.in',
+            phone: '+91 98201 44777',
+            category: 'Engineering Spares - Mechanical',
+            submissionDate: '2026-08-29',
+            status: 'CONDITIONAL / UNDER REVIEW',
+            overallScore: 76.0,
+            systemAction: 'Pending Review',
+            moduleScores: {
+              commercial: { score: 75, weightedScore: 18.75, maxScore: 25, weight: 25, remarks: 'Standard price' },
+              technical: { score: 80, weightedScore: 12.0, maxScore: 15, weight: 15, remarks: 'Acceptable tech' },
+              quality: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard quality' },
+              delivery: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard delivery' },
+              financial: { score: 70, weightedScore: 7.0, maxScore: 10, weight: 10, remarks: 'Stable' },
+              governance: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Compliant' },
+            },
+            documents: [],
+          },
+        ],
+        auditLogs: [
+          {
+            id: 'log-1',
+            timestamp: '2026-08-29 10:00:00',
+            action: 'Initial system bootstrap',
+            user: 'System Bot',
+            hash: 'abc123sha256',
+          },
+        ],
+        aiFeed: [
+          {
+            id: 'feed-1',
+            timestamp: '10:00 AM',
+            title: 'Bootstrap Completed',
+            message: 'System loaded successfully',
+            type: 'system',
+          },
+        ],
+        systemConfig: {
+          ollamaModel: 'Llama 3 (8B Instruct)',
+          ollamaActive: true,
+          ocrExtractionThreshold: 85,
+          whatsappAutoChaser: true,
+          voiceCallAutoChaser: true,
+          smsAutoChaser: true,
+          escalationIntervalHours: 24,
         },
-        documents: [],
       },
-    ],
-    auditLogs: [
-      {
-        id: 'log-1',
-        timestamp: '2026-08-29 10:00:00',
-        action: 'Initial system bootstrap',
-        user: 'System Bot',
-        hash: 'abc123sha256',
-      },
-    ],
-    aiFeed: [
-      {
-        id: 'feed-1',
-        timestamp: '10:00 AM',
-        title: 'Bootstrap Completed',
-        message: 'System loaded successfully',
-        type: 'system',
-      },
-    ],
-    systemConfig: {
-      ollamaModel: 'Llama 3 (8B Instruct)',
-      ollamaActive: true,
-      ocrExtractionThreshold: 85,
-      whatsappAutoChaser: true,
-      voiceCallAutoChaser: true,
-      smsAutoChaser: true,
-      escalationIntervalHours: 24,
-    },
-  },
     };
     // Method-aware: GET /api/rfqs lists (an array), POST /api/rfqs creates (one
     // record). The server allocates the RFQ number, so the created record carries
@@ -332,7 +332,7 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
   });
 
   it('throws error when useApp is called outside of AppProvider', () => {
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => { });
     const TestComponent = () => {
       useApp();
       return <div>Test</div>;
@@ -1064,24 +1064,24 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
     await expect(
       contextValue.addNewRFQ({
-          title: 'Error RFQ',
-          category: 'Mechanical',
-          targetDeliveryDate: '2026-10-15',
-          sourcingMode: 'mode_2',
-          budget: 100000,
-          extractedEntities: [],
-        })
+        title: 'Error RFQ',
+        category: 'Mechanical',
+        targetDeliveryDate: '2026-10-15',
+        sourcingMode: 'mode_2',
+        budget: 100000,
+        extractedEntities: [],
+      })
     ).rejects.toThrow('Subscription required');
 
     await expect(
       contextValue.addNewRFQ({
-          title: 'Error RFQ',
-          category: 'Mechanical',
-          targetDeliveryDate: '2026-10-15',
-          sourcingMode: 'mode_3',
-          budget: 100000,
-          extractedEntities: [],
-        })
+        title: 'Error RFQ',
+        category: 'Mechanical',
+        targetDeliveryDate: '2026-10-15',
+        sourcingMode: 'mode_3',
+        budget: 100000,
+        extractedEntities: [],
+      })
     ).rejects.toThrow('Subscription required');
 
     // 2. Add New RFQ with free_trial and mode_1
@@ -2192,6 +2192,59 @@ describe('lib/store.tsx - RFQ edit and delete', () => {
 
       expect(ctx().rfqs).toHaveLength(1);
       expect(ctx().rfqs[0].title).toBe('Adopted again');
+    });
+
+    it('decrements remainingFreeRFQs and updates activeBuyerAccount when adopting a non-V0 RFQ on free trial', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      expect(ctx().remainingFreeRFQs).toBe(5);
+
+      // Create 1st RFQ in mode_3
+      const rfq1 = { ...STORED, id: '101', rfqNumber: 'RFQ260409000101', sourcingMode: 'mode_3' } as RFQItem;
+      await act(async () => {
+        ctx().adoptCreatedRFQ(rfq1);
+      });
+      expect(ctx().remainingFreeRFQs).toBe(4);
+
+      // Create 2nd RFQ in mode_3
+      const rfq2 = { ...STORED, id: '102', rfqNumber: 'RFQ260409000102', sourcingMode: 'mode_3' } as RFQItem;
+      await act(async () => {
+        ctx().adoptCreatedRFQ(rfq2);
+      });
+      expect(ctx().remainingFreeRFQs).toBe(3);
+
+      // Mode 0 RFQ does not decrement credits
+      const rfqV0 = { ...STORED, id: '103', rfqNumber: 'RFQ260409000103', sourcingMode: 'mode_0' } as RFQItem;
+      await act(async () => {
+        ctx().adoptCreatedRFQ(rfqV0);
+      });
+      expect(ctx().remainingFreeRFQs).toBe(3);
+
+      // Server-provided remaining credits overrides and synchronizes
+      const rfqServer = { ...STORED, id: '104', rfqNumber: 'RFQ260409000104', sourcingMode: 'mode_1' } as RFQItem;
+      await act(async () => {
+        ctx().adoptCreatedRFQ(rfqServer, 1);
+      });
+      expect(ctx().remainingFreeRFQs).toBe(1);
+    });
+
+    it('uses the server credit balance embedded in the RFQ when no separate balance is supplied', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+      const rfqWithServerBalance = {
+        ...STORED,
+        id: '105',
+        rfqNumber: 'RFQ260409000105',
+        sourcingMode: 'mode_1',
+        remainingFreeRFQs: 2,
+      } as RFQItem;
+
+      await act(async () => {
+        ctx().adoptCreatedRFQ(rfqWithServerBalance);
+      });
+
+      expect(ctx().remainingFreeRFQs).toBe(2);
     });
   });
 });

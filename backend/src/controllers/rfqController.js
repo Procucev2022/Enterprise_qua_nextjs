@@ -166,6 +166,18 @@ function canVendorViewRfq(vendor, rfq) {
   if (!vendor || !rfq) return false;
   if (storeService.vendorCoversRFQ(vendor, rfq)) return true;
 
+  // Vendors who have submitted a quote on this RFQ can always view it
+  const vId = vendor.id ? String(vendor.id).toLowerCase() : null;
+  const vEmail = vendor.email ? String(vendor.email).toLowerCase() : null;
+  if (Array.isArray(rfq.quotes) && rfq.quotes.some((q) => {
+    if (!q) return false;
+    const qvId = q.vendorId ? String(q.vendorId).toLowerCase() : null;
+    const qvEmail = q.vendorEmail ? String(q.vendorEmail).toLowerCase() : null;
+    return (vId && qvId === vId) || (vEmail && qvEmail === vEmail);
+  })) {
+    return true;
+  }
+
   // Vendors with database-configured unlimited download/quote access can view any non-private RFQ
   if (hasUnlimitedDownloadAccess(vendor) || hasUnlimitedQuoteAccess(vendor)) {
     if (!storeService.isVendorPrivateToDifferentBuyer(vendor, rfq)) {
@@ -277,9 +289,22 @@ function applyVendorBuyerPrivacy(rfq, vendorRecord) {
   if (!rfq) return rfq;
   if (!vendorRecord) return rfq;
 
+  const vId = vendorRecord.id ? String(vendorRecord.id).toLowerCase() : null;
+  const vEmail = vendorRecord.email ? String(vendorRecord.email).toLowerCase() : null;
+  const vName = vendorRecord.name ? String(vendorRecord.name).trim().toLowerCase() : null;
+
   const vendorQuotes = (Array.isArray(rfq.quotes) ? rfq.quotes : []).filter(
-    (q) => (vendorRecord.id && q.vendorId === vendorRecord.id) ||
-      (vendorRecord.email && q.vendorEmail && q.vendorEmail.toLowerCase() === vendorRecord.email.toLowerCase())
+    (q) => {
+      if (!q) return false;
+      const qvId = q.vendorId ? String(q.vendorId).toLowerCase() : null;
+      const qvEmail = q.vendorEmail ? String(q.vendorEmail).toLowerCase() : null;
+      const qvName = q.vendorName ? String(q.vendorName).trim().toLowerCase() : null;
+      return (
+        (vId && qvId === vId) ||
+        (vEmail && (qvEmail === vEmail || qvId === vEmail)) ||
+        (vName && qvName === vName)
+      );
+    }
   );
 
   if (vendorQuotes.length === 0) {
@@ -813,6 +838,7 @@ async function getRFQById(req, res, next) {
  */
 async function createRFQ(req, res, next) {
   let requestingBuyerAccount = null;
+  let initialFreeRFQsRemaining = null;
   try {
     const body = req.body || {};
 
@@ -929,6 +955,9 @@ async function createRFQ(req, res, next) {
     requestingBuyerAccount = req.user
       ? (await storeService.ensureBuyerAccountForUser(req.user)) ||
       (await storeService.getBuyerAccountByEmail(req.user.email))
+      : null;
+    initialFreeRFQsRemaining = typeof requestingBuyerAccount?.remainingFreeRFQs === 'number'
+      ? requestingBuyerAccount.remainingFreeRFQs
       : null;
 
     // Version Logic: If an RFQ is raised through the email gateway / RFQ email ID,
@@ -1136,7 +1165,23 @@ async function createRFQ(req, res, next) {
       logger.warn('Initial RFQ DB confirmation caught non-fatal warning', { error: persistErr.message }, 'RFQ_CONTROLLER');
     }
 
-    res.status(201).json({ success: true, data: finalRFQ });
+    const remainingFreeRFQs = typeof requestingBuyerAccount?.remainingFreeRFQs === 'number'
+      ? requestingBuyerAccount.remainingFreeRFQs
+      : null;
+    const consumedFreeTrial = initialFreeRFQsRemaining !== null
+      && remainingFreeRFQs !== null
+      && remainingFreeRFQs < initialFreeRFQsRemaining;
+
+    if (remainingFreeRFQs !== null) {
+      finalRFQ.remainingFreeRFQs = remainingFreeRFQs;
+    }
+
+    res.status(201).json({
+      success: true,
+      data: finalRFQ,
+      remainingFreeRFQs,
+      consumedFreeTrial,
+    });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
     next(err);
@@ -1957,6 +2002,7 @@ async function addQuote(req, res, next) {
     const quote = {
       vendorId: vendorRecord.id,
       vendorName: vendorRecord.name,
+      vendorEmail: vendorRecord.email,
       vendorCategory: vendorCategory || 'Client List',
       unitPrice,
       totalPrice: totalPrice || unitPrice,
@@ -1981,8 +2027,13 @@ async function addQuote(req, res, next) {
       logger.warn(`RFQ not found for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
+    const updatedVendor = storeService.getVendorById(vendorRecord.id, 'all') || vendorRecord;
     const finalData = applyVendorBuyerPrivacy(updatedRFQ, vendorRecord);
-    res.json({ success: true, data: finalData });
+    res.json({
+      success: true,
+      data: finalData,
+      freeCreditsRemaining: updatedVendor ? updatedVendor.freeQuotationCredits : undefined,
+    });
   } catch (err) {
     logger.error(`Error adding quote to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
@@ -2261,4 +2312,11 @@ module.exports = {
   replyInquiry,
   validateVendorCategories,
   requestVendorCategoryUpdate,
+  isPastDate,
+  resolveVendorForUser,
+  resolveRfqReadScope,
+  canAccessRfq,
+  canVendorViewRfq,
+  applyVendorBuyerPrivacy,
+  applyQuotesVisibility,
 };

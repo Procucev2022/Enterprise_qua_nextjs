@@ -105,7 +105,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
         return;
       }
 
-      adoptCreatedRFQ(saveRes.rfq);
+      adoptCreatedRFQ(saveRes.rfq, saveRes.remainingFreeRFQs);
       setEmailSubject('');
       setEmailBody('');
       showToast(

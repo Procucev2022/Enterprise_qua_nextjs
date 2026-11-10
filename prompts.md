@@ -3582,7 +3582,7 @@ Force exiting Jest: Have you considered using `--detectOpenHandles` to detect as
 ✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
 
 ❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
-PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
 **Timestamp**: 2026-11-05T12:30:31+05:30
 
 ```text
@@ -3766,7 +3766,7 @@ Force exiting Jest: Have you considered using `--detectOpenHandles` to detect as
 ✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
 
 ❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
-PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
 **Timestamp**: 2026-11-05T12:30:31+05:30
 
 ```
@@ -4362,6 +4362,246 @@ resume, resolve file conflict issues & PR checks, [https://github.com/Procucev20
 ### Prompt 135
 
 **Timestamp**: 2026-11-09T12:47:13+05:30
+
+```text
+resume, resolve file conflict issues & PR checks, [https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416)
+```
+
+### Prompt 136
+
+**Timestamp**: 2026-11-02T07:59:00Z
+
+`	ext
+### Action Center – Internal Tasks Module Implementation
+
+Implement a complete **Internal Task Management System** under Action Center. All the activities listed below are internal tasks created by employees or admins to track work, assign responsibilities, monitor progress, and complete tasks.
+
+### 1. Internal Task Categories
+
+Create the following task types:
+
+1. **Communication Tasks**
+   - Phone Call
+   - SMS
+   - WhatsApp
+   - Email
+   - Follow-up (New Follow-up / Existing Follow-up)
+
+2. **Demo Scheduling**
+   - Schedule product demonstrations.
+   - Record demo date, time, client details, assigned employee, and demo status.
+
+3. **Credit Management**
+   - Add Credits
+   - Delete / Deduct Credits
+   - Capture account details, credit quantity, reason, and requested by.
+
+4. **Business Development Tasks**
+   - Send Proposal
+   - Send Corporate Email
+   - Track whether the proposal or email was sent and completed.
+
+5. **Internal Operations**
+   - Other internal operational activities.
+   - Allow users to enter a custom task title and description.
+
+6. **Onboarding Process**
+   - Track client onboarding activities.
+   - Assign tasks and monitor onboarding progress.
+
+### 2. Task Creation and Assignment
+
+Provide a Create Task option with:
+- Task Category and Task Type
+- Task Title
+- Description / Instructions
+- Related Buyer, Seller, or Client (where applicable)
+- Assigned Employee
+- Priority (Low, Medium, High, Critical)
+- Due Date and Time
+- Attachments
+- Additional Notes
+
+Automatically capture the task creator, creation date, and task reference ID.
+
+### 3. Task Status and Tracking
+
+Every task should have these statuses:
+- New
+- Assigned
+- In Progress
+- Pending Approval
+- Completed
+- Rejected
+- Cancelled
+
+Employees should be able to update progress, add remarks, and attach supporting documents. When a task is completed, record the completion date and completed by.
+
+### 4. Credit Add/Delete Approval Workflow
+
+For Add Credits and Delete Credits tasks, implement a separate approval workflow:
+
+**Requester:**
+- Creates an Add Credit or Delete Credit request.
+- Enters the buyer/seller account, credit quantity, and reason.
+- Tracks the request status.
+
+**Admin / Approver:**
+- Views pending credit requests.
+- Reviews account details, requested credits, and reason.
+- Approves or rejects the request with remarks.
+- Only after approval should the actual credit balance be updated in the database.
+- Maintain a complete credit transaction and approval history.
+
+### 5. Internal Task Dashboard
+
+Display summary cards:
+- Total Tasks
+- New Tasks
+- In Progress
+- Pending Approval
+- Completed
+- Overdue Tasks
+
+Provide filters for Task Type, Assigned Employee, Created By, Priority, Status, and Date Range.
+
+### 6. Task Details and History
+
+When clicking a task, open a detailed view showing:
+- Task information
+- Requester and assigned employee
+- Related buyer/seller details
+- Status history
+- Comments and remarks
+- Attachments
+- Approval history, where applicable
+- Created and completed timestamps
+
+### 7. Notifications and Reminders
+
+- Notify assigned employees when a task is created or assigned.
+- Notify requesters when task status changes.
+- Notify approvers when credit requests are submitted.
+- Send reminders for approaching deadlines and overdue tasks.
+
+### 8. Important Implementation Requirements
+
+- All tasks and task histories must be stored in the database.
+- Implement role-based access for employees, admins, and approvers.
+- Maintain a complete audit trail.
+- Use existing email, SMS, WhatsApp, notification, buyer, seller, and credit services wherever available.
+- Do not automatically mark communication tasks as completed unless the required action is successfully performed or completion is explicitly confirmed.
+- Do not update credits before approval.
+- Reuse existing APIs, components, database models, and authentication.
+- Do not break existing Action Center modules, especially Tickets, Approvals, Scorecard, Buyer Directory, Seller Directory, and Registrations.
+
+**Expected Result:** Internal Tasks should function as a centralized employee task-management and approval system, where every internal activity can be created, assigned, tracked, approved when required, and marked completed with a complete history.
+```
+
+```
+
+---
+
+### Prompt 137
+
+**Timestamp**: 2026-11-06T17:19:45+05:30
+
+```text
+I submitted a bid in V1, and the bid amount is showing under "Your Bid". But in V0 and V3, when I try to submit a quotation, it shows a "Bid Sent Successfully" popup, but the bid is not actually submitted. Once the popup disappears, the bid is not visible.
+
+Please fix this issue. After successfully submitting a bid, the quotation should be saved and displayed under "Your Bid", and the vendor's available credits should be automatically deducted. check
+```
+
+---
+
+### Prompt 138
+
+**Timestamp**: 2026-11-06T18:41:55+05:30
+
+```text
+suggest branch name
+```
+
+---
+
+### Prompt 139
+
+**Timestamp**: 2026-11-06T18:43:47+05:30
+
+```text
+credit should be decrea after I create 2 RFQ
+```
+
+---
+
+### Prompt 140
+
+**Timestamp**: 2026-11-09T20:42:17+05:30
+
+```text
+why using git
+```
+
+---
+
+### Prompt 141
+
+**Timestamp**: 2026-11-09T21:17:13+05:30
+
+```text
+ PASS  __tests__/vendorPublicController.test.js (5.475 s)
+ PASS  __tests__/auditService.test.js
+ PASS  __tests__/buyerProfileQueries.test.js (10.327 s)
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+=============================== Coverage summary ===============================
+Statements   : 98.55% ( 20214/20511 )
+Branches     : 92.04% ( 21512/23372 )
+Functions    : 99% ( 2498/2523 )
+Lines        : 99.23% ( 18646/18789 )
+================================================================================
+Jest: "S:\procucev\Precucev-github\Enterprise_qua_nextjs\backend\src\services\storeService.js" coverage threshold for branches (90%) not met: 89.23%
+Jest: "S:\procucev\Precucev-github\Enterprise_qua_nextjs\backend\src\controllers\rfqController.js" coverage threshold for branches (90%) not met: 88.83%
+
+Test Suites: 154 passed, 154 total
+Tests:       4697 passed, 4697 total
+Snapshots:   0 total
+Time:        1122.294 s, estimated 1489 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+✖ [FAILED] Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
+```
+
+
+---
+
+### Prompt 142
+
+**Timestamp**: 2026-11-09T22:02:40+05:30
+
+```text
+[Images uploaded: Buyer Contact Details popup, Direct Clarification buyer email exposed, Direct Clarification buyer email masked on localhost, and Vendor Quotation Form showing "Quote Submitted" popup with "No bid submitted" under "Your Bid"]
+```
+
+
+---
+
+### Prompt 143
+
+**Timestamp**: 2026-11-09T22:32:50+05:30
+
+```text
+complete
+```
+
+### Prompt 144
+
+**Timestamp**: 2026-11-10T07:37:01+05:30
 
 ```text
 resume, resolve file conflict issues & PR checks, [https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416)

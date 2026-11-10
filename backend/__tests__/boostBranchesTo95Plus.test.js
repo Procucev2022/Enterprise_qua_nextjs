@@ -509,6 +509,91 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       user: { email: 'v1buyer@example.com' },
     }, resPaidSuccess, next);
     expect(resPaidSuccess.status).toHaveBeenCalledWith(201);
+
+    // 5. Successive RFQ creations decrement free trial credits each time (e.g. from 2 to 0)
+    const multiBuyer = storeService.addBuyerAccount({
+      organizationName: 'Multi RFQ Org',
+      corporateEmail: 'multirfq@example.com',
+      subscriptionPlan: 'free_trial',
+      remainingFreeRFQs: 2,
+    });
+
+    const resRfq1 = mockRes();
+    await rfqController.createRFQ({
+      body: {
+        title: 'Multi RFQ 1',
+        category: 'Electronics',
+        sourcingMode: 'mode_3',
+        targetDeliveryDate: '2028-10-15',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        extractedEntities: [{ itemName: 'Part 1', quantity: 1, unit: 'pcs' }],
+      },
+      user: { email: 'multirfq@example.com' },
+    }, resRfq1, next);
+    expect(resRfq1.status).toHaveBeenCalledWith(201);
+    expect(resRfq1.json).toHaveBeenCalledWith(expect.objectContaining({
+      remainingFreeRFQs: 1,
+      consumedFreeTrial: true,
+    }));
+    expect(multiBuyer.remainingFreeRFQs).toBe(1);
+
+    const resRfq2 = mockRes();
+    await rfqController.createRFQ({
+      body: {
+        title: 'Multi RFQ 2',
+        category: 'Electronics',
+        sourcingMode: 'mode_3',
+        targetDeliveryDate: '2028-10-15',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        extractedEntities: [{ itemName: 'Part 2', quantity: 2, unit: 'pcs' }],
+      },
+      user: { email: 'multirfq@example.com' },
+    }, resRfq2, next);
+    expect(resRfq2.status).toHaveBeenCalledWith(201);
+    expect(resRfq2.json).toHaveBeenCalledWith(expect.objectContaining({
+      remainingFreeRFQs: 0,
+      consumedFreeTrial: true,
+    }));
+    const updatedBuyer = await storeService.getBuyerAccountByEmail('multirfq@example.com');
+    expect(updatedBuyer.remainingFreeRFQs).toBe(0);
+
+    // 3rd attempt in Mode 3 is blocked (0 credits left)
+    const resRfq3Blocked = mockRes();
+    next.mockClear();
+    await rfqController.createRFQ({
+      body: {
+        title: 'Multi RFQ 3 Blocked',
+        category: 'Electronics',
+        sourcingMode: 'mode_3',
+        targetDeliveryDate: '2028-10-15',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        extractedEntities: [{ itemName: 'Part 3', quantity: 1, unit: 'pcs' }],
+      },
+      user: { email: 'multirfq@example.com' },
+    }, resRfq3Blocked, next);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+    }));
+
+    // Mode 0 remains allowed (0 credits consumed) even with 0 credits
+    const resRfq4Mode0 = mockRes();
+    await rfqController.createRFQ({
+      body: {
+        title: 'Multi RFQ 4 Mode 0 Allowed',
+        category: 'Electronics',
+        sourcingMode: 'mode_0',
+        targetDeliveryDate: '2028-10-15',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        extractedEntities: [{ itemName: 'Part 4', quantity: 1, unit: 'pcs' }],
+      },
+      user: { email: 'multirfq@example.com' },
+    }, resRfq4Mode0, next);
+    expect(resRfq4Mode0.status).toHaveBeenCalledWith(201);
   });
 
   test('pincodeController and pincodeService branch boost', async () => {
@@ -1351,7 +1436,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     // 2. _rfqTaxonomyGroups edge cases
     expect(storeService._rfqTaxonomyGroups(null)).toEqual([]);
     expect(storeService._rfqTaxonomyGroups({})).toEqual([]);
-    
+
     // Header minorCategory
     const rfqHeadMinor = {
       minorCategory: 'Corrugated Boxes',
@@ -1713,5 +1798,322 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     storeService.vendors.push(unlimitedVendor);
     const unlUnlim = await storeService.unlockRFQForVendor('v-unlim-test', 'rfq-no-num');
     expect(unlUnlim.success).toBe(true);
+  });
+
+  test('rfqController deep branch booster for 90%+ branch threshold', async () => {
+    // 1. isPastDate branches
+    expect(rfqController.isPastDate(null)).toBe(false);
+    expect(rfqController.isPastDate('')).toBe(false);
+    expect(rfqController.isPastDate('   ')).toBe(false);
+    expect(rfqController.isPastDate(12345)).toBe(false);
+    expect(rfqController.isPastDate('invalid-date')).toBe(false);
+    expect(rfqController.isPastDate('2000-01-01')).toBe(true);
+    expect(rfqController.isPastDate('2099-01-01')).toBe(false);
+
+    // 2. resolveVendorForUser branches
+    expect(await rfqController.resolveVendorForUser(null)).toBeNull();
+    expect(await rfqController.resolveVendorForUser({})).toBeNull();
+    const vendorWithEmail = { role: 'vendor', email: 'v-resolved@test.com', id: 'v-res-1' };
+    storeService.vendors.push(vendorWithEmail);
+    expect(await rfqController.resolveVendorForUser(vendorWithEmail)).toBeDefined();
+
+    const spyDBFallback = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+    expect(await rfqController.resolveVendorForUser({ role: 'buyer', email: 'unregistered-unique-buyer@test.com' })).toBeNull();
+    spyDBFallback.mockRestore();
+
+    // 3. resolveRfqReadScope branches
+    const buyerScope = await rfqController.resolveRfqReadScope({ user: { role: 'buyer', email: 'b@test.com' } });
+    expect(buyerScope.role).toBe('buyer');
+    const vendorScope = await rfqController.resolveRfqReadScope({ user: { role: 'vendor', email: 'v-resolved@test.com' } });
+    expect(vendorScope.role).toBe('vendor');
+    const adminScope = await rfqController.resolveRfqReadScope({ user: { role: 'admin' } });
+    expect(adminScope.restricted).toBe(false);
+    const noUserScope = await rfqController.resolveRfqReadScope({});
+    expect(noUserScope.restricted).toBe(false);
+
+    // 4. canVendorViewRfq branches
+    expect(rfqController.canVendorViewRfq(null, null)).toBe(false);
+    expect(rfqController.canVendorViewRfq({}, null)).toBe(false);
+    expect(rfqController.canVendorViewRfq(null, {})).toBe(false);
+    expect(rfqController.canVendorViewRfq({ id: 'v-unmatched' }, { quotes: null })).toBe(false);
+    expect(rfqController.canVendorViewRfq({ id: 'v-quoted' }, { quotes: [null, { vendorId: 'v-quoted' }] })).toBe(true);
+    expect(rfqController.canVendorViewRfq({ email: 'v-email@t.co' }, { quotes: [null, { vendorEmail: 'v-email@t.co' }] })).toBe(true);
+    expect(rfqController.canVendorViewRfq({ id: 'v1', email: 'v1@t.co' }, { quotes: [{ vendorId: 'v2', vendorEmail: 'v2@t.co' }] })).toBe(false);
+    expect(rfqController.canVendorViewRfq({ id: 'v-unlim', unlimitedRfqDownloads: true }, { buyerAccountId: 'b1' })).toBeDefined();
+
+    // 5. canAccessRfq branches
+    const spyEnsureBuyer = jest.spyOn(storeService, 'ensureBuyerAccountForUser');
+    spyEnsureBuyer.mockResolvedValueOnce(null);
+    expect(await rfqController.canAccessRfq({ user: { role: 'buyer', email: 'nobuyer@test.com' } }, {})).toBe(false);
+
+    spyEnsureBuyer.mockResolvedValue({ id: 'b-shared' });
+    const buyerSharedReq = { user: { role: 'buyer', id: 'b-shared', email: 'collab@test.com' } };
+    expect(await rfqController.canAccessRfq(buyerSharedReq, { sharedBuyerAccountIds: ['b-shared'] })).toBe(true);
+    expect(await rfqController.canAccessRfq(buyerSharedReq, { buyerAccountId: 'b-shared' })).toBe(true);
+    expect(await rfqController.canAccessRfq(buyerSharedReq, { buyerAccountId: 'b-other', sharedBuyerAccountIds: [] })).toBe(false);
+    spyEnsureBuyer.mockRestore();
+
+    expect(await rfqController.canAccessRfq({ user: { role: 'vendor', email: 'novendor@test.com' } }, {})).toBe(false);
+    const vQuoted = { id: 'v-q', email: 'vq@test.com', role: 'vendor' };
+    storeService.vendors.push(vQuoted);
+    expect(await rfqController.canAccessRfq({ user: vQuoted }, { quotes: [{ vendorId: 'v-q' }] })).toBe(true);
+
+    // 6. applyVendorBuyerPrivacy branches
+    expect(rfqController.applyVendorBuyerPrivacy(null, null)).toBeNull();
+    expect(rfqController.applyVendorBuyerPrivacy({ id: 'r1' }, null)).toEqual({ id: 'r1' });
+    expect(rfqController.applyVendorBuyerPrivacy(null, { id: 'v1' })).toBeNull();
+    // Vendor with no quotes on RFQ
+    const noQuotesRes = rfqController.applyVendorBuyerPrivacy({ id: 'r-no-quotes', quotes: [] }, { id: 'v-none' });
+    expect(noQuotesRes.buyerDetailsHidden).toBe(false);
+    // Vendor matching by id
+    const resIdMatch = rfqController.applyVendorBuyerPrivacy(
+      { id: 'r-quoted', quotes: [null, { vendorId: 'v-match-id', submittedAt: new Date().toISOString() }] },
+      { id: 'v-match-id' }
+    );
+    expect(resIdMatch.buyerDetailsHidden).toBe(true);
+    // Vendor matching by email
+    const resEmailMatch = rfqController.applyVendorBuyerPrivacy(
+      { id: 'r-quoted', quotes: [{ vendorEmail: 'match@v.com', createdAt: new Date().toISOString() }] },
+      { email: 'match@v.com' }
+    );
+    expect(resEmailMatch.buyerDetailsHidden).toBe(true);
+    // Vendor matching by qvId === vEmail
+    const resIdEmailMatch = rfqController.applyVendorBuyerPrivacy(
+      { id: 'r-quoted', quotes: [{ vendorId: 'match2@v.com', timestamp: new Date().toISOString() }] },
+      { email: 'match2@v.com' }
+    );
+    expect(resIdEmailMatch.buyerDetailsHidden).toBe(true);
+    // Vendor matching by name
+    const resNameMatch = rfqController.applyVendorBuyerPrivacy(
+      { id: 'r-quoted', quotes: [{ vendorName: 'MatchVendorCorp', submittedAt: new Date().toISOString() }] },
+      { name: 'MatchVendorCorp' }
+    );
+    expect(resNameMatch.buyerDetailsHidden).toBe(true);
+    // Vendor quote older than 48h
+    const resOldMatch = rfqController.applyVendorBuyerPrivacy(
+      { id: 'r-quoted', quotes: [{ vendorId: 'v-old', submittedAt: new Date(Date.now() - 50 * 3600 * 1000).toISOString() }] },
+      { id: 'v-old' }
+    );
+    expect(resOldMatch.buyerDetailsHidden).toBe(false);
+    // Vendor quote with no timestamp
+    const resNoTs = rfqController.applyVendorBuyerPrivacy(
+      { id: 'r-quoted', quotes: [{ vendorId: 'v-nots' }] },
+      { id: 'v-nots' }
+    );
+    expect(resNoTs.buyerDetailsHidden).toBe(false);
+
+    // 7. applyQuotesVisibility branches
+    expect(rfqController.applyQuotesVisibility(null, 'buyer')).toBeNull();
+    const qvClosed = rfqController.applyQuotesVisibility({ quotes: [{ id: 'q1' }], status: 'Closed' }, 'buyer');
+    expect(qvClosed.quotesHidden).toBe(false);
+    const qvPOGen = rfqController.applyQuotesVisibility({ quotes: [{ id: 'q1' }], status: 'PO Generated' }, 'buyer');
+    expect(qvPOGen.quotesHidden).toBe(false);
+    const qvV0 = rfqController.applyQuotesVisibility({ quotes: [{ id: 'q1' }], sourcingMode: 'mode_0' }, 'buyer');
+    expect(qvV0.quotesHidden).toBe(false);
+    expect(qvV0.quotes).toEqual([]);
+    const qvRecent = rfqController.applyQuotesVisibility(
+      { quotes: [{ id: 'q1' }], status: 'Published', createdAt: new Date().toISOString() },
+      'buyer'
+    );
+    expect(qvRecent.quotesHidden).toBe(true);
+    const qvOld = rfqController.applyQuotesVisibility(
+      { quotes: [{ id: 'q1' }], status: 'Published', createdAt: new Date(Date.now() - 50 * 3600 * 1000).toISOString() },
+      'buyer'
+    );
+    expect(qvOld.quotesHidden).toBe(false);
+    const qvAdmin = rfqController.applyQuotesVisibility(
+      { quotes: [{ id: 'q1' }], status: 'Published', createdAt: new Date().toISOString() },
+      'admin'
+    );
+    expect(qvAdmin.quotesHidden).toBeUndefined();
+
+    // 8. requestVendorCategoryUpdate controller branches
+    const resCat1 = mockRes();
+    await rfqController.requestVendorCategoryUpdate({ body: {} }, resCat1, jest.fn());
+    expect(resCat1.status).toHaveBeenCalledWith(400);
+
+    const resCat2 = mockRes();
+    const vendorForCat = { id: 'v-cat-req', email: 'vcat@test.com', name: 'CatVendor', contactPerson: 'John', majorCategory: 'Civil Works' };
+    storeService.vendors.push(vendorForCat);
+    jest.spyOn(require('../src/services/vendorCategoryUpdateNotificationService'), 'sendVendorCategoryUpdateNotification')
+      .mockResolvedValue({ sent: true });
+    await rfqController.requestVendorCategoryUpdate(
+      {
+        body: { vendorId: 'v-cat-req', vendorEmail: 'vcat@test.com', rfqCategory: 'Electrical', rfqTitle: 'Supply Cables', rfqNumber: 'RFQ-CAT-1' },
+        user: { name: 'Buyer John', email: 'bjohn@test.com' }
+      },
+      resCat2,
+      jest.fn()
+    );
+    expect(resCat2.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+    // 9. getRFQs controller with sharedBuyerAccountIds and assignedVendors
+    const resGetRFQs = mockRes();
+    const rfqWithShared = storeService.createRFQ({
+      title: 'Shared Buyer RFQ',
+      category: 'Pumps',
+      buyerAccountId: 'b-owner',
+      assignedVendors: [
+        { name: 'AssignedV1' },
+        { vendorName: 'AssignedV2' },
+        { companyName: 'AssignedV3' },
+      ],
+      quotes: [{ id: 'q1', vendorId: 'v-q1', amount: 5000 }],
+      sourcingMode: 'mode_0'
+    });
+    rfqWithShared.sharedBuyerAccountIds = ['b-collab'];
+    await rfqController.getRFQs(
+      { user: { role: 'buyer', id: 'b-collab', email: 'collab@test.com' }, query: {} },
+      resGetRFQs,
+      jest.fn()
+    );
+    expect(resGetRFQs.json).toHaveBeenCalled();
+
+    // 10. canAccessRfq edge roles and null buyerAccountId
+    expect(await rfqController.canAccessRfq({ user: { role: 'admin' } }, { id: 'rfq-g1' })).toBe(true);
+    const scopeMockReq = { user: { role: 'buyer', id: 'b-other-acc', email: 'other@corp.com' } };
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({ id: 'b-other-acc' });
+    expect(await rfqController.canAccessRfq(scopeMockReq, { id: 'rfq-g2', buyerAccountId: 'b-owner' })).toBe(false);
+
+    // 11. addQuote role and profile validation
+    const resAddQ1 = mockRes();
+    await rfqController.addQuote({ user: { role: 'buyer' }, params: { id: 'rfq-1' }, body: {} }, resAddQ1, jest.fn());
+    expect(resAddQ1.status).toHaveBeenCalledWith(403);
+
+    const resAddQ2 = mockRes();
+    await rfqController.addQuote({ user: { role: 'vendor', id: 'v-ghost', email: 'ghost@v.co' }, params: { id: 'rfq-1' }, body: {} }, resAddQ2, jest.fn());
+    expect(resAddQ2.status).toHaveBeenCalledWith(400);
+
+    // 12. generateEmailPreview branches
+    const resEm1 = mockRes();
+    await rfqController.generateEmailPreview({ params: { id: 'ghost-rfq' }, query: {} }, resEm1, jest.fn());
+    expect(resEm1.status).toHaveBeenCalledWith(404);
+
+    const resEm2 = mockRes();
+    await rfqController.generateEmailPreview({ params: { id: rfqWithShared.id }, query: { vendorId: 'v-credit-test' } }, resEm2, jest.fn());
+    expect(resEm2.json).toHaveBeenCalled();
+  });
+
+  test('storeService deep branch booster for 90%+ branch threshold', async () => {
+    // 1. updateBuyerAccount fallback branches
+    expect(storeService.updateBuyerAccount('ghost-id', { companyName: 'GhostCo' })).toBeNull();
+    const bToUpdate = { id: 'b-upd-1', corporateEmail: 'upd@test.com', companyName: 'OldCo' };
+    storeService.buyerAccounts.push(bToUpdate);
+    const updatedRes = storeService.updateBuyerAccount('b-upd-1', { companyName: 'NewCo' });
+    expect(updatedRes).toBeDefined();
+
+    // 3. tryConsumeFreeRFQ comprehensive branches
+    // String with no @
+    expect(storeService.tryConsumeFreeRFQ('ghost-buyer-id')).toEqual({ ok: false, remaining: 0 });
+    // String with @ (not found)
+    expect(storeService.tryConsumeFreeRFQ('ghost@buyer.com')).toEqual({ ok: false, remaining: 0 });
+
+    // Object with unlimited access (found in buyerAccounts)
+    const bUnlim = { id: 'b-unlim-acc', corporateEmail: 'unlim@corp.com', unlimitedRfqAccess: true, remainingFreeRFQs: 999 };
+    storeService.buyerAccounts.push(bUnlim);
+    expect(storeService.tryConsumeFreeRFQ('b-unlim-acc')).toEqual({ ok: true, remaining: 999 });
+    expect(storeService.tryConsumeFreeRFQ({ id: 'b-unlim-acc' })).toEqual({ ok: true, remaining: 999 });
+    expect(storeService.tryConsumeFreeRFQ({ corporateEmail: 'unlim@corp.com' })).toEqual({ ok: true, remaining: 999 });
+
+    // Object with unlimited access (NOT found in buyerAccounts)
+    const bUnlimNew = { id: 'b-unlim-new', corporateEmail: 'unlimnew@corp.com', unlimitedRfqAccess: true, remainingFreeRFQs: 999 };
+    expect(storeService.tryConsumeFreeRFQ(bUnlimNew)).toEqual({ ok: true, remaining: 999 });
+
+    // Object with 0 remaining (found in buyerAccounts)
+    const bZero = { id: 'b-zero-acc', corporateEmail: 'zero@corp.com', remainingFreeRFQs: 0 };
+    storeService.buyerAccounts.push(bZero);
+    expect(storeService.tryConsumeFreeRFQ('b-zero-acc')).toEqual({ ok: false, remaining: 0 });
+    expect(storeService.tryConsumeFreeRFQ(bZero)).toEqual({ ok: false, remaining: 0 });
+
+    // Object with 0 remaining (NOT found in buyerAccounts)
+    const bZeroNew = { id: 'b-zero-new', corporateEmail: 'zeronew@corp.com', remainingFreeRFQs: 0 };
+    expect(storeService.tryConsumeFreeRFQ(bZeroNew)).toEqual({ ok: false, remaining: 0 });
+
+    // Object with remaining credits (found in buyerAccounts)
+    const bNormal = { id: 'b-norm-acc', corporateEmail: 'norm@corp.com', remainingFreeRFQs: 3, freeRFQsUsed: 2 };
+    storeService.buyerAccounts.push(bNormal);
+    storeService.activeBuyerAccount = bNormal;
+    const resConsNorm = storeService.tryConsumeFreeRFQ(bNormal);
+    expect(resConsNorm.ok).toBe(true);
+    expect(resConsNorm.remaining).toBe(2);
+
+    // Object with remaining credits (NOT found in buyerAccounts)
+    const bNewObj = { id: 'b-new-obj', corporateEmail: 'newobj@corp.com', remainingFreeRFQs: 5 };
+    const resConsNew = storeService.tryConsumeFreeRFQ(bNewObj);
+    expect(resConsNew.ok).toBe(true);
+    expect(resConsNew.remaining).toBe(4);
+
+    // 4. refundFreeRFQ comprehensive branches
+    // String not found
+    storeService.refundFreeRFQ('ghost-buyer-id');
+    // String with @ not found
+    storeService.refundFreeRFQ('ghost@buyer.com');
+    // Object with unlimited access
+    storeService.refundFreeRFQ(bUnlim);
+    // Object normal found
+    storeService.refundFreeRFQ(bNormal);
+    expect(bNormal.remainingFreeRFQs).toBe(3);
+    // String ID found
+    storeService.refundFreeRFQ('b-norm-acc');
+    const bFoundById = storeService.buyerAccounts.find((a) => a.id === 'b-norm-acc');
+    expect(bFoundById.remainingFreeRFQs).toBe(4);
+    // String email found
+    storeService.refundFreeRFQ('norm@corp.com');
+    const bFoundByEmail = storeService.buyerAccounts.find((a) => a.corporateEmail === 'norm@corp.com');
+    expect(bFoundByEmail.remainingFreeRFQs).toBe(5);
+
+    // 5. consumeRFQCreditIfApplicable branches
+    expect(storeService.consumeRFQCreditIfApplicable(null, 'mode_1')).toEqual({ consumed: false, remaining: null });
+    expect(storeService.consumeRFQCreditIfApplicable({}, 'mode_1')).toEqual({ consumed: false, remaining: null });
+    expect(storeService.consumeRFQCreditIfApplicable(bUnlim, 'mode_1')).toEqual({ consumed: false, remaining: 999 });
+    expect(storeService.consumeRFQCreditIfApplicable(bNormal, 'mode_0')).toEqual({ consumed: false, remaining: 3 });
+    expect(storeService.consumeRFQCreditIfApplicable(bNormal, 'v0')).toEqual({ consumed: false, remaining: 3 });
+    expect(storeService.consumeRFQCreditIfApplicable(bZero, 'mode_1')).toEqual({ consumed: false, remaining: 0 });
+    expect(storeService.consumeRFQCreditIfApplicable(bNormal, 'mode_1')).toEqual({ consumed: true, remaining: 4 });
+
+    // 6. isBuyerUploaded branches
+    expect(storeService.isBuyerUploaded(null)).toBe(false);
+    expect(storeService.isBuyerUploaded({ addedByBuyerCompany: 'BuyerCo' })).toBe(true);
+    expect(storeService.isBuyerUploaded({ buyerAccountId: 'b1' })).toBe(true);
+    expect(storeService.isBuyerUploaded({ buyerId: 'b1' })).toBe(true);
+    expect(storeService.isBuyerUploaded({ buyerEmail: 'b@corp.com' })).toBe(true);
+    expect(storeService.isBuyerUploaded({ mappedBuyerIds: ['b1'] })).toBe(true);
+    expect(storeService.isBuyerUploaded({ buyerIds: ['b1'] })).toBe(true);
+    expect(storeService.isBuyerUploaded({ source: 'buyer_upload' })).toBe(true);
+    expect(storeService.isBuyerUploaded({ id: 'v-buyer-100' })).toBe(true);
+    expect(storeService.isBuyerUploaded({ source: 'self_onboarded', id: 'vendor-100' })).toBe(false);
+
+    // 7. consumeVendorQuotationCredit branches
+    expect(storeService.consumeVendorQuotationCredit(null, 'rfq-1')).toBeNull();
+    const vendorQuoter = { id: 'v-credit-test', email: 'vcredit@t.co', freeQuotationCredits: 3, quotedRfqIds: [], unlockedRfqIds: [] };
+    storeService.vendors.push(vendorQuoter);
+    const rfqNet = storeService.createRFQ({ title: 'Network RFQ', category: 'Pumps', sourcingMode: 'mode_0' });
+    // First quote on network RFQ
+    const vq1 = storeService.consumeVendorQuotationCredit(vendorQuoter.id, rfqNet.id);
+    expect(vq1.freeQuotationCredits).toBe(2);
+    // Second quote on same network RFQ (already quoted)
+    const vq2 = storeService.consumeVendorQuotationCredit(vendorQuoter.id, rfqNet.id);
+    expect(vq2.freeQuotationCredits).toBe(2);
+    // Quote with RFQ number
+    const vq3 = storeService.consumeVendorQuotationCredit(vendorQuoter.id, rfqNet.rfqNumber);
+    expect(vq3.freeQuotationCredits).toBe(2);
+
+    // 8. unlockRFQForVendor branches (alreadyUnlocked, exhausted, consume credit)
+    const vUnlockExhausted = { id: 'v-unl-ex', email: 'unlex@t.co', freeRfqDownloadCredits: 0, freeQuotationCredits: 0, unlockedRfqIds: [] };
+    storeService.vendors.push(vUnlockExhausted);
+    const rfqNet2 = storeService.createRFQ({ title: 'Network RFQ 2', category: 'Pumps', sourcingMode: 'mode_0' });
+    const resUnlEx = await storeService.unlockRFQForVendor(vUnlockExhausted.id, rfqNet2.id);
+    expect(resUnlEx.success).toBe(false);
+    expect(resUnlEx.creditsExhausted).toBe(true);
+
+    const vUnlockNorm = { id: 'v-unl-norm', email: 'unlnorm@t.co', freeRfqDownloadCredits: 3, freeQuotationCredits: 3, unlockedRfqIds: [] };
+    storeService.vendors.push(vUnlockNorm);
+    const resUnlNorm = await storeService.unlockRFQForVendor(vUnlockNorm.id, rfqNet2.id);
+    expect(resUnlNorm.success).toBe(true);
+    expect(resUnlNorm.creditCharged).toBe(1);
+
+    const resUnlAgain = await storeService.unlockRFQForVendor(vUnlockNorm.id, rfqNet2.id);
+    expect(resUnlAgain.success).toBe(true);
+    expect(resUnlAgain.alreadyUnlocked).toBe(true);
   });
 });

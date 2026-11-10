@@ -187,6 +187,7 @@ describe('Store service durable buyer RFQ creation', () => {
       expect(replay).toEqual(persisted);
       expect(domainQueries.createRFQWithCreditInDB).toHaveBeenCalledWith({ rfq: persisted, buyerId: buyer.id });
       expect(freshStore.buyerAccounts).toEqual([refreshedBuyer]);
+      expect(buyer.remainingFreeRFQs).toBe(4);
       expect(domainQueries.upsertRFQInDB).not.toHaveBeenCalled();
       expect(dispatchSpy).not.toHaveBeenCalled();
     });
@@ -312,6 +313,7 @@ describe('Store service durable buyer RFQ creation', () => {
       expect(domainQueries.upsertRFQInDB).not.toHaveBeenCalled();
       expect(freshStore.buyerAccounts[0]).toEqual(savedBuyer);
       expect(freshStore.activeBuyerAccount).toEqual(savedBuyer);
+      expect(buyer.remainingFreeRFQs).toBe(1);
       expect(dispatchSpy).toHaveBeenCalledWith(persistedRFQ, buyer);
     });
 

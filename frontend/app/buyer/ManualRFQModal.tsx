@@ -695,6 +695,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       return;
     }
 
+    if (store?.adoptCreatedRFQ) {
+      if (typeof result.remainingFreeRFQs === 'number') {
+        store.adoptCreatedRFQ(result.rfq, result.remainingFreeRFQs);
+      } else {
+        store.adoptCreatedRFQ(result.rfq);
+      }
+    }
     onCreated(result.rfq);
     setConfirmationRfq(result.rfq);
     setSubmitAttempted(false);
