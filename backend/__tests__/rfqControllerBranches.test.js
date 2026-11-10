@@ -1817,6 +1817,9 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
       // fileKey found -> loads buffer to base64
       extractionStagingService.load.mockResolvedValue(Buffer.from('sample pdf bytes'));
+      const cleanupError = new Error('cleanup storage failure');
+      jest.spyOn(extractionStagingService, 'remove').mockRejectedValue(cleanupError);
+      jest.spyOn(logger, 'error');
       jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
         status: geminiService.EXTRACTION_STATUS.SUCCESS,
         lineItems: [{ description: 'Extracted Pump', quantity: 1, unit: 'pcs' }],
@@ -1831,6 +1834,12 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       );
       expect(resWithKey.statusCode).toBe(200);
       expect(resWithKey.data.success).toBe(true);
+      await Promise.resolve();
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to remove staged RFQ document after extraction',
+        cleanupError,
+        'RFQ_CONTROLLER'
+      );
 
       extractionStagingService.load.mockRestore();
       geminiService.extractLineItems.mockRestore();

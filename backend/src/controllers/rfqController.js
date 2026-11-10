@@ -1474,7 +1474,15 @@ async function extractRFQFromDocument(req, res, next) {
     // Staging is for the lifetime of exactly one extraction call — delete it
     // whether this request succeeded, failed, or threw, so a staged upload
     // never lingers in R2.
-    if (stagedKey) extractionStagingService.remove(stagedKey).catch(() => { });
+    if (stagedKey) {
+      extractionStagingService.remove(stagedKey).catch((cleanupError) => {
+        logger.error(
+          'Failed to remove staged RFQ document after extraction',
+          cleanupError,
+          'RFQ_CONTROLLER'
+        );
+      });
+    }
   }
 }
 
