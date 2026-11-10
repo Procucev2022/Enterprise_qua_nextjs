@@ -16,11 +16,15 @@ function VendorQuotationFormContent() {
 
   const hasFetchedRef = React.useRef(false);
   React.useEffect(() => {
-    if (!hasFetchedRef.current && vendorOpportunities.length === 0 && typeof ensureRFQs === 'function') {
+    if (!hasFetchedRef.current && vendorOpportunities.length === 0) {
       hasFetchedRef.current = true;
-      void ensureRFQs();
+      if (typeof refreshRFQs === 'function') {
+        void refreshRFQs();
+      } else if (typeof ensureRFQs === 'function') {
+        void ensureRFQs();
+      }
     }
-  }, [vendorOpportunities.length, ensureRFQs]);
+  }, [vendorOpportunities.length, refreshRFQs, ensureRFQs]);
 
   // Match targeted RFQ by query parameter if present
   let opportunity: VendorOpportunity | undefined = undefined;
