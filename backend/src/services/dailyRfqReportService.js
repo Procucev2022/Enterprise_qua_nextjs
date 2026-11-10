@@ -8,7 +8,7 @@
  *   - Itemized RFQ numbers, requirements, categories, buyer accounts, and timestamps
  *
  * Dispatches automatically at 06:00 AM IST daily to configured recipients
- * (default: veerababu.v@procucev.com) and supports on-demand dispatches.
+ * (default: veerababu.v@procucev.com in dev; quateam@procucev.com,veerababu.v@procucev.com in production) and supports on-demand dispatches.
  */
 
 const storeService = require('./storeService');
@@ -141,6 +141,10 @@ function resolveRecipients(overrideRecipients) {
       const list = envVal.split(',').map((e) => e.trim()).filter(Boolean);
       if (list.length > 0) return list;
     }
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    return [...DAILY_RFQ_REPORT_CONFIG.PROD_RECIPIENTS];
   }
 
   return [...DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS];

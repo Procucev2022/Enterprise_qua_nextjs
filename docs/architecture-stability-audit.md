@@ -535,6 +535,13 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Document vault requests previously returned user-visible error text or threw on transport failure without a centralized log record. HTTP rejections now record the operation and status; network and response parsing exceptions record safe error name/message metadata before preserving the existing caller-facing behavior.
 - Regression tests verify HTTP and transport logging while retaining the current thrown-error and result-object contracts.
 
+## PR #416 base synchronization
+
+- Merged the latest `test-v3` changes for daily RFQ reporting and live RFQ follow-up telemetry while retaining PR changes for durable vendor assignment, fallback persistence, and single-write behavior.
+- Reconciled `storeServiceRemainingBranches.test.js` by keeping both its existing invitation-target helper and the incoming `domainQueries` regression coverage. Kept the scheduler's fallback-RFQ option, configurable persistence, and structured failure logs together with the incoming telemetry updates.
+- Auto-assignment now captures synchronous dispatch/feed exceptions after the durable assignment commits. Follow-up channel totals and best-effort RFQ persistence run even when chaser dispatch is deferred.
+- Verification passed on 2026-11-10: production build; backend 208 suites / 5,946 tests with 161/161 executable files at or above 90% (97.94% statements, 92.46% branches, 98.92% functions, 98.61% lines); frontend 149 suites / 3,782 tests with 171/171 executable files at or above 90% (97.93%, 92.98%, 97.90%, 98.71%). Typecheck, lint, master coverage verification, PostgreSQL/D1 schema parity, schema checker regressions, and schema-file verification passed. The pipeline skipped live migration; production D1 credentials remain postponed as requested.
+
 ## Payment dues client failure diagnostics
 
 - Payment dues summary and history failures previously became zeroed KPIs or empty history without centralized diagnostics. Account-list and notification operations also returned fallback errors without recording HTTP or transport failures.

@@ -2,6 +2,7 @@ const storeService = require('../src/services/storeService');
 const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+const { logger } = require('../src/services/loggerService');
 
 describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
   let originalPool;
@@ -235,6 +236,65 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       expect(updated.assignedVendors.some((v) => v.id === 'v-err')).toBe(true);
     });
 
+    test('logs synchronous vendor dispatch errors without losing durable assignments', async () => {
+      domainPool.pool = { query: jest.fn() };
+      const rfq = storeService.createRFQ({
+        id: 'rfq-auto-dispatch-failure',
+        title: 'Dispatch Failure',
+        category: 'Tools',
+        sourcingMode: 'mode_3',
+      });
+      const dispatchError = new Error('Feed write failed');
+      jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+        { id: 'v-dispatch', name: 'Dispatch Vendor', email: 'dispatch@example.com', source: 'procucev_network', category: 'Tools' },
+      ]);
+      jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+      jest.spyOn(storeService, 'addAIFeedItem').mockImplementation(() => {
+        throw dispatchError;
+      });
+      const errorSpy = jest.spyOn(logger, 'error');
+
+      const updated = await storeService.autoAssignVendorsFromDB(rfq);
+
+      expect(updated.assignedVendors.map((vendor) => vendor.id)).toContain('v-dispatch');
+      expect(errorSpy).toHaveBeenCalledWith(
+        'RFQ assignments were saved but automatic vendor dispatch failed',
+        expect.objectContaining({
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          assignedVendorIds: ['v-dispatch'],
+          error: dispatchError,
+        }),
+        'STORE_SERVICE'
+      );
+    });
+
+    test('keeps deferred assignments when follow-up telemetry is absent', async () => {
+      domainPool.pool = { query: jest.fn() };
+      const rfq = storeService.createRFQ({
+        id: 'rfq-auto-deferred-without-follow-up',
+        title: 'Deferred Assignment',
+        category: 'Tools',
+        sourcingMode: 'mode_3',
+      });
+      const vendor = { id: 'v-deferred', name: 'Deferred Vendor', source: 'procucev_network', category: 'Tools' };
+      const updatedRFQ = { ...rfq, assignedVendors: [vendor], followUpData: null };
+      jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([vendor]);
+      jest.spyOn(storeService, '_appendRFQAssignmentsDurably').mockResolvedValue({
+        updatedRFQ,
+        committedAdditions: [vendor],
+      });
+      const persistSpy = jest.spyOn(storeService, '_persistRFQ').mockImplementation(() => true);
+      const chaserSpy = jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers');
+
+      const result = await storeService.autoAssignVendorsFromDB(rfq, { deferChasers: true });
+
+      expect(result.assignedVendors).toEqual([vendor]);
+      expect(result.followUpData).toBeNull();
+      expect(chaserSpy).not.toHaveBeenCalled();
+      expect(persistSpy).toHaveBeenCalledWith(updatedRFQ);
+    });
+
     test('does not publish assignments or schedule chasers when the durable RFQ update fails', async () => {
       domainPool.pool = { query: jest.fn() };
       const rfq = storeService.createRFQ({
@@ -319,6 +379,25 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       expect(res.length).toBe(2);
       expect(res[0].id).toBe('v-high');
       expect(res[1].id).toBe('v-low');
+    });
+
+    test('extracts domain keywords from lineItems and titles in _rfqCategorySignals', () => {
+      const rfqPipes = {
+        title: 'Need 2-inch PVC Pipe urgently',
+        category: 'Engineering Spares - Mechanical',
+        lineItems: [{ description: 'PVC Pipe 2-inch diameter schedule 40' }],
+      };
+      const signals = storeService._rfqCategorySignals(rfqPipes);
+      expect(signals).toContain('Pipes & Pipe Fittings');
+      expect(signals).toContain('Plumbing');
+
+      const rfqPacking = {
+        title: 'Packing Supplies',
+        category: 'Industrial',
+        extractedEntities: [{ description: 'Bubble Rolls for packaging' }],
+      };
+      const packSignals = storeService._rfqCategorySignals(rfqPacking);
+      expect(packSignals).toContain('Packing Material');
     });
   });
 });

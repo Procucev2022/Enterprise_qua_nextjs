@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { formatIndianDateTime } from '@/lib/constants';
 import {
   fetchNotifications,
   markNotificationRead as apiMarkRead,
@@ -251,7 +252,7 @@ export default function NotificationBell() {
                         )}
                         <span className="text-slate-800 dark:text-gray-200">{item.title}</span>
                       </span>
-                      <span className="mono">{item.timestamp}</span>
+                      <span className="mono">{formatIndianDateTime(item.timestamp) || item.timestamp}</span>
                     </div>
                     <p className="text-slate-700 dark:text-gray-300 text-[11px] leading-relaxed">{item.message}</p>
                   </div>

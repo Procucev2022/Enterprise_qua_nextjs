@@ -354,15 +354,31 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
     const liveRfq = options.preferFallback && fallbackRfq
       ? fallbackRfq
       : (storeService.getRFQById ? storeService.getRFQById(rfqNumber) : null) || fallbackRfq;
-    if (!liveRfq || !liveRfq.followUpData) return;
+    if (!liveRfq) return;
+    if (!liveRfq.followUpData) {
+      liveRfq.followUpData = {
+        totalInvited: Array.isArray(liveRfq.assignedVendors) ? liveRfq.assignedVendors.length : 0,
+        vendors: Array.isArray(liveRfq.assignedVendors) ? [...liveRfq.assignedVendors] : [],
+        smsStats: { total: (liveRfq.assignedVendors || []).length, delivered: 0, clicked: 0 },
+        whatsappStats: { total: (liveRfq.assignedVendors || []).length, delivered: 0, read: 0, replied: 0 },
+        emailStats: { total: (liveRfq.assignedVendors || []).length, delivered: 0, sent24h: 0, opened: 0 },
+      };
+    }
     const fup = liveRfq.followUpData;
 
     if (channel === 'whatsapp') {
       if (!fup.whatsappStats) fup.whatsappStats = { total: 0, delivered: 0, read: 0, replied: 0 };
       fup.whatsappStats.delivered = (fup.whatsappStats.delivered || 0) + 1;
+      if (fup.whatsappStats.delivered > (fup.whatsappStats.total || 0)) {
+        fup.whatsappStats.total = fup.whatsappStats.delivered;
+      }
       if (Array.isArray(fup.vendors) && vendor) {
-        const vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
-        if (vRecord) vRecord.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
+        if (!vRecord) {
+          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
+          fup.vendors.push(vRecord);
+        }
+        vRecord.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
       }
     } else if (channel === 'sms') {
       if (!fup.smsStats) fup.smsStats = { total: 0, delivered: 0, clicked: 0 };
@@ -371,23 +387,30 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
         fup.smsStats.total = fup.smsStats.delivered;
       }
       if (Array.isArray(fup.vendors) && vendor) {
-        const vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
-        if (vRecord) {
-          vRecord.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
+        if (!vRecord) {
+          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
+          fup.vendors.push(vRecord);
         }
+        vRecord.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
       }
     } else if (channel === 'email') {
       if (!fup.emailStats) fup.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
       fup.emailStats.sent24h = (fup.emailStats.sent24h || 0) + 1;
       fup.emailStats.delivered = (fup.emailStats.delivered || 0) + 1;
+      if (fup.emailStats.delivered > (fup.emailStats.total || 0)) {
+        fup.emailStats.total = fup.emailStats.delivered;
+      }
       if (Array.isArray(fup.vendors) && vendor) {
-        const vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
-        if (vRecord) {
+        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
+        if (!vRecord) {
+          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
+          fup.vendors.push(vRecord);
+        }
           vRecord.email = { status: 'delivered', lastAttempt: new Date().toISOString() };
           vRecord.emailSent = true;
         }
       }
-    }
 
     if (options.updatedRfqNumbers instanceof Set) options.updatedRfqNumbers.add(rfqNumber);
     if (options.persist !== false) {

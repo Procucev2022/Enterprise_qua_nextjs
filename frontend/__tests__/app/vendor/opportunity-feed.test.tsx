@@ -400,7 +400,7 @@ describe('OpportunityFeed: rendering from the RFQ API', () => {
     logger.clearLogs();
     const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
     (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
-      if (url.includes('/api/vendors/')) {
+      if (url === `/api/vendors/${encodeURIComponent(SELF_VENDOR_RECORD.email)}`) {
         return Promise.resolve({ ok: false, status: 503, json: async () => ({}) });
       }
       return baseImpl?.(url, init);
@@ -422,7 +422,9 @@ describe('OpportunityFeed: rendering from the RFQ API', () => {
     logger.clearLogs();
     const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
     (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
-      if (url.includes('/api/vendors/')) return Promise.reject(new TypeError('Network request failed'));
+      if (url === `/api/vendors/${encodeURIComponent(SELF_VENDOR_RECORD.email)}`) {
+        return Promise.reject(new TypeError('Network request failed'));
+      }
       return baseImpl?.(url, init);
     });
 
