@@ -126,11 +126,32 @@ describe('dailyRfqReportService Suite', () => {
       expect(rec).toEqual(['catman@procucev.com']);
     });
 
-    test('falls back to DEFAULT_RECIPIENTS when no inputs or env are present', () => {
-      delete process.env.DAILY_RFQ_REPORT_EMAILS;
-      delete process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS;
-      const rec = dailyRfqReportService.resolveRecipients([]);
-      expect(rec).toEqual(DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS);
+    test('falls back to DEFAULT_RECIPIENTS when no inputs or env are present in dev/test', () => {
+      const origNodeEnv = process.env.NODE_ENV;
+      try {
+        delete process.env.DAILY_RFQ_REPORT_EMAILS;
+        delete process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS;
+        process.env.NODE_ENV = 'development';
+        const rec = dailyRfqReportService.resolveRecipients([]);
+        expect(rec).toEqual(DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS);
+        expect(rec).toEqual(['veerababu.v@procucev.com']);
+      } finally {
+        process.env.NODE_ENV = origNodeEnv;
+      }
+    });
+
+    test('falls back to PROD_RECIPIENTS when in production and no env variable is set', () => {
+      const origNodeEnv = process.env.NODE_ENV;
+      try {
+        delete process.env.DAILY_RFQ_REPORT_EMAILS;
+        delete process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS;
+        process.env.NODE_ENV = 'production';
+        const rec = dailyRfqReportService.resolveRecipients();
+        expect(rec).toEqual(DAILY_RFQ_REPORT_CONFIG.PROD_RECIPIENTS);
+        expect(rec).toEqual(['quateam@procucev.com', 'veerababu.v@procucev.com']);
+      } finally {
+        process.env.NODE_ENV = origNodeEnv;
+      }
     });
   });
 

@@ -231,6 +231,15 @@ describe('formatIndianDateTime', () => {
     expect(formatIndianDateTime('2026-09-04T20:00:00.000Z')).toBe('05 Sept 2026, 01:30 am IST');
   });
 
+  it('converts a UTC-stamped string into IST', () => {
+    expect(formatIndianDateTime('2026-11-10 03:17 UTC')).toBe('10 Nov 2026, 08:47 am IST');
+    expect(formatIndianDateTime('2026-11-10 03:17:00 UTC')).toBe('10 Nov 2026, 08:47 am IST');
+  });
+
+  it('preserves an already-formatted IST timestamp string', () => {
+    expect(formatIndianDateTime('10 Nov 2026, 08:47 am IST')).toBe('10 Nov 2026, 08:47 am IST');
+  });
+
   it.each([[''], ['   '], [undefined]])('reports nothing for %p', (value) => {
     expect(formatIndianDateTime(value)).toBe('');
   });

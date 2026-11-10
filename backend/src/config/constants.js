@@ -2974,6 +2974,8 @@ const APPROVAL_STATUSES = Object.freeze(['Pending', 'Approved', 'Rejected']);
 
 const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   DEFAULT_RECIPIENTS: Object.freeze(['veerababu.v@procucev.com']),
+  DEV_RECIPIENTS: Object.freeze(['veerababu.v@procucev.com']),
+  PROD_RECIPIENTS: Object.freeze(['quateam@procucev.com', 'veerababu.v@procucev.com']),
   DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
   DEFAULT_SCHEDULE_MINUTE: 0,
   DEFAULT_TIMEZONE: 'Asia/Kolkata',
