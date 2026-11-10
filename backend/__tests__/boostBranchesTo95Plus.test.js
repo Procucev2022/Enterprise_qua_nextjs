@@ -794,6 +794,59 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     await buyerAccountController.getBuyerAccounts({ query: { limit: 'abc' } }, resBuyerInvalid, next);
     expect(resBuyerInvalid.json).toHaveBeenCalled();
 
+    // buyerAccountController.requestCreditApproval branches
+    const resCredit404 = mockRes();
+    await buyerAccountController.requestCreditApproval(
+      { user: { role: 'admin' }, params: { id: 'non-existent-buyer-id' }, body: {} },
+      resCredit404,
+      next
+    );
+    expect(resCredit404.status).toHaveBeenCalledWith(404);
+
+    const resCreditErr = mockRes();
+    const throwNext = jest.fn();
+    jest.spyOn(storeService, 'getBuyerAccounts').mockImplementationOnce(() => { throw new Error('DB Crash'); });
+    await buyerAccountController.requestCreditApproval(
+      { user: { role: 'admin' }, params: { id: 'some-id' }, body: {} },
+      resCreditErr,
+      throwNext
+    );
+    expect(throwNext).toHaveBeenCalled();
+
+    // buyerAccountController.recordBuyerCommunication external email & SMS branches
+    const buyerTarget = { id: 'b-comm-test', organizationName: 'Target Buyer', corporateEmail: 'target@corp.com', phone: '9876543210' };
+    storeService.buyerAccounts.push(buyerTarget);
+
+    const resCommEmail = mockRes();
+    const mailerService = require('../src/services/mailerService');
+    const deliverSpy = jest.spyOn(mailerService, 'deliver').mockImplementation(() => Promise.resolve({ success: true }));
+    await buyerAccountController.recordBuyerCommunication(
+      {
+        user: { role: 'admin', email: 'admin@corp.com' },
+        params: { id: buyerTarget.id },
+        body: { channel: 'EMAIL', recipient: 'target@corp.com', subject: 'Notice', message: 'Hello' },
+      },
+      resCommEmail,
+      next
+    );
+    expect(resCommEmail.status).toHaveBeenCalledWith(201);
+    deliverSpy.mockRestore();
+
+    const resCommSms = mockRes();
+    const smsService = require('../src/services/smsService');
+    const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockImplementation(() => Promise.resolve({ success: true }));
+    await buyerAccountController.recordBuyerCommunication(
+      {
+        user: { role: 'category_manager', email: 'cm@corp.com' },
+        params: { id: buyerTarget.id },
+        body: { channel: 'SMS', recipient: '9876543210', subject: 'SMS Notice', message: 'Hello SMS' },
+      },
+      resCommSms,
+      next
+    );
+    expect(resCommSms.status).toHaveBeenCalledWith(201);
+    smsSpy.mockRestore();
+
     // 3. catalogueController with limit and invalid limit
     const resCat = mockRes();
     await catalogueController.getProducts({ query: { limit: '2' } }, resCat, next);
