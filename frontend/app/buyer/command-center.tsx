@@ -2,11 +2,10 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, formatIndianDateTime } from '@/lib/constants';
 import { RFQItem } from '@/lib/types';
 import {
   RFQFollowUpDeepDiveModal,
-  MultiChannelChaserModal,
   ActivePipelineModal,
   IntakeSourcesModal,
   SupplierQuotesModal,
@@ -58,11 +57,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   } = useApp();
 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
-  const [quickChaserModalOpen, setQuickChaserModalOpen] = useState(false);
-  const [quickChaserData, setQuickChaserData] = useState<{ rfqNumber: string; vendorName: string }>({
-    rfqNumber: '',
-    vendorName: '',
-  });
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry'>('all');
   const [rfqSearchTerm, setRfqSearchTerm] = useState('');
   const [activePipelineModalOpen, setActivePipelineModalOpen] = useState(false);
@@ -258,7 +252,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             title: `Autonomous Sourcing Engine Initialized: ${rfq.rfqNumber}`,
             message: `RFQ ${rfq.rfqNumber} dispatched to ${totalInvited} matched supplier(s). Multi-channel outreach scheduled: SMS (5m), WhatsApp (12h), Email (24h).`,
             recipient: 'Procurement AI Orchestrator',
-            timestamp: rfq.createdAt || 'Just now',
+            timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
             timeAgo: 'Active',
             rfqNumber: rfq.rfqNumber,
             buyerAccountId: rfq.buyerAccountId || undefined,
@@ -283,7 +277,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 title: `SMS Alert Delivered: ${vName}`,
                 message: `DLT registered SMS gateway alert pushed to ${vPhone || vName} for ${rfq.rfqNumber}.`,
                 recipient: `${vName}${vPhone ? ' (' + vPhone + ')' : ''}`,
-                timestamp: rfq.createdAt || 'Just now',
+                timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
                 timeAgo: 'Delivered',
                 rfqNumber: rfq.rfqNumber,
                 buyerAccountId: rfq.buyerAccountId || undefined,
@@ -303,7 +297,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 title: `WhatsApp Invitation Delivered: ${vName}`,
                 message: `Interactive quotation link delivered with secure access token to ${vName}${vPhone ? ' (' + vPhone + ')' : ''} for ${rfq.rfqNumber}.`,
                 recipient: `${vName}${vPhone ? ' (' + vPhone + ')' : ''}`,
-                timestamp: rfq.createdAt || 'Just now',
+                timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
                 timeAgo: 'Delivered',
                 rfqNumber: rfq.rfqNumber,
                 buyerAccountId: rfq.buyerAccountId || undefined,
@@ -323,7 +317,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 title: `Invitation Email Delivered: ${vName}`,
                 message: `RFQ ${rfq.rfqNumber} invitation delivered to ${vEmail || vName}. One-click bid link activated.`,
                 recipient: `${vName}${vEmail ? ' (' + vEmail + ')' : ''}`,
-                timestamp: rfq.createdAt || 'Just now',
+                timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
                 timeAgo: 'Delivered',
                 rfqNumber: rfq.rfqNumber,
                 buyerAccountId: rfq.buyerAccountId || undefined,
@@ -815,7 +809,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                         </span>
                       )}
                     </span>
-                    <span className="mono text-[9px] text-slate-400 dark:text-gray-500 shrink-0">{item.timestamp}</span>
+                    <span className="mono text-[9px] text-slate-400 dark:text-gray-500 shrink-0">{formatIndianDateTime(item.timestamp) || item.timestamp}</span>
                   </div>
 
                   {/* Message */}
@@ -867,14 +861,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         isOpen={deepDiveModalOpen}
         onClose={() => setDeepDiveModalOpen(false)}
         rfq={selectedRFQForDeepDive}
-      />
-
-      {/* Multi-Channel Quick Chaser Modal */}
-      <MultiChannelChaserModal
-        isOpen={quickChaserModalOpen}
-        onClose={() => setQuickChaserModalOpen(false)}
-        rfqNumber={quickChaserData.rfqNumber}
-        vendorName={quickChaserData.vendorName}
       />
 
       {/* Active Pipeline Details Modal */}
