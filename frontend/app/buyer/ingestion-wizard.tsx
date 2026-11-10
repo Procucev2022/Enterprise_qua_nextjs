@@ -1185,6 +1185,70 @@ export default function IngestionWizard({
         matchScore: r.overallScore,
       });
 
+      let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
+
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(buyerVendors)) {
+        const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
+          ? buyerVendors.filter((v) => isBuyerUploaded(v))
+          : buyerVendors;
+        const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
+        const candidatePool = selectedVendorIds.length > 0
+          ? pool.filter((v) => selectedVendorIds.includes(v.id))
+          : pool;
+
+        const matchingVendors: typeof candidatePool = [];
+        const mismatchedVendors: typeof candidatePool = [];
+
+        for (const v of candidatePool) {
+          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals).isMatch) {
+            matchingVendors.push(v);
+          } else {
+            mismatchedVendors.push(v);
+          }
+        }
+
+        if (mismatchedVendors.length > 0) {
+          showToast(
+            'Shortlist Adjusted',
+            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
+            'info'
+          );
+        }
+
+        const finalMatching = dispatchSignals.length > 0
+          ? selectVendorsForCategories(
+              matchingVendors,
+              dispatchSignals,
+              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode }
+            ).map((r) => r.vendor)
+          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+
+        if (finalMatching.length > 0) {
+          mode1AssignedVendors = finalMatching.map(toAssignedVendorEntry);
+        }
+      }
+
+      // V3 (Autonomous): fold in the Procucev network vendors the buyer explicitly
+      // picked from the 360°-ranked top-10 panel, de-duplicated against the private
+      // roster already assembled above. These are honoured on top of the backend's
+      // own autonomous category match for mode_3.
+      if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
+        const alreadyAssigned = new Set((mode1AssignedVendors || []).map((v) => v.id));
+        const picked = procucevV3Ranked
+          .filter((r) => selectedProcucevV3Ids.includes(r.vendor.id) && !alreadyAssigned.has(r.vendor.id))
+          .map((r) => toProcucevAssignedEntry(r));
+        if (picked.length > 0) {
+          mode1AssignedVendors = [...(mode1AssignedVendors || []), ...picked];
+        }
+      }
+
+      if (form.sourcingMode === RFQ_MODES.MODE_1 && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
+        setSubmitError(`${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.`);
+        showToast('Private Vendor Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} requires at least one private vendor in your roster before dispatching.`, 'warning');
+        return;
+      }
+
       // ALL_CATEGORIES_OPTION is a UI-only sentinel that opts a line item out
       // of category-narrowed matching — never a real taxonomy value, so it
       // must never reach the server as this item's majorCategory.
@@ -1200,7 +1264,7 @@ export default function IngestionWizard({
         uploadedFiles.length > 0
       );
       const rfqSource: RFQSource = isAiExtracted ? 'ai_extraction' : 'manual_entry';
-      const payload = toRFQCreatePayload(sanitizedForm, undefined, rfqSource);
+      const payload = toRFQCreatePayload(sanitizedForm, mode1AssignedVendors, rfqSource);
       if (isAiExtracted && extractionSummary?.fileName) {
         payload.sourceFileName = extractionSummary.fileName;
       }
@@ -1232,7 +1296,10 @@ export default function IngestionWizard({
           // Carry the exact dispatched list (tagged Client List / Procucev
           // Network) so the modal's private-vs-Procucev split is authoritative
           // and does not depend on how the server echoes assignedVendors.
-          assignedVendors: Array.isArray(result.rfq?.assignedVendors) ? result.rfq.assignedVendors : [],
+          assignedVendors:
+            Array.isArray(result.rfq?.assignedVendors) && result.rfq.assignedVendors.length >= (mode1AssignedVendors || []).length
+              ? result.rfq.assignedVendors
+              : mode1AssignedVendors || result.rfq?.assignedVendors,
         };
       }
       setConfirmationRfq(confirmation);

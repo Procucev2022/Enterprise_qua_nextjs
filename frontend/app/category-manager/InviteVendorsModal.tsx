@@ -49,53 +49,20 @@ const S = UI_STRINGS.inviteVendors;
 
 type Tab = 'category' | 'all';
 
-/** Every category string an RFQ carries — strictly prioritizes minor categories when present. */
+/** Every category string an RFQ carries — mirrors storeService._rfqCategorySignals. */
 function rfqCategorySignals(rfq: RFQItem): string[] {
-  const items = [
-    ...(Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []),
-    ...(Array.isArray(rfq.lineItems) ? rfq.lineItems : []),
-  ];
-  const minorSignals: string[] = [];
-  if (rfq.minorCategory && typeof rfq.minorCategory === 'string' && rfq.minorCategory.trim()) {
-    minorSignals.push(rfq.minorCategory.trim());
+  const signals: string[] = [];
+  if (rfq.category) signals.push(rfq.category);
+  for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
+    if (ent.majorCategory) signals.push(ent.majorCategory);
+    if (ent.minorCategory) signals.push(ent.minorCategory);
+    if (ent.category) signals.push(ent.category);
   }
-  if (Array.isArray(rfq.minorCategories)) {
-    for (const m of rfq.minorCategories) {
-      if (m && typeof m === 'string' && m.trim()) minorSignals.push(m.trim());
-    }
-  }
-  for (const ent of items) {
-    if (ent.minorCategory && typeof ent.minorCategory === 'string' && ent.minorCategory.trim()) {
-      minorSignals.push(ent.minorCategory.trim());
-    }
-  }
-  if (minorSignals.length > 0) {
-    return Array.from(new Set(minorSignals));
-  }
-
-  const majorSignals: string[] = [];
-  if (rfq.category && typeof rfq.category === 'string' && rfq.category.trim()) {
-    majorSignals.push(rfq.category.trim());
-  }
-  for (const ent of items) {
-    if (ent.majorCategory && typeof ent.majorCategory === 'string' && ent.majorCategory.trim()) {
-      majorSignals.push(ent.majorCategory.trim());
-    }
-    if (ent.category && typeof ent.category === 'string' && ent.category.trim()) {
-      majorSignals.push(ent.category.trim());
-    }
-  }
-  return Array.from(new Set(majorSignals));
+  return signals;
 }
 
-/** Check if vendor covers the category signal (strictly checking minor categories if minor signals are present). */
-function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[], hasMinorSignals: boolean = false): boolean {
-  if (signals.length === 0) return true;
-  if (hasMinorSignals) {
-    const vendorMinors = (Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])
-      .map((c) => String(c || '').trim().toLowerCase());
-    return signals.some((s) => vendorMinors.includes(String(s || '').trim().toLowerCase()));
-  }
+/** Mirrors storeService.vendorCoversCategory's case-insensitive exact match. */
+function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[]): boolean {
   const pools = [vendor.majorCategory, ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])].map(
     (c) => String(c || '').trim().toLowerCase()
   );
@@ -928,13 +895,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
                 <div className="space-y-2">
                   {visibleVendors.map((c) => {
-                    const hasMinorSignals = Boolean(
-                      rfq.minorCategory ||
-                      (Array.isArray(rfq.minorCategories) && rfq.minorCategories.length > 0) ||
-                      (Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((e: any) => e && e.minorCategory)) ||
-                      (Array.isArray(rfq.lineItems) && rfq.lineItems.some((e: any) => e && e.minorCategory))
-                    );
-                    const outsideCategory = tab === 'all' && !vendorCoversAnySignal(c, categorySignals, hasMinorSignals);
+                    const outsideCategory = tab === 'all' && !vendorCoversAnySignal(c, categorySignals);
                     const missingEmail = !c.email;
                     return (
                       <label
