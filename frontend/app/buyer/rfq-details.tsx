@@ -2093,12 +2093,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             title="Assigned & Invited Suppliers"
             count={isCategoryManager ? visibleAssigned.length : displayAssigned.length}
             toolbar={
-              <button
-                onClick={() => setInviteModalOpen(true)}
-                className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
-              >
-                <UserPlus size={12} /> Invite Suppliers
-              </button>
+              isCategoryManager ? (
+                <button
+                  onClick={() => setInviteModalOpen(true)}
+                  className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <UserPlus size={12} /> Invite Suppliers
+                </button>
+              ) : null
             }
           >
             <div className="px-4 pb-4">
@@ -2658,14 +2660,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
               Assign or invite suppliers to this RFQ to enable instant 2-way real-time technical & commercial clarifications.
             </p>
-            <button
-              type="button"
-              onClick={() => setInviteModalOpen(true)}
-              className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1 mt-2"
-            >
-              <UserPlus size={12} />
-              <span>Invite Suppliers</span>
-            </button>
+            {isCategoryManager && (
+              <button
+                type="button"
+                onClick={() => setInviteModalOpen(true)}
+                className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1 mt-2"
+              >
+                <UserPlus size={12} />
+                <span>Invite Suppliers</span>
+              </button>
+            )}
           </div>
         ) : (
           /* ═══ BUYER VIEW: 2-COLUMN SPLIT DESK (LEFT VENDOR LIST, RIGHT CHAT WORKSPACE) ═══ */
@@ -3113,20 +3117,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         />
       )}
 
-      {/* Buyer Private Vendor Invite Modal */}
-      {!isCategoryManager && !isVendor && inviteModalOpen && (
-        <BuyerInviteSuppliersModal
-          isOpen={inviteModalOpen}
-          onClose={() => setInviteModalOpen(false)}
-          rfq={activeRfq!}
-          onInvited={(updatedRfq) => {
-            setLocalRfq(updatedRfq);
-            if (onUpdate) onUpdate(updatedRfq);
-            setInviteModalOpen(false);
-            showToast('Suppliers Added', `Invited suppliers have been assigned to RFQ ${updatedRfq.rfqNumber}.`, 'success');
-          }}
-        />
-      )}
 
       {/* Extend RFQ Modal */}
       {extendModalOpen && activeRfq && (
@@ -3245,276 +3235,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-interface BuyerInviteSuppliersModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  rfq: RFQItem;
-  onInvited: (updatedRfq: RFQItem) => void;
-}
-
-function BuyerInviteSuppliersModal({ isOpen, onClose, rfq, onInvited }: BuyerInviteSuppliersModalProps) {
-  const { buyerVendors, showToast, refreshFromDB } = useApp();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  if (!isOpen) return null;
-
-  // Strictly buyer-uploaded private roster vendors — NO Procucev network marketplace vendors
-  const allMyPrivateVendors = (buyerVendors || []).filter((v) => isBuyerUploaded(v));
-
-  const rawExistingAssigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-  const alreadyAssignedIds = new Set(
-    rawExistingAssigned.map((v: any) => (typeof v === 'string' ? v : v.id || v.email || v.name))
-  );
-
-  const term = searchQuery.trim().toLowerCase();
-  const filteredVendors = allMyPrivateVendors.filter((v) => {
-    if (!term) return true;
-    return (
-      (v.name || '').toLowerCase().includes(term) ||
-      (v.email || '').toLowerCase().includes(term) ||
-      (v.majorCategory || '').toLowerCase().includes(term) ||
-      (v.contactPerson || '').toLowerCase().includes(term)
-    );
-  });
-
-  const unassignedFiltered = filteredVendors.filter((v) => !alreadyAssignedIds.has(v.id));
-  const isAllSelected = unassignedFiltered.length > 0 && unassignedFiltered.every((v) => selectedVendorIds.includes(v.id));
-
-  const toggleSelectAll = () => {
-    if (isAllSelected) {
-      setSelectedVendorIds((prev) => prev.filter((id) => !unassignedFiltered.some((v) => v.id === id)));
-    } else {
-      const newIds = Array.from(new Set([...selectedVendorIds, ...unassignedFiltered.map((v) => v.id)]));
-      setSelectedVendorIds(newIds);
-    }
-  };
-
-  const toggleVendor = (vendorId: string) => {
-    if (alreadyAssignedIds.has(vendorId)) return;
-    setSelectedVendorIds((prev) =>
-      prev.includes(vendorId) ? prev.filter((id) => id !== vendorId) : [...prev, vendorId]
-    );
-  };
-
-  const handleSave = async () => {
-    if (selectedVendorIds.length === 0) {
-      setSaveError('Please select at least one supplier to assign.');
-      return;
-    }
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      const newVendorsToAdd = allMyPrivateVendors
-        .filter((v) => selectedVendorIds.includes(v.id) && !alreadyAssignedIds.has(v.id))
-        .map((v) => ({
-          id: v.id,
-          name: v.name || 'Enterprise Vendor',
-          email: v.email || null,
-          contactPerson: v.contactPerson || null,
-          phone: v.phone || null,
-        }));
-
-      const normalizedCurrent = rawExistingAssigned.map((v: any) => {
-        if (typeof v === 'string') {
-          const found = allMyPrivateVendors.find((bv) => bv.id === v || bv.name === v || bv.email === v);
-          return {
-            id: v,
-            name: found?.name || v,
-            email: found?.email || null,
-            contactPerson: found?.contactPerson || null,
-            phone: found?.phone || null,
-          };
-        }
-        return v;
-      });
-
-      const merged = [...normalizedCurrent, ...newVendorsToAdd];
-      const result = await updateRFQ(rfq.id, { assignedVendors: merged });
-      if (result.success) {
-        const finalRfq: RFQItem = {
-          ...result.rfq,
-          assignedVendors:
-            Array.isArray(result.rfq.assignedVendors) && result.rfq.assignedVendors.length >= merged.length
-              ? result.rfq.assignedVendors
-              : merged,
-        };
-        onInvited(finalRfq);
-        await refreshFromDB();
-      } else {
-        throw new Error(result.error || 'Failed to assign suppliers to RFQ.');
-      }
-    } catch (err: any) {
-      setSaveError(err?.message || 'Failed to update RFQ suppliers.');
-      showToast('Assignment Failed', err?.message || 'Failed to update RFQ suppliers.', 'warning');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800 shrink-0">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/70 text-blue-600 dark:text-blue-400">
-              <Building2 size={20} />
-            </div>
-            <div>
-              <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                <span>Invite Approved Suppliers</span>
-                <span className="badge badge-blue text-[9px] font-bold">
-                  {allMyPrivateVendors.length} Private Suppliers
-                </span>
-              </h3>
-              <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                Select suppliers from your private approved roster to invite for <span className="font-mono font-bold text-slate-700 dark:text-gray-300">{rfq.rfqNumber}</span>.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            disabled={isSaving}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        {saveError && (
-          <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 text-xs flex items-center gap-2 shrink-0">
-            <AlertCircle size={14} className="shrink-0" />
-            <span>{saveError}</span>
-          </div>
-        )}
-
-        {allMyPrivateVendors.length === 0 ? (
-          <div className="p-8 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-2 my-auto">
-            <Users size={28} className="mx-auto text-slate-400 opacity-60" />
-            <h4 className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Suppliers Available</h4>
-            <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
-              You haven&apos;t uploaded any approved private suppliers yet. Add suppliers in the Vendor Directory or PO History ingestion to invite them.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3 flex-1 overflow-hidden flex flex-col min-h-0">
-            {/* Toolbar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
-              <div className="relative flex-1">
-                <Search size={12} className="absolute left-2.5 top-2 text-slate-400" />
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by supplier name, email, or category..."
-                  className="w-full text-xs pl-7 pr-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                />
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {unassignedFiltered.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={toggleSelectAll}
-                    className="btn btn-secondary btn-xs text-[10px] font-bold inline-flex items-center gap-1"
-                  >
-                    {isAllSelected ? <Square size={11} /> : <CheckSquare size={11} />}
-                    <span>{isAllSelected ? 'Deselect All' : 'Select All'}</span>
-                  </button>
-                )}
-                <span className="text-[10px] text-slate-500 font-semibold mono">
-                  {selectedVendorIds.length} selected
-                </span>
-              </div>
-            </div>
-
-            {/* List */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[160px]">
-              {filteredVendors.map((vendor, idx) => {
-                const isAssigned = alreadyAssignedIds.has(vendor.id);
-                const isSelected = selectedVendorIds.includes(vendor.id);
-
-                return (
-                  <div
-                    key={vendor.id || idx}
-                    onClick={() => toggleVendor(vendor.id)}
-                    className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
-                      isAssigned
-                        ? 'bg-slate-50/50 dark:bg-gray-950/20 border-slate-200/60 dark:border-gray-800/60 opacity-60 cursor-not-allowed'
-                        : isSelected
-                        ? 'bg-blue-50/40 dark:bg-blue-950/30 border-blue-400 dark:border-blue-600 ring-1 ring-blue-400/40 cursor-pointer'
-                        : 'bg-white dark:bg-gray-900 border-slate-200 dark:border-gray-800 hover:bg-slate-50 dark:hover:bg-gray-850 cursor-pointer'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border text-[10px] ${
-                          isAssigned
-                            ? 'bg-slate-200 dark:bg-gray-700 border-slate-300 dark:border-gray-600 text-slate-500'
-                            : isSelected
-                            ? 'bg-blue-600 border-blue-600 text-white'
-                            : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                        }`}
-                      >
-                        {(isAssigned || isSelected) && <Check size={11} />}
-                      </div>
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                            {idx + 1}. {vendor.name}
-                          </span>
-                          {vendor.majorCategory && (
-                            <span className="px-1.5 py-0.2 rounded text-[8px] font-semibold bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300">
-                              {vendor.majorCategory}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center gap-2 truncate">
-                          {vendor.contactPerson && <span>{vendor.contactPerson}</span>}
-                          {vendor.email && <span className="mono">{vendor.email}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0">
-                      {isAssigned ? (
-                        <span className="px-2 py-0.5 rounded text-[8px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200 dark:border-gray-700">
-                          Already Assigned
-                        </span>
-                      ) : (
-                        <span className="badge badge-emerald text-[8px] font-bold">
-                          Private Approved
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Footer */}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800 shrink-0">
-          <button onClick={onClose} disabled={isSaving} className="btn btn-ghost btn-sm">
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={isSaving || selectedVendorIds.length === 0}
-            className="btn btn-primary btn-sm px-4 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
-          >
-            <UserPlus size={13} />
-            <span>{isSaving ? 'Assigning...' : `Assign ${selectedVendorIds.length > 0 ? `${selectedVendorIds.length} ` : ''}Suppliers`}</span>
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

@@ -729,14 +729,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const ensureRFQs = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.rfqs && rfqs.length > 0) {
+  const ensureRFQs = useCallback(async (force = false) => {
+    if (!force && loadedEntitiesRef.current.rfqs) {
       return;
     }
     return dedupeRequest('rfqs', async () => {
       await refreshRFQs();
     });
-  };
+  }, []);
 
   // Hydrate reference data. RFQs come from refreshRFQs, not from here.
   const refreshFromDB = async () => {
