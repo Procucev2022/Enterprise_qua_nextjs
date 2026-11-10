@@ -1,4 +1,4 @@
-name: Deploy to Cloudflare (Development)
+name: Deploy to Cloudflare (stage Environment)
 
 on:
   push:
