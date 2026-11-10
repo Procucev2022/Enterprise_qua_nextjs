@@ -547,6 +547,13 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - These paths now log operation, account type, status, and failure kind while retaining the existing fallback contracts. Logs omit account IDs, payment-link IDs/URLs, plan values, and server response text.
 - Regression tests cover vendor and buyer payment-link requests, status polling, pricing failures, and metadata privacy.
 
+## Buyer payment identity lookup failure visibility
+
+- Buyer subscription payment-link creation previously swallowed identity lookup failures when it needed to recover a missing phone number from the identity record. A transient identity database failure then looked exactly like a buyer profile with no mobile number.
+- The endpoint now logs the lookup exception with the buyer-account controller category and retains the existing missing-phone response and no-provider-call fallback.
+- Regression coverage verifies the exception is logged, no payment request is sent to Zoho, and the current response contract is preserved.
+- Focused buyer payment-link tests passed (20 tests). Full workspace quality gate passed on 2026-11-10: backend 208 suites / 5,940 tests with 161/161 executable files meeting all four 90% thresholds (98.01% statements, 92.52% branches, 98.92% functions, 98.70% lines); frontend 149 suites / 3,778 tests with 171/171 executable files meeting all four thresholds (97.90% statements, 92.97% branches, 97.86% functions, 98.67% lines). Build, typecheck, lint, coverage verification, schema parity, schema-checker regression tests, and schema-file verification passed. Live database migration was skipped by the quality pipeline.
+
 ## Vendor opportunity profile lookup diagnostics
 
 - The opportunity feed used a vendor-profile lookup to calculate category matches but discarded both non-success HTTP responses and transport/JSON errors. A failed lookup therefore silently hid category-match metadata.

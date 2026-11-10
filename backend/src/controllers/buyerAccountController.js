@@ -318,7 +318,16 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // identity record rather than sending a blank value.
     let phone = existing.mobileNumber || '';
     if (!phone) {
-      const identityUser = await identityQueries.findUserByEmail(existing.corporateEmail).catch(() => null);
+      let identityUser = null;
+      try {
+        identityUser = await identityQueries.findUserByEmail(existing.corporateEmail);
+      } catch (identityLookupError) {
+        logger.error(
+          'Identity profile lookup failed while resolving buyer payment contact phone; using the missing-phone fallback',
+          identityLookupError,
+          'BUYER_ACCOUNT_CONTROLLER'
+        );
+      }
       phone = (identityUser && identityUser.mobile) || '';
     }
     if (!phone) {
