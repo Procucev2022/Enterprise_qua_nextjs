@@ -1853,6 +1853,21 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
     });
 
+    it('does not repeat the category lookup when only delivery details change', async () => {
+      renderModal();
+      fillRow();
+
+      await waitFor(() => expect(rfqClient.fetchAllVendors).toHaveBeenCalled());
+      const categoryLookupCount = (rfqClient.fetchAllVendors as jest.Mock).mock.calls.length;
+
+      fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
+        target: { value: 'Second delivery site' },
+      });
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+
+      expect(rfqClient.fetchAllVendors).toHaveBeenCalledTimes(categoryLookupCount);
+    });
+
     it('covers handleSendCategoryUpdateEmail edge cases and badge statuses', async () => {
       const mockShowToast = jest.fn();
       const vNoName = {
