@@ -80,6 +80,9 @@ beforeEach(() => {
   jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockResolvedValue(0);
   jest.spyOn(emailGatewayQueries, 'findProcessed').mockResolvedValue(null);
   jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+  jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgement').mockResolvedValue('initial-dispatch-claim');
+  jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
+  jest.spyOn(emailGatewayQueries, 'releaseClaimedAcknowledgement').mockResolvedValue(true);
   jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
   jest.spyOn(storeService, 'consumeRFQCreditIfApplicable').mockReturnValue({ consumed: true, remaining: 4 });
   notice = jest.spyOn(mailerService, 'sendRfqNotCreatedEmail').mockResolvedValue({ sent: true });
@@ -515,6 +518,121 @@ describe('a retried email does not raise the same RFQ twice', () => {
     expect(result.rfqs.map((r) => r.rfqNumber)).toEqual(['RFQ-OLD-1', 'RFQ-NEW-2']);
   });
 
+  test('records and claims the acknowledgement before provider dispatch, then marks it sent', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-ack-outbox', rfqNumber: 'RFQ-ACK-OUTBOX', title: 'Pumps' });
+    const events = [];
+    emailGatewayQueries.recordProcessed.mockImplementation(async ({ status }) => {
+      if (status === INGESTION_OUTCOME.ACK_PENDING) events.push('pending');
+      return true;
+    });
+    emailGatewayQueries.claimPendingAcknowledgement.mockImplementation(async (messageId) => {
+      events.push(`claimed:${messageId}`);
+      return 'initial-dispatch-claim';
+    });
+    ack.mockImplementation(async () => {
+      events.push('provider');
+      return { sent: true };
+    });
+    emailGatewayQueries.completeClaimedAcknowledgement.mockImplementation(async (...args) => {
+      events.push('completed');
+      expect(args).toEqual([
+        `${MESSAGE_ID}#rfq-0#ack`,
+        'initial-dispatch-claim',
+        INGESTION_OUTCOME.ACK_SENT,
+        'Acknowledgement sent on initial dispatch',
+      ]);
+      return true;
+    });
+
+    await emailGatewayService.processMessage(raw(), config());
+
+    expect(events).toEqual([
+      'pending',
+      `claimed:${MESSAGE_ID}#rfq-0#ack`,
+      'provider',
+      'completed',
+    ]);
+  });
+
+  test('does not send an acknowledgement while another worker owns its pending claim', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-ack-claimed' });
+    emailGatewayQueries.claimPendingAcknowledgement.mockResolvedValue(null);
+
+    await emailGatewayService.processMessage(raw(), config());
+
+    expect(ack).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Initial email acknowledgement was left pending because another worker owns its dispatch claim',
+      expect.objectContaining({ messageId: `${MESSAGE_ID}#rfq-0#ack` }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
+  test('sends best-effort when the pending ledger write fails', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-ack-ledger-down', rfqNumber: 'RFQ-ACK-LEDGER-DOWN' });
+    emailGatewayQueries.recordProcessed.mockImplementation(async ({ status }) => status !== INGESTION_OUTCOME.ACK_PENDING);
+
+    await emailGatewayService.processMessage(raw(), config());
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(emailGatewayQueries.claimPendingAcknowledgement).not.toHaveBeenCalled();
+  });
+
+  test('retries the pending ledger write after a best-effort provider send also fails', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-ack-retry-ledger' });
+    let pendingWrites = 0;
+    emailGatewayQueries.recordProcessed.mockImplementation(async ({ status }) => {
+      if (status !== INGESTION_OUTCOME.ACK_PENDING) return true;
+      pendingWrites += 1;
+      return pendingWrites > 1;
+    });
+    ack.mockRejectedValueOnce(new Error('provider unavailable'));
+
+    await emailGatewayService.processMessage(raw(), config());
+
+    expect(pendingWrites).toBe(2);
+    expect(emailGatewayQueries.claimPendingAcknowledgement).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to dispatch RFQ acknowledgement email to buyer',
+      expect.objectContaining({ retryPersisted: false }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
+  test('logs when a failed initial dispatch cannot release its claim', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-ack-claim-release' });
+    emailGatewayQueries.releaseClaimedAcknowledgement.mockResolvedValue(false);
+    ack.mockRejectedValueOnce(new Error('provider unavailable'));
+
+    await emailGatewayService.processMessage(raw(), config());
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed acknowledgement claim release; retry will wait for its lease to expire',
+      expect.objectContaining({ messageId: `${MESSAGE_ID}#rfq-0#ack` }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
+  test('logs when the provider accepts a message but the claimed completion cannot be persisted', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-ack-completion-down' });
+    emailGatewayQueries.completeClaimedAcknowledgement.mockResolvedValue(false);
+
+    await emailGatewayService.processMessage(raw(), config());
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Email provider accepted an acknowledgement but initial dispatch completion was not persisted',
+      expect.objectContaining({ messageId: `${MESSAGE_ID}#rfq-0#ack` }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
   test('without a Message-ID there is nothing to key on, so no lookup is made', async () => {
     mockExtraction();
     jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-x', rfqNumber: 'RFQ-X' });
@@ -697,6 +815,10 @@ describe('acknowledgements that could not be sent are retried later', () => {
         subject: 'Pumps',
         detail: JSON.stringify({ buyerName: 'L&T Heavy Engineering', rfqTitle: 'Pumps' }),
       })
+    );
+    expect(emailGatewayQueries.releaseClaimedAcknowledgement).toHaveBeenCalledWith(
+      `${MESSAGE_ID}#rfq-0#ack`,
+      'initial-dispatch-claim'
     );
   });
 
@@ -1412,6 +1534,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
   test('memory claims expire, reject stale owners, and complete only for the current token', async () => {
     jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
     emailGatewayQueries.recordProcessed.mockRestore();
+    emailGatewayQueries.completeClaimedAcknowledgement.mockRestore();
     await emailGatewayQueries.recordProcessed({
       messageId: 'memory-claim#ack',
       status: INGESTION_OUTCOME.ACK_PENDING,
@@ -1443,8 +1566,86 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
     await expect(emailGatewayQueries.claimPendingAcknowledgements(1, { now: NOW + 1000000 })).resolves.toEqual([]);
   });
 
+  test('claims and releases one pending row for its first dispatch in memory', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
+    emailGatewayQueries.recordProcessed.mockRestore();
+    emailGatewayQueries.claimPendingAcknowledgement.mockRestore();
+    emailGatewayQueries.releaseClaimedAcknowledgement.mockRestore();
+    await emailGatewayQueries.recordProcessed({
+      messageId: 'memory-initial-dispatch#ack',
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      fromAddress: 'buyer@example.com',
+    });
+
+    const firstToken = await emailGatewayQueries.claimPendingAcknowledgement('memory-initial-dispatch#ack', { now: NOW });
+    await expect(emailGatewayQueries.claimPendingAcknowledgement('memory-initial-dispatch#ack', {
+      now: NOW + EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS - 1,
+    })).resolves.toBeNull();
+    const reclaimedToken = await emailGatewayQueries.claimPendingAcknowledgement('memory-initial-dispatch#ack', {
+      now: NOW + EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS + 1,
+    });
+
+    expect(firstToken).toMatch(/^[0-9a-f-]{36}$/);
+    expect(reclaimedToken).toMatch(/^[0-9a-f-]{36}$/);
+    expect(reclaimedToken).not.toBe(firstToken);
+    await expect(emailGatewayQueries.releaseClaimedAcknowledgement('missing#ack', reclaimedToken)).resolves.toBe(false);
+    await expect(emailGatewayQueries.releaseClaimedAcknowledgement('memory-initial-dispatch#ack', firstToken)).resolves.toBe(false);
+    await expect(emailGatewayQueries.releaseClaimedAcknowledgement('memory-initial-dispatch#ack', reclaimedToken)).resolves.toBe(true);
+    await expect(emailGatewayQueries.claimPendingAcknowledgement('')).resolves.toBeNull();
+    await expect(emailGatewayQueries.claimPendingAcknowledgement('missing#ack')).resolves.toBeNull();
+  });
+
+  test('uses a conditional database upsert for targeted claims and releases', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    emailGatewayQueries.claimPendingAcknowledgement.mockRestore();
+    emailGatewayQueries.releaseClaimedAcknowledgement.mockRestore();
+    const rows = jest.spyOn(dbPool, 'rows')
+      .mockResolvedValueOnce([{ claim_token: 'target-claim-token' }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ message_id: 'targeted-row#ack' }]);
+
+    await expect(emailGatewayQueries.claimPendingAcknowledgement('targeted-row#ack', { now: NOW }))
+      .resolves.toBe('target-claim-token');
+    const [claimSql, claimParams, claimOptions] = rows.mock.calls[0];
+    expect(claimSql).toContain('where message_id = $1 and status = $4');
+    expect(claimSql).toContain('where email_ingestion_retry_claims.claimed_at <= $5');
+    expect(claimParams).toEqual([
+      'targeted-row#ack',
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      '2026-10-14T17:00:00.000Z',
+      INGESTION_OUTCOME.ACK_PENDING,
+      '2026-10-14T16:55:00.000Z',
+    ]);
+    expect(claimOptions).toEqual({ d1: true });
+    await expect(emailGatewayQueries.releaseClaimedAcknowledgement('targeted-row#ack', 'wrong-token')).resolves.toBe(false);
+    await expect(emailGatewayQueries.releaseClaimedAcknowledgement('targeted-row#ack', 'target-claim-token')).resolves.toBe(true);
+    expect(rows.mock.calls[2][0]).toContain('where message_id = $1 and claim_token = $2');
+    await expect(emailGatewayQueries.releaseClaimedAcknowledgement('', 'token')).resolves.toBe(false);
+  });
+
+  test('logs targeted claim and release database errors and returns retry-safe fallbacks', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    emailGatewayQueries.claimPendingAcknowledgement.mockRestore();
+    emailGatewayQueries.releaseClaimedAcknowledgement.mockRestore();
+    jest.spyOn(dbPool, 'rows').mockRejectedValue(new Error('database unavailable'));
+
+    await expect(emailGatewayQueries.claimPendingAcknowledgement('error-row#ack', { now: NOW })).resolves.toBeNull();
+    await expect(emailGatewayQueries.releaseClaimedAcknowledgement('error-row#ack', 'claim-token')).resolves.toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(
+      'New email acknowledgement could not be claimed for initial dispatch',
+      expect.objectContaining({ messageId: 'error-row#ack' }),
+      'EMAIL_GATEWAY'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed initial email acknowledgement claim could not be released',
+      expect.objectContaining({ messageId: 'error-row#ack' }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
   test('requires a current database claim when repairing or completing a retry', async () => {
     jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    emailGatewayQueries.completeClaimedAcknowledgement.mockRestore();
     const rows = jest.spyOn(dbPool, 'rows')
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ message_id: 'row#ack' }]);
@@ -1461,6 +1662,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
 
   test('fails closed and logs database errors while claiming and completing', async () => {
     jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    emailGatewayQueries.completeClaimedAcknowledgement.mockRestore();
     jest.spyOn(dbPool, 'rows').mockRejectedValue(new Error('database unavailable'));
 
     await expect(emailGatewayQueries.claimPendingAcknowledgements()).resolves.toEqual([]);

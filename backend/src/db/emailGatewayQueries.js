@@ -312,6 +312,77 @@ async function claimPendingAcknowledgements(limit = 5, {
   }
 }
 
+/** Reserve one newly queued acknowledgement for its original dispatch. */
+async function claimPendingAcknowledgement(messageId, { now = Date.now() } = {}) {
+  if (!messageId) return null;
+  const key = String(messageId);
+  const claimToken = crypto.randomUUID();
+  const claimedAt = new Date(now).toISOString();
+  const reclaimBefore = new Date(now - EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS).toISOString();
+  if (!pool.hasStorage()) {
+    const row = memoryPendingAcknowledgements.get(key);
+    if (!row || row.status !== INGESTION_OUTCOME.ACK_PENDING) return null;
+    if (row.retry_claimed_at) {
+      const existingClaim = Date.parse(row.retry_claimed_at);
+      if (Number.isFinite(existingClaim) && existingClaim > now - EMAIL_GATEWAY_CONFIG.ACK_RETRY_CLAIM_LEASE_MS) return null;
+    }
+    row.retry_claim_token = claimToken;
+    row.retry_claimed_at = claimedAt;
+    return claimToken;
+  }
+  try {
+    const rows = await pool.rows(
+      `insert into email_ingestion_retry_claims (message_id, claim_token, claimed_at)
+       select message_id, $2, $3
+         from email_ingestion_log
+        where message_id = $1 and status = $4
+       on conflict (message_id) do update set
+         claim_token = excluded.claim_token,
+         claimed_at = excluded.claimed_at
+       where email_ingestion_retry_claims.claimed_at <= $5
+       returning claim_token`,
+      [key, claimToken, claimedAt, INGESTION_OUTCOME.ACK_PENDING, reclaimBefore],
+      { d1: true }
+    );
+    return rows[0]?.claim_token || null;
+  } catch (err) {
+    logger.error('New email acknowledgement could not be claimed for initial dispatch', {
+      error: err,
+      messageId: key,
+    }, 'EMAIL_GATEWAY');
+    return null;
+  }
+}
+
+/** Release a failed original dispatch so a retry poll can claim it immediately. */
+async function releaseClaimedAcknowledgement(messageId, claimToken) {
+  if (!messageId || !claimToken) return false;
+  const key = String(messageId);
+  if (!pool.hasStorage()) {
+    const row = memoryPendingAcknowledgements.get(key);
+    if (!row || row.status !== INGESTION_OUTCOME.ACK_PENDING || row.retry_claim_token !== claimToken) return false;
+    row.retry_claim_token = null;
+    row.retry_claimed_at = null;
+    return true;
+  }
+  try {
+    const rows = await pool.rows(
+      `delete from email_ingestion_retry_claims
+        where message_id = $1 and claim_token = $2
+        returning message_id`,
+      [key, String(claimToken)],
+      { d1: true }
+    );
+    return rows.length > 0;
+  } catch (err) {
+    logger.error('Failed initial email acknowledgement claim could not be released', {
+      error: err,
+      messageId: key,
+    }, 'EMAIL_GATEWAY');
+    return false;
+  }
+}
+
 /** Persist an acknowledgement payload repair only while its poller still owns the claim. */
 async function updateClaimedAcknowledgement(messageId, claimToken, detail) {
   if (!messageId || !claimToken) return false;
@@ -542,6 +613,8 @@ module.exports = {
   findProcessed,
   listByStatus,
   claimPendingAcknowledgements,
+  claimPendingAcknowledgement,
+  releaseClaimedAcknowledgement,
   updateClaimedAcknowledgement,
   completeClaimedAcknowledgement,
   clearMemoryPendingAcknowledgements,

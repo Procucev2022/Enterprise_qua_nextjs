@@ -1516,7 +1516,7 @@ function decryptAcknowledgementPassword(encryptedPassword, messageId) {
  * while mail was down never heard back at all.
  */
 async function queueAcknowledgement(rfqKey, ack) {
-  if (!rfqKey) return;
+  if (!rfqKey) return false;
   const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
   if (ack.deliveryKind) detailObj.deliveryKind = ack.deliveryKind;
   [
@@ -1584,6 +1584,63 @@ async function queueAcknowledgement(rfqKey, ack) {
       messageId,
       deliveryKind: ack.deliveryKind || null,
     }, 'EMAIL_GATEWAY');
+  }
+  return recorded && status === INGESTION_OUTCOME.ACK_PENDING;
+}
+
+/** Persist and claim an acknowledgement before its first provider dispatch. */
+async function dispatchInitialAcknowledgement(rfqKey, ack, send, label, failureMessage) {
+  const queued = await emailGateway.queueAcknowledgement(rfqKey, ack);
+  let claimToken = null;
+  if (queued) {
+    claimToken = await emailGatewayQueries.claimPendingAcknowledgement(`${rfqKey}#ack`);
+    if (!claimToken) {
+      logger.warn('Initial email acknowledgement was left pending because another worker owns its dispatch claim', {
+        messageId: `${rfqKey}#ack`,
+        rfqNumber: ack.rfqNumber || null,
+        deliveryKind: ack.deliveryKind || null,
+      }, 'EMAIL_GATEWAY');
+      return;
+    }
+  }
+
+  try {
+    ensureMailDeliveryAccepted(await send(), label);
+  } catch (error) {
+    logger.error(failureMessage, {
+      error,
+      messageId: `${rfqKey}#ack`,
+      rfqNumber: ack.rfqNumber || null,
+      deliveryKind: ack.deliveryKind || null,
+      retryPersisted: queued,
+    }, 'EMAIL_GATEWAY');
+    if (claimToken) {
+      const released = await emailGatewayQueries.releaseClaimedAcknowledgement(`${rfqKey}#ack`, claimToken);
+      if (!released) {
+        logger.error('Failed acknowledgement claim release; retry will wait for its lease to expire', {
+          messageId: `${rfqKey}#ack`,
+          rfqNumber: ack.rfqNumber || null,
+        }, 'EMAIL_GATEWAY');
+      }
+    } else {
+      await emailGateway.queueAcknowledgement(rfqKey, ack);
+    }
+    return;
+  }
+
+  if (claimToken) {
+    const completed = await emailGatewayQueries.completeClaimedAcknowledgement(
+      `${rfqKey}#ack`,
+      claimToken,
+      INGESTION_OUTCOME.ACK_SENT,
+      'Acknowledgement sent on initial dispatch'
+    );
+    if (!completed) {
+      logger.error('Email provider accepted an acknowledgement but initial dispatch completion was not persisted', {
+        messageId: `${rfqKey}#ack`,
+        rfqNumber: ack.rfqNumber || null,
+      }, 'EMAIL_GATEWAY');
+    }
   }
 }
 
@@ -3204,19 +3261,21 @@ async function processMessage(rawSource, config = resolveConfig()) {
           const ackDedupKey = recipient.isPrimary ? (groupKey || created.id) : (groupKey ? `${groupKey}#${recipient.email}` : `${created.id}#${recipient.email}`);
 
           if (isAutoRegisteredPrimary) {
-            try {
-              ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail(ack), 'Buyer onboarding acknowledgement');
-            } catch (onboardErr) {
-              logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
-              await emailGateway.queueAcknowledgement(ackDedupKey, ack);
-            }
+            await dispatchInitialAcknowledgement(
+              ackDedupKey,
+              ack,
+              () => mailerService.sendBuyerOnboardingWithRfqEmail(ack),
+              'Buyer onboarding acknowledgement',
+              'Failed to dispatch buyer onboarding credential email'
+            );
           } else {
-            try {
-              ensureMailDeliveryAccepted(await mailerService.sendRfqAcknowledgementEmail(ack), 'RFQ acknowledgement');
-            } catch (ackErr) {
-              logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
-              await emailGateway.queueAcknowledgement(ackDedupKey, ack);
-            }
+            await dispatchInitialAcknowledgement(
+              ackDedupKey,
+              ack,
+              () => mailerService.sendRfqAcknowledgementEmail(ack),
+              'RFQ acknowledgement',
+              'Failed to dispatch RFQ acknowledgement email to buyer'
+            );
           }
         })
     );
