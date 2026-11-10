@@ -957,44 +957,82 @@ async function updateVendorIfUnchangedInDB(snapshot, vendor) {
 
 async function syncVendorCategoriesIndexed(vendorId, vendor) {
   if (!pool.hasStorage() || !vendorId) return;
+  let categoryPersistenceMode = 'query-sequence';
+  let categoryCount = 0;
   try {
-    const categories = [];
+    const categoriesByKey = new Map();
+    const addCategory = (value, type) => {
+      if (!value) return;
+      const name = String(value).trim();
+      if (!name) return;
+      const key = `${type}:${name.toLowerCase()}`;
+      if (!categoriesByKey.has(key)) categoriesByKey.set(key, { name, type });
+    };
+
     if (vendor.majorCategory) {
-      categories.push({ name: String(vendor.majorCategory).trim(), type: 'major' });
+      addCategory(vendor.majorCategory, 'major');
     }
     if (Array.isArray(vendor.minorCategories)) {
       for (const m of vendor.minorCategories) {
-        if (m) categories.push({ name: String(m).trim(), type: 'minor' });
+        addCategory(m, 'minor');
       }
     }
     if (Array.isArray(vendor.vendorSelectedCategories)) {
       for (const s of vendor.vendorSelectedCategories) {
-        if (s) categories.push({ name: String(s).trim(), type: 'selected' });
+        addCategory(s, 'selected');
       }
     }
     if (Array.isArray(vendor.clientMappedCategories)) {
       for (const c of vendor.clientMappedCategories) {
-        if (c) categories.push({ name: String(c).trim(), type: 'client_mapped' });
+        addCategory(c, 'client_mapped');
       }
     }
-    if (categories.length === 0) return;
+    categoryCount = categoriesByKey.size;
 
     const delSql = 'DELETE FROM vendor_categories_indexed WHERE vendor_id = $1';
-    await pool.query(delSql, [vendorId], { d1: true, d1Text: delSql });
+    const insertSql = `
+      INSERT INTO vendor_categories_indexed (vendor_id, category_name, category_type)
+      VALUES ($1, $2, $3)
+    `;
+    const statements = [
+      { text: delSql, params: [vendorId] },
+      ...Array.from(categoriesByKey.values(), (category) => ({
+        text: insertSql,
+        params: [vendorId, category.name, category.type],
+      })),
+    ];
 
-    for (const cat of categories) {
-      const insSql = `
-        INSERT INTO vendor_categories_indexed (vendor_id, category_name, category_type)
-        VALUES ($1, $2, $3)
-      `;
-      const d1InsSql = `
-        INSERT OR IGNORE INTO vendor_categories_indexed (vendor_id, category_name, category_type)
-        VALUES ($1, $2, $3)
-      `;
-      await pool.query(insSql, [vendorId, cat.name, cat.type], { d1: true, d1Text: d1InsSql });
+    const d1Binding = d1Bridge.getD1Binding();
+    if (d1Binding) {
+      categoryPersistenceMode = 'd1-worker-batch';
+      await d1Bridge.batchD1(d1Binding, statements);
+      return;
     }
-  } catch {
-    // Non-fatal category indexing sync
+
+    if (pool.pool && typeof pool.pool.connect === 'function') {
+      categoryPersistenceMode = 'postgres-transaction';
+      await pool.withTransaction(async (client) => {
+        for (const statement of statements) {
+          await client.query(statement.text, statement.params);
+        }
+      });
+      return;
+    }
+
+    for (const statement of statements) {
+      await pool.query(statement.text, statement.params, {
+        d1: true,
+        d1Text: statement.text,
+      });
+    }
+  } catch (error) {
+    logger.error('Vendor category index synchronization failed', {
+      error,
+      operation: 'replace-vendor-category-index',
+      vendorId,
+      categoryCount,
+      persistenceMode: categoryPersistenceMode,
+    }, 'DATABASE_QUERY');
   }
 }
 

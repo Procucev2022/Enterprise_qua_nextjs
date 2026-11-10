@@ -599,3 +599,10 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Synced the PR with the latest `test-v3` base and resolved approval conflicts while retaining the branch's transactional approval and event persistence, durable error responses, and internal-task credit ledger synchronization.
 - The approval action boundary now requires an explicitly selected approver and verifies its password against backend-only environment secrets using timing-safe comparison. Missing configuration returns a service-unavailable response; invalid credentials return unauthorized. Example files use nonfunctional placeholders and do not contain a usable password.
 - Focused backend approval/configuration tests passed (67 tests), and frontend approval client/dashboard tests passed (38 tests). Production approver secrets still need to be configured in the deployment secret manager; no sample default is accepted by the server.
+
+## Vendor category index replacement and D1 request reduction
+
+- Vendor upserts previously refreshed `vendor_categories_indexed` with one DELETE followed by one D1 request per category, skipped cleanup when a vendor removed every category, and silently swallowed index-write errors. This could leave stale category rows and consume avoidable D1 subrequests.
+- Category replacement now trims blank labels, removes case-insensitive duplicates within each category type, and always deletes the previous set even when the new set is empty. Worker D1 replaces the rows in one atomic `batchD1` call; PostgreSQL uses a transaction when the driver supports one. The existing sequential D1 HTTP fallback is preserved because that adapter cannot guarantee batch atomicity.
+- A failed derived-index refresh remains non-fatal to the already committed vendor row, but it now emits a structured `DATABASE_QUERY` error with the vendor ID, category count, persistence mode, and original exception.
+- Focused `domainQueries.test.js` passed (234 tests), including D1 batching, category clearing/deduplication, PostgreSQL transaction behavior, and failure diagnostics. Production D1 execution remains unverified until the intended account is connected.

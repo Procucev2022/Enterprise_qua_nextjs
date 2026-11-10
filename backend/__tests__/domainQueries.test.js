@@ -2517,6 +2517,88 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const res = await domainQueries.upsertVendorInDB(v);
       expect(res).toEqual(v);
     });
+
+    test('replaces the D1 vendor category index atomically and clears it when categories are removed', async () => {
+      const binding = {};
+      const vendor = {
+        id: 'v-category-index',
+        majorCategory: 'Industrial',
+        minorCategories: ['Valves', ' valves ', '  '],
+        vendorSelectedCategories: ['Valves'],
+      };
+      pool.pool = {
+        query: jest.fn().mockResolvedValue({ rows: [{ raw: vendor }] }),
+      };
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+      const batchSpy = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([]);
+
+      await domainQueries.upsertVendorInDB(vendor);
+      await domainQueries.upsertVendorInDB({ id: vendor.id });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(batchSpy).toHaveBeenCalledTimes(2);
+      expect(batchSpy.mock.calls[0][0]).toBe(binding);
+      expect(batchSpy.mock.calls[0][1]).toHaveLength(4);
+      expect(batchSpy.mock.calls[0][1][0]).toEqual({
+        text: 'DELETE FROM vendor_categories_indexed WHERE vendor_id = $1',
+        params: [vendor.id],
+      });
+      expect(batchSpy.mock.calls[0][1].slice(1).map((statement) => statement.params)).toEqual([
+        [vendor.id, 'Industrial', 'major'],
+        [vendor.id, 'Valves', 'minor'],
+        [vendor.id, 'Valves', 'selected'],
+      ]);
+      expect(batchSpy.mock.calls[1][1]).toEqual([{
+        text: 'DELETE FROM vendor_categories_indexed WHERE vendor_id = $1',
+        params: [vendor.id],
+      }]);
+    });
+
+    test('replaces the PostgreSQL vendor category index in one transaction', async () => {
+      const vendor = { id: 'v-category-transaction', majorCategory: 'Industrial', minorCategories: ['Valves'] };
+      const clientQuery = jest.fn().mockResolvedValue({ rows: [] });
+      pool.pool = {
+        connect: jest.fn(),
+        query: jest.fn().mockResolvedValue({ rows: [{ raw: vendor }] }),
+      };
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      const transactionSpy = jest.spyOn(pool, 'withTransaction')
+        .mockImplementation((callback) => callback({ query: clientQuery }));
+
+      await domainQueries.upsertVendorInDB(vendor);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(transactionSpy).toHaveBeenCalledTimes(1);
+      expect(clientQuery).toHaveBeenCalledTimes(3);
+      expect(clientQuery.mock.calls[0][0]).toBe('DELETE FROM vendor_categories_indexed WHERE vendor_id = $1');
+    });
+
+    test('logs a failed D1 vendor category index refresh with bounded metadata', async () => {
+      const { logger } = require('../src/services/loggerService');
+      const vendor = { id: 'v-category-index-failure', majorCategory: 'Industrial' };
+      const error = new Error('D1 batch unavailable');
+      pool.pool = {
+        query: jest.fn().mockResolvedValue({ rows: [{ raw: vendor }] }),
+      };
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
+      jest.spyOn(d1Bridge, 'batchD1').mockRejectedValue(error);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await domainQueries.upsertVendorInDB(vendor);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Vendor category index synchronization failed',
+        expect.objectContaining({
+          error,
+          operation: 'replace-vendor-category-index',
+          vendorId: vendor.id,
+          categoryCount: 1,
+          persistenceMode: 'd1-worker-batch',
+        }),
+        'DATABASE_QUERY'
+      );
+    });
   });
 });
 
