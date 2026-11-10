@@ -526,9 +526,13 @@ async function createVendor(req, res, next) {
     if (addedByBuyerCompany) {
       body.addedByBuyerCompany = addedByBuyerCompany;
     }
+    if (req.user && req.user.role === 'buyer' && req.user.email) {
+      body.buyerEmail = req.user.email;
+    }
     // Check uniqueness before mutating the cache. Durable confirmation below
     // still handles a concurrent insert; onboarding is only provisioned after
-    // that confirmation succeeds.
+    // that confirmation succeeds. This must run before addVendor starts any
+    // identity or email side effects for a duplicate submission.
     if (body.email) {
       // A migrated vendor who signed in first already has an auto-created,
       // unowned profile; this add takes it over rather than 409ing.

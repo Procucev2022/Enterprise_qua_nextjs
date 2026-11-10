@@ -98,15 +98,15 @@ function rfqInScope(scope, rfq) {
   if (!scope.restricted) return true;
   if (scope.role === 'vendor') {
     if (storeService.vendorCoversRFQ(scope.vendor, rfq)) return true;
+    if (storeService.isVendorMappedToRfqBuyer(scope.vendor, rfq)) return true;
     const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
-    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
-    const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
-    const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
-    if (isV0 || isV2 || isV3) {
+    const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
+    if (!isV1) {
+      const isUncategorized = !scope.vendor?.majorCategory || String(scope.vendor?.majorCategory).toLowerCase().includes('uncategorized');
       const signals = storeService._rfqCategorySignals(rfq);
       if (
         signals.length === 0 ||
-        !scope.vendor?.majorCategory ||
+        isUncategorized ||
         signals.some((c) => storeService.vendorCoversCategory(scope.vendor, c))
       ) {
         return true;

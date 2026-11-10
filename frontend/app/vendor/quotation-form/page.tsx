@@ -10,7 +10,7 @@ function VendorQuotationFormContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const targetRfqParam = searchParams.get('rfq') || searchParams.get('id');
-  const { selectedVendorOpportunity, vendorOpportunities, rfqs, refreshRFQs, ensureRFQs, isLoadingDB } = useApp();
+  const { selectedVendorOpportunity, vendorOpportunities, rfqs, refreshRFQs, isLoadingDB,ensureRFQs, isLoadingRFQs } = useApp();
   const backToFeed = () => router.push('/vendor/opportunity-feed');
   const backToBidQuotes = () => router.push('/vendor/quotation-form');
 
@@ -102,6 +102,14 @@ function VendorQuotationFormContent() {
         })),
       };
     }
+  }
+
+  if (isLoadingRFQs && (!rfqs || rfqs.length === 0)) {
+    return (
+      <div className="p-6 text-xs text-slate-500 dark:text-gray-400">
+        Loading quotation form...
+      </div>
+    );
   }
 
   if (!opportunity) {

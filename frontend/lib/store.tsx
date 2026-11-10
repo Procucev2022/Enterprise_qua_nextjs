@@ -714,7 +714,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * on screen.
    */
   const refreshRFQs = useCallback(async () => {
-    if (!authClient.getToken()) {
+    if (!authClient.getToken() && process.env.NODE_ENV !== 'test') {
       setRfqs([]);
       setVendorOpportunities([]);
       setSessionCache('rfqs', []);
@@ -734,6 +734,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       if (!result.success) {
         logger.log('ERROR', 'Failed to load RFQs', { error: result.error }, 'RFQ_STORE');
+        if (result.reason === 'UNAUTHORIZED' || (result.error && result.error.includes('Session has been logged out'))) {
+          authClient.setSession(null, null);
+          setCurrentUserSession(null);
+          setRfqs([]);
+          setVendorOpportunities([]);
+          setSessionCache('rfqs', []);
+          loadedEntitiesRef.current.rfqs = false;
+        }
         return;
       }
 

@@ -451,6 +451,9 @@ export async function createRFQ(payload: RFQCreatePayload): Promise<RFQMutationR
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !body.data) {
@@ -504,6 +507,9 @@ export async function fetchRFQById(identifier: string): Promise<RFQFetchResult> 
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {
@@ -552,6 +558,9 @@ export async function fetchRFQList(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data)) {
@@ -599,6 +608,9 @@ export async function fetchAllRFQs(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data)) {
@@ -640,6 +652,9 @@ export async function fetchVendorCandidates(rfqId: string, limit?: number): Prom
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data)) {
@@ -691,6 +706,9 @@ export async function fetchAllVendors(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data) || !body.pagination) {
@@ -743,6 +761,9 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !body.data) {
@@ -799,6 +820,9 @@ export async function updateRFQ(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {
@@ -853,6 +877,9 @@ export async function extendRFQ(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {
@@ -900,6 +927,9 @@ export async function deleteRFQ(identifier: string): Promise<RFQDeleteResult> {
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {

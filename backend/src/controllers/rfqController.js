@@ -190,13 +190,20 @@ function canVendorViewRfq(vendor, rfq) {
   const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
   const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
 
-  // RFQ details should be visible to all vendors (including buyer-invited vendors)
-  // across V0, V2, and V3, even if they have not received an invitation.
+  // Buyer-specific vendor access rule:
+  // When a vendor is mapped to the buyer who created the RFQ, they can view that buyer's RFQs across all modes.
+  if (storeService.isVendorMappedToRfqBuyer(vendor, rfq)) {
+    return true;
+  }
+
+  // RFQ details should be visible to all vendors (including buyer-uploaded vendors behaving as normal vendors)
+  // across network modes (V0, V2, V3), even if they have not received an explicit invitation.
   if (isV0 || isV2 || isV3) {
+    const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
     const signals = storeService._rfqCategorySignals(rfq);
     if (
       signals.length === 0 ||
-      !vendor.majorCategory ||
+      isUncategorized ||
       signals.some((c) => storeService.vendorCoversCategory(vendor, c))
     ) {
       return true;
