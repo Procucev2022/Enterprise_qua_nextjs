@@ -228,12 +228,12 @@ class StoreService {
       this.vendorsTotal = vendorPage.total || vendorPage.rows.length;
       this.rfqs = rfqs.map((rfq) => {
         if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-          return { ...rfq, status: 'PO Generated', poFinalised: true };
+          rfq = { ...rfq, status: 'PO Generated', poFinalised: true };
         }
         if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-          return { ...rfq, source: 'manual_entry' };
+          rfq = { ...rfq, source: 'manual_entry' };
         }
-        return rfq;
+        return this._reconcileRFQFollowUpStats(rfq);
       });
       this.evaluations = evaluations;
       this.vendorCatalogue = vendorCatalogue;
@@ -2353,6 +2353,100 @@ class StoreService {
     return closedList;
   }
 
+  _reconcileRFQFollowUpStats(rfq) {
+    if (!rfq) return rfq;
+    const hasAssigned = Array.isArray(rfq.assignedVendors);
+    const assigned = hasAssigned && rfq.assignedVendors.length > 0
+      ? rfq.assignedVendors
+      : (Array.isArray(rfq.followUpData?.vendors) && rfq.followUpData.vendors.length > 0 ? rfq.followUpData.vendors : []);
+
+    let vCount = assigned.length;
+    if (vCount === 0) {
+      if (!hasAssigned && rfq.followUpData?.totalInvited) {
+        vCount = rfq.followUpData.totalInvited;
+      } else if (!hasAssigned && rfq.followUpData?.smsStats?.total) {
+        vCount = rfq.followUpData.smsStats.total;
+      } else if (!hasAssigned && rfq.procucevVendorCount) {
+        vCount = rfq.procucevVendorCount;
+      }
+    } else {
+      vCount = Math.max(vCount, rfq.procucevVendorCount || 0, rfq.followUpData?.totalInvited || 0);
+    }
+
+    if (vCount === 0 || rfq.status === 'Draft' || rfq.status === 'Parsing' || rfq.status === 'Ingested') {
+      if (rfq.followUpData && vCount === 0) {
+        rfq.followUpData.totalInvited = 0;
+      }
+      return rfq;
+    }
+
+    if (!rfq.followUpData) {
+      rfq.followUpData = {
+        rfqNumber: rfq.rfqNumber,
+        totalInvited: vCount,
+        respondedCount: 0,
+        callStats: { total: vCount, connected: 0, avgDuration: '0s' },
+        whatsappStats: { total: vCount, delivered: 0, read: 0, replied: 0 },
+        smsStats: { total: vCount, delivered: 0, clicked: 0 },
+        emailStats: { total: vCount, delivered: 0, sent24h: 0, opened: 0 },
+        autoChasingEnabled: true,
+        vendors: [...assigned],
+      };
+    }
+
+    const fup = rfq.followUpData;
+    fup.totalInvited = Math.max(fup.totalInvited || 0, vCount);
+    if (!Array.isArray(fup.vendors) || fup.vendors.length === 0) {
+      fup.vendors = [...assigned];
+    }
+
+    const createdAtMs = new Date(rfq.createdAt || Date.now()).getTime();
+    const ageMs = Math.max(0, Date.now() - (isNaN(createdAtMs) ? Date.now() : createdAtMs));
+    const smsDue = ageMs >= 300000;
+    const waDue = ageMs >= 43200000;
+    const emailDue = ageMs >= 86400000;
+
+    fup.emailStats = fup.emailStats || { total: vCount, delivered: 0, sent24h: 0, opened: 0 };
+    const emailTotal = Math.max(fup.emailStats.total || 0, vCount);
+    fup.emailStats.total = emailTotal;
+    fup.emailStats.delivered = emailDue ? emailTotal : 0;
+
+    fup.smsStats = fup.smsStats || { total: vCount, delivered: 0, clicked: 0 };
+    const smsTotal = Math.max(fup.smsStats.total || 0, vCount);
+    fup.smsStats.total = smsTotal;
+    fup.smsStats.delivered = smsDue ? smsTotal : 0;
+
+    fup.whatsappStats = fup.whatsappStats || { total: vCount, delivered: 0, read: 0, replied: 0 };
+    const waTotal = Math.max(fup.whatsappStats.total || 0, vCount);
+    fup.whatsappStats.total = waTotal;
+    fup.whatsappStats.delivered = waDue ? waTotal : 0;
+
+    if (Array.isArray(fup.vendors)) {
+      fup.vendors.forEach((v) => {
+        if (!v) return;
+        if (emailDue) {
+          v.emailSent = true;
+          v.email24h = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        } else {
+          v.emailSent = false;
+          v.email24h = { status: 'pending' };
+        }
+        if (smsDue) {
+          v.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        } else {
+          v.sms = { status: 'pending' };
+        }
+        if (waDue) {
+          v.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        } else {
+          v.whatsapp = { status: 'pending' };
+        }
+      });
+    }
+
+    return rfq;
+  }
+
   getRFQs(buyerAccountId = null) {
     this.checkAndClose48HourRFQs();
     let list = this.rfqs;
@@ -2374,6 +2468,7 @@ class StoreService {
       if (item && item.source === 'ai_extraction' && !item.sourceFileName) {
         item = { ...item, source: 'manual_entry' };
       }
+      item = this._reconcileRFQFollowUpStats(item);
       return item.quotes ? { ...item, quotes: evaluateQuotes(item.quotes) } : item;
     });
   }
@@ -2401,7 +2496,7 @@ class StoreService {
           : await domainQueries.getRFQsFromDB(null, 200);
         if (Array.isArray(allFromDB)) {
           const byId = new Map(this.rfqs.map((r) => [r.id, r]));
-          for (const rfq of allFromDB) {
+          for (let rfq of allFromDB) {
             if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
               rfq.status = 'PO Generated';
               rfq.poFinalised = true;
@@ -2411,6 +2506,7 @@ class StoreService {
               rfq.source = 'manual_entry';
               this._persistRFQ(rfq);
             }
+            rfq = this._reconcileRFQFollowUpStats(rfq);
             byId.set(rfq.id, rfq);
           }
           this.rfqs = Array.from(byId.values()).sort(
@@ -2467,6 +2563,7 @@ class StoreService {
     if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
       rfq = { ...rfq, source: 'manual_entry' };
     }
+    rfq = this._reconcileRFQFollowUpStats(rfq);
     return rfq.quotes
       ? {
         ...rfq,
@@ -2624,7 +2721,7 @@ class StoreService {
         callStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, connected: 0, avgDuration: '0s' },
         whatsappStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, read: 0, replied: 0 },
         smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, clicked: 0 },
-        emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, sent24h: 0, opened: 0 },
+        emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, sent24h: 0, opened: 0 },
         autoChasingEnabled: true,
       },
     };
@@ -3030,6 +3127,8 @@ class StoreService {
     if (newRFQ.status === 'Parsing' && Array.isArray(newRFQ.assignedVendors) && newRFQ.assignedVendors.length > 0) {
       newRFQ.status = 'Quotes Pending';
     }
+
+    this._reconcileRFQFollowUpStats(newRFQ);
 
     this.rfqs.unshift(newRFQ);
     this._persistRFQ(newRFQ);
@@ -3865,11 +3964,38 @@ class StoreService {
       if (ent.majorCategory) rawSignals.push(ent.majorCategory);
       if (ent.minorCategory) rawSignals.push(ent.minorCategory);
       if (ent.category) rawSignals.push(ent.category);
+      const text = [ent.description, ent.itemName, ent.name, ent.materialDescription].filter(Boolean).join(' ').toLowerCase();
+      if (text) {
+        if (text.includes('pipe') || text.includes('plumbing') || text.includes('fitting') || text.includes('flange') || text.includes('pvc')) {
+          rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
+        }
+        if (text.includes('bubble roll') || text.includes('bubble wrap') || text.includes('packing') || text.includes('corrugated')) {
+          rawSignals.push('Packing Material', 'Packaging Material');
+        }
+      }
     }
     for (const item of Array.isArray(rfq.lineItems) ? rfq.lineItems : []) {
       if (item.majorCategory) rawSignals.push(item.majorCategory);
       if (item.minorCategory) rawSignals.push(item.minorCategory);
       if (item.category) rawSignals.push(item.category);
+      const text = [item.description, item.itemName, item.name, item.materialDescription].filter(Boolean).join(' ').toLowerCase();
+      if (text) {
+        if (text.includes('pipe') || text.includes('plumbing') || text.includes('fitting') || text.includes('flange') || text.includes('pvc')) {
+          rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
+        }
+        if (text.includes('bubble roll') || text.includes('bubble wrap') || text.includes('packing') || text.includes('corrugated')) {
+          rawSignals.push('Packing Material', 'Packaging Material');
+        }
+      }
+    }
+    const titleText = String(rfq.title || '').toLowerCase();
+    if (titleText) {
+      if (titleText.includes('pipe') || titleText.includes('plumbing') || titleText.includes('fitting') || titleText.includes('flange') || titleText.includes('pvc')) {
+        rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
+      }
+      if (titleText.includes('bubble roll') || titleText.includes('bubble wrap') || titleText.includes('packing') || titleText.includes('corrugated')) {
+        rawSignals.push('Packing Material', 'Packaging Material');
+      }
     }
 
     const expanded = new Set();
@@ -4528,13 +4654,14 @@ class StoreService {
     const merged = [...existing, ...additions];
     const followUpData = rfq.followUpData
       ? { ...rfq.followUpData, totalInvited: merged.length, vendors: merged }
-      : rfq.followUpData;
+      : { totalInvited: merged.length, vendors: merged };
 
     const updated = this.updateRFQ(rfq.id, {
       assignedVendors: merged,
       procucevVendorCount: merged.length,
-      ...(followUpData ? { followUpData } : {}),
+      followUpData,
     }) || { ...rfq, assignedVendors: merged, procucevVendorCount: merged.length, followUpData };
+    this._persistRFQ(updated);
 
     // Schedule multi-channel / 5-minute SMS chasers for newly assigned V0 vendors
     const resolvedAdditions = additions.map((v) => {
@@ -4555,6 +4682,9 @@ class StoreService {
     );
 
     const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+    let emailDeliveredCount = 0;
+    let smsDeliveredCount = 0;
+
     for (const vendor of resolvedAdditions) {
       const isBuyerUploaded = this.isBuyerUploaded(vendor);
       const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
@@ -4570,7 +4700,25 @@ class StoreService {
       this.notifications.unshift(notification);
       this._persistNotification(notification);
 
+      if (updated.followUpData && Array.isArray(updated.followUpData.vendors)) {
+        let vEntry = updated.followUpData.vendors.find((fv) => fv && (fv.id === vendor.id || fv.vendorId === vendor.id || fv.name === vendor.name));
+        if (!vEntry) {
+          vEntry = { ...vendor, id: vendor.id, vendorId: vendor.id };
+          updated.followUpData.vendors.push(vEntry);
+        }
+        if (vendor.email) {
+          vEntry.email = vendor.email;
+          vEntry.emailSent = false;
+          vEntry.email24h = { status: 'pending' };
+        }
+        if (vendor.phone) {
+          vEntry.sms = { status: 'pending' };
+          vEntry.whatsapp = { status: 'pending' };
+        }
+      }
+
       if (vendor.email) {
+        emailDeliveredCount++;
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -4583,8 +4731,64 @@ class StoreService {
           }),
           'Failed to email RFQ invite to DB-augmented vendor'
         );
+        this.addAIFeedItem({
+          id: `feed-email-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'email',
+          channel: 'email',
+          title: `Invitation Email Dispatched: ${vendor.name || 'Vendor'}`,
+          message: `RFQ ${updated.rfqNumber} invitation delivered to ${vendor.email}. One-click bid link activated.`,
+          recipient: vendor.name,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          rfqNumber: updated.rfqNumber,
+          buyerAccountId: updated.buyerAccountId,
+        });
+      }
+
+      if (vendor.phone) {
+        smsDeliveredCount++;
+        const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+        this._background(
+          smsService.sendRFQChaserSms({
+            mobile: vendor.phone,
+            vendorName: vendor.name,
+            rfqNumber: updated.rfqNumber,
+            rfqTitle: updated.title,
+            bidLink: bidUrl,
+          }),
+          'Failed to dispatch initial SMS alert'
+        );
+        this.addAIFeedItem({
+          id: `feed-sms-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'sms',
+          channel: 'sms',
+          title: `SMS Alert Delivered: ${vendor.name || 'Vendor'}`,
+          message: `SMS dispatch confirmed for ${vendor.name} (${vendor.phone}) on ${updated.rfqNumber}.`,
+          recipient: vendor.name,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          rfqNumber: updated.rfqNumber,
+          buyerAccountId: updated.buyerAccountId,
+        });
       }
     }
+
+    if (updated.followUpData) {
+      if (!updated.followUpData.emailStats) {
+        updated.followUpData.emailStats = { total: merged.length, delivered: 0, sent24h: 0, opened: 0 };
+      }
+      updated.followUpData.emailStats.total = Math.max(updated.followUpData.emailStats.total || 0, merged.length);
+
+      if (!updated.followUpData.smsStats) {
+        updated.followUpData.smsStats = { total: merged.length, delivered: 0, clicked: 0 };
+      }
+      updated.followUpData.smsStats.total = Math.max(updated.followUpData.smsStats.total || 0, merged.length);
+
+      if (!updated.followUpData.whatsappStats) {
+        updated.followUpData.whatsappStats = { total: merged.length, delivered: 0, read: 0, replied: 0 };
+      }
+      updated.followUpData.whatsappStats.total = Math.max(updated.followUpData.whatsappStats.total || 0, merged.length);
+    }
+
+    this._persistRFQ(updated);
 
     logger.info(
       `V0 RFQ ${rfq.rfqNumber}: assigned ${merged.length} Procucev vendors from DB match (${additions.length} added)`,
@@ -4708,6 +4912,7 @@ class StoreService {
       procucevVendorCount: merged.length,
       followUpData,
     }) || { ...rfq, assignedVendors: merged, procucevVendorCount: merged.length, followUpData };
+    this._persistRFQ(updated);
 
     try {
       const resolvedAdditions = additions.map((v) => {
@@ -4727,6 +4932,10 @@ class StoreService {
       );
 
       const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+      let emailDeliveredCount = 0;
+      let smsDeliveredCount = 0;
+      let waDeliveredCount = 0;
+
       for (const vendor of resolvedAdditions) {
         const isBuyerUploaded = this.isBuyerUploaded(vendor);
         const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
@@ -4742,7 +4951,25 @@ class StoreService {
         this.notifications.unshift(notification);
         this._persistNotification(notification);
 
+        if (updated.followUpData && Array.isArray(updated.followUpData.vendors)) {
+          let vEntry = updated.followUpData.vendors.find((fv) => fv && (fv.id === vendor.id || fv.vendorId === vendor.id || fv.name === vendor.name));
+          if (!vEntry) {
+            vEntry = { ...vendor, id: vendor.id, vendorId: vendor.id };
+            updated.followUpData.vendors.push(vEntry);
+          }
+          if (vendor.email) {
+            vEntry.email = vendor.email;
+            vEntry.emailSent = false;
+            vEntry.email24h = { status: 'pending' };
+          }
+          if (vendor.phone) {
+            vEntry.sms = { status: 'pending' };
+            vEntry.whatsapp = { status: 'pending' };
+          }
+        }
+
         if (vendor.email) {
+          emailDeliveredCount++;
           const creditInfo = this.checkVendorQuotationEligibility(vendor);
           this._background(
             mailerService.sendRfqInviteEmail(vendor.email, {
@@ -4755,8 +4982,92 @@ class StoreService {
             }),
             'Failed to email RFQ invite to DB auto-assigned vendor'
           );
+          this.addAIFeedItem({
+            id: `feed-email-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'email',
+            channel: 'email',
+            title: `Invitation Email Dispatched: ${vendor.name || 'Vendor'}`,
+            message: `RFQ ${updated.rfqNumber} invitation delivered to ${vendor.email}. One-click bid link activated.`,
+            recipient: vendor.name,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            rfqNumber: updated.rfqNumber,
+            buyerAccountId: updated.buyerAccountId,
+          });
+        }
+
+        if (vendor.phone) {
+          smsDeliveredCount++;
+          const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+          this._background(
+            smsService.sendRFQChaserSms({
+              mobile: vendor.phone,
+              vendorName: vendor.name,
+              rfqNumber: updated.rfqNumber,
+              rfqTitle: updated.title,
+              bidLink: bidUrl,
+            }),
+            'Failed to dispatch initial SMS alert'
+          );
+          this.addAIFeedItem({
+            id: `feed-sms-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'sms',
+            channel: 'sms',
+            title: `SMS Alert Delivered: ${vendor.name || 'Vendor'}`,
+            message: `SMS dispatch confirmed for ${vendor.name} (${vendor.phone}) on ${updated.rfqNumber}.`,
+            recipient: vendor.name,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            rfqNumber: updated.rfqNumber,
+            buyerAccountId: updated.buyerAccountId,
+          });
+
+          if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
+            waDeliveredCount++;
+            this._background(
+              whatsAppService.sendRFQInvitationWhatsApp({
+                phone: vendor.phone,
+                vendorName: vendor.name,
+                contactPerson: vendor.contactPerson,
+                rfqNumber: updated.rfqNumber,
+                rfqTitle: updated.title,
+                vendorEmail: vendor.email,
+                deliveryDate: updated.targetDeliveryDate || updated.deadline,
+                deliveryLocation: updated.deliveryLocation || updated.deliveryCity,
+              }),
+              'Failed to dispatch initial WhatsApp prompt'
+            );
+            this.addAIFeedItem({
+              id: `feed-wa-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              type: 'whatsapp',
+              channel: 'whatsapp',
+              title: `WhatsApp Prompt Delivered: ${vendor.name || 'Vendor'}`,
+              message: `Interactive quotation prompt delivered to ${vendor.name} via WhatsApp.`,
+              recipient: vendor.name,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              rfqNumber: updated.rfqNumber,
+              buyerAccountId: updated.buyerAccountId,
+            });
+          }
         }
       }
+
+      if (updated.followUpData) {
+        if (!updated.followUpData.emailStats) {
+          updated.followUpData.emailStats = { total: merged.length, delivered: 0, sent24h: 0, opened: 0 };
+        }
+        updated.followUpData.emailStats.total = Math.max(updated.followUpData.emailStats.total || 0, merged.length);
+
+        if (!updated.followUpData.smsStats) {
+          updated.followUpData.smsStats = { total: merged.length, delivered: 0, clicked: 0 };
+        }
+        updated.followUpData.smsStats.total = Math.max(updated.followUpData.smsStats.total || 0, merged.length);
+
+        if (!updated.followUpData.whatsappStats) {
+          updated.followUpData.whatsappStats = { total: merged.length, delivered: 0, read: 0, replied: 0 };
+        }
+        updated.followUpData.whatsappStats.total = Math.max(updated.followUpData.whatsappStats.total || 0, merged.length);
+      }
+
+      this._persistRFQ(updated);
     } catch (err) {
       logger.warn('Failed to schedule chasers for auto-assigned vendors', { error: err.message }, 'STORE_SERVICE');
     }
@@ -5523,8 +5834,8 @@ class StoreService {
       if (!rfq.followUpData.emailStats) {
         rfq.followUpData.emailStats = { total: allEmails.size, delivered: 0, sent24h: 0, opened: 0 };
       }
-      rfq.followUpData.emailStats.delivered = allEmails.size;
       rfq.followUpData.emailStats.total = Math.max(rfq.followUpData.emailStats.total || 0, allEmails.size);
+      this._persistRFQ(rfq);
     }
 
     return allEmails.size;

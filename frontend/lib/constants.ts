@@ -902,12 +902,17 @@ export const DISPLAY_TIMEZONE = 'Asia/Kolkata';
  */
 export function formatIndianDateTime(value?: string): string {
   if (!value || value.trim() === '') return '';
+  const trimmed = value.trim();
+  if (trimmed.endsWith(' IST')) return trimmed;
 
-  // A bare MySQL DATETIME has no zone designator, so one is added before parsing;
-  // without it the browser would read it in the viewer's local zone instead.
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(value.trim())
-    ? `${value.trim().replace(' ', 'T')}Z`
-    : value;
+  // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
+  // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
+  let normalized = trimmed;
+  if (/(\s+|_)UTC$/i.test(normalized)) {
+    normalized = `${normalized.replace(/(\s+|_)UTC$/i, '').trim().replace(' ', 'T')}Z`;
+  } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = `${normalized.replace(' ', 'T')}Z`;
+  }
 
   const parsed = Date.parse(normalized);
   if (Number.isNaN(parsed)) return value;
