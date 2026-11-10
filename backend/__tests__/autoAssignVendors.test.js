@@ -138,7 +138,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       expect(chaserSpy).not.toHaveBeenCalled();
     });
 
-    test('falls back to getVendorsPageFromDB if getPublicVendorsMatchingCategories returns empty array', async () => {
+    test('does not assign random vendors if getPublicVendorsMatchingCategories returns empty array', async () => {
       domainPool.pool = { query: jest.fn() };
       const rfq = storeService.createRFQ({
         id: 'rfq-auto-test-2',
@@ -148,16 +148,11 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       });
 
       jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([]);
-      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
-        rows: [
-          { id: 'v-fallback', name: 'Fallback Vendor', category: 'CustomCategory', majorCategory: 'CustomCategory', source: 'procucev_network' },
-        ],
-        total: 1,
-      });
-      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (updatedRfq) => updatedRfq);
+      jest.spyOn(storeService, 'candidateVendorsForRFQ').mockReturnValue([]);
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValue();
 
       const updated = await storeService.autoAssignVendorsFromDB(rfq);
-      expect(updated.assignedVendors.some((v) => v.id === 'v-fallback')).toBe(true);
+      expect(updated.assignedVendors.length).toBe(0);
     });
 
     test('handles DB query errors gracefully and falls back to in-memory candidates', async () => {

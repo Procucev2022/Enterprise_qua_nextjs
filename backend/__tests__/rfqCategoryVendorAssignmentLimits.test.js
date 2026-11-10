@@ -50,8 +50,8 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
     expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(8);
   });
 
-  describe('25 Vendors per Unique Minor Category with Major Fallback', () => {
-    test('invites 25 vendors: 21 from minor category and remaining 4 fallback from major category', () => {
+  describe('25 Vendors per Unique Minor Category without Major Fallback', () => {
+    test('invites vendors strictly based on minor category (e.g. exactly 21 vendors) without major category fallback', () => {
       const buyer = storeService.addBuyerAccount({
         organizationName: 'Fallback Test Corp',
         corporateEmail: 'buyer-fallback@test.com',
@@ -105,7 +105,7 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
       );
 
       const assigned = rfq.assignedVendors || [];
-      expect(assigned).toHaveLength(25);
+      expect(assigned).toHaveLength(21);
 
       const minorIds = new Set(minorVendors.map((v) => v.id));
       const majorIds = new Set(majorOnlyVendors.map((v) => v.id));
@@ -115,11 +115,11 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
 
       // Exactly 21 from minor category
       expect(assignedMinor).toHaveLength(21);
-      // Exactly 4 from major category fallback (25 - 21 = 4)
-      expect(assignedMajorFallback).toHaveLength(4);
+      // Strictly 0 from major category (no fallback)
+      expect(assignedMajorFallback).toHaveLength(0);
     });
 
-    test('preserves delivery location proximity sorting without changes', () => {
+    test('preserves delivery location proximity sorting within minor category matches', () => {
       const buyer = storeService.addBuyerAccount({
         organizationName: 'Location Proximity Corp',
         corporateEmail: 'buyer-loc@test.com',
@@ -196,17 +196,16 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
       );
 
       const assigned = rfq.assignedVendors || [];
-      expect(assigned).toHaveLength(25);
+      expect(assigned).toHaveLength(21);
 
       // Nearby minor vendor (exact pincode) must be at the very top of minor matches
       expect(assigned[0].id).toBe(nearbyMinorVendor.id);
 
-      // Nearby major vendor (exact pincode) must be selected among the fallback 4
-      const fallbackIds = assigned.slice(21).map((v) => v.id);
-      expect(fallbackIds).toContain(nearbyMajorFallback.id);
+      // Major vendors must NOT be invited (no fallback)
+      expect(assigned.some((v) => v.id === nearbyMajorFallback.id)).toBe(false);
     });
 
-    test('invites 25 vendors per unique minor category across multiple line items', () => {
+    test('invites up to 25 vendors strictly per unique minor category across multiple line items', () => {
       const buyer = storeService.addBuyerAccount({
         organizationName: 'Multi Category Corp',
         corporateEmail: 'buyer-multi@test.com',
@@ -261,9 +260,9 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
 
       // There are 2 unique minor categories: 'PVC Pipes' and 'Valves'
       // PVC Pipes gets 25 minor vendors (out of 30 available)
-      // Valves gets 21 minor vendors + 4 fallback from major Plumbing = 25
-      // Total assigned vendors = 25 + 25 = 50
-      expect(rfq.assignedVendors).toHaveLength(50);
+      // Valves gets strictly 21 minor vendors (0 fallback from major Plumbing)
+      // Total assigned vendors = 25 + 21 = 46
+      expect(rfq.assignedVendors).toHaveLength(46);
     });
   });
 

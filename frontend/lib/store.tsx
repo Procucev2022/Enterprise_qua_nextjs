@@ -48,6 +48,7 @@ import { UI_STRINGS, formatString } from './uiStrings';
 import {
   createRFQ,
   fetchRFQList,
+  fetchAllRFQs,
   updateRFQ as updateRFQRequest,
   deleteRFQ as deleteRFQRequest,
   fetchVendorRfqCredits,
@@ -712,7 +713,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * Signed out, this clears the list rather than leaving a previous session's RFQs
    * on screen.
    */
-  const refreshRFQs = async () => {
+  const refreshRFQs = useCallback(async () => {
     if (!authClient.getToken()) {
       setRfqs([]);
       setVendorOpportunities([]);
@@ -726,7 +727,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingRFQs(true);
     }
     try {
-      const result = await fetchRFQList({ limit: 500 });
+      const isCM = currentRole === 'category_manager' || currentRole === 'admin';
+      let result = isCM ? await fetchAllRFQs({ limit: 500 }) : await fetchRFQList({ limit: 500 });
+      if (!result.success && isCM) {
+        result = await fetchRFQList({ limit: 500 });
+      }
       if (!result.success) {
         logger.log('ERROR', 'Failed to load RFQs', { error: result.error }, 'RFQ_STORE');
         return;
@@ -741,16 +746,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoadingRFQs(false);
     }
-  };
+  }, [currentRole, rfqs.length]);
 
-  const ensureRFQs = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.rfqs && rfqs.length > 0) {
+  const ensureRFQs = useCallback(async (force = false) => {
+    if (!force && loadedEntitiesRef.current.rfqs) {
       return;
     }
     return dedupeRequest('rfqs', async () => {
       await refreshRFQs();
     });
-  };
+  }, [refreshRFQs]);
 
   // Hydrate reference data. RFQs come from refreshRFQs, not from here.
   const refreshFromDB = async () => {

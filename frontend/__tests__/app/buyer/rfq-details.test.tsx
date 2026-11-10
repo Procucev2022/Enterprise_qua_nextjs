@@ -1410,7 +1410,14 @@ function makeInquiry(overrides: any = {}): any {
       });
     });
 
-    it('renders empty desk state and allows inviting suppliers', () => {
+    it('renders empty desk state and allows inviting suppliers for category manager', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'category_manager',
+        currentUserSession: { name: 'CM User', email: 'cm@procucev.com', role: 'category_manager' },
+        buyerVendors: [],
+      });
       renderDetails(
         buildRFQ({
           inquiries: [],
@@ -1423,6 +1430,7 @@ function makeInquiry(overrides: any = {}): any {
       const inviteBtns = screen.getAllByRole('button', { name: /Invite Suppliers/i });
       expect(inviteBtns.length).toBeGreaterThanOrEqual(1);
       fireEvent.click(inviteBtns[0]);
+      expect(screen.getByTestId('mock-invite-vendors-modal')).toBeInTheDocument();
     });
 
     it('handles RFQ closure when clicking Close RFQ', async () => {
@@ -2311,7 +2319,7 @@ function makeInquiry(overrides: any = {}): any {
       expect(screen.queryByTestId('mock-invite-vendors-modal')).not.toBeInTheDocument();
     });
 
-    it('buyer opens BuyerInviteSuppliersModal, selects vendors, searches, and saves assignments', async () => {
+    it('verifies buyers cannot open arbitrary supplier assignment modals and modal is absent', async () => {
       (useApp as jest.Mock).mockReturnValue({
         showToast: mockShowToast,
         refreshFromDB: jest.fn().mockResolvedValue(undefined),
@@ -2325,14 +2333,6 @@ function makeInquiry(overrides: any = {}): any {
             contactPerson: 'Ramesh Kumar',
             source: 'buyer_excel',
           },
-          {
-            id: 'v-buyer-2',
-            name: 'Valves Private Ltd',
-            email: 'priv2@test.com',
-            majorCategory: 'Valves',
-            contactPerson: 'Suresh Patel',
-            source: 'buyer_excel',
-          },
         ],
         currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
       });
@@ -2343,109 +2343,9 @@ function makeInquiry(overrides: any = {}): any {
         })
       );
 
-      // Open Buyer Invite Suppliers Modal
-      const inviteBtn = screen.getAllByRole('button', { name: /Invite Suppliers/i })[0];
-      fireEvent.click(inviteBtn);
-
-      expect(screen.getByText(/Invite Approved Suppliers/i)).toBeInTheDocument();
-      expect(screen.getByText(/2 Private Suppliers/i)).toBeInTheDocument();
-
-      // Search vendors
-      const searchInput = screen.getByPlaceholderText(/Search by supplier name, email, or category/i);
-      fireEvent.change(searchInput, { target: { value: 'Valves' } });
-      expect(screen.getByText(/Valves Private Ltd/i)).toBeInTheDocument();
-      expect(screen.queryByText(/Pumps Private Ltd/i)).not.toBeInTheDocument();
-
-      // Clear search
-      fireEvent.change(searchInput, { target: { value: '' } });
-
-      // Click Select All
-      const selectAllBtn = screen.getByText('Select All');
-      fireEvent.click(selectAllBtn);
-      expect(screen.getByText('2 selected')).toBeInTheDocument();
-
-      // Click Deselect All
-      const deselectAllBtn = screen.getByText('Deselect All');
-      fireEvent.click(deselectAllBtn);
-      expect(screen.getByText('0 selected')).toBeInTheDocument();
-
-      // Button disabled when 0 selected
-      const assignBtn = screen.getByRole('button', { name: /Assign Suppliers/i });
-      expect(assignBtn).toBeDisabled();
-
-      // Select vendor by clicking card
-      const vendorCard = screen.getByText(/Pumps Private Ltd/i);
-      fireEvent.click(vendorCard);
-      expect(screen.getByText('1 selected')).toBeInTheDocument();
-
-      // Assign selected vendor
-      const assign1Btn = screen.getByRole('button', { name: /Assign 1 Suppliers/i });
-      fireEvent.click(assign1Btn);
-
-      await waitFor(() => {
-        expect(mockUpdateRFQ).toHaveBeenCalledWith(
-          'rfq-1',
-          expect.objectContaining({
-            assignedVendors: expect.arrayContaining([
-              expect.objectContaining({ id: 'v-buyer-1', name: 'Pumps Private Ltd' }),
-            ]),
-          })
-        );
-      });
-      expect(mockShowToast).toHaveBeenCalledWith('Suppliers Added', expect.any(String), 'success');
+      // Verify buyers cannot open arbitrary supplier assignment modal
+      expect(screen.queryByRole('button', { name: /Invite Suppliers/i })).not.toBeInTheDocument();
       expect(screen.queryByText(/Invite Approved Suppliers/i)).not.toBeInTheDocument();
-    });
-
-    it('handles BuyerInviteSuppliersModal update failure with error display and warning toast', async () => {
-      mockUpdateRFQ.mockResolvedValueOnce({ success: false, error: 'Database update failed' });
-
-      (useApp as jest.Mock).mockReturnValue({
-        showToast: mockShowToast,
-        refreshFromDB: jest.fn().mockResolvedValue(undefined),
-        currentRole: 'buyer',
-        buyerVendors: [
-          {
-            id: 'v-buyer-err',
-            name: 'Error Vendor',
-            source: 'buyer_excel',
-          },
-        ],
-        currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
-      });
-
-      renderDetails(buildRFQ({ assignedVendors: [] }));
-
-      const inviteBtn = screen.getAllByRole('button', { name: /Invite Suppliers/i })[0];
-      fireEvent.click(inviteBtn);
-
-      fireEvent.click(screen.getByText(/Error Vendor/i));
-      fireEvent.click(screen.getByRole('button', { name: /Assign 1 Suppliers/i }));
-
-      await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Assignment Failed', 'Database update failed', 'warning');
-      });
-      expect(screen.getByText('Database update failed')).toBeInTheDocument();
-
-      // Close modal
-      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-      expect(screen.queryByText(/Invite Approved Suppliers/i)).not.toBeInTheDocument();
-    });
-
-    it('displays empty state when buyer has no private suppliers uploaded', () => {
-      (useApp as jest.Mock).mockReturnValue({
-        showToast: mockShowToast,
-        refreshFromDB: jest.fn().mockResolvedValue(undefined),
-        currentRole: 'buyer',
-        buyerVendors: [],
-        currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
-      });
-
-      renderDetails(buildRFQ({ assignedVendors: [] }));
-
-      const inviteBtn = screen.getAllByRole('button', { name: /Invite Suppliers/i })[0];
-      fireEvent.click(inviteBtn);
-
-      expect(screen.getByText(/No Private Suppliers Available/i)).toBeInTheDocument();
     });
   });
 
@@ -2696,7 +2596,7 @@ function makeInquiry(overrides: any = {}): any {
       expect(screen.getByText(/No buyer's own vendors on this RFQ\./i)).toBeInTheDocument();
     });
 
-    it('exercises BuyerInviteSuppliersModal deep search filters, select all toggle, and unselect toggle', async () => {
+    it('confirms buyer roster suppliers are viewable in Assigned Suppliers list', async () => {
       (useApp as jest.Mock).mockReturnValue({
         showToast: mockShowToast,
         refreshFromDB: jest.fn().mockResolvedValue(undefined),
@@ -2711,98 +2611,14 @@ function makeInquiry(overrides: any = {}): any {
       renderDetails(
         buildRFQ({
           sourcingMode: 'mode_1',
-          assignedVendors: [],
+          assignedVendors: [
+            { id: 'v-buyer-sec1', name: 'Alpha Mechanicals', email: 'alpha@buyer.com', source: 'buyer_excel' } as any,
+          ],
         })
       );
 
-      const inviteBtn = screen.getAllByRole('button', { name: /Invite Suppliers/i })[0];
-      fireEvent.click(inviteBtn);
-
-      const searchInput = screen.getByPlaceholderText(/Search by supplier name/i);
-
-      // Search by email
-      fireEvent.change(searchInput, { target: { value: 'alpha@buyer.com' } });
-      expect(screen.getByText(/Alpha Mechanicals/i)).toBeInTheDocument();
-      expect(screen.queryByText(/Beta Hydraulics/i)).not.toBeInTheDocument();
-
-      // Search by majorCategory
-      fireEvent.change(searchInput, { target: { value: 'Valves' } });
-      expect(screen.getByText(/Beta Hydraulics/i)).toBeInTheDocument();
-      expect(screen.queryByText(/Alpha Mechanicals/i)).not.toBeInTheDocument();
-
-      // Search by contactPerson
-      fireEvent.change(searchInput, { target: { value: 'Arun Kumar' } });
-      expect(screen.getByText(/Alpha Mechanicals/i)).toBeInTheDocument();
-
-      // Clear search
-      fireEvent.change(searchInput, { target: { value: '' } });
-
-      // Toggle Select All on
-      const selectAllBtn = screen.getByRole('button', { name: /Select All/i });
-      fireEvent.click(selectAllBtn);
-
-      // Toggle Select All off (Deselect All)
-      const deselectAllBtn = screen.getByRole('button', { name: /Deselect All/i });
-      fireEvent.click(deselectAllBtn);
-
-      // Select individual vendor
-      fireEvent.click(screen.getByText(/Alpha Mechanicals/i));
-      // Unselect individual vendor
-      fireEvent.click(screen.getByText(/Alpha Mechanicals/i));
-
-      // Close modal
-      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-    });
-
-    it('exercises BuyerInviteSuppliersModal with string rawExistingAssigned resolving from buyerVendors', async () => {
-      const mockOnUpdate = jest.fn();
-      mockUpdateRFQ.mockResolvedValueOnce({
-        success: true,
-        rfq: buildRFQ({
-          assignedVendors: [
-            { id: 'v-str-existing', name: 'Existing String Vendor', email: 'str@buyer.com' } as any,
-            { id: 'v-buyer-to-add', name: 'Newly Added Vendor', email: 'new@buyer.com' } as any,
-          ],
-        }),
-      });
-
-      (useApp as jest.Mock).mockReturnValue({
-        showToast: mockShowToast,
-        refreshFromDB: jest.fn().mockResolvedValue(undefined),
-        currentRole: 'buyer',
-        buyerVendors: [
-          { id: 'v-str-existing', name: 'Existing String Vendor', email: 'str@buyer.com', source: 'buyer_excel' },
-          { id: 'v-buyer-to-add', name: 'Newly Added Vendor', email: 'new@buyer.com', source: 'buyer_excel' },
-        ],
-        currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
-      });
-
-      renderDetails(
-        buildRFQ({
-          sourcingMode: 'mode_1',
-          assignedVendors: ['v-str-existing' as any],
-        }),
-        { onUpdate: mockOnUpdate }
-      );
-
-      const inviteBtn = screen.getAllByRole('button', { name: /Invite Suppliers/i })[0];
-      fireEvent.click(inviteBtn);
-
-      fireEvent.click(screen.getByText(/Newly Added Vendor/i));
-      fireEvent.click(screen.getByRole('button', { name: /Assign 1 Suppliers/i }));
-
-      await waitFor(() => {
-        expect(mockUpdateRFQ).toHaveBeenCalledWith(
-          'rfq-1',
-          expect.objectContaining({
-            assignedVendors: expect.arrayContaining([
-              expect.objectContaining({ id: 'v-str-existing', name: 'Existing String Vendor' }),
-              expect.objectContaining({ id: 'v-buyer-to-add', name: 'Newly Added Vendor' }),
-            ]),
-          })
-        );
-      });
-      expect(mockOnUpdate).toHaveBeenCalled();
+      expect(screen.getAllByText(/Alpha Mechanicals/i)[0]).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Invite Suppliers/i })).not.toBeInTheDocument();
     });
 
     it('exercises chat message sending with onUpdate, vendor submission success, and empty input no-op', async () => {
@@ -3281,24 +3097,13 @@ function makeInquiry(overrides: any = {}): any {
       });
     });
 
-    it('exercises BuyerInviteSuppliersModal deep edge cases for already assigned and unassigned data', async () => {
-      const mockOnUpdate = jest.fn();
-      mockUpdateRFQ.mockResolvedValueOnce({
-        success: true,
-        rfq: {
-          id: 'rfq-1',
-          assignedVendors: [], // shorter than merged, triggers line 3177 : merged
-        },
-      });
-
+    it('exercises assigned vendors rendering with name and email fallbacks', async () => {
       (useApp as jest.Mock).mockReturnValue({
         showToast: mockShowToast,
         refreshFromDB: jest.fn().mockResolvedValue(undefined),
         currentRole: 'buyer',
         buyerVendors: [
-          // Vendor with name
           { id: 'v-sparse-1', name: 'Sparse Private Vendor', source: 'buyer_excel' },
-          // Already assigned vendor
           { id: 'v-already-1', name: 'Already Assigned Supplier', source: 'buyer_excel' },
         ],
         currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
@@ -3308,36 +3113,16 @@ function makeInquiry(overrides: any = {}): any {
         buildRFQ({
           sourcingMode: 'mode_1',
           assignedVendors: [
-            // object with email only
             { email: 'assigned-email@test.com' } as any,
-            // object with name only (hits line 3166 return v)
             { name: 'Assigned By Name' } as any,
-            // string vendor that is NOT found in buyerVendors
             'v-unfound-string' as any,
-            // already assigned vendor
             { id: 'v-already-1', name: 'Already Assigned Supplier' } as any,
           ],
-        }),
-        { onUpdate: mockOnUpdate }
+        })
       );
 
-      const inviteBtn = screen.getAllByRole('button', { name: /Invite Suppliers/i })[0];
-      fireEvent.click(inviteBtn);
-
-      // Click already assigned supplier (triggers line 3131 return)
-      fireEvent.click(screen.getAllByText(/Already Assigned Supplier/i).slice(-1)[0]);
-
-      // Click sparse vendor
-      fireEvent.click(screen.getAllByText(/Sparse Private Vendor/i).slice(-1)[0]);
-
-      // Click assign button
-      const assign1Btn = screen.getAllByRole('button', { name: /Assign 1 Suppliers/i })[0];
-      fireEvent.click(assign1Btn);
-
-      await waitFor(() => {
-        expect(mockUpdateRFQ).toHaveBeenCalled();
-      });
-      expect(mockOnUpdate).toHaveBeenCalled();
+      expect(screen.getAllByText(/Already Assigned Supplier/i)[0]).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Invite Suppliers/i })).not.toBeInTheDocument();
     });
 
     it('exercises quote attachments rendering in desktop table and mobile cards', () => {
@@ -3537,11 +3322,18 @@ function makeInquiry(overrides: any = {}): any {
       unmount();
     });
 
-    it('covers empty clarifications desk invite suppliers button click', () => {
+    it('covers empty clarifications desk invite suppliers button click for category manager', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'category_manager',
+        currentUserSession: { name: 'CM User', email: 'cm@procucev.com', role: 'category_manager' },
+        buyerVendors: [],
+      });
       const { unmount } = renderDetails(buildRFQ({ quotes: [], assignedVendors: [] }));
       const emptyInviteBtns = screen.getAllByRole('button', { name: /Invite Suppliers/i });
       fireEvent.click(emptyInviteBtns[emptyInviteBtns.length - 1]);
-      expect(screen.getByText('Invite Approved Suppliers')).toBeInTheDocument();
+      expect(screen.getByTestId('mock-invite-vendors-modal')).toBeInTheDocument();
       unmount();
     });
 
