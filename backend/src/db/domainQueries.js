@@ -1517,6 +1517,7 @@ async function upsertEvaluationInDB(evaluation) {
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
        updated_at = CURRENT_TIMESTAMP
+     WHERE COALESCE(evaluations.vendor_id, '') = COALESCE(EXCLUDED.vendor_id, '')
      RETURNING raw`,
     [id, vendorId || null, status || null, JSON.stringify(evaluation)],
     {
@@ -1528,11 +1529,24 @@ async function upsertEvaluationInDB(evaluation) {
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
        updated_at = CURRENT_TIMESTAMP
+       WHERE COALESCE(evaluations.vendor_id, '') = COALESCE(EXCLUDED.vendor_id, '')
      RETURNING raw`,
     }
   );
   queryCache.invalidate('evaluations');
-  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  if (result.rows[0]) return parseRaw(result.rows[0].raw);
+
+  const existing = await pool.query(
+    'SELECT vendor_id FROM evaluations WHERE id = $1 LIMIT 1',
+    [id],
+    { d1: true, useCache: false, tag: 'evaluations' }
+  );
+  if (existing.rows[0] && String(existing.rows[0].vendor_id || '') !== String(vendorId || '')) {
+    const error = new Error('The evaluation identifier is already owned by another vendor.');
+    error.code = 'EVALUATION_IDENTITY_CONFLICT';
+    throw error;
+  }
+  return null;
 }
 
 // ── Vendor catalogue ────────────────────────────────────────────────────────

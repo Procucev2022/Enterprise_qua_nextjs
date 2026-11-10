@@ -1020,6 +1020,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const [sql, params] = pool.pool.query.mock.calls[0];
       expect(sql).toContain('INSERT INTO evaluations');
       expect(sql).toContain('ON CONFLICT (id) DO UPDATE');
+      expect(sql).toContain("WHERE COALESCE(evaluations.vendor_id, '') = COALESCE(EXCLUDED.vendor_id, '')");
       expect(params).toEqual(['eval-1', 'v-001', 'PREFERRED ENTERPRISE SUPPLIER', JSON.stringify(evaluation)]);
     });
 
@@ -1036,6 +1037,21 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('upsertEvaluationInDB returns null when nothing came back', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertEvaluationInDB({ id: 'eval-3' })).resolves.toBeNull();
+    });
+
+    test('upsertEvaluationInDB refuses an evaluation ID owned by another vendor', async () => {
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [] })
+          .mockResolvedValueOnce({ rows: [{ vendor_id: 'vendor-owner' }] }),
+      };
+
+      await expect(domainQueries.upsertEvaluationInDB({ id: 'eval-cross-vendor', vendorId: 'vendor-caller' }))
+        .rejects.toMatchObject({ code: 'EVALUATION_IDENTITY_CONFLICT' });
+      expect(pool.pool.query).toHaveBeenLastCalledWith(
+        'SELECT vendor_id FROM evaluations WHERE id = $1 LIMIT 1',
+        ['eval-cross-vendor']
+      );
     });
 
     // evaluations has been ported to D1 (see d1Bridge.js), which has no JSON
