@@ -1,4 +1,5 @@
 const path = require('path');
+const crypto = require('crypto');
 
 // ==============================================================================
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
@@ -2989,7 +2990,57 @@ const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   }),
 });
 
+const DEFAULT_APPROVER_PASSWORD = process.env.APPROVER_PASSWORD || 'Procucev@2026';
+
+const APPROVER_CONFIG = Object.freeze([
+  {
+    id: 'srinu_sir',
+    name: 'Srinu Sir',
+    title: 'Director / Management Authority',
+    email: process.env.SRINU_APPROVER_EMAIL || 'srinivas.mukku@procucev.com',
+    role: 'Director',
+  },
+  {
+    id: 'sudheer_sir',
+    name: 'Sudheer Sir',
+    title: 'Management Authority',
+    email: process.env.SUDHEER_APPROVER_EMAIL || 'sudheer.kangala@procucev.com',
+    role: 'Management Authority',
+  },
+]);
+
+function verifyApproverPassword(approverName, submittedPassword) {
+  if (!submittedPassword || typeof submittedPassword !== 'string') {
+    return false;
+  }
+  const nameNorm = String(approverName || '').toLowerCase().trim();
+  if (!nameNorm) {
+    return false;
+  }
+
+  let expectedPassword = null;
+  if (nameNorm.includes('srinu') || nameNorm.includes('srinivas') || nameNorm.includes('mukku')) {
+    expectedPassword = process.env.SRINU_APPROVER_PASSWORD || process.env.APPROVER_PASSWORD || 'Procucev@2026';
+  } else if (nameNorm.includes('sudheer') || nameNorm.includes('kangala')) {
+    expectedPassword = process.env.SUDHEER_APPROVER_PASSWORD || process.env.APPROVER_PASSWORD || 'Procucev@2026';
+  } else {
+    // Only designated senior approvers are authorized to verify passwords
+    return false;
+  }
+
+  try {
+    const expectedHash = crypto.createHash('sha256').update(String(expectedPassword), 'utf8').digest();
+    const submittedHash = crypto.createHash('sha256').update(String(submittedPassword), 'utf8').digest();
+    return crypto.timingSafeEqual(expectedHash, submittedHash);
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
+  DEFAULT_APPROVER_PASSWORD,
+  APPROVER_CONFIG,
+  verifyApproverPassword,
   DAILY_RFQ_REPORT_CONFIG,
   ACCOUNT_DOCUMENT_CATEGORIES,
   ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,

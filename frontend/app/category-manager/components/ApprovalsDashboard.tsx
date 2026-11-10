@@ -93,6 +93,9 @@ export function ApprovalsDashboard() {
   const [selectedRequest, setSelectedRequest] = useState<ApprovalRequest | null>(null);
   const [pendingAction, setPendingAction] = useState<'APPROVE' | 'REJECT' | null>(null);
   const [actionRemarks, setActionRemarks] = useState<string>('');
+  const [actionApprover, setActionApprover] = useState<string>('Srinu Sir');
+  const [actionPassword, setActionPassword] = useState<string>('');
+  const [passwordError, setPasswordError] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
   // Summary Card Modal State
@@ -119,6 +122,26 @@ export function ApprovalsDashboard() {
     setTimeout(() => setToastMessage(null), 3500);
   }, []);
 
+  // Close Action Modal
+  const handleCloseActionModal = useCallback(() => {
+    setSelectedRequest(null);
+    setPendingAction(null);
+    setActionRemarks('');
+    setActionPassword('');
+    setPasswordError('');
+    setActionApprover('Srinu Sir');
+  }, []);
+
+  // Open Action Modal
+  const openActionModal = useCallback((req: ApprovalRequest, action: 'APPROVE' | 'REJECT') => {
+    setSelectedRequest(req);
+    setPendingAction(action);
+    setActionRemarks('');
+    setActionPassword('');
+    setPasswordError('');
+    setActionApprover(req.assigned_approver || 'Srinu Sir');
+  }, []);
+
   // Restore column preferences from localStorage
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -135,6 +158,24 @@ export function ApprovalsDashboard() {
       // Use defaults if parse fails
     }
   }, [sessionUser]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedRequest && pendingAction) {
+          handleCloseActionModal();
+        } else if (detailsRequest) {
+          setDetailsRequest(null);
+        } else if (isColumnSettingsOpen) {
+          setIsColumnSettingsOpen(false);
+        } else if (summaryModalState.isOpen) {
+          setSummaryModalState((prev) => ({ ...prev, isOpen: false }));
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRequest, pendingAction, detailsRequest, isColumnSettingsOpen, summaryModalState.isOpen, handleCloseActionModal]);
 
   // Load summary statistics
   const loadSummary = useCallback(async () => {
@@ -267,35 +308,60 @@ export function ApprovalsDashboard() {
   const handleActionConfirm = async () => {
     if (!selectedRequest || !pendingAction) return;
 
+    if (!actionPassword.trim()) {
+      setPasswordError(strings.passwordRequiredError);
+      return;
+    }
+    setPasswordError('');
+
     setIsProcessing(true);
-    const res = await processApprovalAction(selectedRequest.id, pendingAction, actionRemarks);
+    const res = await processApprovalAction(
+      selectedRequest.id,
+      pendingAction,
+      actionRemarks,
+      actionPassword,
+      actionApprover
+    );
     setIsProcessing(false);
 
     if (res.success) {
+      const finalStatus = pendingAction === 'APPROVE' ? 'Approved' : 'Rejected';
       showToast(
-        `Request ${selectedRequest.request_number} marked as ${
-          pendingAction === 'APPROVE' ? 'Approved' : 'Rejected'
-        }.`
+        `Request ${selectedRequest.request_number} marked as ${finalStatus}.`
       );
-      setSelectedRequest(null);
-      setPendingAction(null);
-      setActionRemarks('');
+      // Immediately reflect database confirmed status in local state
+      setApprovals((prev) =>
+        prev.map((item) =>
+          item.id === selectedRequest.id
+            ? {
+                ...item,
+                status: finalStatus,
+                approver_name: actionApprover,
+                approver_remarks: actionRemarks,
+              }
+            : item
+        )
+      );
+      handleCloseActionModal();
       if (detailsRequest?.id === selectedRequest.id) {
-        setDetailsRequest(null);
+        setDetailsRequest((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: finalStatus,
+                approver_name: actionApprover,
+                approver_remarks: actionRemarks,
+              }
+            : null
+        );
       }
       void loadSummary();
       void loadApprovals();
     } else {
-      showToast(res.error || 'Failed to process approval.');
+      setPasswordError(res.error || strings.invalidPasswordError);
+      showToast(res.error || strings.databaseSyncError);
     }
   };
-
-  // Close Action Modal
-  const handleCloseActionModal = useCallback(() => {
-    setSelectedRequest(null);
-    setPendingAction(null);
-    setActionRemarks('');
-  }, []);
 
   // Sort Header Handler
   const handleSort = (field: string) => {
@@ -948,10 +1014,7 @@ export function ApprovalsDashboard() {
                               <>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedRequest(req);
-                                    setPendingAction('APPROVE');
-                                  }}
+                                  onClick={() => openActionModal(req, 'APPROVE')}
                                   className="px-2 py-0.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded flex items-center gap-0.5 transition"
                                   title={strings.approveBtn}
                                 >
@@ -960,10 +1023,7 @@ export function ApprovalsDashboard() {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedRequest(req);
-                                    setPendingAction('REJECT');
-                                  }}
+                                  onClick={() => openActionModal(req, 'REJECT')}
                                   className="px-2 py-0.5 text-[11px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded flex items-center gap-0.5 transition"
                                   title={strings.rejectBtn}
                                 >
@@ -1040,8 +1100,16 @@ export function ApprovalsDashboard() {
 
       {/* 5. Column Settings Modal */}
       {isColumnSettingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-4 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in"
+          onClick={() => setIsColumnSettingsOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-4 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-3"
+          >
             <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <h3 className="font-bold text-slate-900 dark:text-white text-sm">
@@ -1145,8 +1213,16 @@ export function ApprovalsDashboard() {
 
       {/* 6. Approval Request Details Popup */}
       {detailsRequest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in"
+          onClick={() => setDetailsRequest(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <h3 className="font-bold text-slate-900 dark:text-white text-base">
@@ -1342,10 +1418,7 @@ export function ApprovalsDashboard() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedRequest(detailsRequest);
-                      setPendingAction('REJECT');
-                    }}
+                    onClick={() => openActionModal(detailsRequest, 'REJECT')}
                     className="px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1"
                   >
                     <X size={12} />
@@ -1354,10 +1427,7 @@ export function ApprovalsDashboard() {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedRequest(detailsRequest);
-                      setPendingAction('APPROVE');
-                    }}
+                    onClick={() => openActionModal(detailsRequest, 'APPROVE')}
                     className="px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg flex items-center gap-1 shadow-2xs"
                   >
                     <Check size={12} />
@@ -1372,8 +1442,16 @@ export function ApprovalsDashboard() {
 
       {/* 7. Action Confirmation Modal (Approve / Reject Workflow) */}
       {selectedRequest && pendingAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in"
+          onClick={handleCloseActionModal}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
+          >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <h3 className="font-bold text-slate-900 dark:text-white text-base">
                 {pendingAction === 'APPROVE' ? strings.confirmApprovalTitle : strings.confirmRejectionTitle}
@@ -1411,6 +1489,41 @@ export function ApprovalsDashboard() {
                 <span className="text-slate-400">{strings.colRequestedBy}:</span>
                 <span className="font-medium text-slate-800 dark:text-slate-200">{selectedRequest.maker_name}</span>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
+                {strings.approverLabel}
+              </label>
+              <select
+                value={actionApprover}
+                onChange={(e) => setActionApprover(e.target.value)}
+                className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="Srinu Sir">{strings.approverSrinu}</option>
+                <option value="Sudheer Sir">{strings.approverSudheer}</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
+                {strings.passwordLabel} <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={actionPassword}
+                onChange={(e) => {
+                  setActionPassword(e.target.value);
+                  if (passwordError) setPasswordError('');
+                }}
+                placeholder={strings.passwordPlaceholder}
+                className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
+                  passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+              />
+              {passwordError && (
+                <p className="text-[11px] text-rose-500 mt-1 font-medium">{passwordError}</p>
+              )}
             </div>
 
             <div>

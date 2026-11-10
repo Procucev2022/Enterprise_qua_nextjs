@@ -18,10 +18,11 @@ function extractActor(req) {
       role: req.user.role || 'admin',
     };
   }
+  const headers = req.headers || {};
   return {
     uuid: null,
-    name: req.headers['x-user-name'] || 'Management Authority',
-    email: req.headers['x-user-email'] || 'admin@procucev.com',
+    name: headers['x-user-name'] || 'Management Authority',
+    email: headers['x-user-email'] || 'admin@procucev.com',
     role: 'admin',
   };
 }
@@ -94,7 +95,11 @@ async function processAction(req, res) {
     return res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Failed to process approval action on ${req.params.id}`, err, 'APPROVAL_CONTROLLER');
-    return res.status(500).json({ success: false, error: 'Failed to process approval action.' });
+    const statusCode = err.statusCode || (err.message && err.message.toLowerCase().includes('password') ? 401 : 500);
+    return res.status(statusCode).json({
+      success: false,
+      error: err.message || 'Failed to process approval action.',
+    });
   }
 }
 
