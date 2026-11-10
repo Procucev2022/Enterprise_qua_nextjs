@@ -88,6 +88,20 @@ describe('zohoPaymentService', () => {
       );
     });
 
+    test('preserves the standard fetch Response API when a deadline is configured', async () => {
+      const response = new Response(JSON.stringify({ access_token: 'response-api-token', expires_in: 3600 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      global.fetch = jest.fn().mockResolvedValue(response);
+
+      await expect(zohoPaymentService.getValidAccessToken()).resolves.toBe('response-api-token');
+
+      expect(response).toBeInstanceOf(Response);
+      expect(response.headers.get('content-type')).toBe('application/json');
+      expect(typeof response.text).toBe('function');
+    });
+
     test('supports disabling the Zoho HTTP deadline explicitly in runtime configuration', async () => {
       ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS = 0;
       global.fetch = jest.fn().mockResolvedValue(jsonResponse(200, { access_token: 'no-timeout-token', expires_in: 3600 }));

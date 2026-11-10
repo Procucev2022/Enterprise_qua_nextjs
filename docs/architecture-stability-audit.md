@@ -656,3 +656,9 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 ## PR #416 conflict and check status
 
 - GitHub shows PR #416 merged into `test-v3` on 2026-11-10 at merge commit `3b6475590da90f786c05b7df8e1eadf01843c698`; the merge history includes explicit conflict-resolution commits. All five check runs on the final PR head succeeded: backend migrations and coverage, frontend build/lint/typecheck/coverage, master quality summary, review, and Copilot review request. The merge commit's Cloudflare test deployment also succeeded.
+
+## Zoho HTTP timeout response compatibility
+
+- The latest PR review identified that `fetchWithRetry` returned a custom `{ ok, status, json }` object when deadlines were enabled, which hid standard Fetch `Response` members from future callers.
+- The helper now returns the original `Response` and wraps its JSON body reader only to keep the abort deadline active until parsing completes and preserve the structured timeout error. A regression test verifies `Response` identity and its standard headers/text interface alongside the existing timeout tests.
+- Verification on 2026-11-11: the full workspace gate passed with 209 backend suites / 6,015 tests and 162/162 files meeting all per-file 90% thresholds (97.93% statements, 92.53% branches, 98.75% functions, 98.62% lines), plus 149 frontend suites / 3,796 tests and 171/171 files meeting all thresholds (97.92%, 93.04%, 97.95%, 98.70%). Build, typecheck, lint, workspace coverage, schema parity, schema checker tests, and schema-file verification passed.

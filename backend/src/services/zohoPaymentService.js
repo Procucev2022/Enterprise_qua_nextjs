@@ -50,27 +50,25 @@ async function fetchWithRetry(url, init, attempt = 1) {
 
     // Keep the deadline alive through body consumption, not only until the
     // response headers arrive. Every Zoho caller reads the JSON body next.
-    return {
-      ok: response.ok,
-      status: response.status,
-      json: async (...args) => {
-        try {
-          return await response.json(...args);
-        } catch (err) {
-          if (controller.signal.aborted) {
-            const timeoutError = Object.assign(new Error(`Zoho request timed out after ${timeoutMs}ms.`), {
-              code: 'ZOHO_REQUEST_TIMEOUT',
-              cause: err,
-            });
-            logger.error('Zoho HTTP request exceeded its configured timeout', { timeoutMs, attempt }, 'ZOHO_PAYMENT_SERVICE');
-            throw timeoutError;
-          }
-          throw err;
-        } finally {
-          clearTimeout(timeout);
+    const readJson = response.json.bind(response);
+    response.json = async (...args) => {
+      try {
+        return await readJson(...args);
+      } catch (err) {
+        if (controller.signal.aborted) {
+          const timeoutError = Object.assign(new Error(`Zoho request timed out after ${timeoutMs}ms.`), {
+            code: 'ZOHO_REQUEST_TIMEOUT',
+            cause: err,
+          });
+          logger.error('Zoho HTTP request exceeded its configured timeout', { timeoutMs, attempt }, 'ZOHO_PAYMENT_SERVICE');
+          throw timeoutError;
         }
-      },
+        throw err;
+      } finally {
+        clearTimeout(timeout);
+      }
     };
+    return response;
   } catch (err) {
     if (timeout) clearTimeout(timeout);
     if (controller.signal.aborted) {
