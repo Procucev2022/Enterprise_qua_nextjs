@@ -23,8 +23,7 @@
   },
   "env": {
     "dev": {
-      "name": "procucev-enterprise-frontend",
-      "account_id": "97a5dd65ad21c0f5dcd8547de147c806",
+      "name": "procucev-enterprise-frontend-stage",
       "vars": {
         "NODE_BACKEND_URL": "https://procucev-enterprise-backend-test.anshul-goel.workers.dev",
         "NEXT_PUBLIC_BACKEND_URL": "https://procucev-enterprise-backend-test.anshul-goel.workers.dev"
