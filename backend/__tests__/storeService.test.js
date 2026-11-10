@@ -3445,12 +3445,38 @@ describe('Store Service & Business Operations', () => {
       const originalPool = poolModule.pool;
       poolModule.pool = {};
       const dbOnlyLink = { id: 'pl-db-only-1', zohoPaymentLinkId: 'zoho-db-only-1', status: 'CREATED' };
-      const spy = jest.spyOn(domainQueries, 'getPaymentLinksFromDB').mockResolvedValueOnce([dbOnlyLink]);
+      storeService.createPaymentLinkRecord({ id: 'pl-cached-stale', zohoPaymentLinkId: 'zoho-stale', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'CREATED' });
+      const spy = jest.spyOn(domainQueries, 'getPaymentLinksByStatusFromDB').mockResolvedValueOnce([dbOnlyLink]);
       try {
         const pending = await storeService.getPaymentLinksByStatusIn(['CREATED', 'pending']);
-        expect(pending.some((l) => l.id === 'pl-db-only-1')).toBe(true);
+        expect(pending).toEqual([dbOnlyLink]);
+        expect(domainQueries.getPaymentLinksByStatusFromDB).toHaveBeenCalledWith(['CREATED', 'pending']);
+        expect(storeService.paymentLinks.some((link) => link.id === 'pl-cached-stale')).toBe(false);
       } finally {
         spy.mockRestore();
+        poolModule.pool = originalPool;
+      }
+    });
+
+    test('getPaymentLinksByStatusIn logs durable query failures and preserves the error', async () => {
+      const poolModule = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const logger = require('../src/services/loggerService').logger;
+      const originalPool = poolModule.pool;
+      poolModule.pool = {};
+      const failure = new Error('payment storage unavailable');
+      const spy = jest.spyOn(domainQueries, 'getPaymentLinksByStatusFromDB').mockRejectedValueOnce(failure);
+      const logSpy = jest.spyOn(logger, 'error');
+      try {
+        await expect(storeService.getPaymentLinksByStatusIn(['CREATED'])).rejects.toBe(failure);
+        expect(logSpy).toHaveBeenCalledWith(
+          'Failed to load reconcilable payment links from authoritative storage',
+          expect.objectContaining({ error: failure, statuses: ['CREATED'], operation: 'get-payment-links-by-status' }),
+          'STORE_SERVICE'
+        );
+      } finally {
+        spy.mockRestore();
+        logSpy.mockRestore();
         poolModule.pool = originalPool;
       }
     });

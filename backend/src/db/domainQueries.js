@@ -2143,6 +2143,34 @@ async function getPaymentLinksFromDB(limit = null) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
+/**
+ * Fetch the oldest payment links in the requested statuses for scheduled
+ * reconciliation. Filtering in SQL lets the status index serve this query
+ * and prevents newer terminal links from hiding older unpaid links behind a
+ * fixed "latest N" window. The bounded oldest-first batch makes progress
+ * through a backlog without loading the full payment_links table into a
+ * Worker isolate.
+ */
+async function getPaymentLinksByStatusFromDB(statuses, limit = 100) {
+  if (!pool.hasStorage() || !Array.isArray(statuses)) return [];
+  const safeStatuses = [...new Set(statuses.map((status) => String(status || '').trim()).filter(Boolean))];
+  if (safeStatuses.length === 0) return [];
+
+  const safeLimit = Math.min(Math.max(Math.floor(Number(limit) || 100), 1), 100);
+  const statusParameters = safeStatuses.map((_, index) => `$${index + 1}`).join(', ');
+  const limitParameter = `$${safeStatuses.length + 1}`;
+  const params = [...safeStatuses, safeLimit];
+  const result = await pool.query(
+    `SELECT raw FROM payment_links
+     WHERE status IN (${statusParameters})
+     ORDER BY updated_at ASC
+     LIMIT ${limitParameter}`,
+    params,
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
 async function getPaymentLinksByVendorFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
@@ -2972,6 +3000,7 @@ module.exports = {
   getZohoOAuthTokenFromDB,
   upsertZohoOAuthTokenInDB,
   getPaymentLinksFromDB,
+  getPaymentLinksByStatusFromDB,
   getPaymentLinksByVendorFromDB,
   getPaymentLinksByBuyerFromDB,
   getPaymentLinkByIdFromDB,

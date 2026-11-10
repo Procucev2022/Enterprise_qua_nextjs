@@ -2888,14 +2888,33 @@ class StoreService {
    */
   async getPaymentLinksByStatusIn(statuses) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getPaymentLinksFromDB(100);
-      const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
-      for (const link of allFromDB) {
-        byId.set(link.id, link);
+      const requestedStatuses = new Set(
+        (Array.isArray(statuses) ? statuses : []).map((status) => String(status || '').trim()).filter(Boolean)
+      );
+      if (requestedStatuses.size === 0) return [];
+
+      try {
+        const fromDB = await domainQueries.getPaymentLinksByStatusFromDB([...requestedStatuses]);
+        const databaseIds = new Set(fromDB.map((link) => link.id));
+        const byId = new Map(
+          this.paymentLinks
+            .filter((link) => !requestedStatuses.has(link.status) && !databaseIds.has(link.id))
+            .map((link) => [link.id, link])
+        );
+        for (const link of fromDB) byId.set(link.id, link);
+        this.paymentLinks = Array.from(byId.values());
+        return fromDB;
+      } catch (error) {
+        logger.error('Failed to load reconcilable payment links from authoritative storage', {
+          error,
+          statuses: [...requestedStatuses],
+          operation: 'get-payment-links-by-status',
+        }, 'STORE_SERVICE');
+        throw error;
       }
-      this.paymentLinks = Array.from(byId.values());
     }
-    return this.paymentLinks.filter((l) => statuses.includes(l.status));
+    const requestedStatuses = new Set(Array.isArray(statuses) ? statuses : []);
+    return this.paymentLinks.filter((link) => requestedStatuses.has(link.status));
   }
 
   /**

@@ -1751,6 +1751,11 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.getPaymentLinksFromDB()).resolves.toEqual([]);
     });
 
+    test('not configured: getPaymentLinksByStatusFromDB returns an empty array', async () => {
+      pool.pool = null;
+      await expect(domainQueries.getPaymentLinksByStatusFromDB(['CREATED'])).resolves.toEqual([]);
+    });
+
     test('not configured: getPaymentLinkByZohoIdFromDB returns null', async () => {
       pool.pool = null;
       await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-1')).resolves.toBeNull();
@@ -1767,6 +1772,29 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       await expect(domainQueries.getPaymentLinksFromDB()).resolves.toEqual([link]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
+    });
+
+    test('getPaymentLinksByStatusFromDB filters in SQL and bounds an oldest-first batch', async () => {
+      const olderLink = { id: 'pl-old', status: 'CREATED' };
+      const newerLink = { id: 'pl-new', status: 'pending' };
+      pool.pool = {
+        query: jest.fn().mockResolvedValue({ rows: [{ raw: olderLink }, { raw: newerLink }] }),
+      };
+
+      await expect(domainQueries.getPaymentLinksByStatusFromDB(['CREATED', 'pending', 'CREATED'], 25))
+        .resolves.toEqual([olderLink, newerLink]);
+      expect(pool.pool.query).toHaveBeenCalledWith(
+        expect.stringMatching(/WHERE status IN \(\$1, \$2\)[\s\S]*ORDER BY updated_at ASC[\s\S]*LIMIT \$3/),
+        ['CREATED', 'pending', 25]
+      );
+    });
+
+    test('getPaymentLinksByStatusFromDB avoids an unfiltered read when statuses are empty', async () => {
+      const query = jest.fn();
+      pool.pool = { query };
+
+      await expect(domainQueries.getPaymentLinksByStatusFromDB(['', null], 10)).resolves.toEqual([]);
+      expect(query).not.toHaveBeenCalled();
     });
 
     test('getPaymentLinkByZohoIdFromDB looks up by the Zoho id and returns its raw object', async () => {
@@ -1790,6 +1818,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
 
       await expect(domainQueries.getPaymentLinksFromDB()).resolves.toEqual([link]);
+    });
+
+    test('getPaymentLinksByStatusFromDB parses D1 text rows', async () => {
+      const link = { id: 'pl-pending', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
+
+      await expect(domainQueries.getPaymentLinksByStatusFromDB(['CREATED'])).resolves.toEqual([link]);
     });
 
     test('getPaymentLinkByZohoIdFromDB parses a string raw column (D1)', async () => {
