@@ -809,6 +809,87 @@ describe('Category Manager Screens Suite', () => {
       expect(screen.getByText('Hybrid Base Network')).toBeInTheDocument();
       expect(screen.getByText('360° AI Evaluated Roster')).toBeInTheDocument();
     });
+
+    test('SpendDashboard handles edge-case RFQs and audit logs in mode calculation (missing mode, missing follow-up, missing audit rfqNumber)', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-nomode',
+                  rfqNumber: 'RFQ-NOMODE',
+                  title: 'RFQ With No Sourcing Mode',
+                  sourcingMode: undefined,
+                  status: 'Quotes Pending',
+                },
+                {
+                  id: 'rfq-empty-mode',
+                  rfqNumber: 'RFQ-EMPTY-MODE',
+                  title: 'RFQ With Empty Sourcing Mode',
+                  sourcingMode: '',
+                  status: 'Quotes Pending',
+                },
+                {
+                  id: 'rfq-m1-nofollowup',
+                  rfqNumber: 'RFQ-M1-NOFOLLOWUP',
+                  title: 'M1 RFQ with missing follow-up data',
+                  sourcingMode: 'MODE 1',
+                  status: 'Quotes Pending',
+                  followUpData: undefined,
+                },
+                {
+                  id: undefined,
+                  rfqNumber: 'RFQ-M2-NOID',
+                  title: 'M2 RFQ without id',
+                  sourcingMode: 'MODE 2',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 0, respondedCount: 0 },
+                },
+                {
+                  id: 'rfq-m3-norfqnum',
+                  rfqNumber: undefined,
+                  title: 'M3 RFQ without rfqNumber',
+                  sourcingMode: 'MODE 3',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 0, respondedCount: 0 },
+                },
+              ],
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [
+                  { id: 'a-nonum', action: 'Vendor downloaded RFQ specification for undefined' },
+                  { id: 'a-notset', rfqNumber: 'RFQ-UNKNOWN', action: 'Vendor downloaded RFQ specification for other' },
+                ],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
+      await waitFor(() => expect(screen.getByText('Private Client Roster')).toBeInTheDocument());
+      expect(screen.getByText('Hybrid Base Network')).toBeInTheDocument();
+      expect(screen.getByText('360° AI Evaluated Roster')).toBeInTheDocument();
+    });
   });
 
   describe('BuyerConsole Screen', () => {
