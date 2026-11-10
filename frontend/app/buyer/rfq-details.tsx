@@ -1036,7 +1036,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   id: `msg-${Date.now()}`,
                   senderRole: 'buyer' as const,
                   senderName,
-                  senderEmail,
+                  // senderEmail intentionally omitted: buyer email must not be
+                  // exposed to vendor-side views via the inquiry message thread.
                   message: textToSend,
                   timestamp: new Date().toISOString(),
                 };
@@ -1062,7 +1063,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             id: `msg-${Date.now()}`,
             senderRole: 'buyer' as const,
             senderName,
-            senderEmail,
+            // senderEmail intentionally omitted: buyer email must not be
+            // exposed to vendor-side views via the inquiry message thread.
             message: textToSend,
             timestamp,
           };
@@ -2537,10 +2539,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                     </span>
                   </div>
                   <div className="text-[10px] text-slate-400 flex items-center gap-2 truncate">
-                    {(activeRfq.raisedByEmail || activeRfq.sourceEmail) && (
-                      <span className="mono truncate">{activeRfq.raisedByEmail || activeRfq.sourceEmail}</span>
-                    )}
-                    <span>•</span>
                     <span className="mono font-semibold text-slate-500 dark:text-gray-400">RFQ #{activeRfq.rfqNumber}</span>
                   </div>
                 </div>

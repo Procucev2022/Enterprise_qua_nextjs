@@ -183,31 +183,31 @@ function serveVendorRFQs(rfqNumbers: string[]) {
       json: async () =>
         /\/api\/rfqs(\?|$)/.test(String(url))
           ? {
-              success: true,
-              data: rfqNumbers.map((rfqNumber, idx) => ({
-                id: `rfq-${idx}`,
-                rfqNumber,
-                title: `Opportunity ${rfqNumber}`,
-                category: "Engineering Spares - Mechanical",
-                sourcingMode: idx === 0 ? "mode_1" : "mode_3",
-                status: "Quotes Pending",
-                quotesCount: 0,
-                budget: 150000,
-                targetDeliveryDate: "2026-09-15",
-                createdAt: "2026-09-04T10:00:00.000Z",
-                deliveryLocation: "Pune Plant",
-                // Only the first RFQ matches MOCK_MY_VENDOR's addedByBuyerCompany,
-                // so isOwnBuyerRfq only unlocks that one — the rest stay locked
-                // below connect/select, matching this function's own doc comment.
-                buyerAccountName:
-                  idx === 0
-                    ? MOCK_MY_VENDOR.addedByBuyerCompany
-                    : "Some Other Buyer Ltd.",
-                extractedEntities: [],
-                quotes: [],
-                chasingActive: false,
-              })),
-            }
+            success: true,
+            data: rfqNumbers.map((rfqNumber, idx) => ({
+              id: `rfq-${idx}`,
+              rfqNumber,
+              title: `Opportunity ${rfqNumber}`,
+              category: "Engineering Spares - Mechanical",
+              sourcingMode: idx === 0 ? "mode_1" : "mode_3",
+              status: "Quotes Pending",
+              quotesCount: 0,
+              budget: 150000,
+              targetDeliveryDate: "2026-09-15",
+              createdAt: "2026-09-04T10:00:00.000Z",
+              deliveryLocation: "Pune Plant",
+              // Only the first RFQ matches MOCK_MY_VENDOR's addedByBuyerCompany,
+              // so isOwnBuyerRfq only unlocks that one — the rest stay locked
+              // below connect/select, matching this function's own doc comment.
+              buyerAccountName:
+                idx === 0
+                  ? MOCK_MY_VENDOR.addedByBuyerCompany
+                  : "Some Other Buyer Ltd.",
+              extractedEntities: [],
+              quotes: [] as any[],
+              chasingActive: false,
+            })),
+          }
           : { success: true, data: {} },
     }),
   );
@@ -358,19 +358,15 @@ describe("QuotationForm Comprehensive Suite", () => {
     unmountConnect();
   });
 
-  test("Buyer details modal interactions: open, copy company name with timer, and close", async () => {
+  test("Buyer details privacy: company name displays without modal trigger and contact details remain confidential", async () => {
     const onBack = jest.fn();
     const onSubmitSuccess = jest.fn();
 
-    // Opportunities are derived from RFQs fetched from GET /api/rfqs, not from
-    // the bootstrap payload (that endpoint is anonymous and dropped RFQs from
-    // its response — serving the global list there is what leaked RFQs
-    // between buyers). Both rows this test needs share this vendor's real
-    // addedByBuyerCompany relationship ('Larsen & Toubro Ltd. (L&T)', same as
-    // MOCK_MY_VENDOR) — RFQ-2026-00421 has a BUYER_CONTACTS_MAP entry,
-    // RFQ-2026-00423 doesn't, so the second row exercises the fallback
-    // baseBuyerData branch while still being unlocked via the real
-    // direct-buyer relationship (not a submitted quote).
+    // Opportunities are derived from RFQs fetched from GET /api/rfqs.
+    // Both rows share this vendor's real addedByBuyerCompany relationship
+    // ('Larsen & Toubro Ltd. (L&T)', same as MOCK_MY_VENDOR).
+    // Under the buyer privacy policy, only the company name is displayed to vendors,
+    // and no contact details popup or trigger button is rendered.
     global.fetch = jest.fn((url: string, options: any = {}) => {
       if (/\/api\/rfqs(\?|$)/.test(url)) {
         return Promise.resolve({
@@ -391,7 +387,7 @@ describe("QuotationForm Comprehensive Suite", () => {
                 budget: 150000,
                 createdAt: "2026-09-01",
                 chasingActive: false,
-                quotes: [],
+                quotes: [] as any[],
                 extractedEntities: [],
               },
               {
@@ -407,7 +403,7 @@ describe("QuotationForm Comprehensive Suite", () => {
                 budget: 85000,
                 createdAt: "2026-09-01",
                 chasingActive: false,
-                quotes: [],
+                quotes: [] as any[],
                 extractedEntities: [],
               },
             ],
@@ -426,67 +422,23 @@ describe("QuotationForm Comprehensive Suite", () => {
       />,
     );
 
-    // Opportunities are derived from RFQs fetched from the API, so the rows appear
-    // only once that request settles. The table element itself renders immediately
-    // with an empty body, so waiting on it would resolve before any row exists —
-    // wait for the per-row buttons instead. First button is RFQ-2026-00421 (in
-    // BUYER_CONTACTS_MAP, unlocked via this vendor's real addedByBuyerCompany
-    // relationship).
-    const infoBtns = await waitFor(() => {
-      const btns = screen.getAllByRole("button", { name: /Buyer Details/i });
-      expect(btns.length).toBeGreaterThan(1);
-      return btns;
+    // Wait for the opportunities to render with buyer company names
+    await waitFor(() => {
+      const companyNames = screen.getAllByText("Larsen & Toubro Ltd. (L&T)");
+      expect(companyNames.length).toBeGreaterThanOrEqual(2);
     });
-    fireEvent.click(infoBtns[0]);
 
-    expect(screen.getByText(/Buyer Contact Details/i)).toBeInTheDocument();
-    expect(screen.getByText(/Direct Client Roster/i)).toBeInTheDocument();
+    // Ensure no Buyer Details buttons exist to trigger contact popups
+    expect(screen.queryAllByRole("button", { name: /Buyer Details/i })).toHaveLength(0);
 
-    // Copy Company Name button
-    const copyBtn = screen.getByTitle(/Copy Company Name/i);
-    fireEvent.click(copyBtn);
-    expect(navigator.clipboard.writeText).toHaveBeenCalled();
-    expect(screen.getByText(/Copied!/i)).toBeInTheDocument();
+    // Ensure Buyer Contact Details popup is not rendered
+    expect(screen.queryByText(/Buyer Contact Details/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Direct Client Roster/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Rajesh Sharma/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/client@procucev\.com/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\+91 98201 44520/)).not.toBeInTheDocument();
 
-    // Advance timer to test setCopiedField(null)
-    act(() => {
-      jest.advanceTimersByTime(2500);
-    });
-    expect(screen.queryByText(/Copied!/i)).not.toBeInTheDocument();
-
-    // Close via Close button (triggers onSubmitSuccess)
-    const closeBtn = screen.getByRole("button", { name: /^Close$/i });
-    fireEvent.click(closeBtn);
-    expect(onSubmitSuccess).toHaveBeenCalledTimes(1);
-
-    // Open second info button (RFQ-2026-00423 - no BUYER_CONTACTS_MAP entry,
-    // so this hits the fallback baseBuyerData branch, still unlocked via the
-    // same real addedByBuyerCompany relationship as RFQ-2026-00421 above)
-    fireEvent.click(infoBtns[1]);
-    expect(screen.getByText(/Buyer Contact Details/i)).toBeInTheDocument();
-
-    // Close via X button in header
-    const closeXBtn = screen.getByTitle(/Close Buyer Details Modal/i);
-    fireEvent.click(closeXBtn);
     unmount();
-
-    // Render without onSubmitSuccess to test fallback branch on modal close
-    const { unmount: unmountNoCallback } = renderWithProvider(
-      <QuotationFormCustomWrapper
-        onBack={onBack}
-        onSubmitSuccess={undefined}
-        withSession
-      />,
-    );
-    const infoBtnsNoCallback = await waitFor(() => {
-      const btns = screen.getAllByRole("button", { name: /Buyer Details/i });
-      expect(btns.length).toBeGreaterThan(0);
-      return btns;
-    });
-    fireEvent.click(infoBtnsNoCallback[0]);
-    const closeBtnNoCallback = screen.getByRole("button", { name: /^Close$/i });
-    fireEvent.click(closeBtnNoCallback);
-    unmountNoCallback();
   });
 
   test("loads the caller's own vendor record on mount", async () => {
@@ -1118,7 +1070,7 @@ describe("QuotationForm Comprehensive Suite", () => {
                 // Not in the isOwnBuyerRfq allow-list, and no submittedAt on
                 // the quote — exercises the "-" date fallback, the
                 // non-"PO Generated" status branch, and the
-                // "Buyer Details Unlocked (Quote Submitted)" title branch.
+                // unlocked buyer company (canViewBuyerDetails) branch.
                 id: "rfq-real-2",
                 rfqNumber: "RFQ-2026-00501",
                 title: "HVAC Air Handling Unit & Smart Chiller Control",
@@ -1428,5 +1380,106 @@ describe("QuotationForm Comprehensive Suite", () => {
     if (xBtn) {
       fireEvent.click(xBtn);
     }
+  });
+
+  test("submits quote for a V0 network RFQ, saves quotation under Your Bid, updates status to Quote Submitted, and decrements credits", async () => {
+    const v0Rfq = {
+      ...DEFAULT_RFQ,
+      id: "rfq-v0-123",
+      rfqNumber: "RFQ260611583677",
+      title: "Industrial Machinery and Spare Parts",
+      sourcingMode: "mode_0",
+      buyerAccountName: "Procucev Network Sourced",
+      quotes: [] as any[],
+    };
+
+    const updatedV0Rfq = {
+      ...v0Rfq,
+      quotes: [
+        {
+          id: "q-1",
+          vendorId: MOCK_MY_VENDOR.id,
+          vendorName: MOCK_MY_VENDOR.name,
+          vendorEmail: MOCK_MY_VENDOR.email,
+          totalPrice: 25000,
+          unitPrice: 25000,
+          submittedAt: new Date().toISOString(),
+        },
+      ],
+    };
+
+    let currentRfq = v0Rfq;
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      const method = options.method || "GET";
+      if (/\/api\/vendors\/[^/]+$/.test(url) && method === "GET") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { ...MOCK_MY_VENDOR, freeQuotationCredits: 5 },
+          }),
+        });
+      }
+      if (/\/api\/rfqs\/[^/]+\/quotes$/.test(url) && method === "POST") {
+        currentRfq = updatedV0Rfq;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: updatedV0Rfq,
+            freeCreditsRemaining: 4,
+          }),
+        });
+      }
+      if (/\/api\/rfqs(\?|$)/.test(url) && method === "GET") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: [currentRfq] }),
+        });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    authClient.setSession(
+      {
+        id: "user-1",
+        email: "vendor@test.com",
+        name: "Test Vendor Co",
+        role: "vendor",
+        orgId: "org-1",
+        orgName: "Test Vendor Co",
+      },
+      "fake-token-123",
+    );
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={jest.fn()} withSession customSubscription="free" />,
+    );
+
+    // Initial state: credits 5 Free Left, No bid submitted
+    await waitFor(() => {
+      expect(screen.getByText(/5 Free Left/i)).toBeInTheDocument();
+      expect(screen.getByText(/No bid submitted/i)).toBeInTheDocument();
+    });
+
+    const submitBtns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+    fireEvent.click(submitBtns[0]);
+
+    const priceInputs = document.querySelectorAll('input[type="number"]');
+    fireEvent.change(priceInputs[0], { target: { value: "25000" } });
+
+    const submitQuotationBtn = screen.getByRole("button", {
+      name: /Submit Quotation/i,
+    });
+    await act(async () => {
+      fireEvent.click(submitQuotationBtn);
+    });
+
+    // Verify credits decremented from 5 to 4 Free Left and "Your Bid" displays the submitted quotation
+    await waitFor(() => {
+      expect(screen.getByText(/4 Free Left/i)).toBeInTheDocument();
+      expect(screen.getByText("₹25,000")).toBeInTheDocument();
+      expect(screen.getByText("Quote Submitted")).toBeInTheDocument();
+    });
   });
 });

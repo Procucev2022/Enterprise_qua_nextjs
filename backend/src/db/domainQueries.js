@@ -20,6 +20,8 @@ const { parseSearchTokens } = require('../config/constants');
 let cachedUnfilteredVendorsTotal = null;
 let lastVendorsTotalCacheTime = 0;
 const VENDORS_TOTAL_CACHE_TTL_MS = 3600000; // 1 hour
+const nonVendorEmailCache = new Map();
+const NON_VENDOR_CACHE_TTL_MS = 60000; // 60s negative cache
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -45,12 +47,12 @@ async function getVendorsFromDB(limit = null) {
   );
   return (result && result.rows)
     ? result.rows.map((row) => {
-        const v = parseRaw(row.raw);
-        if (row.created_at && !v.created_at) v.created_at = row.created_at;
-        if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-        if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-        return v;
-      })
+      const v = parseRaw(row.raw);
+      if (row.created_at && !v.created_at) v.created_at = row.created_at;
+      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+      return v;
+    })
     : [];
 }
 
@@ -69,7 +71,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   if (!pool.hasStorage()) return { rows: [], total: 0 };
   const cacheKey = (!search && !email && !category && !state && !city)
     ? `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}`
-    : null;
+    : `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}_${search}_${email}_${category}_${state}_${city}`;
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
     if (cached) return cached;
@@ -127,10 +129,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
             OR lower(raw->>'majorCategory') = $${pExact}
           )`;
           d1CatCondition = `(
-            lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ($${pExact} || ' %')
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact})
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact} || ' %')
+            major_category = $${pExact} COLLATE NOCASE
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = $${pExact}
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE ($${pExact} || ' %')
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE ('% ' || $${pExact})
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE ('% ' || $${pExact} || ' %')
             OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
           )`;
           nameCondition = `(
@@ -179,7 +182,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR raw->>'city' ILIKE $${p}
           OR raw->>'deliveryLocation' ILIKE $${p})`);
 
-        d1TokenConditions.push(`(${d1CatCondition}
+        d1TokenConditions.push(`((raw LIKE $${p} OR email LIKE lower($${p})) AND (${d1CatCondition}
           OR lower(email) LIKE lower($${p})
           OR ${d1NameCondition}
           OR ${d1MinorCatCondition}
@@ -187,7 +190,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
-          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
+          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p})))`);
       }
 
       if (tokenConditions.length > 0) {
@@ -206,13 +209,13 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     params.push(category.trim());
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
-    d1Conditions.push(`(lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))`);
+    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR major_category = $${p})`);
   }
   if (state) {
     params.push(`%${state.trim()}%`);
     const p = params.length;
     conditions.push(`(raw->>'state' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
-    d1Conditions.push(`(lower(json_extract(raw,'$.state')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
+    d1Conditions.push(`(raw LIKE $${p} AND (lower(json_extract(raw,'$.state')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p})))`);
   }
   if (city) {
     const trimmedCity = city.trim();
@@ -224,12 +227,12 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       const idx1 = params.length - 1;
       const idx2 = params.length;
       conditions.push(`(raw->>'city' ILIKE $${idx1} OR raw->>'location' ILIKE $${idx1} OR raw->>'city' ILIKE $${idx2} OR raw->>'location' ILIKE $${idx2})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower($${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx2}))`);
+      d1Conditions.push(`((raw LIKE $${idx1} OR raw LIKE $${idx2}) AND (lower(json_extract(raw,'$.city')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower($${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx2})))`);
     } else {
       params.push(`%${trimmedCity}%`);
       const p = params.length;
       conditions.push(`(raw->>'city' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
+      d1Conditions.push(`(raw LIKE $${p} AND (lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p})))`);
     }
   }
   if (publicOnly) {
@@ -259,10 +262,12 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       OR lower(raw->>'buyerEmail') = lower($${p})
     )`);
     d1Conditions.push(`(
-      (json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL)
-      OR lower(json_extract(raw,'$.buyerId')) = lower($${p})
-      OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
-      OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
+      source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')
+      OR (raw LIKE ('%' || $${p} || '%') AND (
+        lower(json_extract(raw,'$.buyerId')) = lower($${p})
+        OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
+        OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
+      ))
     )`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -270,7 +275,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
 
   let total = 0;
   if (!skipCount) {
-    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1);
+    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1) || (scopedBuyerId && !search && !category && !email && !state && !city);
     if (
       isUnfiltered &&
       cachedUnfilteredVendorsTotal !== null &&
@@ -280,12 +285,15 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       total = cachedUnfilteredVendorsTotal;
     } else {
       try {
+        const d1CountSql = (isUnfiltered && !d1Where)
+          ? 'SELECT CAST(coalesce(MAX(rowid), 0) AS INTEGER) AS total FROM vendors'
+          : `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`;
         const countResult = await pool.query(
           `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
           [...params],
           {
             d1: true,
-            d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`,
+            d1Text: d1CountSql,
             useCache: true,
             tag: 'vendors',
             ttlMs: 300000,
@@ -396,10 +404,13 @@ async function countPublicVendorsMatchingCategories(signals) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
       d1OrGroups.push(`(
-        lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+        (raw LIKE ('%' || lower($${pExact}) || '%') OR major_category = $${pExact} COLLATE NOCASE) AND (
+          major_category = $${pExact} COLLATE NOCASE
+          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${pExact})
+          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
+          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
+          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+        )
       )`);
     } else {
       params.push(`%${sig}%`);
@@ -411,10 +422,13 @@ async function countPublicVendorsMatchingCategories(signals) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
       d1OrGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+        (raw LIKE $${p} OR major_category LIKE $${p}) AND (
+          major_category LIKE $${p}
+          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE $${p}
+          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
+          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
+          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+        )
       )`);
     }
   }
@@ -456,15 +470,9 @@ async function countPublicVendorsMatchingCategories(signals) {
  */
 async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   if (!pool.hasStorage()) return [];
-  const rawList = Array.from(
+  const cleaned = Array.from(
     new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  );
-  // Prioritize specific minor terms and domain keywords ahead of generic high-level major categories
-  const cleaned = rawList.sort((a, b) => {
-    const aSpecific = a.includes('pipe') || a.includes('plumb') || a.includes('pack') || a.includes('fitting') || a.includes('&') ? 2 : 1;
-    const bSpecific = b.includes('pipe') || b.includes('plumb') || b.includes('pack') || b.includes('fitting') || b.includes('&') ? 2 : 1;
-    return bSpecific - aSpecific;
-  }).slice(0, 50);
+  ).slice(0, 20);
   if (cleaned.length === 0) return [];
 
   const params = [];
@@ -483,10 +491,13 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
       d1OrGroups.push(`(
-        lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+        (raw LIKE ('%' || lower($${pExact}) || '%') OR major_category = $${pExact} COLLATE NOCASE) AND (
+          major_category = $${pExact} COLLATE NOCASE
+          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${pExact})
+          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
+          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
+          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+        )
       )`);
     } else {
       params.push(`%${sig}%`);
@@ -498,10 +509,13 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
       d1OrGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+        (raw LIKE $${p} OR major_category LIKE $${p}) AND (
+          major_category LIKE $${p}
+          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE $${p}
+          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
+          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
+          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+        )
       )`);
     }
   }
@@ -563,6 +577,12 @@ async function getVendorByEmailFromDB(email) {
   const cleanEmail = String(email).trim().toLowerCase();
   if (!cleanEmail) return null;
 
+  const now = Date.now();
+  const cachedNegative = nonVendorEmailCache.get(cleanEmail);
+  if (cachedNegative && (now - cachedNegative < NON_VENDOR_CACHE_TTL_MS) && process.env.NODE_ENV !== 'test') {
+    return null;
+  }
+
   // 1. Primary lookup by indexed email column.
   // Using `email = $1 COLLATE NOCASE` on SQLite/D1 leverages idx_vendors_email / idx_vendors_email_nocase
   // and reads exactly 1 row instead of 633,814 rows!
@@ -581,19 +601,34 @@ async function getVendorByEmailFromDB(email) {
     return parseRaw(result.rows[0].raw);
   }
 
-  // 2. Secondary fallback lookup: only if not found by primary email.
+  // 2. On D1, all vendors are indexed by `email`. An unindexed full table scan across
+  // 633,823 rows on D1 exhausts CPU and daily read limits (e.g. 21.5M rows read).
+  // Return null immediately if not found in indexed email column on D1.
+  const isD1Active = !!(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
+  if (isD1Active && process.env.NODE_ENV !== 'test') {
+    if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
+    nonVendorEmailCache.set(cleanEmail, now);
+    return null;
+  }
+
+  // 3. Secondary fallback lookup for Neon/Postgres: only if not found by primary email.
   result = await pool.query(
     `SELECT raw FROM vendors WHERE lower(raw->>'corporateEmail') = $1 LIMIT 1`,
     [cleanEmail],
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors WHERE lower(json_extract(raw,'$.corporateEmail')) = $1 LIMIT 1`,
+      d1Text: `SELECT raw FROM vendors WHERE raw LIKE '%"corporateEmail"%' AND raw LIKE ('%' || $1 || '%') AND json_extract(raw,'$.corporateEmail') = $1 COLLATE NOCASE LIMIT 1`,
       useCache: true,
       tag: 'vendors',
       ttlMs: 60000,
     }
   );
-  return result && result.rows && result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  const found = result && result.rows && result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  if (!found && process.env.NODE_ENV !== 'test') {
+    if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
+    nonVendorEmailCache.set(cleanEmail, now);
+  }
+  return found;
 }
 
 /**
@@ -631,7 +666,7 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
         if (acc && acc.id) {
           addCandidate(acc.id);
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -647,27 +682,36 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const limitPlaceholder = `$${ids.length + 1}`;
 
   const pgQuery = `SELECT raw FROM vendors
-     WHERE (lower(raw->>'buyerId') IN (${placeholders})
+     WHERE source IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'buyer_direct', 'historical_purchase_dump')
+       AND (lower(raw->>'buyerId') IN (${placeholders})
         OR lower(raw->>'buyerAccountId') IN (${placeholders})
         OR lower(raw->>'buyerEmail') IN (${placeholders}))
      ORDER BY created_at DESC
      LIMIT ${limitPlaceholder}`;
 
   const d1Query = `SELECT raw FROM vendors
-     WHERE (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+     WHERE source IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'buyer_direct', 'historical_purchase_dump')
+       AND (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders}))
      ORDER BY created_at DESC
      LIMIT ${limitPlaceholder}`;
 
-  const result = await pool.query(
-    pgQuery,
-    [...ids, maxLimit],
-    {
-      d1: true,
-      d1Text: d1Query,
-    }
-  );
+  let result;
+  try {
+    result = await pool.query(
+      pgQuery,
+      [...ids, maxLimit],
+      {
+        d1: true,
+        d1Text: d1Query,
+      }
+    );
+  } catch (err) {
+    const stale = queryCache.getStale(cacheKey);
+    if (stale) return stale;
+    throw err;
+  }
   const rows = result.rows.map((row) => parseRaw(row.raw));
   queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
   return rows;
@@ -771,6 +815,7 @@ async function upsertVendorInDB(vendor) {
     }
   );
   queryCache.invalidate('vendors');
+  if (email) nonVendorEmailCache.delete(String(email).trim().toLowerCase());
   if (vendor && vendor.id) {
     void syncVendorCategoriesIndexed(vendor.id, vendor);
   }
@@ -785,6 +830,7 @@ async function deleteVendorInDB(id) {
     { d1: true }
   );
   queryCache.invalidate('vendors');
+  nonVendorEmailCache.clear();
   return result.rowCount > 0;
 }
 
@@ -832,6 +878,7 @@ async function bulkInsertVendorsInDB(vendors) {
     }));
     const results = await d1Bridge.batchD1(d1, statements);
     queryCache.invalidate('vendors');
+    nonVendorEmailCache.clear();
     return results.flatMap((result) => result.rows.map((row) => row.email));
   }
 
@@ -857,6 +904,7 @@ async function bulkInsertVendorsInDB(vendors) {
     values
   );
   queryCache.invalidate('vendors');
+  nonVendorEmailCache.clear();
   return result.rows.map((row) => row.email);
 }
 
@@ -1202,7 +1250,13 @@ async function getBuyerAccountByEmailFromDB(email) {
   const result = await pool.query(
     'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
     [email],
-    { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
+    {
+      d1: true,
+      d1Text: 'SELECT raw FROM buyer_accounts WHERE corporate_email = $1 COLLATE NOCASE LIMIT 1',
+      useCache: true,
+      tag: 'buyer_accounts',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
@@ -1630,8 +1684,8 @@ async function insertChaserJobInDB(job) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
      ON CONFLICT (id) DO NOTHING`,
     [id, rfqNumber, rfqId, vendorId, vendorName,
-     vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
-     rfqTitle || null, channel, fireAt],
+      vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
+      rfqTitle || null, channel, fireAt],
     { d1: true }
   );
   return job;
@@ -1938,7 +1992,7 @@ async function getPublicVendorsPageFromDB({
     `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`,
   ];
   const d1Conditions = [
-    `json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`,
+    `source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`,
   ];
 
   if (search) {
@@ -1953,11 +2007,13 @@ async function getPublicVendorsPageFromDB({
       OR (raw->'minorCategories')::text ILIKE $${p}
     )`);
     d1Conditions.push(`(
-      lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.name')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.brandName')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.products')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})
+      (raw LIKE ('%' || lower($${p}) || '%')) AND (
+        lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE lower($${p})
+        OR lower(json_extract(raw,'$.name')) LIKE lower($${p})
+        OR lower(json_extract(raw,'$.brandName')) LIKE lower($${p})
+        OR lower(json_extract(raw,'$.products')) LIKE lower($${p})
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})
+      )
     )`);
   }
 
@@ -1965,7 +2021,7 @@ async function getPublicVendorsPageFromDB({
     params.push(category);
     const p = params.length;
     pgConditions.push(`(major_category ILIKE $${p} OR raw->>'majorCategory' ILIKE $${p} OR raw->>'category' ILIKE $${p})`);
-    d1Conditions.push(`(lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.category')) = lower($${p}))`);
+    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR (raw LIKE ('%' || lower($${p}) || '%') AND (lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.category')) = lower($${p}))))`);
   }
 
   if (state && state !== 'all' && state !== 'All States') {
@@ -2069,13 +2125,13 @@ async function getPublicVendorFiltersFromDB() {
 
     const categories = (catResult && catResult.rows)
       ? catResult.rows
-          .map((r) => (r && r.category ? String(r.category).trim() : ''))
-          .filter((c) => (
-            c &&
-            c.length >= 2 &&
-            !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
-            !c.includes('(No Past POs)')
-          ))
+        .map((r) => (r && r.category ? String(r.category).trim() : ''))
+        .filter((c) => (
+          c &&
+          c.length >= 2 &&
+          !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
+          !c.includes('(No Past POs)')
+        ))
       : [];
 
     return { categories, states: defaultStates };
@@ -2177,4 +2233,3 @@ module.exports = {
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
 };
-

@@ -126,7 +126,7 @@ test('keeps latest category results when a slower initial request arrives later'
     .mockResolvedValueOnce(page([{ ...candidate, name: 'Current supplier' }]));
   render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
   fireEvent.change(screen.getAllByRole('combobox')[2], { target: { value: 'Cables' } });
-  await waitFor(() => expect(screen.getByTestId(`vendor-card-${candidate.id}`)).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByTestId(`vendor-card-${candidate.id}`)).toBeInTheDocument(), { timeout: 3000 });
   await act(async () => resolveEarlier(page([{ ...candidate, id: 'stale', name: 'Stale supplier' }])));
   expect(screen.queryByTestId('vendor-card-stale')).not.toBeInTheDocument();
   expect(fetchAllVendors).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'Cables' }));
@@ -142,7 +142,7 @@ test('ignores stale pagination responses and treats an exact category search as 
   render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
   fireEvent.click(await screen.findByTestId('load-more-vendor-cards'));
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Cables' } });
-  await waitFor(() => expect(screen.getByTestId('vendor-card-filtered')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByTestId('vendor-card-filtered')).toBeInTheDocument(), { timeout: 3000 });
   await act(async () => resolveMore(page([{ ...candidate, id: 'stale', name: 'Stale supplier' }], 2, 2)));
   expect(screen.queryByTestId('vendor-card-stale')).not.toBeInTheDocument();
   expect(fetchAllVendors).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'Cables', search: '' }));

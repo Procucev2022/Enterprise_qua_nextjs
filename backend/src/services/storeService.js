@@ -768,9 +768,46 @@ class StoreService {
    * Atomically check and consume one free trial RFQ slot for a buyer account.
    * Eliminates race conditions from concurrent RFQ creation requests.
    */
-  tryConsumeFreeRFQ(id) {
-    const idx = this.buyerAccounts.findIndex((a) => a.id === id);
-    if (idx === -1) return { ok: false, remaining: 0 };
+  tryConsumeFreeRFQ(idOrAccount) {
+    const candidateId = typeof idOrAccount === 'object' && idOrAccount !== null ? idOrAccount.id : idOrAccount;
+    const candidateEmail = typeof idOrAccount === 'object' && idOrAccount !== null
+      ? (idOrAccount.corporateEmail || idOrAccount.email)
+      : (typeof idOrAccount === 'string' && idOrAccount.includes('@') ? idOrAccount : null);
+    const key = candidateEmail ? candidateEmail.trim().toLowerCase() : '';
+
+    const idx = this.buyerAccounts.findIndex((a) => {
+      if (candidateId && (a.id === candidateId || a.organizationId === candidateId || a.userId === candidateId)) return true;
+      if (key && a.corporateEmail && a.corporateEmail.trim().toLowerCase() === key) return true;
+      return false;
+    });
+
+    if (idx === -1) {
+      if (typeof idOrAccount === 'object' && idOrAccount !== null) {
+        if (hasUnlimitedRfqAccess(idOrAccount)) {
+          return { ok: true, remaining: idOrAccount.remainingFreeRFQs !== undefined ? idOrAccount.remainingFreeRFQs : 999999 };
+        }
+        const remaining = idOrAccount.remainingFreeRFQs !== undefined ? idOrAccount.remainingFreeRFQs : 5;
+        if (remaining <= 0) {
+          return { ok: false, remaining: 0 };
+        }
+        const updated = {
+          ...idOrAccount,
+          remainingFreeRFQs: remaining - 1,
+          freeRFQsUsed: (idOrAccount.freeRFQsUsed || (5 - remaining)) + 1,
+          syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+        };
+        this.buyerAccounts.unshift(updated);
+        this._persistBuyerAccount(updated);
+        if (this.activeBuyerAccount && (this.activeBuyerAccount.id === updated.id || (key && this.activeBuyerAccount.corporateEmail?.toLowerCase() === key))) {
+          this.activeBuyerAccount = updated;
+        }
+        idOrAccount.remainingFreeRFQs = updated.remainingFreeRFQs;
+        idOrAccount.freeRFQsUsed = updated.freeRFQsUsed;
+        return { ok: true, remaining: updated.remainingFreeRFQs };
+      }
+      return { ok: false, remaining: 0 };
+    }
+
     const buyer = this.buyerAccounts[idx];
     if (hasUnlimitedRfqAccess(buyer)) {
       return { ok: true, remaining: buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 999999 };
@@ -782,12 +819,19 @@ class StoreService {
     const updated = {
       ...buyer,
       remainingFreeRFQs: remaining - 1,
+      freeRFQsUsed: (buyer.freeRFQsUsed || (5 - remaining)) + 1,
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
+    buyer.remainingFreeRFQs = updated.remainingFreeRFQs;
+    buyer.freeRFQsUsed = updated.freeRFQsUsed;
     this.buyerAccounts[idx] = updated;
     this._persistBuyerAccount(updated);
-    if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
+    if (this.activeBuyerAccount && (this.activeBuyerAccount.id === buyer.id || (key && this.activeBuyerAccount.corporateEmail?.toLowerCase() === key))) {
       this.activeBuyerAccount = updated;
+    }
+    if (typeof idOrAccount === 'object' && idOrAccount !== null) {
+      idOrAccount.remainingFreeRFQs = updated.remainingFreeRFQs;
+      idOrAccount.freeRFQsUsed = updated.freeRFQsUsed;
     }
     return { ok: true, remaining: updated.remainingFreeRFQs };
   }
@@ -795,8 +839,18 @@ class StoreService {
   /**
    * Refund a reserved free trial RFQ slot if RFQ creation fails downstream.
    */
-  refundFreeRFQ(id) {
-    const idx = this.buyerAccounts.findIndex((a) => a.id === id);
+  refundFreeRFQ(idOrAccount) {
+    const candidateId = typeof idOrAccount === 'object' && idOrAccount !== null ? idOrAccount.id : idOrAccount;
+    const candidateEmail = typeof idOrAccount === 'object' && idOrAccount !== null
+      ? (idOrAccount.corporateEmail || idOrAccount.email)
+      : (typeof idOrAccount === 'string' && idOrAccount.includes('@') ? idOrAccount : null);
+    const key = candidateEmail ? candidateEmail.trim().toLowerCase() : '';
+
+    const idx = this.buyerAccounts.findIndex((a) => {
+      if (candidateId && (a.id === candidateId || a.organizationId === candidateId || a.userId === candidateId)) return true;
+      if (key && a.corporateEmail && a.corporateEmail.trim().toLowerCase() === key) return true;
+      return false;
+    });
     if (idx === -1) return;
     const buyer = this.buyerAccounts[idx];
     if (hasUnlimitedRfqAccess(buyer)) return;
@@ -804,12 +858,17 @@ class StoreService {
     const updated = {
       ...buyer,
       remainingFreeRFQs: Math.min(5, current + 1),
+      freeRFQsUsed: Math.max(0, (buyer.freeRFQsUsed || (5 - current)) - 1),
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
     this.buyerAccounts[idx] = updated;
     this._persistBuyerAccount(updated);
-    if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
+    if (this.activeBuyerAccount && (this.activeBuyerAccount.id === buyer.id || (key && this.activeBuyerAccount.corporateEmail?.toLowerCase() === key))) {
       this.activeBuyerAccount = updated;
+    }
+    if (typeof idOrAccount === 'object' && idOrAccount !== null) {
+      idOrAccount.remainingFreeRFQs = updated.remainingFreeRFQs;
+      idOrAccount.freeRFQsUsed = updated.freeRFQsUsed;
     }
   }
 
@@ -841,7 +900,10 @@ class StoreService {
    *   was deducted and the buyer's remaining free credits (null when no buyer).
    */
   consumeRFQCreditIfApplicable(buyerAccount, sourcingMode) {
-    if (!buyerAccount || !buyerAccount.id) return { consumed: false, remaining: null };
+    if (!buyerAccount) return { consumed: false, remaining: null };
+    const hasId = Boolean(buyerAccount.id || buyerAccount.organizationId || buyerAccount.userId);
+    const hasEmail = Boolean(buyerAccount.corporateEmail || buyerAccount.email);
+    if (!hasId && !hasEmail) return { consumed: false, remaining: null };
 
     // Database-level unlimited RFQ access bypasses credit deductions
     if (hasUnlimitedRfqAccess(buyerAccount)) {
@@ -860,7 +922,11 @@ class StoreService {
       return { consumed: false, remaining: current };
     }
 
-    const result = this.tryConsumeFreeRFQ(buyerAccount.id);
+    const result = this.tryConsumeFreeRFQ(buyerAccount);
+    if (result.ok && buyerAccount) {
+      buyerAccount.remainingFreeRFQs = result.remaining;
+      buyerAccount.freeRFQsUsed = Math.max(0, 5 - result.remaining);
+    }
     return { consumed: result.ok, remaining: result.remaining };
   }
 
@@ -1479,7 +1545,7 @@ class StoreService {
       }
     }
 
-    // Direct invitation match: buyer specifically assigned or invited this vendor to this RFQ
+    // Direct invitation match: buyer specifically assigned or invited this vendor to this private RFQ
     const vId = vendor.id ? String(vendor.id).trim().toLowerCase() : null;
     const vEmail = vendor.email ? String(vendor.email).trim().toLowerCase() : null;
     const vName = vendor.name ? String(vendor.name).trim().toLowerCase() : null;
@@ -1864,24 +1930,47 @@ class StoreService {
     if (!vendor) return null;
 
     const rfq = rfqId ? this.getRFQById(rfqId) : null;
-    const isBuyerMapped = Boolean(rfq && this.isVendorMappedToRfqBuyer(vendor, rfq));
+    const mode = String(rfq?.sourcingMode || '').trim().toLowerCase();
+    const isNetworkMode =
+      mode === 'mode_0' ||
+      mode === 'v0' ||
+      mode === 'version_0' ||
+      mode === 'mode_3' ||
+      mode === 'v3' ||
+      mode === 'version_3' ||
+      mode === 'mode_2' ||
+      mode === 'v2' ||
+      mode === 'version_2';
+
+    const isBuyerMapped = Boolean(
+      rfq &&
+      !isNetworkMode &&
+      !this.isProcucevVendor(vendor) &&
+      this.isVendorMappedToRfqBuyer(vendor, rfq)
+    );
 
     const eligibility = this.checkVendorQuotationEligibility(vendor, rfq);
     const quotedRfqIds = Array.isArray(vendor.quotedRfqIds) ? [...vendor.quotedRfqIds] : [];
-    const normalizedRfqId = rfqId ? String(rfqId).trim() : null;
-    const alreadyQuoted = normalizedRfqId && quotedRfqIds.includes(normalizedRfqId);
+    const canonicalId = rfq?.id ? String(rfq.id).trim() : (rfqId ? String(rfqId).trim() : null);
+    const canonicalRfqNumber = rfq?.rfqNumber ? String(rfq.rfqNumber).trim() : null;
+    const alreadyQuoted = Boolean(
+      (canonicalId && quotedRfqIds.includes(canonicalId)) ||
+      (canonicalRfqNumber && quotedRfqIds.includes(canonicalRfqNumber)) ||
+      (rfqId && quotedRfqIds.includes(String(rfqId).trim()))
+    );
 
-    if (!alreadyQuoted && normalizedRfqId) {
-      quotedRfqIds.push(normalizedRfqId);
+    if (!alreadyQuoted) {
+      if (canonicalId) quotedRfqIds.push(canonicalId);
+      if (canonicalRfqNumber && canonicalRfqNumber !== canonicalId) quotedRfqIds.push(canonicalRfqNumber);
     }
 
     // Also ensure RFQ is marked in unlockedRfqIds
     const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
-    if (normalizedRfqId && !unlockedList.includes(normalizedRfqId)) {
-      unlockedList.push(normalizedRfqId);
+    if (canonicalId && !unlockedList.includes(canonicalId)) {
+      unlockedList.push(canonicalId);
     }
-    if (rfq && rfq.rfqNumber && !unlockedList.includes(String(rfq.rfqNumber))) {
-      unlockedList.push(String(rfq.rfqNumber));
+    if (canonicalRfqNumber && !unlockedList.includes(canonicalRfqNumber)) {
+      unlockedList.push(canonicalRfqNumber);
     }
 
     let newCredits = eligibility.freeCreditsRemaining;
@@ -1907,7 +1996,7 @@ class StoreService {
       'STORE_SERVICE'
     );
 
-    return updated;
+    return updated || vendor;
   }
 
 
@@ -3656,7 +3745,14 @@ class StoreService {
 
   isBuyerUploaded(vendor) {
     if (!vendor) return false;
-    if (vendor.addedByBuyerCompany || vendor.buyerAccountId || vendor.buyerId) return true;
+    if (
+      vendor.addedByBuyerCompany ||
+      vendor.buyerAccountId ||
+      vendor.buyerId ||
+      vendor.buyerEmail ||
+      (Array.isArray(vendor.mappedBuyerIds) && vendor.mappedBuyerIds.length > 0) ||
+      (Array.isArray(vendor.buyerIds) && vendor.buyerIds.length > 0)
+    ) return true;
     const s = String(vendor.source || '').toLowerCase().trim();
     const id = String(vendor.id || '').toLowerCase().trim();
     return Boolean(

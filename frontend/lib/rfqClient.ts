@@ -419,7 +419,13 @@ export async function createRFQ(payload: RFQCreatePayload): Promise<RFQMutationR
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  let body: { success?: boolean; data?: RFQItem; error?: string; fieldErrors?: Record<string, string> } = {};
+  let body: {
+    success?: boolean;
+    data?: RFQItem;
+    remainingFreeRFQs?: number | null;
+    error?: string;
+    fieldErrors?: Record<string, string>;
+  } = {};
   try {
     body = await res.json();
   } catch {
@@ -444,7 +450,14 @@ export async function createRFQ(payload: RFQCreatePayload): Promise<RFQMutationR
     };
   }
 
-  return { success: true, rfq: body.data };
+  let remainingFreeRFQs: number | null | undefined = undefined;
+  if (typeof body.remainingFreeRFQs === 'number') {
+    remainingFreeRFQs = body.remainingFreeRFQs;
+  } else if (body.data && typeof (body.data as any).remainingFreeRFQs === 'number') {
+    remainingFreeRFQs = (body.data as any).remainingFreeRFQs;
+  }
+
+  return { success: true, rfq: body.data, remainingFreeRFQs };
 }
 
 /**

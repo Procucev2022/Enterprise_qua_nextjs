@@ -287,7 +287,7 @@ export type RFQTransportFailure =
 
 /** Outcome of creating an RFQ. On success the server's record is authoritative. */
 export type RFQMutationResult =
-  | { success: true; rfq: RFQItem }
+  | { success: true; rfq: RFQItem; remainingFreeRFQs?: number | null }
   | {
       success: false;
       reason: RFQTransportFailure;
