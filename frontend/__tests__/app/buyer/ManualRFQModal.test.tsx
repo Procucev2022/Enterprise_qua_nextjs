@@ -2309,6 +2309,84 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         expect(onCreated).toHaveBeenCalled();
       });
     });
+
+    it('covers adoptCreatedRFQ fallback and mode_0 uncategorized confirmation title', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0',
+          rfqNumber: 'RFQ-2026-UNCAT',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'mode_0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: undefined,
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
+
+    it('covers adoptCreatedRFQ with remaining count and v0 confirmation', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0-2',
+          rfqNumber: 'RFQ-2026-UNCAT-2',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'v0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: 5,
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
+
+    it('covers version_0 confirmation', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0-3',
+          rfqNumber: 'RFQ-2026-UNCAT-3',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'version_0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: 3,
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
   });
 });
 
