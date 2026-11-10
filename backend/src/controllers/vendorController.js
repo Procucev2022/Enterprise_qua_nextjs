@@ -505,6 +505,9 @@ async function createVendor(req, res, next) {
     if (addedByBuyerCompany) {
       body.addedByBuyerCompany = addedByBuyerCompany;
     }
+    if (req.user && req.user.role === 'buyer' && req.user.email) {
+      body.buyerEmail = req.user.email;
+    }
     // Checked before addVendor runs at all, not just before reporting success:
     // addVendor kicks off real side effects (an identity-account write with a
     // fresh temp password, a real onboarding email) as soon as it's called.

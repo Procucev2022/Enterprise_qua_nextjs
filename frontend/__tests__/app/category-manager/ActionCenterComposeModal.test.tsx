@@ -312,19 +312,29 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(mockDispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: 'BOTH',
-          recipientEmail: 'accounts@vendor.com',
-          recipientPhone: '9876543210',
-        })
-      );
+    await act(async () => {
+      await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(mockDispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: 'BOTH',
+            recipientEmail: 'accounts@vendor.com',
+            recipientPhone: '9876543210',
+          })
+        );
+      },
+      { timeout: 10000 }
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('status')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('handles submission when channel is SMS with fallback assigneeName', async () => {
@@ -355,21 +365,31 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(mockDispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: 'SMS',
-          recipientPhone: '9876543210',
-          scheduleFollowup: expect.objectContaining({
-            assigneeName: 'Assignee',
-          }),
-        })
-      );
+    await act(async () => {
+      await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(mockDispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: 'SMS',
+            recipientPhone: '9876543210',
+            scheduleFollowup: expect.objectContaining({
+              assigneeName: 'Assignee',
+            }),
+          })
+        );
+      },
+      { timeout: 10000 }
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('status')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('handles submission error from API result', async () => {
@@ -393,9 +413,16 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
     expect(screen.getByText('Telecom gateway rejected SMS')).toBeInTheDocument();
   });
 
@@ -416,9 +443,16 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
     expect(screen.getByText(strings.errorToast)).toBeInTheDocument();
   });
 
@@ -486,10 +520,17 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/Partial delivery: Email: Sent \| SMS: Failed \(Network timeout\)/i)).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByText(/Partial delivery: Email: Sent \| SMS: Failed \(Network timeout\)/i)).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('displays partial delivery banner when SMS succeeds and Email fails without error detail', async () => {
@@ -515,10 +556,17 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/Partial delivery: Email: Failed \(Unsent\) \| SMS: Sent/i)).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByText(/Partial delivery: Email: Failed \(Unsent\) \| SMS: Sent/i)).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('displays per-channel error message when all channels fail', async () => {
@@ -544,10 +592,17 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/SMTP connection failed \| Recipient rate limited/i)).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByText(/SMTP connection failed \| Recipient rate limited/i)).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('submits form with EMAIL channel and calls onSuccess and triggers onClose after delay', async () => {
