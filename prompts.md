@@ -5051,3 +5051,49 @@ resume, resolve file conflict issues & PR checks, [https://github.com/Procucev20
 ```text
 resume, resolve file conflict issues & PR checks, [https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416)
 ```
+
+
+---
+
+### Prompt 122
+
+**Timestamp**: 2026-11-11T08:41:26+05:30
+
+```text
+Gemini model order was supposed to be gemini 3.5 flash lite, then gemini 3.1 flash lite, then gemini 3.8 flash, then gemini 3.7 flash, then gemini 3.6 flash, then gemini 3.5 flash
+
+Why a change, can you please check
+```
+
+
+---
+
+### Prompt 123
+
+**Timestamp**: 2026-11-11T08:45:47+05:30
+
+```text
+please do, who updated this order last time?
+```
+
+
+---
+
+### Prompt 124
+
+**Timestamp**: 2026-11-11T09:01:50+05:30
+
+```text
+Can we remove these gemini model configuration from env variables, this gemini model order is fine constants file, no need of env.
+```
+
+
+---
+
+### Prompt 125
+
+**Timestamp**: 2026-11-11T09:06:42+05:30
+
+```text
+Why this login error? for what purpose, session storage is needed in login?
+```

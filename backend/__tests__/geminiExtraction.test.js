@@ -428,7 +428,7 @@ describe('Gemini document extraction service', () => {
       expect(global.fetch.mock.calls[0][0]).toContain(GEMINI_CONFIG.FALLBACK_MODELS[0]);
     });
 
-    test('resolveModelChain reflects ordered GEMINI_MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
+    test('resolveModelChain reflects ordered GEMINI_CONFIG.MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
       GEMINI_CONFIG.MODELS = [
         'gemini-3.5-flash-lite',
         'gemini-3.1-flash-lite',

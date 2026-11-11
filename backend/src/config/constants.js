@@ -1137,13 +1137,15 @@ const GEMINI_CONFIG = {
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
   // Ordered models attempted in sequence: gemini-3.5-flash-lite down to reasoning fallback models.
   // Extraction automatically advances through the backup models upon error or 503 overload.
-  MODELS: (
-    process.env.GEMINI_MODELS ||
-    'gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash'
-  )
-    .split(',')
-    .map((m) => m.trim().replace(/\s+/g, '-'))
-    .filter(Boolean),
+  // Code-owned model chain to prevent runtime environment discrepancies or accidental configuration drift.
+  MODELS: [
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+  ],
   get PRIMARY_MODEL() {
     return this.MODELS[0] || 'gemini-3.5-flash-lite';
   },
