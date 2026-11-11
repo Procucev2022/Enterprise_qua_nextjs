@@ -7,6 +7,7 @@ const {
   applyD1Migrations,
   getSchemaBaseline,
   migrate,
+  resolveD1Config,
   schemaChecksum,
   splitStatements,
 } = require('../scripts/migrate-d1');
@@ -519,6 +520,65 @@ describe('D1 migration SQL handling', () => {
     } finally {
       process.exitCode = originalExitCode;
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('resolves D1 config from wrangler.jsonc when env vars are omitted', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wrangler-test-'));
+    const tempWrangler = path.join(root, 'wrangler.jsonc');
+    fs.writeFileSync(tempWrangler, `
+      // Mock wrangler jsonc
+      {
+        "account_id": "test-account-id",
+        "d1_databases": [{ "database_id": "default-db-id" }],
+        "env": {
+          "prod": {
+            "account_id": "prod-account-id",
+            "d1_databases": [{ "database_id": "prod-db-id" }]
+          }
+        }
+      }
+    `);
+
+    const originalAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const originalDb = process.env.CLOUDFLARE_D1_DATABASE_ID;
+    delete process.env.CLOUDFLARE_ACCOUNT_ID;
+    delete process.env.CLOUDFLARE_D1_DATABASE_ID;
+
+    try {
+      const devConfig = resolveD1Config({ target: 'dev', wranglerPath: tempWrangler });
+      expect(devConfig.accountId).toBe('test-account-id');
+      expect(devConfig.databaseId).toBe('default-db-id');
+
+      const prodConfig = resolveD1Config({ target: 'prod', wranglerPath: tempWrangler });
+      expect(prodConfig.accountId).toBe('prod-account-id');
+      expect(prodConfig.databaseId).toBe('prod-db-id');
+
+      const fallbackMissing = resolveD1Config({ target: 'prod', wranglerPath: path.join(root, 'non-existent.jsonc') });
+      expect(fallbackMissing.databaseId).toBeNull();
+    } finally {
+      if (originalAccount) process.env.CLOUDFLARE_ACCOUNT_ID = originalAccount;
+      if (originalDb) process.env.CLOUDFLARE_D1_DATABASE_ID = originalDb;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('fails migration when required credentials are missing', async () => {
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const res = await migrate({
+        requireCredentials: true,
+        credentials: { accountId: null, databaseId: null, apiToken: null },
+      });
+      expect(res.applied).toBe(0);
+      expect(res.skipped).toBe(0);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = originalExitCode;
+      errSpy.mockRestore();
     }
   });
 });

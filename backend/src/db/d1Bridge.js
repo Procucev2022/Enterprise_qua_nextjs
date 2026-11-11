@@ -55,9 +55,9 @@ let _d1HttpClient = undefined; // undefined = not yet resolved, null = not confi
 function getD1HttpClient() {
   if (_d1HttpClient !== undefined) return _d1HttpClient;
 
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const accountId  = process.env.CLOUDFLARE_ACCOUNT_ID;
   const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  const apiToken   = process.env.CLOUDFLARE_API_TOKEN;
 
   if (!accountId || !databaseId || !apiToken) {
     _d1HttpClient = null;
@@ -67,7 +67,7 @@ function getD1HttpClient() {
   const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
   const headers = {
     'Authorization': `Bearer ${apiToken}`,
-    'Content-Type': 'application/json',
+    'Content-Type':  'application/json',
   };
 
   /**
@@ -76,7 +76,7 @@ function getD1HttpClient() {
    */
   async function execHttp(sql, params = []) {
     const body = JSON.stringify({ sql, params });
-    const res = await fetch(baseUrl, { method: 'POST', headers, body });
+    const res  = await fetch(baseUrl, { method: 'POST', headers, body });
 
     const text = await res.text();
     let json;
@@ -93,7 +93,7 @@ function getD1HttpClient() {
     const result = Array.isArray(json.result) ? json.result[0] : json.result;
     const meta = result && result.meta ? result.meta : {};
     return {
-      rows: (result && result.results) || [],
+      rows:     (result && result.results) || [],
       rowCount: meta.changes ?? undefined,
       ...(result && result.meta ? { meta: result.meta } : {}),
     };
@@ -162,7 +162,7 @@ function getD1HttpClient() {
       };
     },
     batch: (stmts) => batchHttp(stmts.map((s) => ({ sql: s._sql, params: s._params || [] }))),
-    _execHttp: execHttp,
+    _execHttp:  execHttp,
     _batchHttp: batchHttp,
   };
 
@@ -366,7 +366,7 @@ async function batchD1(db, statements) {
     // Workers binding returns { results, meta }; HTTP client returns { rows, rowCount }
     if (result && result.rows !== undefined) return result;
     return {
-      rows: result.results || [],
+      rows:     result.results || [],
       rowCount: result.meta ? result.meta.changes : undefined,
     };
   });

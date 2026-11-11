@@ -33,9 +33,37 @@ if (fs.existsSync(envSpecific)) {
 }
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID;
-const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+function resolveD1Config({ target = targetEnv, wranglerPath = path.resolve(__dirname, '../wrangler.jsonc') } = {}) {
+  let accountId = process.env.CLOUDFLARE_ACCOUNT_ID || null;
+  let databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID || null;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN || null;
+
+  if (!databaseId || !accountId) {
+    try {
+      if (fs.existsSync(wranglerPath)) {
+        const raw = fs.readFileSync(wranglerPath, 'utf8');
+        const sanitized = raw.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        const config = JSON.parse(sanitized);
+        if (!databaseId) {
+          databaseId = (target && config.env?.[target]?.d1_databases?.[0]?.database_id)
+            || config.d1_databases?.[0]?.database_id
+            || null;
+        }
+        if (!accountId) {
+          accountId = (target && config.env?.[target]?.account_id)
+            || config.account_id
+            || null;
+        }
+      }
+    } catch {
+      // Fall back to environment values
+    }
+  }
+
+  return { accountId, databaseId, apiToken };
+}
+
+const { accountId: ACCOUNT_ID, databaseId: DATABASE_ID, apiToken: API_TOKEN } = resolveD1Config();
 
 const SCHEMA_PATH = path.join(__dirname, '../src/db/schema.d1.sql');
 const MIGRATIONS_PATH = path.join(__dirname, '../src/db/migrations');
@@ -376,8 +404,13 @@ async function migrate({
   migrationsPath = MIGRATIONS_PATH,
   includeRowCounts = process.argv.includes('--report-row-counts'),
   requireCredentials = true,
+  credentials = { accountId: ACCOUNT_ID, databaseId: DATABASE_ID, apiToken: API_TOKEN },
 } = {}) {
-  if (requireCredentials && (!ACCOUNT_ID || !DATABASE_ID || !API_TOKEN)) {
+  const accountId = credentials?.accountId;
+  const databaseId = credentials?.databaseId;
+  const apiToken = credentials?.apiToken;
+
+  if (requireCredentials && (!accountId || !databaseId || !apiToken)) {
     console.error(
       '[migrate-d1] Missing required env vars.\n' +
       '  Set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_API_TOKEN in .env'
@@ -512,4 +545,5 @@ module.exports = {
   splitStatements,
   REPORTED_TABLES,
   acquireMigrationLock,
+  resolveD1Config,
 };

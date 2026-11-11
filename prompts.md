@@ -5147,3 +5147,15 @@ Also why error message was not proper, in entire codebase error message should b
 ```
 
 
+---
+
+### Prompt 132
+
+**Timestamp**: 2026-11-11T12:40:42+05:30
+
+```text
+I want database migrations to happen via CI-CD pipeline,  for this where should we add env variables. i don't want to add env variables in codebase.
+```
+
+
+

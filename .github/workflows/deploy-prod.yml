@@ -67,6 +67,14 @@ jobs:
           WRANGLER_ENV: prod
         working-directory: frontend
 
+      - name: Run Cloudflare D1 Database Migrations (Production Environment)
+        run: node scripts/migrate-d1.js --prod
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID || vars.CLOUDFLARE_D1_DATABASE_ID }}
+
       - name: Deploy Frontend to Cloudflare (Production Environment)
         run: npx wrangler deploy --env prod
         working-directory: frontend
