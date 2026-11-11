@@ -1517,6 +1517,7 @@ async function upsertEvaluationInDB(evaluation) {
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
        updated_at = CURRENT_TIMESTAMP
+     WHERE COALESCE(evaluations.vendor_id, '') = COALESCE(EXCLUDED.vendor_id, '')
      RETURNING raw`,
     [id, vendorId || null, status || null, JSON.stringify(evaluation)],
     {
@@ -1528,11 +1529,24 @@ async function upsertEvaluationInDB(evaluation) {
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
        updated_at = CURRENT_TIMESTAMP
+       WHERE COALESCE(evaluations.vendor_id, '') = COALESCE(EXCLUDED.vendor_id, '')
      RETURNING raw`,
     }
   );
   queryCache.invalidate('evaluations');
-  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  if (result.rows[0]) return parseRaw(result.rows[0].raw);
+
+  const existing = await pool.query(
+    'SELECT vendor_id FROM evaluations WHERE id = $1 LIMIT 1',
+    [id],
+    { d1: true, useCache: false, tag: 'evaluations' }
+  );
+  if (existing.rows[0] && String(existing.rows[0].vendor_id || '') !== String(vendorId || '')) {
+    const error = new Error('The evaluation identifier is already owned by another vendor.');
+    error.code = 'EVALUATION_IDENTITY_CONFLICT';
+    throw error;
+  }
+  return null;
 }
 
 // ── Vendor catalogue ────────────────────────────────────────────────────────
@@ -1541,15 +1555,17 @@ async function getVendorCatalogueFromDB(limit = null, { fresh = false } = {}) {
   if (!pool.hasStorage()) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1'
-    : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000';
+    ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT $1'
+    : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT 1000';
   const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
     sql,
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000',
+      d1Text: hasLimit
+        ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT $1'
+        : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC, id DESC LIMIT 1000',
       useCache: !fresh,
       tag: 'catalogue',
       ttlMs: 60000,
@@ -1563,7 +1579,7 @@ async function getVendorCatalogueByVendorFromDB(vendorId, limit = 100) {
   const safeLimit = Number.isInteger(Number(limit)) && Number(limit) > 0
     ? Math.min(Number(limit), 500)
     : 100;
-  const sql = 'SELECT raw FROM vendor_catalogue WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2';
+  const sql = 'SELECT raw FROM vendor_catalogue WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2';
   const result = await pool.query(sql, [vendorId, safeLimit], {
     d1: true,
     d1Text: sql,
@@ -2213,14 +2229,14 @@ async function getPaymentLinksByVendorFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
-    : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000';
+    ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+    : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000';
   const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
-      : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000',
+      ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,
@@ -2232,14 +2248,14 @@ async function getPaymentLinksByBuyerFromDB(buyerAccountId, limit = 50) {
   if (!pool.hasStorage() || !buyerAccountId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
-    : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000';
+    ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+    : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000';
   const params = hasLimit ? [buyerAccountId, Math.min(Number(limit), 1000)] : [buyerAccountId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
-      : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000',
+      ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,
@@ -2658,14 +2674,14 @@ async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`;
+    ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`;
   const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
@@ -2757,14 +2773,14 @@ async function getBuyerCreditTransactionsFromDB(buyerId, limit = 50) {
   if (!pool.hasStorage() || !buyerId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`;
+    ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+    : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`;
   const params = hasLimit ? [buyerId, Math.min(Number(limit), 1000)] : [buyerId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+      ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+      : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`,
     useCache: true,
     tag: 'buyer_credits',
     ttlMs: 60000,

@@ -1368,6 +1368,12 @@ function buildZohoConfig() {
     RECONCILIATION_ENABLED: String(getZohoEnv('ZOHO_RECONCILIATION_ENABLED', '')).toLowerCase() === 'true',
     // 10 minutes, matching the reference app's `0 */10 * * * *` cron.
     RECONCILIATION_INTERVAL_MS: Number(getZohoEnv('ZOHO_RECONCILIATION_INTERVAL_MS', 10 * 60 * 1000)),
+    // Bound concurrent provider reads from user-triggered payment-history refreshes.
+    RECONCILIATION_MAX_CONCURRENCY: 5,
+    // Cross-isolate lease outlives the maximum bounded OAuth + payment-link fetch retries.
+    RECONCILIATION_LEASE_MS: 3 * 60 * 1000,
+    // Every Zoho HTTP request is bounded so a worker cannot hold reconciliation work indefinitely.
+    HTTP_REQUEST_TIMEOUT_MS: 20 * 1000,
     // Refresh the cached access token this many ms before it actually expires, so
     // a request never races a token that's about to go stale mid-flight.
     TOKEN_REFRESH_BUFFER_MS: 60 * 1000,

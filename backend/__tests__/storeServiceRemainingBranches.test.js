@@ -1120,6 +1120,24 @@ describe('Store Service — remaining branch coverage', () => {
       expect(errorSpy).toHaveBeenCalledWith('Failed to persist vendor evaluation', expect.any(Error), 'STORE_SERVICE');
     });
 
+    test('createEvaluationDurably preserves evaluation ownership conflicts as HTTP 409', async () => {
+      const identityConflict = Object.assign(new Error('evaluation ID belongs to another vendor'), {
+        code: 'EVALUATION_IDENTITY_CONFLICT',
+      });
+      const { freshStore } = freshStoreWithFailingWrite({
+        upsertEvaluationInDB: jest.fn().mockRejectedValue(identityConflict),
+      }, true);
+
+      await expect(freshStore.createEvaluationDurably({
+        id: 'evaluation-owned-by-another-vendor',
+        vendorId: 'current-vendor',
+      })).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'EVALUATION_IDENTITY_CONFLICT',
+      });
+      expect(freshStore.evaluations).toHaveLength(0);
+    });
+
     test('createEvaluationDurably supports explicitly unconfigured local mode', async () => {
       const { freshStore } = freshStoreWithFailingWrite({}, false);
       const saved = await freshStore.createEvaluationDurably({ vendorName: 'Memory Evaluation Vendor' });

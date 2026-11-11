@@ -8515,6 +8515,13 @@ class StoreService {
       }
     } catch (error) {
       logger.error('Failed to persist vendor evaluation', error, 'STORE_SERVICE');
+      if (error?.code === 'EVALUATION_IDENTITY_CONFLICT') {
+        const conflictError = new Error('This evaluation identifier is already used by another vendor. Retry the submission.');
+        conflictError.statusCode = 409;
+        conflictError.code = 'EVALUATION_IDENTITY_CONFLICT';
+        conflictError.cause = error;
+        throw conflictError;
+      }
       const persistError = new Error('The evaluation could not be saved to storage. Try again.');
       persistError.statusCode = 503;
       persistError.code = 'PERSISTENCE_UNAVAILABLE';

@@ -16,11 +16,18 @@
 
 const storeService = require('../services/storeService');
 const zohoWebhookQueries = require('../db/zohoWebhookQueries');
+const zohoReconciliationQueries = require('../db/zohoReconciliationQueries');
 const zohoPaymentService = require('./zohoPaymentService');
 const { ZOHO_CONFIG } = require('../config/constants');
 const { logger } = require('./loggerService');
 
-const runtime = { timer: null };
+const runtime = {
+  timer: null,
+  reconcilePromise: null,
+  inFlightLinks: new Map(),
+  leaseCleanupAt: null,
+  leaseCleanupPromise: null,
+};
 
 // 'CREATED'/'pending' are this app's own placeholder status
 // (createPaymentLinkRecord's `status || 'CREATED'` fallback); 'active' is
@@ -76,7 +83,12 @@ async function reconcileLink(link) {
       if (!updated) throw new Error('Payment link expiration could not be recorded in durable storage.');
       return { status: 'expired', nonExistent: true };
     }
-    throw err;
+    throw Object.assign(new Error(String(err?.message || 'Zoho payment-link status lookup failed.')), {
+      code: 'ZOHO_STATUS_LOOKUP_FAILED',
+      cause: err,
+      status: err?.status,
+      statusCode: err?.statusCode,
+    });
   }
 
   // Zoho's own status strings are lowercase ('active', 'paid', 'expired',
@@ -98,7 +110,91 @@ async function reconcileLink(link) {
   return result;
 }
 
-async function reconcileOnce() {
+function reconcileLinkOnce(link) {
+  const linkId = typeof link?.id === 'string' ? link.id : '';
+  if (!linkId) return reconcileLink(link);
+
+  const existing = runtime.inFlightLinks.get(linkId);
+  if (existing) return existing;
+
+  let operation;
+  operation = Promise.resolve()
+    .then(async () => {
+      const claim = await zohoReconciliationQueries.claimPaymentLinkReconciliation(linkId);
+      if (!claim?.claimed) {
+        logger.debug('Skipped Zoho reconciliation because another isolate holds the payment-link lease', {
+          linkId,
+          reason: claim?.reason || 'CLAIM_NOT_GRANTED',
+        }, 'ZOHO_RECONCILIATION');
+        return { skipped: true, reason: claim?.reason || 'CLAIM_NOT_GRANTED' };
+      }
+
+      try {
+        // Keep the lease until expiry after success or a Zoho request failure.
+        // This avoids a second D1 write per successful link and throttles
+        // repeated provider checks during transient outages.
+        return await reconcileLink(link);
+      } catch (error) {
+        if (error?.code !== 'ZOHO_STATUS_LOOKUP_FAILED') {
+          try {
+            const released = await zohoReconciliationQueries.releasePaymentLinkReconciliation(linkId, claim.claimedAt);
+            if (released > 0) {
+              logger.info('Released Zoho payment-link reconciliation lease after a local failure', {
+                linkId,
+                errorCode: error?.code || 'UNCLASSIFIED_RECONCILIATION_FAILURE',
+              }, 'ZOHO_RECONCILIATION');
+            }
+          } catch (releaseError) {
+            logger.error('Failed to release Zoho payment-link reconciliation lease after a local failure', {
+              linkId,
+              error,
+              releaseError,
+            }, 'ZOHO_RECONCILIATION');
+          }
+        }
+        throw error;
+      }
+    })
+    .finally(() => {
+      if (runtime.inFlightLinks.get(linkId) === operation) runtime.inFlightLinks.delete(linkId);
+    });
+  runtime.inFlightLinks.set(linkId, operation);
+  return operation;
+}
+
+async function cleanupExpiredReconciliationClaims() {
+  if (runtime.leaseCleanupPromise) return runtime.leaseCleanupPromise;
+
+  const nowMs = Date.now();
+  const configuredIntervalMs = Number(ZOHO_CONFIG.RECONCILIATION_LEASE_MS);
+  const cleanupIntervalMs = Number.isFinite(configuredIntervalMs) && configuredIntervalMs > 0
+    ? configuredIntervalMs
+    : 0;
+  if (runtime.leaseCleanupAt !== null && nowMs - runtime.leaseCleanupAt < cleanupIntervalMs) return 0;
+
+  runtime.leaseCleanupAt = nowMs;
+  let operation;
+  operation = (async () => {
+    try {
+      const purgedClaims = await zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims();
+      if (purgedClaims > 0) {
+        logger.info('Expired Zoho payment-link reconciliation leases purged', { purgedClaims }, 'ZOHO_RECONCILIATION');
+      }
+      return purgedClaims;
+    } catch (error) {
+      logger.error('Expired Zoho payment-link reconciliation lease cleanup failed', { error }, 'ZOHO_RECONCILIATION');
+      return 0;
+    }
+  })();
+  runtime.leaseCleanupPromise = operation;
+  try {
+    return await operation;
+  } finally {
+    if (runtime.leaseCleanupPromise === operation) runtime.leaseCleanupPromise = null;
+  }
+}
+
+async function runReconciliationPass() {
   try {
     const purgedCount = await zohoWebhookQueries.purgeExpiredWebhookEvents();
     if (purgedCount > 0) {
@@ -108,15 +204,32 @@ async function reconcileOnce() {
     logger.error('Expired Zoho webhook receipt cleanup failed', { error }, 'ZOHO_RECONCILIATION');
   }
 
+  await cleanupExpiredReconciliationClaims();
+
   const pending = await storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
   for (const link of pending) {
     try {
-      await reconcileLink(link);
+      await reconcileLinkOnce(link);
     } catch (err) {
       logger.error(`Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION');
     }
   }
   return { checked: pending.length };
+}
+
+async function reconcileOnce() {
+  if (runtime.reconcilePromise) {
+    logger.info('Skipped an overlapping Zoho reconciliation poll', { operation: 'reconcile-once' }, 'ZOHO_RECONCILIATION');
+    return runtime.reconcilePromise;
+  }
+
+  const operation = runReconciliationPass();
+  runtime.reconcilePromise = operation;
+  try {
+    return await operation;
+  } finally {
+    if (runtime.reconcilePromise === operation) runtime.reconcilePromise = null;
+  }
 }
 
 /**
@@ -127,12 +240,23 @@ async function reconcileOnce() {
  * `storeService`, so callers just re-read from storeService afterward.
  */
 async function reconcilePendingLinks(links) {
+  await cleanupExpiredReconciliationClaims();
   const pending = links.filter((l) => RECONCILABLE_STATUSES.includes(l.status));
-  await Promise.all(
-    pending.map((link) =>
-      reconcileLink(link).catch((err) => logger.error(`On-demand Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION'))
-    )
-  );
+  let nextIndex = 0;
+  const configuredConcurrency = Number(ZOHO_CONFIG.RECONCILIATION_MAX_CONCURRENCY);
+  const concurrency = Math.max(1, Math.floor(Number.isFinite(configuredConcurrency) ? configuredConcurrency : 1));
+  const workerCount = Math.min(pending.length, concurrency);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < pending.length) {
+      const link = pending[nextIndex];
+      nextIndex += 1;
+      try {
+        await reconcileLinkOnce(link);
+      } catch (err) {
+        logger.error(`On-demand Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION');
+      }
+    }
+  }));
   return pending.length;
 }
 
@@ -157,6 +281,7 @@ function startPolling(config = ZOHO_CONFIG) {
 
 /** Stop the interval. Safe to call when it was never started. */
 function stopPolling() {
+  runtime.leaseCleanupAt = null;
   if (!runtime.timer) return false;
   clearInterval(runtime.timer);
   runtime.timer = null;

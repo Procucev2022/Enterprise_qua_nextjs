@@ -16,6 +16,7 @@ describe('zohoPaymentService', () => {
   const originalClientSecret = ZOHO_CONFIG.CLIENT_SECRET;
   const originalSigningKey = ZOHO_CONFIG.WEBHOOK_SIGNING_KEY;
   const originalAccountId = ZOHO_CONFIG.ACCOUNT_ID;
+  const originalRequestTimeout = ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -24,6 +25,7 @@ describe('zohoPaymentService', () => {
     ZOHO_CONFIG.CLIENT_SECRET = 'test-client-secret';
     ZOHO_CONFIG.WEBHOOK_SIGNING_KEY = 'test-signing-key';
     ZOHO_CONFIG.ACCOUNT_ID = 'acct-1';
+    ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS = 20 * 1000;
     domainQueries.getZohoOAuthTokenFromDB.mockResolvedValue(null);
     domainQueries.upsertZohoOAuthTokenInDB.mockResolvedValue(null);
   });
@@ -35,12 +37,76 @@ describe('zohoPaymentService', () => {
     ZOHO_CONFIG.CLIENT_SECRET = originalClientSecret;
     ZOHO_CONFIG.WEBHOOK_SIGNING_KEY = originalSigningKey;
     ZOHO_CONFIG.ACCOUNT_ID = originalAccountId;
+    ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS = originalRequestTimeout;
   });
 
   describe('getValidAccessToken', () => {
     test('throws when no refresh token is configured', async () => {
       ZOHO_CONFIG.REFRESH_TOKEN = '';
       await expect(zohoPaymentService.getValidAccessToken()).rejects.toThrow('Zoho refresh token not configured');
+    });
+
+    test('aborts and logs Zoho HTTP calls that exceed the configured timeout', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS = 5;
+      global.fetch = jest.fn((_url, init) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
+      }));
+
+      await expect(zohoPaymentService.getValidAccessToken()).rejects.toMatchObject({
+        code: 'ZOHO_REQUEST_TIMEOUT',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Zoho HTTP request exceeded its configured timeout',
+        { timeoutMs: 5, attempt: 1 },
+        'ZOHO_PAYMENT_SERVICE'
+      );
+    });
+
+    test('keeps the timeout active while the response body is being consumed', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS = 5;
+      global.fetch = jest.fn(async (_url, init) => ({
+        ok: true,
+        status: 200,
+        json: () => new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('body read aborted')), { once: true });
+        }),
+      }));
+
+      await expect(zohoPaymentService.getValidAccessToken()).rejects.toMatchObject({
+        code: 'ZOHO_REQUEST_TIMEOUT',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Zoho HTTP request exceeded its configured timeout',
+        { timeoutMs: 5, attempt: 1 },
+        'ZOHO_PAYMENT_SERVICE'
+      );
+    });
+
+    test('preserves the standard fetch Response API when a deadline is configured', async () => {
+      const response = new Response(JSON.stringify({ access_token: 'response-api-token', expires_in: 3600 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      global.fetch = jest.fn().mockResolvedValue(response);
+
+      await expect(zohoPaymentService.getValidAccessToken()).resolves.toBe('response-api-token');
+
+      expect(response).toBeInstanceOf(Response);
+      expect(response.headers.get('content-type')).toBe('application/json');
+      expect(typeof response.text).toBe('function');
+    });
+
+    test('supports disabling the Zoho HTTP deadline explicitly in runtime configuration', async () => {
+      ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS = 0;
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse(200, { access_token: 'no-timeout-token', expires_in: 3600 }));
+
+      await expect(zohoPaymentService.getValidAccessToken()).resolves.toBe('no-timeout-token');
     });
 
     test('reuses a cached token that has not expired', async () => {

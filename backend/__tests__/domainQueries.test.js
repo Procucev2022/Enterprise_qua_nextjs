@@ -1020,6 +1020,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const [sql, params] = pool.pool.query.mock.calls[0];
       expect(sql).toContain('INSERT INTO evaluations');
       expect(sql).toContain('ON CONFLICT (id) DO UPDATE');
+      expect(sql).toContain("WHERE COALESCE(evaluations.vendor_id, '') = COALESCE(EXCLUDED.vendor_id, '')");
       expect(params).toEqual(['eval-1', 'v-001', 'PREFERRED ENTERPRISE SUPPLIER', JSON.stringify(evaluation)]);
     });
 
@@ -1036,6 +1037,21 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('upsertEvaluationInDB returns null when nothing came back', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertEvaluationInDB({ id: 'eval-3' })).resolves.toBeNull();
+    });
+
+    test('upsertEvaluationInDB refuses an evaluation ID owned by another vendor', async () => {
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [] })
+          .mockResolvedValueOnce({ rows: [{ vendor_id: 'vendor-owner' }] }),
+      };
+
+      await expect(domainQueries.upsertEvaluationInDB({ id: 'eval-cross-vendor', vendorId: 'vendor-caller' }))
+        .rejects.toMatchObject({ code: 'EVALUATION_IDENTITY_CONFLICT' });
+      expect(pool.pool.query).toHaveBeenLastCalledWith(
+        'SELECT vendor_id FROM evaluations WHERE id = $1 LIMIT 1',
+        ['eval-cross-vendor']
+      );
     });
 
     // evaluations has been ported to D1 (see d1Bridge.js), which has no JSON
@@ -1061,7 +1077,10 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: product }] }) };
 
       await expect(domainQueries.getVendorCatalogueFromDB()).resolves.toEqual([product]);
-      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
+      expect(pool.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('ORDER BY created_at DESC, id DESC'),
+        []
+      );
     });
 
     test('getVendorCatalogueByVendorFromDB uses a bounded vendor-indexed read', async () => {
@@ -1073,6 +1092,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect.stringContaining('WHERE vendor_id = $1'),
         ['v-1', 101]
       );
+      expect(pool.pool.query.mock.calls[0][0]).toContain('ORDER BY created_at DESC, id DESC');
     });
 
     test('getCatalogueProductByIdFromDB reads one product and parses D1 text JSON', async () => {
@@ -1882,11 +1902,16 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getPaymentLinksByVendorFromDB maps rows with and without limit', async () => {
       const link = { id: 'pl-v1', vendorId: 'v-1' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+      const querySpy = jest.spyOn(pool, 'query');
 
       await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1', 10)).resolves.toEqual([link]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('LIMIT $2'), ['v-1', 10]);
+      expect(querySpy.mock.calls[0][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
+      expect(querySpy.mock.calls[0][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
 
       await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1', 0)).resolves.toEqual([link]);
+      expect(querySpy.mock.calls[1][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
+      expect(querySpy.mock.calls[1][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
       pool.pool = null;
       await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1')).resolves.toEqual([]);
       await expect(domainQueries.getPaymentLinksByVendorFromDB('')).resolves.toEqual([]);
@@ -1895,11 +1920,16 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getPaymentLinksByBuyerFromDB maps rows with and without limit', async () => {
       const link = { id: 'pl-b1', buyerAccountId: 'b-1' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+      const querySpy = jest.spyOn(pool, 'query');
 
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1', 5)).resolves.toEqual([link]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('LIMIT $2'), ['b-1', 5]);
+      expect(querySpy.mock.calls[0][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
+      expect(querySpy.mock.calls[0][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
 
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1', 0)).resolves.toEqual([link]);
+      expect(querySpy.mock.calls[1][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
+      expect(querySpy.mock.calls[1][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
       pool.pool = null;
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1')).resolves.toEqual([]);
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('')).resolves.toEqual([]);
@@ -2466,16 +2496,43 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getVendorCreditTransactionsFromDB lists transactions for a vendor', async () => {
       const txRows = [{ id: 'tx-1' }];
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: txRows }) };
+      const querySpy = jest.spyOn(pool, 'query');
 
       const res1 = await domainQueries.getVendorCreditTransactionsFromDB('v-1', 10);
       expect(res1).toEqual(txRows);
 
       const res2 = await domainQueries.getVendorCreditTransactionsFromDB('v-1', 0);
       expect(res2).toEqual(txRows);
+      expect(querySpy.mock.calls.map(([sql]) => sql)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
+      expect(querySpy.mock.calls.map(([, , options]) => options.d1Text)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
 
       pool.pool = null;
       await expect(domainQueries.getVendorCreditTransactionsFromDB('v-1')).resolves.toEqual([]);
       await expect(domainQueries.getVendorCreditTransactionsFromDB('')).resolves.toEqual([]);
+    });
+
+    test('getBuyerCreditTransactionsFromDB uses stable newest-first ordering for PostgreSQL and D1', async () => {
+      const txRows = [{ id: 'tx-buyer-1' }];
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: txRows }) };
+      const querySpy = jest.spyOn(pool, 'query');
+
+      await expect(domainQueries.getBuyerCreditTransactionsFromDB('buyer-1', 10)).resolves.toEqual(txRows);
+      await expect(domainQueries.getBuyerCreditTransactionsFromDB('buyer-1', 0)).resolves.toEqual(txRows);
+
+      expect(querySpy.mock.calls.map(([sql]) => sql)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
+      expect(querySpy.mock.calls.map(([, , options]) => options.d1Text)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
     });
 
     test('getVendorsFromDB copies created_at and updated_at when missing on raw', async () => {

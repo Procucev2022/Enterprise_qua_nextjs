@@ -69,6 +69,7 @@ const REPORTED_TABLES = [
   'client_registration_events',
   'enterprise_inquiries',
   'zoho_webhook_events',
+  'zoho_reconciliation_claims',
   'chaser_queue', 'rfq_unlocks',
   'vendor_credit_transactions', 'buyer_credit_transactions',
   'tickets', 'ticket_activities', 'internal_task_types',
