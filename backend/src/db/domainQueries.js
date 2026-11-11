@@ -2674,14 +2674,14 @@ async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`;
+    ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`;
   const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
@@ -2773,14 +2773,14 @@ async function getBuyerCreditTransactionsFromDB(buyerId, limit = 50) {
   if (!pool.hasStorage() || !buyerId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`;
+    ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+    : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`;
   const params = hasLimit ? [buyerId, Math.min(Number(limit), 1000)] : [buyerId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+      ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+      : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000`,
     useCache: true,
     tag: 'buyer_credits',
     ttlMs: 60000,

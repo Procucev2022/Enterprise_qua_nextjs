@@ -73,6 +73,27 @@ test('index inventory honors expression columns and later index drops', () => {
   }
 });
 
+test('index inventory applies drops and recreations in SQL order', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'db-index-recreate-'));
+  const migrationFile = path.join(directory, '0030_rebuild_credit_history.d1.sql');
+  try {
+    fs.writeFileSync(migrationFile, `
+      CREATE INDEX IF NOT EXISTS idx_credit_owner ON credit_history (owner_id, created_at);
+      DROP INDEX IF EXISTS idx_credit_owner;
+      CREATE INDEX IF NOT EXISTS idx_credit_owner ON credit_history (owner_id, created_at DESC, id DESC);
+    `);
+    const indexes = parseIndexFiles([migrationFile]);
+    assert.deepEqual(indexes.get('idx_credit_owner'), {
+      name: 'idx_credit_owner',
+      table: 'credit_history',
+      columns: ['owner_id', 'created_atdesc', 'iddesc'],
+      unique: false,
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('critical access path comparison accepts a composite leftmost prefix and reports missing paths', () => {
   const postgresIndexes = new Map([
     ['org_name_type', { table: 'organization', columns: ['organization_name', 'org_type_uuid'] }],
@@ -85,6 +106,8 @@ test('critical access path comparison accepts a composite leftmost prefix and re
     ['catalogue_created', { table: 'vendor_catalogue', columns: ['created_at', 'id'] }],
     ['catalogue_vendor_created', { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'] }],
     ['catalogue_vendor_sku', { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'] }],
+    ['vendor_credit_history', { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_atdesc', 'iddesc'] }],
+    ['buyer_credit_history', { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_atdesc', 'iddesc'] }],
   ]);
   const d1Indexes = new Map([
     ['org_name_type', { table: 'organization', columns: ['organization_name', 'org_type_uuid'] }],
@@ -97,17 +120,21 @@ test('critical access path comparison accepts a composite leftmost prefix and re
     ['catalogue_created', { table: 'vendor_catalogue', columns: ['created_at', 'id'] }],
     ['catalogue_vendor_created', { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'] }],
     ['catalogue_vendor_sku', { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'] }],
+    ['vendor_credit_history', { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_atdesc', 'iddesc'] }],
+    ['buyer_credit_history', { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_atdesc', 'iddesc'] }],
   ]);
 
   assert.deepEqual(compareRequiredAccessPaths(postgresIndexes, d1Indexes), { postgres: [], d1: [] });
   d1Indexes.delete('org_category_user');
   d1Indexes.delete('catalogue_vendor_created');
+  d1Indexes.delete('buyer_credit_history');
   const result = compareRequiredAccessPaths(postgresIndexes, d1Indexes);
   assert.deepEqual(result.postgres, []);
-  assert.equal(result.d1.length, 2);
+  assert.equal(result.d1.length, 3);
   assert.deepEqual(result.d1.map((item) => item.query), [
     'buyer category reads and ordering by user',
     'bounded vendor catalogue listing by creation time',
+    'bounded buyer credit history by newest transaction',
   ]);
 });
 

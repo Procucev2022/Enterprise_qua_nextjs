@@ -2486,16 +2486,43 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getVendorCreditTransactionsFromDB lists transactions for a vendor', async () => {
       const txRows = [{ id: 'tx-1' }];
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: txRows }) };
+      const querySpy = jest.spyOn(pool, 'query');
 
       const res1 = await domainQueries.getVendorCreditTransactionsFromDB('v-1', 10);
       expect(res1).toEqual(txRows);
 
       const res2 = await domainQueries.getVendorCreditTransactionsFromDB('v-1', 0);
       expect(res2).toEqual(txRows);
+      expect(querySpy.mock.calls.map(([sql]) => sql)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
+      expect(querySpy.mock.calls.map(([, , options]) => options.d1Text)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
 
       pool.pool = null;
       await expect(domainQueries.getVendorCreditTransactionsFromDB('v-1')).resolves.toEqual([]);
       await expect(domainQueries.getVendorCreditTransactionsFromDB('')).resolves.toEqual([]);
+    });
+
+    test('getBuyerCreditTransactionsFromDB uses stable newest-first ordering for PostgreSQL and D1', async () => {
+      const txRows = [{ id: 'tx-buyer-1' }];
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: txRows }) };
+      const querySpy = jest.spyOn(pool, 'query');
+
+      await expect(domainQueries.getBuyerCreditTransactionsFromDB('buyer-1', 10)).resolves.toEqual(txRows);
+      await expect(domainQueries.getBuyerCreditTransactionsFromDB('buyer-1', 0)).resolves.toEqual(txRows);
+
+      expect(querySpy.mock.calls.map(([sql]) => sql)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
+      expect(querySpy.mock.calls.map(([, , options]) => options.d1Text)).toEqual([
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT $2'),
+        expect.stringContaining('ORDER BY created_at DESC, id DESC LIMIT 1000'),
+      ]);
     });
 
     test('getVendorsFromDB copies created_at and updated_at when missing on raw', async () => {

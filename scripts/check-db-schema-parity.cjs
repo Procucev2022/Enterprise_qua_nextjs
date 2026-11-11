@@ -38,6 +38,8 @@ const REQUIRED_ACCESS_PATHS = Object.freeze({
     { table: 'vendor_catalogue', columns: ['created_at', 'id'], query: 'bounded catalogue listing by creation time' },
     { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'], query: 'bounded vendor catalogue listing by creation time' },
     { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'], query: 'normalized duplicate SKU check by vendor' },
+    { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_at DESC', 'id DESC'], query: 'bounded vendor credit history by newest transaction' },
+    { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_at DESC', 'id DESC'], query: 'bounded buyer credit history by newest transaction' },
   ],
   d1: [
     { table: 'organization', columns: ['organization_name', 'org_type_uuid'], query: 'identity registration organization reuse' },
@@ -50,6 +52,8 @@ const REQUIRED_ACCESS_PATHS = Object.freeze({
     { table: 'vendor_catalogue', columns: ['created_at', 'id'], query: 'bounded catalogue listing by creation time' },
     { table: 'vendor_catalogue', columns: ['vendor_id', 'created_at', 'id'], query: 'bounded vendor catalogue listing by creation time' },
     { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'], query: 'normalized duplicate SKU check by vendor' },
+    { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_at DESC', 'id DESC'], query: 'bounded vendor credit history by newest transaction' },
+    { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_at DESC', 'id DESC'], query: 'bounded buyer credit history by newest transaction' },
   ],
 });
 
@@ -208,6 +212,7 @@ function parseIndexFiles(files) {
   const indexes = new Map();
   for (const filePath of files) {
     const source = stripSqlComments(fs.readFileSync(filePath, 'utf8'));
+    const operations = [];
     const createPattern = /\bCREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|`([^`]+)`|([a-z_][a-z0-9_]*))\s+ON\s+(?:ONLY\s+)?(?:"([^"]+)"|`([^`]+)`|([a-z_][a-z0-9_]*))(?:\s+USING\s+[a-z_][a-z0-9_]*)?\s*\(/gi;
     let createMatch;
     while ((createMatch = createPattern.exec(source))) {
@@ -218,16 +223,31 @@ function parseIndexFiles(files) {
       if (closeIndex < 0) throw new Error(`Unclosed CREATE INDEX definition in ${filePath}`);
       const columns = splitTopLevelDefinitions(source.slice(openIndex + 1, closeIndex))
         .map(normalizeIndexExpression);
-      if (!indexes.has(indexName)) {
-        indexes.set(indexName, { name: indexName, table: tableName, columns, unique: Boolean(createMatch[1]) });
-      }
+      operations.push({
+        position: createMatch.index,
+        type: 'create',
+        index: { name: indexName, table: tableName, columns, unique: Boolean(createMatch[1]) },
+      });
       createPattern.lastIndex = closeIndex + 1;
     }
 
     const dropPattern = /\bDROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:(?:"[^"]+"|`[^`]+`|[a-z_][a-z0-9_]*)\s*\.\s*)?(?:"([^"]+)"|`([^`]+)`|([a-z_][a-z0-9_]*))/gi;
     let dropMatch;
     while ((dropMatch = dropPattern.exec(source))) {
-      indexes.delete((dropMatch[1] || dropMatch[2] || dropMatch[3]).toLowerCase());
+      operations.push({
+        position: dropMatch.index,
+        type: 'drop',
+        name: (dropMatch[1] || dropMatch[2] || dropMatch[3]).toLowerCase(),
+      });
+    }
+
+    operations.sort((left, right) => left.position - right.position);
+    for (const operation of operations) {
+      if (operation.type === 'drop') {
+        indexes.delete(operation.name);
+      } else if (!indexes.has(operation.index.name)) {
+        indexes.set(operation.index.name, operation.index);
+      }
     }
   }
   return indexes;
