@@ -108,6 +108,8 @@ test('critical access path comparison accepts a composite leftmost prefix and re
     ['catalogue_vendor_sku', { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'] }],
     ['vendor_credit_history', { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_atdesc', 'iddesc'] }],
     ['buyer_credit_history', { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_atdesc', 'iddesc'] }],
+    ['vendor_payment_history', { table: 'payment_links', columns: ['vendor_id', 'created_atdesc', 'iddesc'] }],
+    ['buyer_payment_history', { table: 'payment_links', columns: ['buyer_account_id', 'created_atdesc', 'iddesc'] }],
   ]);
   const d1Indexes = new Map([
     ['org_name_type', { table: 'organization', columns: ['organization_name', 'org_type_uuid'] }],
@@ -122,19 +124,23 @@ test('critical access path comparison accepts a composite leftmost prefix and re
     ['catalogue_vendor_sku', { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'] }],
     ['vendor_credit_history', { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_atdesc', 'iddesc'] }],
     ['buyer_credit_history', { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_atdesc', 'iddesc'] }],
+    ['vendor_payment_history', { table: 'payment_links', columns: ['vendor_id', 'created_atdesc', 'iddesc'] }],
+    ['buyer_payment_history', { table: 'payment_links', columns: ['buyer_account_id', 'created_atdesc', 'iddesc'] }],
   ]);
 
   assert.deepEqual(compareRequiredAccessPaths(postgresIndexes, d1Indexes), { postgres: [], d1: [] });
   d1Indexes.delete('org_category_user');
   d1Indexes.delete('catalogue_vendor_created');
   d1Indexes.delete('buyer_credit_history');
+  d1Indexes.delete('buyer_payment_history');
   const result = compareRequiredAccessPaths(postgresIndexes, d1Indexes);
   assert.deepEqual(result.postgres, []);
-  assert.equal(result.d1.length, 3);
+  assert.equal(result.d1.length, 4);
   assert.deepEqual(result.d1.map((item) => item.query), [
     'buyer category reads and ordering by user',
     'bounded vendor catalogue listing by creation time',
     'bounded buyer credit history by newest transaction',
+    'bounded buyer payment link history by newest link',
   ]);
 });
 

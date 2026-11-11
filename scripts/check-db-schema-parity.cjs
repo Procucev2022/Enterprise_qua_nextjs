@@ -40,6 +40,8 @@ const REQUIRED_ACCESS_PATHS = Object.freeze({
     { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'], query: 'normalized duplicate SKU check by vendor' },
     { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_at DESC', 'id DESC'], query: 'bounded vendor credit history by newest transaction' },
     { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_at DESC', 'id DESC'], query: 'bounded buyer credit history by newest transaction' },
+    { table: 'payment_links', columns: ['vendor_id', 'created_at DESC', 'id DESC'], query: 'bounded vendor payment link history by newest link' },
+    { table: 'payment_links', columns: ['buyer_account_id', 'created_at DESC', 'id DESC'], query: 'bounded buyer payment link history by newest link' },
   ],
   d1: [
     { table: 'organization', columns: ['organization_name', 'org_type_uuid'], query: 'identity registration organization reuse' },
@@ -54,6 +56,8 @@ const REQUIRED_ACCESS_PATHS = Object.freeze({
     { table: 'vendor_catalogue', columns: ['vendor_id', 'lower(trim(sku))'], query: 'normalized duplicate SKU check by vendor' },
     { table: 'vendor_credit_transactions', columns: ['vendor_id', 'created_at DESC', 'id DESC'], query: 'bounded vendor credit history by newest transaction' },
     { table: 'buyer_credit_transactions', columns: ['buyer_id', 'created_at DESC', 'id DESC'], query: 'bounded buyer credit history by newest transaction' },
+    { table: 'payment_links', columns: ['vendor_id', 'created_at DESC', 'id DESC'], query: 'bounded vendor payment link history by newest link' },
+    { table: 'payment_links', columns: ['buyer_account_id', 'created_at DESC', 'id DESC'], query: 'bounded buyer payment link history by newest link' },
   ],
 });
 

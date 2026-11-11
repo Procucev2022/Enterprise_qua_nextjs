@@ -361,6 +361,7 @@ describe('PostgreSQL migration runner', () => {
         '0028_zoho_reconciliation_claims',
         '0029_vendor_catalogue_access_paths',
         '0030_credit_history_order_access_paths',
+        '0031_payment_link_history_access_paths',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
@@ -395,6 +396,19 @@ describe('PostgreSQL migration runner', () => {
       expect(sql).toContain('DROP INDEX IF EXISTS idx_buyer_credit_transactions_buyer');
       expect(sql).toContain('ON vendor_credit_transactions (vendor_id, created_at DESC, id DESC)');
       expect(sql).toContain('ON buyer_credit_transactions (buyer_id, created_at DESC, id DESC)');
+    }
+  });
+
+  test('payment link history migrations replace owner-only indexes with ordered paths', () => {
+    const migrationsDir = path.resolve(__dirname, '../src/db/migrations');
+    const postgresSql = fs.readFileSync(path.join(migrationsDir, '0031_payment_link_history_access_paths.pg.sql'), 'utf8');
+    const d1Sql = fs.readFileSync(path.join(migrationsDir, '0031_payment_link_history_access_paths.d1.sql'), 'utf8');
+
+    for (const sql of [postgresSql, d1Sql]) {
+      expect(sql).toContain('DROP INDEX IF EXISTS idx_payment_links_vendor_id');
+      expect(sql).toContain('DROP INDEX IF EXISTS idx_payment_links_buyer_account_id');
+      expect(sql).toContain('ON payment_links (vendor_id, created_at DESC, id DESC)');
+      expect(sql).toContain('ON payment_links (buyer_account_id, created_at DESC, id DESC)');
     }
   });
 

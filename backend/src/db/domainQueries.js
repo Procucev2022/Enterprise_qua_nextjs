@@ -2229,14 +2229,14 @@ async function getPaymentLinksByVendorFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
-    : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000';
+    ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+    : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000';
   const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
-      : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000',
+      ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,
@@ -2248,14 +2248,14 @@ async function getPaymentLinksByBuyerFromDB(buyerAccountId, limit = 50) {
   if (!pool.hasStorage() || !buyerAccountId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
-    ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
-    : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000';
+    ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+    : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000';
   const params = hasLimit ? [buyerAccountId, Math.min(Number(limit), 1000)] : [buyerAccountId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
-      : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000',
+      ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,

@@ -1902,11 +1902,16 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getPaymentLinksByVendorFromDB maps rows with and without limit', async () => {
       const link = { id: 'pl-v1', vendorId: 'v-1' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+      const querySpy = jest.spyOn(pool, 'query');
 
       await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1', 10)).resolves.toEqual([link]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('LIMIT $2'), ['v-1', 10]);
+      expect(querySpy.mock.calls[0][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
+      expect(querySpy.mock.calls[0][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
 
       await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1', 0)).resolves.toEqual([link]);
+      expect(querySpy.mock.calls[1][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
+      expect(querySpy.mock.calls[1][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
       pool.pool = null;
       await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1')).resolves.toEqual([]);
       await expect(domainQueries.getPaymentLinksByVendorFromDB('')).resolves.toEqual([]);
@@ -1915,11 +1920,16 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getPaymentLinksByBuyerFromDB maps rows with and without limit', async () => {
       const link = { id: 'pl-b1', buyerAccountId: 'b-1' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+      const querySpy = jest.spyOn(pool, 'query');
 
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1', 5)).resolves.toEqual([link]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('LIMIT $2'), ['b-1', 5]);
+      expect(querySpy.mock.calls[0][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
+      expect(querySpy.mock.calls[0][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT $2');
 
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1', 0)).resolves.toEqual([link]);
+      expect(querySpy.mock.calls[1][0]).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
+      expect(querySpy.mock.calls[1][2].d1Text).toContain('ORDER BY created_at DESC, id DESC LIMIT 1000');
       pool.pool = null;
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1')).resolves.toEqual([]);
       await expect(domainQueries.getPaymentLinksByBuyerFromDB('')).resolves.toEqual([]);
