@@ -5219,3 +5219,15 @@ https://qua.procucev.com/buyer/vendor-evaluation-summary
 This is not a vendor in our account, But the vendor is being displayed. Can you please check what could be the issue here.
 ```
 
+---
+
+### Prompt 138
+
+**Timestamp**: 2026-11-11T18:37:11+05:30
+
+```text
+This is our vendor’s profile. The vendor has not yet signed in to the portal, but multiple attachments have already been uploaded on his behalf.
+
+Can you please check & fix this.
+```
+

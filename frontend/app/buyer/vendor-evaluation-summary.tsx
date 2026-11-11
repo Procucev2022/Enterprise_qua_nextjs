@@ -86,60 +86,69 @@ function buildEvaluationRecordForVendor(vendor: any): VendorEvaluationRecord {
   const cat = vendor.majorCategory || vendor.category || 'General Industrial';
   const name = vendor.name || vendor.vendorName || 'Enterprise Supplier';
   const contact = vendor.contactPerson || (vendor.name ? `${vendor.name} Representative` : 'Authorized Representative');
-  const email = vendor.email || vendor.contactEmail || 'N/A';
-  const phone = vendor.phone || vendor.mobile || 'N/A';
+  const email = vendor.email || vendor.officialEmail || vendor.contactEmail || 'N/A';
+  const phone = vendor.phone || vendor.mobile || vendor.officialMobile || 'N/A';
   const id = vendor.id || 'v-001';
   const submissionDate = vendor.createdAt ? new Date(vendor.createdAt).toISOString().split('T')[0] : '2026-03-01';
 
-  const cleanName = name.replace(/[^a-zA-Z0-9]/g, '_');
   const catShort = cat.split('-')[0].trim();
+
+  // If vendor has actual uploaded documents or attachments, use them; otherwise, vendors who have not yet signed in or submitted attachments must not have fabricated attachments.
+  const vendorDocs: any[] = Array.isArray(vendor.documents) && vendor.documents.length > 0
+    ? vendor.documents
+    : Array.isArray(vendor.attachments) && vendor.attachments.length > 0
+    ? vendor.attachments
+    : [];
+  const hasUploadedDocs = vendorDocs.length > 0;
 
   const questions: QuestionEvaluationItem[] = [
     // M1 Commercial
-    { refId: 'M1-Q1', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Fixed Pricing Validity (12 Months)', score: 4.8, weightedScore: 6.25, attachmentName: `${cleanName}_Pricing_Agreement.pdf`, attachmentVerified: true, remarks: `12-month firm price schedule locked with volume tier discounting for ${catShort}.` },
-    { refId: 'M1-Q2', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Payment Terms Acceptance (Net 30/45)', score: 4.6, weightedScore: 6.25, attachmentName: `${cleanName}_Payment_Terms_Acceptance.pdf`, attachmentVerified: true, remarks: `Confirmed standard Net 30/45 days credit cycle with milestone reconciliation.` },
-    { refId: 'M1-Q3', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Freight & Logistics Terms (DDP/FCA)', score: 4.9, weightedScore: 6.25, attachmentName: `${cleanName}_Logistics_SLA.pdf`, attachmentVerified: true, remarks: `DDP delivery to buyer facility with transit insurance coverage included.` },
-    { refId: 'M1-Q4', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Annual Rebate & Volume Incentive Framework', score: 4.5, weightedScore: 6.25, attachmentName: `${cleanName}_Rebate_Matrix.xlsx`, attachmentVerified: true, remarks: `Retrospective volume rebate slabs configured for annual purchasing targets.` },
+    { refId: 'M1-Q1', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Fixed Pricing Validity (12 Months)', score: 4.8, weightedScore: 6.25, attachmentName: hasUploadedDocs ? (vendorDocs[0]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[0]?.verified) : false, remarks: `12-month firm price schedule locked with volume tier discounting for ${catShort}.` },
+    { refId: 'M1-Q2', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Payment Terms Acceptance (Net 30/45)', score: 4.6, weightedScore: 6.25, attachmentName: hasUploadedDocs ? (vendorDocs[1]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[1]?.verified) : false, remarks: `Confirmed standard Net 30/45 days credit cycle with milestone reconciliation.` },
+    { refId: 'M1-Q3', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Freight & Logistics Terms (DDP/FCA)', score: 4.9, weightedScore: 6.25, attachmentName: hasUploadedDocs ? (vendorDocs[2]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[2]?.verified) : false, remarks: `DDP delivery to buyer facility with transit insurance coverage included.` },
+    { refId: 'M1-Q4', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Annual Rebate & Volume Incentive Framework', score: 4.5, weightedScore: 6.25, attachmentName: hasUploadedDocs ? (vendorDocs[3]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[3]?.verified) : false, remarks: `Retrospective volume rebate slabs configured for annual purchasing targets.` },
 
     // M2 Technical
-    { refId: 'M2-Q1', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Precision Manufacturing & Tooling Capacity', score: 4.7, weightedScore: 3.75, attachmentName: `${cleanName}_Manufacturing_Audit.pdf`, attachmentVerified: true, remarks: `Dedicated manufacturing lines with calibrated QC tooling for ${cat}.` },
-    { refId: 'M2-Q2', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Engineering R&D & In-House Testing Facility', score: 4.5, weightedScore: 3.75, attachmentName: `${cleanName}_Lab_Accreditation.pdf`, attachmentVerified: true, remarks: `In-house certified testing apparatus and metallurgical inspection facility.` },
-    { refId: 'M2-Q3', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Drawing & Specification Interoperability', score: 4.8, weightedScore: 3.75, attachmentName: `${cleanName}_CAD_Spec_Sheet.pdf`, attachmentVerified: true, remarks: `Engineering CAD/CAM modeling adherence with 100% tolerance compliance.` },
-    { refId: 'M2-Q4', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Production Redundancy & Surge Capacity', score: 4.4, weightedScore: 3.75, attachmentName: `${cleanName}_Surge_Capacity_Plan.pdf`, attachmentVerified: true, remarks: `Multi-shift manufacturing buffer supporting up to 140% surge procurement volume.` },
+    { refId: 'M2-Q1', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Precision Manufacturing & Tooling Capacity', score: 4.7, weightedScore: 3.75, attachmentName: hasUploadedDocs ? (vendorDocs[4]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[4]?.verified) : false, remarks: `Dedicated manufacturing lines with calibrated QC tooling for ${cat}.` },
+    { refId: 'M2-Q2', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Engineering R&D & In-House Testing Facility', score: 4.5, weightedScore: 3.75, attachmentName: hasUploadedDocs ? (vendorDocs[5]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[5]?.verified) : false, remarks: `In-house certified testing apparatus and metallurgical inspection facility.` },
+    { refId: 'M2-Q3', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Drawing & Specification Interoperability', score: 4.8, weightedScore: 3.75, attachmentName: hasUploadedDocs ? (vendorDocs[6]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[6]?.verified) : false, remarks: `Engineering CAD/CAM modeling adherence with 100% tolerance compliance.` },
+    { refId: 'M2-Q4', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Production Redundancy & Surge Capacity', score: 4.4, weightedScore: 3.75, attachmentName: hasUploadedDocs ? (vendorDocs[7]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[7]?.verified) : false, remarks: `Multi-shift manufacturing buffer supporting up to 140% surge procurement volume.` },
 
     // M3 Quality & Warranty
-    { refId: 'M3-Q1', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'ISO 9001 / IATF Quality Certification', score: 5.0, weightedScore: 5.0, attachmentName: `${cleanName}_ISO_Quality_Certificate.pdf`, attachmentVerified: true, remarks: `Accredited ISO quality management certification valid through 2028.` },
-    { refId: 'M3-Q2', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Defect Rate Threshold (< 350 PPM)', score: 4.7, weightedScore: 5.0, attachmentName: `${cleanName}_Defect_Rate_Report.xlsx`, attachmentVerified: true, remarks: `Historical rejection rate maintained below 320 PPM with optical inspection.` },
-    { refId: 'M3-Q3', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Comprehensive Replacement Warranty (24 Months)', score: 4.8, weightedScore: 5.0, attachmentName: `${cleanName}_Warranty_Undertaking.pdf`, attachmentVerified: true, remarks: `24-month comprehensive replacement warranty with SLA-backed RMA dispatch.` },
-    { refId: 'M3-Q4', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Material Traceability & Batch QR/RFID Serialization', score: 4.6, weightedScore: 5.0, attachmentName: `${cleanName}_Traceability_Protocol.pdf`, attachmentVerified: true, remarks: `Mill-test certificate matching with batch barcode serialization.` },
+    { refId: 'M3-Q1', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'ISO 9001 / IATF Quality Certification', score: 5.0, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[8]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[8]?.verified) : false, remarks: `Accredited ISO quality management certification valid through 2028.` },
+    { refId: 'M3-Q2', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Defect Rate Threshold (< 350 PPM)', score: 4.7, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[9]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[9]?.verified) : false, remarks: `Historical rejection rate maintained below 320 PPM with optical inspection.` },
+    { refId: 'M3-Q3', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Comprehensive Replacement Warranty (24 Months)', score: 4.8, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[10]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[10]?.verified) : false, remarks: `24-month comprehensive replacement warranty with SLA-backed RMA dispatch.` },
+    { refId: 'M3-Q4', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Material Traceability & Batch QR/RFID Serialization', score: 4.6, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[11]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[11]?.verified) : false, remarks: `Mill-test certificate matching with batch barcode serialization.` },
 
     // M4 Delivery & SLA
-    { refId: 'M4-Q1', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Historical OTIF Delivery Track Record (>95%)', score: 4.8, weightedScore: 5.0, attachmentName: `${cleanName}_OTIF_Performance_Log.xlsx`, attachmentVerified: true, remarks: `96.8% On-Time In-Full dispatch track record over rolling 12-month orders.` },
-    { refId: 'M4-Q2', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Standard Production Lead Time Commitment', score: 4.5, weightedScore: 5.0, attachmentName: `${cleanName}_Lead_Time_SLA.pdf`, attachmentVerified: true, remarks: `Committed 7-10 business day dispatch lead time on primary line items.` },
-    { refId: 'M4-Q3', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Strategic Buffer Stock & Consignment Warehousing', score: 4.6, weightedScore: 5.0, attachmentName: `${cleanName}_Warehousing_Agreement.pdf`, attachmentVerified: true, remarks: `30-day buffer inventory maintained in regional supply depot.` },
-    { refId: 'M4-Q4', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Disaster Recovery & Business Continuity (BCP)', score: 4.5, weightedScore: 5.0, attachmentName: `${cleanName}_Business_Continuity_Plan.pdf`, attachmentVerified: true, remarks: `Active secondary facility failover protocols and multi-source tier-2 suppliers.` },
+    { refId: 'M4-Q1', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Historical OTIF Delivery Track Record (>95%)', score: 4.8, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[12]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[12]?.verified) : false, remarks: `96.8% On-Time In-Full dispatch track record over rolling 12-month orders.` },
+    { refId: 'M4-Q2', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Standard Production Lead Time Commitment', score: 4.5, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[13]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[13]?.verified) : false, remarks: `Committed 7-10 business day dispatch lead time on primary line items.` },
+    { refId: 'M4-Q3', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Strategic Buffer Stock & Consignment Warehousing', score: 4.6, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[14]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[14]?.verified) : false, remarks: `30-day buffer inventory maintained in regional supply depot.` },
+    { refId: 'M4-Q4', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Disaster Recovery & Business Continuity (BCP)', score: 4.5, weightedScore: 5.0, attachmentName: hasUploadedDocs ? (vendorDocs[15]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[15]?.verified) : false, remarks: `Active secondary facility failover protocols and multi-source tier-2 suppliers.` },
 
     // M5 Financial Stability
-    { refId: 'M5-Q1', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Audited Turnover & Scope Coverage Ratio', score: 4.7, weightedScore: 2.5, attachmentName: `${cleanName}_Audited_Financials.pdf`, attachmentVerified: true, remarks: `Annual financial turnover provides > 4x scope coverage with sound balance sheet.` },
-    { refId: 'M5-Q2', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Credit Rating & Working Capital Adequacy', score: 4.6, weightedScore: 2.5, attachmentName: `${cleanName}_Credit_Rating_Report.pdf`, attachmentVerified: true, remarks: `Investment-grade credit rating with healthy liquidity ratio.` },
-    { refId: 'M5-Q3', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Statutory GSTIN, PAN & Tax Clearance', score: 5.0, weightedScore: 2.5, attachmentName: `${cleanName}_GST_Tax_Clearance.pdf`, attachmentVerified: true, remarks: `Reconciled GSTR-1/3B statutory filings with active GSTIN status.` },
-    { refId: 'M5-Q4', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Bank Solvency & Credit Line Certificate', score: 4.8, weightedScore: 2.5, attachmentName: `${cleanName}_Bank_Solvency_Letter.pdf`, attachmentVerified: true, remarks: `Bank solvency certificate and unencumbered working capital line verified.` },
+    { refId: 'M5-Q1', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Audited Turnover & Scope Coverage Ratio', score: 4.7, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[16]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[16]?.verified) : false, remarks: `Annual financial turnover provides > 4x scope coverage with sound balance sheet.` },
+    { refId: 'M5-Q2', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Credit Rating & Working Capital Adequacy', score: 4.6, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[17]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[17]?.verified) : false, remarks: `Investment-grade credit rating with healthy liquidity ratio.` },
+    { refId: 'M5-Q3', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Statutory GSTIN, PAN & Tax Clearance', score: 5.0, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[18]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[18]?.verified) : false, remarks: `Reconciled GSTR-1/3B statutory filings with active GSTIN status.` },
+    { refId: 'M5-Q4', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Bank Solvency & Credit Line Certificate', score: 4.8, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[19]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[19]?.verified) : false, remarks: `Bank solvency certificate and unencumbered working capital line verified.` },
 
     // M6 Governance & ESG
-    { refId: 'M6-Q1', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Anti-Bribery, Ethics & Whistleblower Protocol', score: 5.0, weightedScore: 2.5, attachmentName: `${cleanName}_Code_Of_Conduct.pdf`, attachmentVerified: true, remarks: `Signed enterprise ethical code of conduct and whistleblower policy.` },
-    { refId: 'M6-Q2', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Occupational Health & Safety (ISO 45001)', score: 4.8, weightedScore: 2.5, attachmentName: `${cleanName}_ISO_45001_OHSAS.pdf`, attachmentVerified: true, remarks: `Certified workplace health and industrial safety standards implemented.` },
-    { refId: 'M6-Q3', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Environmental Management (ISO 14001)', score: 4.6, weightedScore: 2.5, attachmentName: `${cleanName}_ISO_14001_Environmental.pdf`, attachmentVerified: true, remarks: `RoHS/REACH environmental compliance and waste reduction protocols active.` },
-    { refId: 'M6-Q4', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Information Security & Data Privacy (ISO 27001)', score: 4.7, weightedScore: 2.5, attachmentName: `${cleanName}_InfoSec_Compliance.pdf`, attachmentVerified: true, remarks: `ISO 27001 data governance and strict commercial NDA adherence verified.` },
+    { refId: 'M6-Q1', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Anti-Bribery, Ethics & Whistleblower Protocol', score: 5.0, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[20]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[20]?.verified) : false, remarks: `Signed enterprise ethical code of conduct and whistleblower policy.` },
+    { refId: 'M6-Q2', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Occupational Health & Safety (ISO 45001)', score: 4.8, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[21]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[21]?.verified) : false, remarks: `Certified workplace health and industrial safety standards implemented.` },
+    { refId: 'M6-Q3', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Environmental Management (ISO 14001)', score: 4.6, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[22]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[22]?.verified) : false, remarks: `RoHS/REACH environmental compliance and waste reduction protocols active.` },
+    { refId: 'M6-Q4', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Information Security & Data Privacy (ISO 27001)', score: 4.7, weightedScore: 2.5, attachmentName: hasUploadedDocs ? (vendorDocs[23]?.name || '') : '', attachmentVerified: hasUploadedDocs ? Boolean(vendorDocs[23]?.verified) : false, remarks: `ISO 27001 data governance and strict commercial NDA adherence verified.` },
   ];
 
-  const documents: VendorEvaluationDocument[] = questions.map((q, idx) => ({
-    id: `doc-${idx + 1}`,
-    name: q.attachmentName,
-    type: q.pillarId === 'M1' ? 'Commercial & Pricing' : q.pillarId === 'M2' ? 'Technical Specifications' : q.pillarId === 'M3' ? 'Quality & Warranty' : q.pillarId === 'M4' ? 'Delivery & Logistics' : q.pillarId === 'M5' ? 'Financial Audit' : 'Governance & ESG',
-    uploadDate: submissionDate,
-    verified: true,
-    status: 'Verified' as const,
-  }));
+  const documents: VendorEvaluationDocument[] = hasUploadedDocs
+    ? vendorDocs.map((doc: any, idx: number) => ({
+        id: doc.id || `doc-${idx + 1}`,
+        name: doc.name || doc.fileName || `Attachment-${idx + 1}.pdf`,
+        type: doc.type || 'Compliance Document',
+        uploadDate: doc.uploadDate || doc.uploadedAt || submissionDate,
+        verified: Boolean(doc.verified),
+        status: (doc.status === 'Verified' || doc.status === 'VERIFIED') ? ('Verified' as const) : (doc.status === 'Missing' ? ('Missing' as const) : ('Pending Review' as const)),
+      }))
+    : [];
 
   return {
     id: `eval-${id}`,
@@ -179,18 +188,23 @@ export default function VendorEvaluationSummary({
 
   // Combined company list for dropdown
   const companyOptions = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; category: string; source?: string; score: number; status?: string }>();
+    const map = new Map<string, { id: string; name: string; category: string; source?: string; score: number; status?: string; contactPerson?: string; email?: string; phone?: string; documents?: any[]; createdAt?: string }>();
 
     // From buyerVendors
     (buyerVendors || []).forEach((v) => {
       if (v.id) {
         map.set(v.id, {
+          ...(v as any),
           id: v.id,
           name: v.name || (v as any).vendorName || 'Enterprise Supplier',
           category: v.majorCategory || (v as any).category || 'General Industrial',
           source: v.source,
           score: Number(v.score) || 92,
           status: v.status,
+          contactPerson: v.contactPerson || (v.name ? `${v.name} Representative` : 'Authorized Representative'),
+          email: v.email || (v as any).officialEmail || (v as any).contactEmail || '',
+          phone: v.phone || (v as any).mobile || '',
+          documents: (v as any).documents || (v as any).attachments || [],
         });
       }
     });
@@ -199,12 +213,17 @@ export default function VendorEvaluationSummary({
     (vendorEvaluations || []).forEach((e) => {
       if (e.vendorId && !map.has(e.vendorId)) {
         map.set(e.vendorId, {
+          ...(e as any),
           id: e.vendorId,
           name: e.vendorName || 'Enterprise Supplier',
           category: e.category || 'General Industrial',
           source: (e as any).source || 'evaluated',
           score: Number(e.overallScore) || 90,
           status: e.status,
+          contactPerson: e.contactPerson,
+          email: e.email,
+          phone: e.phone,
+          documents: e.documents || [],
         });
       }
     });
@@ -212,12 +231,17 @@ export default function VendorEvaluationSummary({
     // If initial record is passed and not yet in map
     if (evaluationRecord && evaluationRecord.vendorId && !map.has(evaluationRecord.vendorId)) {
       map.set(evaluationRecord.vendorId, {
+        ...(evaluationRecord as any),
         id: evaluationRecord.vendorId,
         name: evaluationRecord.vendorName,
         category: evaluationRecord.category,
         source: (evaluationRecord as any).source,
         score: evaluationRecord.overallScore,
         status: evaluationRecord.status,
+        contactPerson: evaluationRecord.contactPerson,
+        email: evaluationRecord.email,
+        phone: evaluationRecord.phone,
+        documents: evaluationRecord.documents || [],
       });
     }
 
@@ -297,7 +321,9 @@ export default function VendorEvaluationSummary({
     if (companyOptions.length > 0) {
       const firstCompany = companyOptions[0];
       const match = vendorEvaluations?.find((e) => e.vendorId === firstCompany.id);
-      return match || buildEvaluationRecordForVendor(firstCompany);
+      if (match) return match;
+      const fullVendor = buyerVendors?.find((v) => v.id === firstCompany.id) || firstCompany;
+      return buildEvaluationRecordForVendor(fullVendor);
     }
 
     // 6. Fallback to vendorEvaluations or buyerVendors
@@ -464,6 +490,33 @@ export default function VendorEvaluationSummary({
   const filteredQuestions = selectedPillarFilter === 'ALL'
     ? questions
     : questions.filter((q) => q.pillarId === selectedPillarFilter);
+
+  const getPillarAttachmentSummary = (pillarId: string) => {
+    const pillarQuestions = (record.questionBreakdown || []).filter((q) => q.pillarId === pillarId);
+    const total = pillarQuestions.length || 4;
+    const uploaded = pillarQuestions.filter((q) => Boolean(q.attachmentName)).length;
+    const verified = pillarQuestions.filter((q) => Boolean(q.attachmentVerified)).length;
+
+    if (uploaded === 0) {
+      return {
+        label: `0/${total} Uploaded`,
+        statusLabel: 'Pending Vendor Upload',
+        statusColor: 'text-amber-600 dark:text-amber-400 font-semibold',
+      };
+    }
+    if (verified === total) {
+      return {
+        label: `${total}/${total} Mandatory Attachments`,
+        statusLabel: '100% OCR Passed',
+        statusColor: 'text-emerald-700 dark:text-emerald-400 font-bold',
+      };
+    }
+    return {
+      label: `${uploaded}/${total} Uploaded`,
+      statusLabel: `${verified}/${uploaded} OCR Verified`,
+      statusColor: 'text-indigo-600 dark:text-indigo-400 font-medium',
+    };
+  };
 
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
@@ -708,7 +761,15 @@ export default function VendorEvaluationSummary({
             <span>Automated Execution:</span>
             <span className="font-normal text-emerald-900 dark:text-emerald-200">{record.systemAction}</span>
           </div>
-          <span className="badge badge-emerald">24/24 Attachments Verified</span>
+          {documents.length === 0 ? (
+            <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40 flex items-center gap-1 font-mono">
+              <Clock size={11} /> 0/24 Attachments Uploaded (Pending Vendor Submission)
+            </span>
+          ) : (
+            <span className="badge badge-emerald font-mono">
+              {documents.filter((d) => d.verified || d.status === 'Verified').length}/{documents.length} Attachments Verified
+            </span>
+          )}
         </div>
       </div>
 
@@ -741,8 +802,8 @@ export default function VendorEvaluationSummary({
                 />
               </div>
               <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                <span>4/4 Mandatory Attachments</span>
-                <span className="text-emerald-600 font-bold">100% OCR Passed</span>
+                <span>{getPillarAttachmentSummary('M1').label}</span>
+                <span className={getPillarAttachmentSummary('M1').statusColor}>{getPillarAttachmentSummary('M1').statusLabel}</span>
               </div>
             </div>
             <div className="p-2 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 text-[10px] text-indigo-900 dark:text-indigo-200">
@@ -772,8 +833,8 @@ export default function VendorEvaluationSummary({
                 />
               </div>
               <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                <span>4/4 Mandatory Attachments</span>
-                <span className="text-emerald-600 font-bold">100% OCR Passed</span>
+                <span>{getPillarAttachmentSummary('M2').label}</span>
+                <span className={getPillarAttachmentSummary('M2').statusColor}>{getPillarAttachmentSummary('M2').statusLabel}</span>
               </div>
             </div>
             <div className="p-2 rounded-lg bg-sky-50/70 dark:bg-cyan-950/50 border border-sky-100 dark:border-cyan-800/60 text-[10px] text-sky-900 dark:text-cyan-200">
@@ -803,8 +864,8 @@ export default function VendorEvaluationSummary({
                 />
               </div>
               <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                <span>4/4 Mandatory Attachments</span>
-                <span className="text-emerald-600 font-bold">100% OCR Passed</span>
+                <span>{getPillarAttachmentSummary('M3').label}</span>
+                <span className={getPillarAttachmentSummary('M3').statusColor}>{getPillarAttachmentSummary('M3').statusLabel}</span>
               </div>
             </div>
             <div className="p-2 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/60 text-[10px] text-emerald-900 dark:text-emerald-200">
@@ -834,8 +895,8 @@ export default function VendorEvaluationSummary({
                 />
               </div>
               <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                <span>4/4 Mandatory Attachments</span>
-                <span className="text-emerald-600 font-bold">100% OCR Passed</span>
+                <span>{getPillarAttachmentSummary('M4').label}</span>
+                <span className={getPillarAttachmentSummary('M4').statusColor}>{getPillarAttachmentSummary('M4').statusLabel}</span>
               </div>
             </div>
             <div className="p-2 rounded-lg bg-purple-50/70 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-800/60 text-[10px] text-purple-900 dark:text-purple-200">
@@ -865,8 +926,8 @@ export default function VendorEvaluationSummary({
                 />
               </div>
               <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                <span>4/4 Mandatory Attachments</span>
-                <span className="text-emerald-600 font-bold">100% OCR Passed</span>
+                <span>{getPillarAttachmentSummary('M5').label}</span>
+                <span className={getPillarAttachmentSummary('M5').statusColor}>{getPillarAttachmentSummary('M5').statusLabel}</span>
               </div>
             </div>
             <div className="p-2 rounded-lg bg-amber-50/70 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-800/60 text-[10px] text-amber-900 dark:text-amber-200">
@@ -896,8 +957,8 @@ export default function VendorEvaluationSummary({
                 />
               </div>
               <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                <span>4/4 Mandatory Attachments</span>
-                <span className="text-emerald-600 font-bold">100% OCR Passed</span>
+                <span>{getPillarAttachmentSummary('M6').label}</span>
+                <span className={getPillarAttachmentSummary('M6').statusColor}>{getPillarAttachmentSummary('M6').statusLabel}</span>
               </div>
             </div>
             <div className="p-2 rounded-lg bg-rose-50/70 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-800/60 text-[10px] text-rose-900 dark:text-rose-200">
@@ -963,13 +1024,26 @@ export default function VendorEvaluationSummary({
                     {q.criteria}
                   </td>
                   <td className="py-2 px-2.5">
-                    <div className="flex items-center gap-1.5 font-mono text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
-                      <Paperclip size={12} className="shrink-0" />
-                      <span className="truncate max-w-[160px]" title={q.attachmentName}>{q.attachmentName}</span>
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                        ✓ Verified
-                      </span>
-                    </div>
+                    {q.attachmentName ? (
+                      <div className="flex items-center gap-1.5 font-mono text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
+                        <Paperclip size={12} className="shrink-0" />
+                        <span className="truncate max-w-[160px]" title={q.attachmentName}>{q.attachmentName}</span>
+                        {q.attachmentVerified ? (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                            ✓ Verified
+                          </span>
+                        ) : (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 shrink-0">
+                            Pending Review
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400 font-medium">
+                        <Clock size={11} className="shrink-0" />
+                        <span>Awaiting Vendor Upload</span>
+                      </div>
+                    )}
                   </td>
                   <td className="py-2 px-2.5 text-center font-bold text-slate-800 dark:text-gray-200 mono">
                     {(q.score ?? 0).toFixed(1)} / 5.0
@@ -987,59 +1061,85 @@ export default function VendorEvaluationSummary({
         </div>
       </div>
 
-      {/* 24 Verified Mandatory Attachments Overview Card */}
+      {/* Mandatory Attachments Overview Card */}
       <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
             <Paperclip size={15} className="text-indigo-600 dark:text-indigo-400" />
-            24 Mandatory PDF/Excel File Attachments Audit Status ({documents.length} Files)
+            Mandatory File Attachments Audit Status ({documents.length} Files)
           </h3>
-          <span className="badge badge-emerald">24/24 OCR Verification 100%</span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-400 dark:text-gray-500 uppercase tracking-wider text-[10px]">
-                <th className="py-2 px-2">Document File Title</th>
-                <th className="py-2 px-2">Criteria Type</th>
-                <th className="py-2 px-2">Uploaded On</th>
-                <th className="py-2 px-2">OCR Audit Status</th>
-                <th className="py-2 px-2 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-              {documents.slice(0, 12).map((doc) => (
-                <tr key={doc.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                  <td className="py-2 px-2 font-semibold text-slate-800 dark:text-gray-200 flex items-center gap-2">
-                    <FileText size={14} className="text-indigo-500 shrink-0" />
-                    <span>{doc.name}</span>
-                  </td>
-                  <td className="py-2 px-2 text-slate-600 dark:text-gray-400">{doc.type}</td>
-                  <td className="py-2 px-2 text-slate-400 dark:text-gray-500 mono">{doc.uploadDate}</td>
-                  <td className="py-2 px-2">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
-                      ✓ {doc.status}
-                    </span>
-                  </td>
-                  <td className="py-2 px-2 text-right">
-                    <button
-                      onClick={() => showToast('Document Opened', `Viewing ${doc.name} in secure Azure Blob viewer.`, 'info')}
-                      className="btn btn-ghost btn-sm text-[11px] text-indigo-600 dark:text-indigo-400"
-                    >
-                      <ExternalLink size={12} /> Preview
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {documents.length > 12 && (
-            <div className="text-center py-2 text-xs text-indigo-600 font-bold">
-              + {documents.length - 12} additional mandatory documents verified in Azure Blob Storage.
-            </div>
+          {documents.length === 0 ? (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40">
+              0 Uploaded • Awaiting Vendor Submission
+            </span>
+          ) : (
+            <span className="badge badge-emerald">
+              {documents.filter((d) => d.verified || d.status === 'Verified').length}/{documents.length} OCR Verified
+            </span>
           )}
         </div>
+
+        {documents.length === 0 ? (
+          <div className="py-6 px-4 rounded-lg border border-dashed border-amber-200 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/20 text-center">
+            <Clock size={28} className="mx-auto mb-2 text-amber-600 dark:text-amber-400 opacity-80" />
+            <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 mb-1">
+              No Attachments Uploaded on Vendor&apos;s Behalf
+            </h4>
+            <p className="text-[11px] text-slate-600 dark:text-gray-400 max-w-md mx-auto">
+              This vendor has not yet signed in to the vendor portal to submit compliance documents. Once the supplier authenticates and submits required documentation, attachments will be audited and displayed here.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-400 dark:text-gray-500 uppercase tracking-wider text-[10px]">
+                  <th className="py-2 px-2">Document File Title</th>
+                  <th className="py-2 px-2">Criteria Type</th>
+                  <th className="py-2 px-2">Uploaded On</th>
+                  <th className="py-2 px-2">OCR Audit Status</th>
+                  <th className="py-2 px-2 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                {documents.slice(0, 12).map((doc) => (
+                  <tr key={doc.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
+                    <td className="py-2 px-2 font-semibold text-slate-800 dark:text-gray-200 flex items-center gap-2">
+                      <FileText size={14} className="text-indigo-500 shrink-0" />
+                      <span>{doc.name}</span>
+                    </td>
+                    <td className="py-2 px-2 text-slate-600 dark:text-gray-400">{doc.type}</td>
+                    <td className="py-2 px-2 text-slate-400 dark:text-gray-500 mono">{doc.uploadDate}</td>
+                    <td className="py-2 px-2">
+                      {doc.status === 'Verified' ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
+                          ✓ Verified
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30">
+                          {doc.status}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 px-2 text-right">
+                      <button
+                        onClick={() => showToast('Document Opened', `Viewing ${doc.name} in secure document viewer.`, 'info')}
+                        className="btn btn-ghost btn-sm text-[11px] text-indigo-600 dark:text-indigo-400"
+                      >
+                        <ExternalLink size={12} /> Preview
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {documents.length > 12 && (
+              <div className="text-center py-2 text-xs text-indigo-600 font-bold">
+                + {documents.length - 12} additional mandatory documents verified in cloud storage.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Manual Score Override Modal */}

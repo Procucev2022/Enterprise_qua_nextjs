@@ -146,7 +146,7 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     expect(screen.getAllByText('Apex Supplies Ltd.').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
     expect(screen.getByText('94%')).toBeInTheDocument();
-    expect(screen.getByText('+ 2 additional mandatory documents verified in Azure Blob Storage.')).toBeInTheDocument();
+    expect(screen.getByText('+ 2 additional mandatory documents verified in cloud storage.')).toBeInTheDocument();
 
     // Click back button
     fireEvent.click(screen.getByText('Back'));
@@ -524,5 +524,85 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     // Should display buyer's vendor, NOT the unassociated vendor
     expect(screen.getAllByText('Govardhan Solutions pvt LTD').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Veera Solutions Pvt LTD')).not.toBeInTheDocument();
+  });
+
+  it('correctly handles a vendor who has not logged in and has no uploaded documents', () => {
+    const unSignedInVendor = {
+      id: 'v-1794373914682-506a',
+      name: 'Shiva Enterprises',
+      majorCategory: 'IT',
+      contactPerson: 'Shiva',
+      officialEmail: 'it.coordinator@growelfeeds.com',
+      mobile: '9908445040',
+      source: 'buyer_uploaded',
+      score: 90,
+      createdAt: '2026-03-01T10:00:00Z',
+      documents: [],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      buyerVendors: [unSignedInVendor],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+      setActiveEvaluationRecord: jest.fn(),
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={null} />);
+
+    // Should display Shiva Enterprises and real contact information
+    expect(screen.getAllByText('Shiva Enterprises').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Shiva')).toBeInTheDocument();
+    expect(screen.getByText('it.coordinator@growelfeeds.com')).toBeInTheDocument();
+    expect(screen.getByText('9908445040')).toBeInTheDocument();
+
+    // Should show 0/24 attachments banner with pending status
+    expect(screen.getByText('0/24 Attachments Uploaded (Pending Vendor Submission)')).toBeInTheDocument();
+
+    // Should show pillar cards with 0/4 Uploaded • Pending Vendor Upload
+    expect(screen.getAllByText('0/4 Uploaded').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Pending Vendor Upload').length).toBeGreaterThanOrEqual(1);
+
+    // Criteria table should display "Awaiting Vendor Upload" instead of fake filenames
+    expect(screen.getAllByText('Awaiting Vendor Upload').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Shiva_Enterprises_Pricing_Agreement.pdf')).not.toBeInTheDocument();
+
+    // Bottom attachment card should show empty state
+    expect(screen.getByText(/0 Uploaded • Awaiting Vendor Submission/i)).toBeInTheDocument();
+    expect(screen.getByText(/No Attachments Uploaded on Vendor's Behalf/i)).toBeInTheDocument();
+  });
+
+  it('correctly renders uploaded documents when vendor has actual attachments submitted', () => {
+    const vendorWithDocs = {
+      id: 'v-has-docs-1',
+      name: 'Verified Vendor Corp',
+      majorCategory: 'Electrical',
+      contactPerson: 'Anil Kumar',
+      email: 'anil@verifiedcorp.com',
+      phone: '9876543210',
+      source: 'buyer_uploaded',
+      score: 85,
+      documents: [
+        { id: 'doc-v1', name: 'Pricing_Sheet.pdf', type: 'Commercial', verified: true, status: 'Verified' },
+        { id: 'doc-v2', name: 'ISO_Certificate.pdf', type: 'Quality', verified: false, status: 'Pending Review' },
+      ],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      buyerVendors: [vendorWithDocs],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+      setActiveEvaluationRecord: jest.fn(),
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={null} />);
+
+    expect(screen.getAllByText('Verified Vendor Corp').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Pricing_Sheet.pdf').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('ISO_Certificate.pdf').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('1/2 Attachments Verified')).toBeInTheDocument();
   });
 });
