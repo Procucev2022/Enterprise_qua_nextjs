@@ -5158,4 +5158,18 @@ I want database migrations to happen via CI-CD pipeline,  for this where should 
 ```
 
 
+---
+
+### Prompt 133
+
+**Timestamp**: 2026-11-11T13:24:52+05:30
+
+```text
+We haven't added this information but PAN & Udhyam Number is showing. 
+
+Can you please check what is this issue.
+```
+
+
+
 

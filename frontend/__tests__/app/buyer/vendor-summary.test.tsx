@@ -1076,7 +1076,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getAllByText('N/A').length).toBeGreaterThan(0);
       expect(screen.getByText('No specific minors tagged')).toBeInTheDocument();
       expect(screen.getAllByText('General Industrial').length).toBeGreaterThan(0);
-      expect(screen.getByText('27AAACD1234F1Z5')).toBeInTheDocument();
+      expect(screen.getAllByText('Not Provided').length).toBeGreaterThan(0);
     });
 
     it('opens the Edit modal with vendor default fallbacks when most fields are missing', () => {
