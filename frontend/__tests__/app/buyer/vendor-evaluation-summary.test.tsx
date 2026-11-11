@@ -495,4 +495,34 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     rerender(<VendorEvaluationSummary evaluationRecord={null} />);
     expect(screen.getAllByText('Fallback Vendor Co').length).toBeGreaterThanOrEqual(1);
   });
+
+  it('does not display unassociated network vendors when buyer has their own approved vendors', () => {
+    const unassociatedNetworkEval: any = {
+      ...mockEvaluationRecord,
+      id: 'eval-veera',
+      vendorId: 'v-1794296880504',
+      vendorName: 'Veera Solutions Pvt LTD',
+      source: 'public_portal',
+    };
+    const buyerApprovedVendor = {
+      id: 'v-buyer-approved-1',
+      name: 'Govardhan Solutions pvt LTD',
+      majorCategory: 'General Spares',
+      score: 95,
+      source: 'buyer_uploaded',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [unassociatedNetworkEval],
+      buyerVendors: [buyerApprovedVendor],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={null} />);
+    // Should display buyer's vendor, NOT the unassociated vendor
+    expect(screen.getAllByText('Govardhan Solutions pvt LTD').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Veera Solutions Pvt LTD')).not.toBeInTheDocument();
+  });
 });

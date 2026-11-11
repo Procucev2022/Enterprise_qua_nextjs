@@ -232,4 +232,112 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-123' } }, res, jest.fn());
     expect(res.statusCode).toBe(200);
   });
+
+  test('buyer evaluation and vendor scoping filters unassociated vendors and evaluations', async () => {
+    const buyerAccount = {
+      id: 'buyer-acc-123',
+      corporateEmail: 'buyer@enterprise.com',
+    };
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(buyerAccount);
+
+    const ownedVendor1 = {
+      id: 'v-owned-1',
+      buyerAccountId: 'buyer-acc-123',
+      email: 'vendor1@owned.com',
+      name: 'Owned Vendor 1',
+    };
+    const ownedVendor2 = {
+      id: 'v-owned-2',
+      buyerEmail: 'buyer@enterprise.com',
+      email: 'vendor2@owned.com',
+      name: 'Owned Vendor 2',
+    };
+    const foreignVendor = {
+      id: 'v-foreign-99',
+      buyerAccountId: 'buyer-acc-other',
+      email: 'foreign@other.com',
+      name: 'Foreign Vendor',
+    };
+
+    const evalOwnedByBuyerId = {
+      id: 'eval-1',
+      buyerAccountId: 'buyer-acc-123',
+      vendorId: 'v-unknown',
+      vendorName: 'Direct Buyer Eval',
+    };
+    const evalOwnedByVendorId = {
+      id: 'eval-2',
+      vendorId: 'v-owned-1',
+      vendorName: 'Owned Vendor 1 Eval',
+    };
+    const evalOwnedByVendorEmail = {
+      id: 'eval-3',
+      vendorId: 'v-diff',
+      email: 'vendor2@owned.com',
+      vendorName: 'Owned Vendor 2 Eval',
+    };
+    const evalForeign = {
+      id: 'eval-foreign',
+      vendorId: 'v-foreign-99',
+      email: 'foreign@other.com',
+      vendorName: 'Veera Solutions Pvt LTD',
+    };
+
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      vendors: [ownedVendor1, ownedVendor2, foreignVendor],
+      evaluations: [evalOwnedByBuyerId, evalOwnedByVendorId, evalOwnedByVendorEmail, evalForeign],
+    });
+
+    const req = {
+      user: {
+        role: 'buyer',
+        email: 'buyer@enterprise.com',
+        id: 'user-buyer-1',
+      },
+    };
+    const res = mockRes();
+    await bootstrapController.getBootstrap(req, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    // Foreign evaluation must be filtered out for the buyer!
+    expect(res.data.data.evaluations).toHaveLength(3);
+    expect(res.data.data.evaluations.map((e) => e.id)).toEqual(['eval-1', 'eval-2', 'eval-3']);
+    expect(res.data.data.evaluations.find((e) => e.vendorName === 'Veera Solutions Pvt LTD')).toBeUndefined();
+
+    // Foreign vendor must be sanitized
+    const returnedForeignVendor = res.data.data.vendors.find((v) => v.id === 'v-foreign-99');
+    expect(returnedForeignVendor).toBeDefined();
+    expect(returnedForeignVendor.contactEmail).toBeUndefined();
+  });
+
+  test('vendor role scopes vendors and recognizes isOwnVendor', async () => {
+    const ownVendor = {
+      id: 'v-vendor-own',
+      email: 'supplier@own.com',
+      name: 'My Own Vendor Profile',
+    };
+    const otherVendor = {
+      id: 'v-other',
+      email: 'other@vendor.com',
+      name: 'Other Vendor',
+    };
+
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      vendors: [ownVendor, otherVendor],
+      evaluations: [],
+    });
+
+    const req = {
+      user: {
+        role: 'vendor',
+        email: 'supplier@own.com',
+      },
+    };
+    const res = mockRes();
+    await bootstrapController.getBootstrap(req, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    const returnedOwn = res.data.data.vendors.find((v) => v.id === 'v-vendor-own');
+    expect(returnedOwn.email).toBe('supplier@own.com');
+  });
 });

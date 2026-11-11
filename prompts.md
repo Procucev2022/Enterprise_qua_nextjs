@@ -5206,3 +5206,16 @@ On the left - It is showing Quotes - 1 and the one with arrow marked showing 0/0
 ```text
 Vendor-side Zoho payment is not working, and 18% GST is not being added to the subscription amount. Buyer-side payment is working correctly with 18% GST.
 ```
+
+---
+
+### Prompt 137
+
+**Timestamp**: 2026-11-11T17:55:37+05:30
+
+```text
+https://qua.procucev.com/buyer/vendor-evaluation-summary
+
+This is not a vendor in our account, But the vendor is being displayed. Can you please check what could be the issue here.
+```
+

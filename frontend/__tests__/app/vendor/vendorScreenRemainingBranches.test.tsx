@@ -181,13 +181,9 @@ describe('opportunity feed navigation, matching and access failures', () => {
   });
 
   test('matches a real vendor minor category and buyer account relationship', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true, json: async () => ({
-        success: true, data: {
-          majorCategory: 'Another Category', minorCategories: [' precision valves '], buyerAccountId: 'buyer-account',
-        }
-      })
-    });
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: {
+      majorCategory: 'Another Category', minorCategories: [' precision valves '], buyerAccountId: 'buyer-account',
+    } }) });
     mockApp.vendorOpportunities = [makeOpportunity({ majorCategory: 'Mechanical', minorCategory: 'Precision Valves', buyerAccountId: 'buyer-account' })];
     const { container } = render(<OpportunityFeed onNavigateToBidForm={jest.fn()} />);
     await waitFor(() => expect(container.querySelector('.border-emerald-300')).toBeInTheDocument());
@@ -287,12 +283,10 @@ describe('catalogue workbook preview validation', () => {
   test('marks existing and duplicate SKUs while importing only valid rows', async () => {
     mockApp.currentUserSession = { ...SESSION, orgName: '' };
     mockApp.vendorCatalogue = [{ id: 'existing', name: 'Existing', sku: 'EXISTING', category: 'Pumps', specs: '', unitPrice: 1, leadTimeDays: 1, moq: 1 }];
-    jest.mocked(parseCatalogueWorkbook).mockReturnValue({
-      success: true, error: null, rows: [
-        row({ sku: 'existing' }), row({ rowNumber: 3, sku: 'New' }), row({ rowNumber: 4, sku: 'NEW' }),
-        row({ rowNumber: 5, sku: '' }), row({ rowNumber: 6, sku: 'New', errors: ['SKU is duplicated in this workbook.'] }),
-      ]
-    });
+    jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [
+      row({ sku: 'existing' }), row({ rowNumber: 3, sku: 'New' }), row({ rowNumber: 4, sku: 'NEW' }),
+      row({ rowNumber: 5, sku: '' }), row({ rowNumber: 6, sku: 'New', errors: ['SKU is duplicated in this workbook.'] }),
+    ] });
     const { container } = render(<ItemCatalogue />);
     upload(new File(['workbook'], 'catalogue.xlsx'));
     await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled());

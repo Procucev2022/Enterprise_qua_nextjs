@@ -148,8 +148,8 @@ export default function VendorSubscriptionCenter() {
     plan === 'premium'
       ? 'Premium Model (Client Uploaded Vendor)'
       : plan === 'connect'
-        ? 'Connect Model (50 RFQs / 3 Months)'
-        : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+      ? 'Connect Model (50 RFQs / 3 Months)'
+      : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
 
   const handleSubscribe = async (plan: 'premium' | 'connect' | 'select') => {
     if (isUpdatingPlan) return;
@@ -285,23 +285,25 @@ export default function VendorSubscriptionCenter() {
       {/* Active Subscription Status Banner */}
       <div className="p-4 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className={`p-2.5 rounded-xl shrink-0 ${vendorSubscription === 'select'
+          <div className={`p-2.5 rounded-xl shrink-0 ${
+            vendorSubscription === 'select'
               ? 'bg-purple-100 dark:bg-purple-950 text-purple-600 dark:text-purple-300'
               : vendorSubscription === 'connect'
-                ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300'
-                : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300'
-            }`}>
+              ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300'
+              : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300'
+          }`}>
             <ShieldCheck size={20} />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400 uppercase font-extrabold tracking-wider">Active Plan</span>
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${vendorSubscription === 'select'
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${
+                vendorSubscription === 'select'
                   ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-300'
                   : vendorSubscription === 'connect'
-                    ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300'
-                    : 'bg-slate-200 dark:bg-gray-800 text-slate-700 dark:text-gray-300 border border-slate-300'
-                }`}>
+                  ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300'
+                  : 'bg-slate-200 dark:bg-gray-800 text-slate-700 dark:text-gray-300 border border-slate-300'
+              }`}>
                 {vendorSubscription === 'select' ? 'Select Model' : vendorSubscription === 'connect' ? 'Connect Model' : 'Premium Model (Client Uploaded)'}
               </span>
             </div>
@@ -326,12 +328,13 @@ export default function VendorSubscriptionCenter() {
             </div>
             <div className="w-full bg-slate-200 dark:bg-gray-800 h-2 rounded-full overflow-hidden">
               <div
-                className={`h-full transition-all ${vendorRfqDownloadsUsed >= maxQuota
+                className={`h-full transition-all ${
+                  vendorRfqDownloadsUsed >= maxQuota
                     ? 'bg-rose-500'
                     : vendorSubscription === 'select'
-                      ? 'bg-purple-600'
-                      : 'bg-indigo-600'
-                  }`}
+                    ? 'bg-purple-600'
+                    : 'bg-indigo-600'
+                }`}
                 style={{ width: `${Math.min(100, (vendorRfqDownloadsUsed / maxQuota) * 100)}%` }}
               />
             </div>
@@ -359,10 +362,11 @@ export default function VendorSubscriptionCenter() {
           return (
             <div
               key={p.id}
-              className={`rounded-3xl border bg-white dark:bg-gray-900 flex flex-col justify-between overflow-hidden transition-all shadow-md relative ${isActive
+              className={`rounded-3xl border bg-white dark:bg-gray-900 flex flex-col justify-between overflow-hidden transition-all shadow-md relative ${
+                isActive
                   ? 'border-emerald-500 ring-2 ring-emerald-500/20 scale-[1.01]'
                   : 'border-slate-200 dark:border-gray-800 hover:border-slate-400 dark:hover:border-gray-700'
-                }`}
+              }`}
             >
               {/* Highlight Ribbon */}
               {isActive && (
@@ -447,14 +451,15 @@ export default function VendorSubscriptionCenter() {
                 <button
                   onClick={() => handlePlanButtonClick(p.id)}
                   disabled={isActive || isUpdatingPlan}
-                  className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${isActive
+                  className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${
+                    isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'
                       : p.id === 'select'
-                        ? 'btn-primary bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border-none text-white'
-                        : p.id === 'connect'
-                          ? 'btn-primary bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 border-none text-white'
-                          : 'btn-secondary'
-                    }`}
+                      ? 'btn-primary bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border-none text-white'
+                      : p.id === 'connect'
+                      ? 'btn-primary bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 border-none text-white'
+                      : 'btn-secondary'
+                  }`}
                 >
                   {isActive ? <ShieldCheck size={13} /> : <Zap size={13} />}
                   {isActive ? 'Active Plan' : `Switch to ${p.name}`}

@@ -433,7 +433,7 @@ export function setSessionCache<T>(key: string, data: T): void {
   if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
   try {
     sessionStorage.setItem(`procucev_cache_${key}`, JSON.stringify(data));
-  } catch { }
+  } catch {}
 }
 
 export function clearSessionCache(): void {
@@ -441,7 +441,7 @@ export function clearSessionCache(): void {
   try {
     const keys = ['vendors', 'evaluations', 'rfqs', 'activeBuyerAccount', 'aiFeed', 'taxonomy'];
     keys.forEach((k) => sessionStorage.removeItem(`procucev_cache_${k}`));
-  } catch { }
+  } catch {}
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -1642,10 +1642,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       prev.map((v) =>
         v.id === vendorId
           ? {
-            ...v,
-            remindersSentCount: nextCount,
-            nextReminderDate: nextDate,
-          }
+              ...v,
+              remindersSentCount: nextCount,
+              nextReminderDate: nextDate,
+            }
           : v
       )
     );
@@ -1756,11 +1756,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const targetEmail = (vendorEmail || '').toLowerCase();
         return (vEmail && targetEmail && vEmail === targetEmail)
           ? {
-            ...v,
-            profileCompletionStatus: 'completed',
-            firstLoginCompleted: true,
-            minorCategories: updatedCategories || v.minorCategories,
-          }
+              ...v,
+              profileCompletionStatus: 'completed',
+              firstLoginCompleted: true,
+              minorCategories: updatedCategories || v.minorCategories,
+            }
           : v;
       })
     );
@@ -2146,27 +2146,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const isCategoryMatch = (v: VendorEntry) => {
       const vMajor = (v.majorCategory || '').toLowerCase();
-
+      
       // Dual-Stream resolution
-      const clientMapped = (v.clientMappedCategories && v.clientMappedCategories.length > 0
-        ? v.clientMappedCategories
+      const clientMapped = (v.clientMappedCategories && v.clientMappedCategories.length > 0 
+        ? v.clientMappedCategories 
         : ((v.email || '').includes('apex') ? clientMappedCategories : v.minorCategories || [])).map(m => (m || '').toLowerCase().trim());
-
-      const vendorSelected = (v.vendorSelectedCategories && v.vendorSelectedCategories.length > 0
-        ? v.vendorSelectedCategories
+        
+      const vendorSelected = (v.vendorSelectedCategories && v.vendorSelectedCategories.length > 0 
+        ? v.vendorSelectedCategories 
         : ((v.email || '').includes('apex') ? vendorSelectedCategories : [])).map(m => (m || '').toLowerCase().trim());
-
+      
       const allMinors = Array.from(new Set([...clientMapped, ...vendorSelected]));
 
-      const isClientMappedMatch = targetMinorCategories.some(tMin =>
+      const isClientMappedMatch = targetMinorCategories.some(tMin => 
         clientMapped.some(vMin => vMin.includes(tMin) || tMin.includes(vMin))
       );
 
-      const isVendorSelectedMatch = targetMinorCategories.some(tMin =>
+      const isVendorSelectedMatch = targetMinorCategories.some(tMin => 
         vendorSelected.some(vMin => vMin.includes(tMin) || tMin.includes(vMin))
       );
 
-      const hasMinorMatch = isClientMappedMatch || isVendorSelectedMatch || targetMinorCategories.some(tMin =>
+      const hasMinorMatch = isClientMappedMatch || isVendorSelectedMatch || targetMinorCategories.some(tMin => 
         allMinors.some(vMin => vMin.includes(tMin) || tMin.includes(vMin))
       );
 
@@ -2181,7 +2181,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return true;
       }
 
-      const hasMajorMatch = targetMajorCategories.some(tMaj =>
+      const hasMajorMatch = targetMajorCategories.some(tMaj => 
         vMajor.includes(tMaj) || tMaj.includes(vMajor)
       );
       if (hasMajorMatch) return true;
@@ -2193,7 +2193,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     if (mode === 'mode_1') {
-      const matched = vendorPool.filter(v =>
+      const matched = vendorPool.filter(v => 
         (v.source === 'buyer_manual' || v.source === 'buyer_excel' || v.source === 'manual' || v.source === 'excel') &&
         isCategoryMatch(v)
       );
@@ -2241,7 +2241,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return 0;
       });
     } else {
-      const matched = vendorPool.filter(v =>
+      const matched = vendorPool.filter(v => 
         (v.source === 'buyer_manual' || v.source === 'buyer_excel' || v.source === 'manual' || v.source === 'excel') &&
         isCategoryMatch(v)
       );
@@ -2280,8 +2280,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const shaSignature = generateShaHash();
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' IST';
     const major = vendor.majorCategory || rfq.extractedEntities[0]?.majorCategory || rfq.category || 'Industrial Procurement';
-    const minors = vendor.minorCategories && vendor.minorCategories.length > 0
-      ? vendor.minorCategories
+    const minors = vendor.minorCategories && vendor.minorCategories.length > 0 
+      ? vendor.minorCategories 
       : rfq.extractedEntities.map(e => e.minorCategory || e.category).filter(Boolean);
 
     let specialInstructions = '';
@@ -2345,7 +2345,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedEmailForModal(emailPayload);
     setEmailModalOpen(true);
   };
-
+  
   const [toastMessage, setToastMessage] = useState<{ title: string; description: string; type: 'success' | 'info' | 'warning' } | null>(null);
 
   const showToast = (title: string, description: string, type: 'success' | 'info' | 'warning' = 'info') => {
@@ -2364,10 +2364,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       currentRole === 'buyer'
         ? 'client@procucev.com (Enterprise Buyer)'
         : currentRole === 'category_manager'
-          ? 'catmanager@procucev.com (Category Manager)'
-          : currentRole === 'vendor'
-            ? 'vendor@apex.com (Apex Supplies Ltd.)'
-            : 'admin@procucev.com (System Admin)';
+        ? 'catmanager@procucev.com (Category Manager)'
+        : currentRole === 'vendor'
+        ? 'vendor@apex.com (Apex Supplies Ltd.)'
+        : 'admin@procucev.com (System Admin)';
 
     const newLog: AuditLogEntry = {
       id: `aud-${Date.now()}`,
@@ -2433,7 +2433,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     suppressToast = false
   ) => {
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
+    
     let title = '';
     let message = '';
     let toastTitle = '';
@@ -2505,32 +2505,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             vendors: Array.isArray(r.followUpData.vendors) && r.followUpData.vendors.length > 0
               ? r.followUpData.vendors
               : [
-                {
-                  vendorId: 'v-1',
-                  vendorName: vendorName || 'Vendor Pool',
-                  phone: '+91 98765 43210',
-                  contactPerson: 'Sales Coordinator',
-                  call: {
-                    status: 'scheduled',
-                    lastAttempt: timeNow,
-                    duration: '0m',
+                  {
+                    vendorId: 'v-1',
+                    vendorName: vendorName || 'Vendor Pool',
+                    phone: '+91 98765 43210',
+                    contactPerson: 'Sales Coordinator',
+                    call: {
+                      status: 'scheduled',
+                      lastAttempt: timeNow,
+                      duration: '0m',
+                    },
+                    whatsapp: {
+                      status: 'delivered',
+                      lastAttempt: timeNow,
+                      messagePreview: 'RFQ Invitation dispatched.',
+                      linkClicked: false,
+                    },
+                    sms: {
+                      status: 'sent',
+                      lastAttempt: timeNow,
+                    },
+                    overallStatus: 'Pending',
+                    lastInteraction: timeNow,
+                    attemptsCount: 0,
+                    bidStatus: 'Pending',
                   },
-                  whatsapp: {
-                    status: 'delivered',
-                    lastAttempt: timeNow,
-                    messagePreview: 'RFQ Invitation dispatched.',
-                    linkClicked: false,
-                  },
-                  sms: {
-                    status: 'sent',
-                    lastAttempt: timeNow,
-                  },
-                  overallStatus: 'Pending',
-                  lastInteraction: timeNow,
-                  attemptsCount: 0,
-                  bidStatus: 'Pending',
-                },
-              ],
+                ],
           };
 
           const targetName = String(vendorName || '').trim().toLowerCase();
@@ -2747,25 +2747,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         prev.map((r) =>
           r.rfqNumber === rfqNumber
             ? {
-              ...r,
-              status: 'PO Generated' as const,
-              awardedVendor: effectiveVendorName,
-              awardedAmount: effectiveAmount,
-              awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
-              poNumber: data.poNumber,
-              poIssueDate: data.issueDate,
-              poFinalised: true,
-              poShaSignature: data.shaSignature,
-              quotes: Array.isArray(r.quotes)
-                ? r.quotes.map((q) => {
-                  const isAwarded = Boolean(
-                    (effectiveVendorId && q.vendorId === effectiveVendorId) ||
-                    (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
-                  );
-                  return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
-                })
-                : r.quotes,
-            }
+                ...r,
+                status: 'PO Generated' as const,
+                awardedVendor: effectiveVendorName,
+                awardedAmount: effectiveAmount,
+                awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
+                poNumber: data.poNumber,
+                poIssueDate: data.issueDate,
+                poFinalised: true,
+                poShaSignature: data.shaSignature,
+                quotes: Array.isArray(r.quotes)
+                  ? r.quotes.map((q) => {
+                      const isAwarded = Boolean(
+                        (effectiveVendorId && q.vendorId === effectiveVendorId) ||
+                        (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
+                      );
+                      return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
+                    })
+                  : r.quotes,
+              }
             : r
         )
       );
@@ -2876,8 +2876,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ...result.rfq,
       assignedVendors:
         changes.assignedVendors &&
-          Array.isArray(changes.assignedVendors) &&
-          changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
+        Array.isArray(changes.assignedVendors) &&
+        changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
           ? (changes.assignedVendors as any)
           : result.rfq.assignedVendors || (changes.assignedVendors as any) || [],
     };
@@ -3084,10 +3084,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setActiveBuyerAccount((prev) =>
         prev
           ? {
-            ...prev,
-            remainingFreeRFQs: remainingNum,
-            freeRFQsUsed: Math.max(0, 5 - remainingNum),
-          }
+              ...prev,
+              remainingFreeRFQs: remainingNum,
+              freeRFQsUsed: Math.max(0, 5 - remainingNum),
+            }
           : prev
       );
     }

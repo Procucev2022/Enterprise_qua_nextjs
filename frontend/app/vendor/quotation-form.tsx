@@ -658,7 +658,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         currentUserSession?.email
       );
       showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully. Buyer details remain confidential for 48 hours in accordance with procurement privacy rules.`, 'success');
-
+      
       setBiddingOn(null);
       setBidDocuments([]);
       setUploadedBidDocuments([]);
@@ -865,10 +865,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               <button
                 type="button"
                 onClick={() => setSelectedCategories([])}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${selectedCategories.length === 0
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                  selectedCategories.length === 0
                     ? 'bg-blue-600 text-white shadow-2xs font-bold'
                     : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
-                  }`}
+                }`}
               >
                 All Categories ({totalReceivedCount})
               </button>
@@ -887,10 +888,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                         prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
                       );
                     }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${isSelected
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      isSelected
                         ? 'bg-blue-600 text-white shadow-2xs font-bold'
                         : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
-                      }`}
+                    }`}
                   >
                     <span>{cat}</span>
                     <span className={`text-[10px] px-1 py-0.2 rounded-full ${isSelected ? 'bg-blue-700 text-white' : 'bg-slate-200 dark:bg-gray-700 text-slate-500'}`}>
@@ -922,8 +924,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               {vendorOpportunities.length === 0
                 ? 'New sourcing requests from buyers will appear here.'
                 : selectedCategories.length > 0
-                  ? 'No RFQs match the selected category filter. Try clearing or selecting different categories.'
-                  : 'Try another search term or choose a different status filter.'}
+                ? 'No RFQs match the selected category filter. Try clearing or selecting different categories.'
+                : 'Try another search term or choose a different status filter.'}
             </p>
             {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0) && (
               <button
@@ -936,283 +938,285 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             )}
           </div>
         ) : (
-          <div className="vendor-quotation-table-wrap">
-            <table className="vendor-quotation-table w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-100 dark:border-gray-800 text-slate-400 uppercase tracking-wider text-[9px] font-bold">
-                  <th className="py-3">RFQ Number</th>
-                  <th className="py-3">RFQ Details</th>
-                  <th className="py-3">Buyer Company</th>
-                  <th className="py-3 text-center">Deadline</th>
-                  <th className="py-3 text-center">RFQ Documents</th>
-                  <th className="py-3">Your Bid</th>
-                  <th className="py-3">Clarifications</th>
-                  <th className="py-3 text-right">Sourcing Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-150/40 dark:divide-gray-850 text-[11px]">
-                {filteredOpportunities.map((opp) => {
-                  const quote = submittedQuotes.find((q) => q.rfqNumber === opp.rfqNumber);
-                  const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
-                  const allItemDetails = rfqRecord?.extractedEntities?.length
-                    ? rfqRecord.extractedEntities
-                    : opp.lineItems.map((item) => ({
-                      id: item.id,
-                      itemName: item.description,
-                      quantity: item.quantity,
-                      unit: '',
-                    }));
-                  const itemDetails = allItemDetails.slice(0, 2);
-                  const additionalItemCount = Math.max(0, allItemDetails.length - itemDetails.length);
-                  const ownInquiries = (rfqRecord?.inquiries || []).filter((inquiry) =>
-                    (!!myVendorId && inquiry.vendorId === myVendorId) ||
-                    (!!currentUserSession?.email && inquiry.vendorEmail?.toLowerCase() === currentUserSession.email.toLowerCase()) ||
-                    (!!myVendorName && inquiry.vendorName?.toLowerCase().trim() === myVendorName.toLowerCase().trim())
-                  );
-                  const latestInquiry = ownInquiries.reduce<(typeof ownInquiries)[number] | null>(
-                    (latest, inquiry) => !latest || new Date(inquiry.createdAt).getTime() > new Date(latest.createdAt).getTime() ? inquiry : latest,
-                    null
-                  );
-                  const parentCompany = getParentCompany(opp.buyer);
-                  const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
-                    (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
-                    vendorSubscription === 'unlimited';
-                  const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
-                  const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
-                  const isLocked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+        <div className="vendor-quotation-table-wrap">
+          <table className="vendor-quotation-table w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-100 dark:border-gray-800 text-slate-400 uppercase tracking-wider text-[9px] font-bold">
+                <th className="py-3">RFQ Number</th>
+                <th className="py-3">RFQ Details</th>
+                <th className="py-3">Buyer Company</th>
+                <th className="py-3 text-center">Deadline</th>
+                <th className="py-3 text-center">RFQ Documents</th>
+                <th className="py-3">Your Bid</th>
+                <th className="py-3">Clarifications</th>
+                <th className="py-3 text-right">Sourcing Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-150/40 dark:divide-gray-850 text-[11px]">
+              {filteredOpportunities.map((opp) => {
+                const quote = submittedQuotes.find((q) => q.rfqNumber === opp.rfqNumber);
+                const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+                const allItemDetails = rfqRecord?.extractedEntities?.length
+                  ? rfqRecord.extractedEntities
+                  : opp.lineItems.map((item) => ({
+                    id: item.id,
+                    itemName: item.description,
+                    quantity: item.quantity,
+                    unit: '',
+                  }));
+                const itemDetails = allItemDetails.slice(0, 2);
+                const additionalItemCount = Math.max(0, allItemDetails.length - itemDetails.length);
+                const ownInquiries = (rfqRecord?.inquiries || []).filter((inquiry) =>
+                  (!!myVendorId && inquiry.vendorId === myVendorId) ||
+                  (!!currentUserSession?.email && inquiry.vendorEmail?.toLowerCase() === currentUserSession.email.toLowerCase()) ||
+                  (!!myVendorName && inquiry.vendorName?.toLowerCase().trim() === myVendorName.toLowerCase().trim())
+                );
+                const latestInquiry = ownInquiries.reduce<(typeof ownInquiries)[number] | null>(
+                  (latest, inquiry) => !latest || new Date(inquiry.createdAt).getTime() > new Date(latest.createdAt).getTime() ? inquiry : latest,
+                  null
+                );
+                const parentCompany = getParentCompany(opp.buyer);
+                const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
+                  (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
+                  vendorSubscription === 'unlimited';
+                const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
+                const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
+                const isLocked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+                
+                // Condition: Buyer details remain hidden for 48 hours after bid submission.
+                // After 48 hours, buyer details automatically become visible.
+                const isUploadedByBuyer = isOwnBuyerRfq(opp.rfqNumber);
+                const isQuoteSubmitted = !!quote || opp.status === 'submitted';
+                const quoteSubmittedAt = (quote as any)?.submittedAt || (quote as any)?.createdAt;
+                const isWithin48h = isQuoteSubmitted && quoteSubmittedAt && (Date.now() - new Date(quoteSubmittedAt).getTime() < 48 * 60 * 60 * 1000);
+                const isBuyerProtected48h = isWithin48h || Boolean((opp as any).buyerDetailsHidden) || Boolean((rfqRecord as any)?.buyerDetailsHidden);
+                const canViewBuyerDetails = !isBuyerProtected48h && (isUploadedByBuyer || (isQuoteSubmitted && !isWithin48h));
 
-                  // Condition: Buyer details remain hidden for 48 hours after bid submission.
-                  // After 48 hours, buyer details automatically become visible.
-                  const isUploadedByBuyer = isOwnBuyerRfq(opp.rfqNumber);
-                  const isQuoteSubmitted = !!quote || opp.status === 'submitted';
-                  const quoteSubmittedAt = (quote as any)?.submittedAt || (quote as any)?.createdAt;
-                  const isWithin48h = isQuoteSubmitted && quoteSubmittedAt && (Date.now() - new Date(quoteSubmittedAt).getTime() < 48 * 60 * 60 * 1000);
-                  const isBuyerProtected48h = isWithin48h || Boolean((opp as any).buyerDetailsHidden) || Boolean((rfqRecord as any)?.buyerDetailsHidden);
-                  const canViewBuyerDetails = !isBuyerProtected48h && (isUploadedByBuyer || (isQuoteSubmitted && !isWithin48h));
+                const buyerCompanyName = (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany;
 
-                  const buyerCompanyName = (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany;
+                const modeStr = String(opp.sourcingMode || (rfqRecord as any)?.sourcingMode || '').toLowerCase();
+                const versionBadge = (() => {
+                  if (modeStr.includes('0') || modeStr === 'v0' || modeStr === 'version_0' || modeStr === 'mode_0') {
+                    return { label: 'V0 · Starter', color: 'bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700' };
+                  }
+                  if (modeStr.includes('1') || modeStr === 'v1' || modeStr === 'version_1' || modeStr === 'mode_1') {
+                    return { label: 'V1 · Private', color: 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800' };
+                  }
+                  if (modeStr.includes('2') || modeStr === 'v2' || modeStr === 'version_2' || modeStr === 'mode_2') {
+                    return { label: 'V2 · Hybrid', color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' };
+                  }
+                  if (modeStr.includes('3') || modeStr === 'v3' || modeStr === 'version_3' || modeStr === 'mode_3') {
+                    return { label: 'V3 · Autonomous', color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800' };
+                  }
+                  return null;
+                })();
 
-                  const modeStr = String(opp.sourcingMode || (rfqRecord as any)?.sourcingMode || '').toLowerCase();
-                  const versionBadge = (() => {
-                    if (modeStr.includes('0') || modeStr === 'v0' || modeStr === 'version_0' || modeStr === 'mode_0') {
-                      return { label: 'V0 · Starter', color: 'bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700' };
-                    }
-                    if (modeStr.includes('1') || modeStr === 'v1' || modeStr === 'version_1' || modeStr === 'mode_1') {
-                      return { label: 'V1 · Private', color: 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800' };
-                    }
-                    if (modeStr.includes('2') || modeStr === 'v2' || modeStr === 'version_2' || modeStr === 'mode_2') {
-                      return { label: 'V2 · Hybrid', color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' };
-                    }
-                    if (modeStr.includes('3') || modeStr === 'v3' || modeStr === 'version_3' || modeStr === 'mode_3') {
-                      return { label: 'V3 · Autonomous', color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800' };
-                    }
-                    return null;
-                  })();
-
-                  return (
-                    <tr
-                      key={opp.rfqNumber}
-                      className={`transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40 ${isDirectBuyer ? 'bg-indigo-50/25 dark:bg-indigo-950/15' : ''
-                        }`}
-                    >
-                      {/* RFQ Number */}
-                      <td data-label="RFQ Number" className="py-3 font-mono font-bold text-slate-900 dark:text-white">
+                return (
+                  <tr
+                    key={opp.rfqNumber}
+                    className={`transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40 ${
+                      isDirectBuyer ? 'bg-indigo-50/25 dark:bg-indigo-950/15' : ''
+                    }`}
+                  >
+                    {/* RFQ Number */}
+                    <td data-label="RFQ Number" className="py-3 font-mono font-bold text-slate-900 dark:text-white">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>{opp.rfqNumber}</span>
+                        {isDirectBuyer && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            {UI_STRINGS.vendorQuotationPage?.directClientBadge || 'Direct Client'}
+                          </span>
+                        )}
+                      </div>
+                      {versionBadge && (
+                        <div className="mt-1">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${versionBadge.color}`}>
+                            {versionBadge.label}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    
+                    {/* Title */}
+                    <td data-label="RFQ Details" className="py-3">
+                      <div className="font-semibold text-slate-800 dark:text-gray-200">{opp.title}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
+                        {(opp.majorCategory || rfqRecord?.category) && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
+                            {opp.majorCategory || rfqRecord?.category}
+                          </span>
+                        )}
+                        {(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (
+                          <span>· 📍 {opp.deliveryLocation || rfqRecord?.deliveryLocation}</span>
+                        )}
+                      </div>
+                      {itemDetails.length > 0 && (
+                        <ul className="mt-1 space-y-0.5 text-[10px] text-slate-600 dark:text-gray-300">
+                          {itemDetails.map((item) => (
+                            <li key={item.id}>
+                              {item.itemName}
+                              {item.quantity > 0 && ` · ${item.quantity}${item.unit ? ` ${item.unit}` : ''}`}
+                            </li>
+                          ))}
+                          {additionalItemCount > 0 && <li>+{additionalItemCount} more item{additionalItemCount === 1 ? '' : 's'}</li>}
+                        </ul>
+                      )}
+                    </td>
+                    
+                    {/* Buyer Company */}
+                    <td data-label="Buyer Company" className="py-3">
+                      {canViewBuyerDetails ? (
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span>{opp.rfqNumber}</span>
-                          {isDirectBuyer && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                              {UI_STRINGS.vendorQuotationPage?.directClientBadge || 'Direct Client'}
-                            </span>
-                          )}
+                          <span className="font-semibold text-slate-800 dark:text-gray-200">
+                            {buyerCompanyName}
+                          </span>
                         </div>
-                        {versionBadge && (
-                          <div className="mt-1">
-                            <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${versionBadge.color}`}>
-                              {versionBadge.label}
-                            </span>
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Title */}
-                      <td data-label="RFQ Details" className="py-3">
-                        <div className="font-semibold text-slate-800 dark:text-gray-200">{opp.title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
-                          {(opp.majorCategory || rfqRecord?.category) && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-                              {opp.majorCategory || rfqRecord?.category}
-                            </span>
-                          )}
-                          {(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (
-                            <span>· 📍 {opp.deliveryLocation || rfqRecord?.deliveryLocation}</span>
-                          )}
-                        </div>
-                        {itemDetails.length > 0 && (
-                          <ul className="mt-1 space-y-0.5 text-[10px] text-slate-600 dark:text-gray-300">
-                            {itemDetails.map((item) => (
-                              <li key={item.id}>
-                                {item.itemName}
-                                {item.quantity > 0 && ` · ${item.quantity}${item.unit ? ` ${item.unit}` : ''}`}
-                              </li>
-                            ))}
-                            {additionalItemCount > 0 && <li>+{additionalItemCount} more item{additionalItemCount === 1 ? '' : 's'}</li>}
-                          </ul>
-                        )}
-                      </td>
-
-                      {/* Buyer Company */}
-                      <td data-label="Buyer Company" className="py-3">
-                        {canViewBuyerDetails ? (
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-semibold text-slate-800 dark:text-gray-200">
-                              {buyerCompanyName}
-                            </span>
-                          </div>
-                        ) : isBuyerProtected48h ? (
-                          <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-                            <span className="font-semibold text-xs text-slate-500 dark:text-gray-400 italic">Protected (48h privacy)</span>
-                            <span
-                              className="p-1 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 cursor-help inline-flex items-center"
-                              title="Buyer details remain confidential for 48 hours following quotation submission in accordance with procurement privacy rules."
-                            >
-                              <Lock size={11} />
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 text-slate-400 dark:text-gray-500">
-                            <span className="italic text-[10px]">Procucev Network Sourced</span>
-                            <span
-                              className="p-1 rounded-md bg-slate-100 dark:bg-gray-800 text-slate-400 cursor-help inline-flex items-center"
-                              title="Buyer details will be revealed 48 hours after quotation submission."
-                            >
-                              <Lock size={11} />
-                            </span>
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Deadline */}
-                      <td data-label="Deadline" className="py-3 text-center font-medium mono text-amber-700 dark:text-amber-300">{opp.deadline || '—'}</td>
-
-                      {/* Download RFQ */}
-                      <td data-label="RFQ Documents" className="py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                            className="btn btn-secondary btn-xs min-h-9 py-1 px-2.5 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
-                            title="View RFQ Details"
+                      ) : isBuyerProtected48h ? (
+                        <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                          <span className="font-semibold text-xs text-slate-500 dark:text-gray-400 italic">Protected (48h privacy)</span>
+                          <span
+                            className="p-1 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 cursor-help inline-flex items-center"
+                            title="Buyer details remain confidential for 48 hours following quotation submission in accordance with procurement privacy rules."
                           >
-                            <FileText size={12} className="text-blue-700 dark:text-blue-300" />
-                            <span>View Details</span>
+                            <Lock size={11} />
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-slate-400 dark:text-gray-500">
+                          <span className="italic text-[10px]">Procucev Network Sourced</span>
+                          <span
+                            className="p-1 rounded-md bg-slate-100 dark:bg-gray-800 text-slate-400 cursor-help inline-flex items-center"
+                            title="Buyer details will be revealed 48 hours after quotation submission."
+                          >
+                            <Lock size={11} />
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    
+                    {/* Deadline */}
+                    <td data-label="Deadline" className="py-3 text-center font-medium mono text-amber-700 dark:text-amber-300">{opp.deadline || '—'}</td>
+                    
+                    {/* Download RFQ */}
+                    <td data-label="RFQ Documents" className="py-3 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                          className="btn btn-secondary btn-xs min-h-9 py-1 px-2.5 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
+                          title="View RFQ Details"
+                        >
+                          <FileText size={12} className="text-blue-700 dark:text-blue-300" />
+                          <span>View Details</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (isLocked) {
+                              showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
+                              setShowUpgradeModal(true);
+                            } else {
+                              handleDownloadRfq(opp);
+                            }
+                          }}
+                          className="btn btn-secondary btn-xs min-h-9 py-1 px-2.5 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
+                          title="Download RFQ Specification"
+                        >
+                          <Download size={12} className="text-blue-700 dark:text-blue-300" />
+                          <span>Download RFQ</span>
+                        </button>
+                      </div>
+                    </td>
+
+                    {/* This vendor's submitted quote only */}
+                    <td data-label="Your Bid" className="py-3">
+                      {quote ? (
+                        <div>
+                          <span className="font-bold text-slate-800 dark:text-gray-200">
+                            {quote.totalPrice > 0 ? `₹${quote.totalPrice.toLocaleString('en-IN')}` : 'Quote submitted'}
+                          </span>
+                          <span className="mt-1 block text-[10px] text-slate-500 dark:text-gray-400">
+                            {quote.submissionMethod} · {quote.submittedDate}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">No bid submitted</span>
+                      )}
+                    </td>
+
+                    {/* This vendor's own clarification history */}
+                    <td data-label="Clarifications" className="py-3">
+                      <div className="flex flex-col items-start gap-1.5">
+                        {ownInquiries.length > 0 ? (
+                          <span className="text-[10px] font-semibold text-slate-700 dark:text-gray-200">
+                            {ownInquiries.length} sent · {latestInquiry?.status === 'answered' ? 'Buyer replied' : 'Awaiting reply'}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">None sent</span>
+                        )}
+                        {latestInquiry?.reply && (
+                          <span className="max-w-[220px] truncate text-[10px] text-slate-500 dark:text-gray-400" title={latestInquiry.reply}>
+                            Latest reply: {latestInquiry.reply}
+                          </span>
+                        )}
+                        {!isLocked && opp.status !== 'Closed' && opp.status !== 'Expired' && (
+                          <button
+                            onClick={() => openInquiryModal(opp)}
+                            className="btn btn-secondary btn-xs min-h-8 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-semibold text-slate-600 dark:text-gray-300"
+                            title="Ask a question or raise a clarification with the buyer"
+                          >
+                            <MessageSquare size={10} />
+                            <span>Clarify</span>
                           </button>
+                        )}
+                      </div>
+                    </td>
+                    
+                    {/* Sourcing Status */}
+                    <td data-label="Sourcing Status" className="py-3 text-right">
+                      {quote ? (
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wide border inline-block ${
+                          quote.status === 'PO Generated' 
+                            ? 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200' 
+                            : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-250'
+                        }`}>
+                          {quote.status}
+                        </span>
+                      ) : (opp.status === 'Closed' || opp.status === 'Expired') ? (
+                        <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 border border-slate-200 dark:border-gray-700">
+                          🔒 RFQ Closed
+                        </span>
+                      ) : isLocked ? (
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
+                          <button
+                            onClick={() => setShowUpgradeModal(true)}
+                            className="btn btn-amber btn-xs min-h-8 py-1 px-2 inline-flex items-center gap-1 text-[10px] font-bold"
+                            title="Upgrade subscription to quote"
+                          >
+                            {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-1.5">
                           <button
                             onClick={() => {
-                              if (isLocked) {
-                                showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
-                                setShowUpgradeModal(true);
-                              } else {
+                              if (!isRfqUnlocked(opp.rfqNumber) && !isOwnBuyerRfq(opp.rfqNumber)) {
                                 handleDownloadRfq(opp);
                               }
+                              openBidForm(opp);
                             }}
-                            className="btn btn-secondary btn-xs min-h-9 py-1 px-2.5 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
-                            title="Download RFQ Specification"
+                            className="btn btn-emerald btn-xs min-h-9 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-bold"
                           >
-                            <Download size={12} className="text-blue-700 dark:text-blue-300" />
-                            <span>Download RFQ</span>
+                            <Send size={10} /> Submit Quote
                           </button>
                         </div>
-                      </td>
-
-                      {/* This vendor's submitted quote only */}
-                      <td data-label="Your Bid" className="py-3">
-                        {quote ? (
-                          <div>
-                            <span className="font-bold text-slate-800 dark:text-gray-200">
-                              {quote.totalPrice > 0 ? `₹${quote.totalPrice.toLocaleString('en-IN')}` : 'Quote submitted'}
-                            </span>
-                            <span className="mt-1 block text-[10px] text-slate-500 dark:text-gray-400">
-                              {quote.submissionMethod} · {quote.submittedDate}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400">No bid submitted</span>
-                        )}
-                      </td>
-
-                      {/* This vendor's own clarification history */}
-                      <td data-label="Clarifications" className="py-3">
-                        <div className="flex flex-col items-start gap-1.5">
-                          {ownInquiries.length > 0 ? (
-                            <span className="text-[10px] font-semibold text-slate-700 dark:text-gray-200">
-                              {ownInquiries.length} sent · {latestInquiry?.status === 'answered' ? 'Buyer replied' : 'Awaiting reply'}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-slate-400">None sent</span>
-                          )}
-                          {latestInquiry?.reply && (
-                            <span className="max-w-[220px] truncate text-[10px] text-slate-500 dark:text-gray-400" title={latestInquiry.reply}>
-                              Latest reply: {latestInquiry.reply}
-                            </span>
-                          )}
-                          {!isLocked && opp.status !== 'Closed' && opp.status !== 'Expired' && (
-                            <button
-                              onClick={() => openInquiryModal(opp)}
-                              className="btn btn-secondary btn-xs min-h-8 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-semibold text-slate-600 dark:text-gray-300"
-                              title="Ask a question or raise a clarification with the buyer"
-                            >
-                              <MessageSquare size={10} />
-                              <span>Clarify</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Sourcing Status */}
-                      <td data-label="Sourcing Status" className="py-3 text-right">
-                        {quote ? (
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wide border inline-block ${quote.status === 'PO Generated'
-                              ? 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200'
-                              : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-250'
-                            }`}>
-                            {quote.status}
-                          </span>
-                        ) : (opp.status === 'Closed' || opp.status === 'Expired') ? (
-                          <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 border border-slate-200 dark:border-gray-700">
-                            🔒 RFQ Closed
-                          </span>
-                        ) : isLocked ? (
-                          <div className="flex items-center justify-end gap-1.5">
-                            <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
-                            <button
-                              onClick={() => setShowUpgradeModal(true)}
-                              className="btn btn-amber btn-xs min-h-8 py-1 px-2 inline-flex items-center gap-1 text-[10px] font-bold"
-                              title="Upgrade subscription to quote"
-                            >
-                              {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => {
-                                if (!isRfqUnlocked(opp.rfqNumber) && !isOwnBuyerRfq(opp.rfqNumber)) {
-                                  handleDownloadRfq(opp);
-                                }
-                                openBidForm(opp);
-                              }}
-                              className="btn btn-emerald btn-xs min-h-9 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-bold"
-                            >
-                              <Send size={10} /> Submit Quote
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
         )}
       </section>
 
@@ -1259,25 +1263,25 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                   return [
                     ...(inq.message
                       ? [
-                        {
-                          id: `msg-${inq.id}-vendor`,
-                          senderRole: 'vendor' as const,
-                          senderName: inq.vendorName || 'You',
-                          message: inq.message,
-                          timestamp: inq.createdAt || new Date().toISOString(),
-                        },
-                      ]
+                          {
+                            id: `msg-${inq.id}-vendor`,
+                            senderRole: 'vendor' as const,
+                            senderName: inq.vendorName || 'You',
+                            message: inq.message,
+                            timestamp: inq.createdAt || new Date().toISOString(),
+                          },
+                        ]
                       : []),
                     ...(inq.reply
                       ? [
-                        {
-                          id: `msg-${inq.id}-buyer`,
-                          senderRole: 'buyer' as const,
-                          senderName: inq.repliedBy || 'Buyer Procurement Team',
-                          message: inq.reply,
-                          timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
-                        },
-                      ]
+                          {
+                            id: `msg-${inq.id}-buyer`,
+                            senderRole: 'buyer' as const,
+                            senderName: inq.repliedBy || 'Buyer Procurement Team',
+                            message: inq.reply,
+                            timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
+                          },
+                        ]
                       : []),
                   ];
                 }).sort((a: any, b: any) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
@@ -1309,10 +1313,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                                 </span>
                               </div>
                               <div
-                                className={`p-2.5 rounded-xl text-xs leading-relaxed max-w-[85%] whitespace-pre-wrap break-words shadow-xs ${isVendorMsg
+                                className={`p-2.5 rounded-xl text-xs leading-relaxed max-w-[85%] whitespace-pre-wrap break-words shadow-xs ${
+                                  isVendorMsg
                                     ? 'bg-blue-600 text-white rounded-tr-xs'
                                     : 'bg-white dark:bg-gray-850 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white rounded-tl-xs'
-                                  }`}
+                                }`}
                               >
                                 {msg.message}
                               </div>
@@ -1401,363 +1406,365 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </div>
             )}
 
-            {/* Error Banner */}
-            {submitModalError && (
-              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 space-y-2">
-                <div className="flex items-start gap-2">
-                  <AlertCircle size={15} className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" />
-                  <span className="text-[11px] font-medium leading-relaxed">{submitModalError}</span>
-                </div>
-                {(submitModalError.toLowerCase().includes('credit') || submitModalError.toLowerCase().includes('upgrade')) && (
-                  <div className="pt-1">
-                    <a
-                      href="/vendor/vendor-subscription"
-                      className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1 text-[10px]"
-                    >
-                      Upgrade Plan to Continue Quoting
-                    </a>
+                {/* Error Banner */}
+                {submitModalError && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={15} className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" />
+                      <span className="text-[11px] font-medium leading-relaxed">{submitModalError}</span>
+                    </div>
+                    {(submitModalError.toLowerCase().includes('credit') || submitModalError.toLowerCase().includes('upgrade')) && (
+                      <div className="pt-1">
+                        <a
+                          href="/vendor/vendor-subscription"
+                          className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1 text-[10px]"
+                        >
+                          Upgrade Plan to Continue Quoting
+                        </a>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
 
-            <div className="space-y-3">
-              {(biddingOn.lineItems?.length || 0) > 1 ? (
-                <div>
-                  {(biddingOn.lineItems?.length || 0) > 10 && (
-                    <div className="mb-2 p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-800 dark:text-blue-300 text-[11px] flex items-center justify-between gap-2 flex-wrap">
-                      <span className="font-semibold flex items-center gap-1.5">
-                        <Info size={14} className="text-blue-600 dark:text-blue-400 shrink-0" />
-                        RFQ has {biddingOn.lineItems.length} items: email bids are not accepted. Submit through this portal; download the Excel sheet, enter your rates, and upload it with your supporting documents.
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      Line Item Pricing ({biddingOn.lineItems.length} items) *
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="file"
-                        ref={excelInputRef}
-                        onChange={handleUploadPricedExcel}
-                        accept=".xlsx,.xls,.csv"
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => excelInputRef.current?.click()}
-                        className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 px-2 py-1 rounded border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 transition-colors"
-                        title="Upload filled Excel sheet with item rates"
-                      >
-                        <Upload size={11} /> Upload Priced Excel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          downloadVendorQuotationExcel(biddingOn.rfqNumber, biddingOn.lineItems || [], bidLineItemPrices)
-                        }
-                        className="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 px-2 py-1 rounded border border-indigo-200 dark:border-indigo-800 flex items-center gap-1 transition-colors"
-                        title="Download pre-filled RFQ Excel sheet"
-                      >
-                        <Download size={11} /> Export as Excel (Download RFQ)
-                      </button>
-                    </div>
-                  </div>
-                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
-                    <table className="w-full min-w-[960px] text-left text-[11px] border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 dark:bg-gray-950/60 text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
-                          <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Item</th>
-                          <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Qty</th>
-                          <th className="px-2.5 py-2 text-[10px] uppercase font-bold">UOM</th>
-                          <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[10rem]">Rate (₹)</th>
-                          <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right min-w-[10rem]">Amount (₹)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                        {(biddingOn.lineItems || []).map((li) => {
-                          const rate = Number(bidLineItemPrices[li.id]) || 0;
-                          const amount = rate * li.quantity;
-                          return (
-                            <tr key={li.id}>
-                              <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[220px] truncate" title={li.description}>
-                                {li.description}
+                <div className="space-y-3">
+                  {(biddingOn.lineItems?.length || 0) > 1 ? (
+                    <div>
+                      {(biddingOn.lineItems?.length || 0) > 10 && (
+                        <div className="mb-2 p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-800 dark:text-blue-300 text-[11px] flex items-center justify-between gap-2 flex-wrap">
+                          <span className="font-semibold flex items-center gap-1.5">
+                            <Info size={14} className="text-blue-600 dark:text-blue-400 shrink-0" />
+                            RFQ has {biddingOn.lineItems.length} items: email bids are not accepted. Submit through this portal; download the Excel sheet, enter your rates, and upload it with your supporting documents.
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Line Item Pricing ({biddingOn.lineItems.length} items) *
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="file"
+                            ref={excelInputRef}
+                            onChange={handleUploadPricedExcel}
+                            accept=".xlsx,.xls,.csv"
+                            className="hidden"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => excelInputRef.current?.click()}
+                            className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 px-2 py-1 rounded border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 transition-colors"
+                            title="Upload filled Excel sheet with item rates"
+                          >
+                            <Upload size={11} /> Upload Priced Excel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              downloadVendorQuotationExcel(biddingOn.rfqNumber, biddingOn.lineItems || [], bidLineItemPrices)
+                            }
+                            className="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 px-2 py-1 rounded border border-indigo-200 dark:border-indigo-800 flex items-center gap-1 transition-colors"
+                            title="Download pre-filled RFQ Excel sheet"
+                          >
+                            <Download size={11} /> Export as Excel (Download RFQ)
+                          </button>
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
+                        <table className="w-full min-w-[960px] text-left text-[11px] border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 dark:bg-gray-950/60 text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Item</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Qty</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">UOM</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[10rem]">Rate (₹)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right min-w-[10rem]">Amount (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                            {(biddingOn.lineItems || []).map((li) => {
+                              const rate = Number(bidLineItemPrices[li.id]) || 0;
+                              const amount = rate * li.quantity;
+                              return (
+                                <tr key={li.id}>
+                                  <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[220px] truncate" title={li.description}>
+                                    {li.description}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-right mono text-slate-600 dark:text-gray-300">{li.quantity}</td>
+                                  <td className="px-2.5 py-1.5 text-slate-500 dark:text-gray-400">{li.unit || '—'}</td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      aria-label={`Rate for ${li.description}`}
+                                      value={bidLineItemPrices[li.id] || ''}
+                                      onChange={(e) =>
+                                        setBidLineItemPrices((prev) => ({ ...prev, [li.id]: e.target.value }))
+                                      }
+                                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                                      placeholder="0"
+                                      className="w-36 px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-right mono font-bold text-slate-900 dark:text-white">
+                                    {amount > 0 ? amount.toLocaleString('en-IN') : '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
+                              <td colSpan={4} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
+                                Total
                               </td>
-                              <td className="px-2.5 py-1.5 text-right mono text-slate-600 dark:text-gray-300">{li.quantity}</td>
-                              <td className="px-2.5 py-1.5 text-slate-500 dark:text-gray-400">{li.unit || '—'}</td>
-                              <td className="px-2.5 py-1.5">
-                                <input
-                                  type="number"
-                                  min={0}
-                                  aria-label={`Rate for ${li.description}`}
-                                  value={bidLineItemPrices[li.id] || ''}
-                                  onChange={(e) =>
-                                    setBidLineItemPrices((prev) => ({ ...prev, [li.id]: e.target.value }))
-                                  }
-                                  disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                                  placeholder="0"
-                                  className="w-36 px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                                />
-                              </td>
-                              <td className="px-2.5 py-1.5 text-right mono font-bold text-slate-900 dark:text-white">
-                                {amount > 0 ? amount.toLocaleString('en-IN') : '—'}
+                              <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
+                                {(biddingOn.lineItems || [])
+                                  .reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0)
+                                  .toLocaleString('en-IN')}
                               </td>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
-                          <td colSpan={4} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
-                            Total
-                          </td>
-                          <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
-                            {(biddingOn.lineItems || [])
-                              .reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0)
-                              .toLocaleString('en-IN')}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
+                      <div className="relative">
+                        <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                        <input
+                          type="number"
+                          min={0}
+                          value={bidUnitPrice}
+                          onChange={(e) => setBidUnitPrice(e.target.value)}
+                          disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                          placeholder="e.g. 25000"
+                          className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lead Time (Days)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={bidLeadTimeDays}
+                        onChange={(e) => setBidLeadTimeDays(e.target.value)}
+                        disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                        placeholder="e.g. 14"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Warranty (Years)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={bidWarrantyYears}
+                        onChange={(e) => setBidWarrantyYears(e.target.value)}
+                        disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                        placeholder="e.g. 1"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                      />
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div>
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
-                  <div className="relative">
-                    <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Payment Terms</label>
                     <input
-                      type="number"
-                      min={0}
-                      value={bidUnitPrice}
-                      onChange={(e) => setBidUnitPrice(e.target.value)}
+                      type="text"
+                      value={bidPaymentTerms}
+                      onChange={(e) => setBidPaymentTerms(e.target.value)}
                       disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                      placeholder="e.g. 25000"
-                      className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                      placeholder="e.g. 45 Days Net, 100% Against Dispatch"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
                     />
                   </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Remarks</label>
+                    <textarea
+                      value={bidRemarks}
+                      onChange={(e) => setBidRemarks(e.target.value)}
+                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                      rows={2}
+                      placeholder="Special notes, inclusions, exclusions, or freight details..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white resize-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                      Bid Documents (up to 5 files, 10 MB each)
+                    </label>
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.xls,.xlsx,.doc,.docx,.txt,.csv,.png,.jpg,.jpeg"
+                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                      onChange={(event) => {
+                        const files = Array.from(event.target.files || []);
+                        if (files.length > 5) {
+                          showToast('Too Many Documents', 'Attach no more than five documents.', 'warning');
+                          event.target.value = '';
+                          return;
+                        }
+                        const emptyFile = files.find((file) => file.size === 0);
+                        if (emptyFile) {
+                          showToast('Empty Document', `${emptyFile.name} is empty. Choose a file with content.`, 'warning');
+                          event.target.value = '';
+                          return;
+                        }
+                        const oversized = files.find((file) => file.size > 10 * 1024 * 1024);
+                        if (oversized) {
+                          showToast('Document Too Large', `${oversized.name} exceeds the 10 MB limit.`, 'warning');
+                          event.target.value = '';
+                          return;
+                        }
+                        setBidDocuments(files);
+                        setUploadedBidDocuments([]);
+                      }}
+                      className="block w-full rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950 px-3 py-2 text-xs"
+                    />
+                    {bidDocuments.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {bidDocuments.map((file, index) => (
+                          <li key={`${file.name}-${file.lastModified}`} className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className="inline-flex min-w-0 items-center gap-1.5 truncate text-slate-600 dark:text-gray-300">
+                              <Paperclip size={12} className="shrink-0" /> {file.name}
+                              <span className="text-slate-400">({formatFileSize(file.size)})</span>
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isSubmittingQuote}
+                              onClick={() => {
+                                setBidDocuments((previous) => previous.filter((_, fileIndex) => fileIndex !== index));
+                                setUploadedBidDocuments([]);
+                              }}
+                              className="text-rose-600 hover:underline"
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
-              )}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lead Time (Days)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={bidLeadTimeDays}
-                    onChange={(e) => setBidLeadTimeDays(e.target.value)}
+
+                <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-gray-800">
+                  <button onClick={() => setBiddingOn(null)} disabled={isSubmittingQuote} className="btn btn-ghost btn-sm">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSubmitQuote}
                     disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                    placeholder="e.g. 14"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                  />
+                    className="btn btn-primary btn-sm px-4 text-xs font-bold disabled:opacity-50"
+                  >
+                    <Send size={13} /> {isSubmittingQuote ? 'Submitting...' : 'Submit Quotation'}
+                  </button>
                 </div>
-                <div>
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Warranty (Years)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={bidWarrantyYears}
-                    onChange={(e) => setBidWarrantyYears(e.target.value)}
-                    disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                    placeholder="e.g. 1"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Payment Terms</label>
-                <input
-                  type="text"
-                  value={bidPaymentTerms}
-                  onChange={(e) => setBidPaymentTerms(e.target.value)}
-                  disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                  placeholder="e.g. 45 Days Net, 100% Against Dispatch"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Remarks</label>
-                <textarea
-                  value={bidRemarks}
-                  onChange={(e) => setBidRemarks(e.target.value)}
-                  disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                  rows={2}
-                  placeholder="Special notes, inclusions, exclusions, or freight details..."
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white resize-none"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                  Bid Documents (up to 5 files, 10 MB each)
-                </label>
-                <input
-                  type="file"
-                  multiple
-                  accept=".pdf,.xls,.xlsx,.doc,.docx,.txt,.csv,.png,.jpg,.jpeg"
-                  disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                  onChange={(event) => {
-                    const files = Array.from(event.target.files || []);
-                    if (files.length > 5) {
-                      showToast('Too Many Documents', 'Attach no more than five documents.', 'warning');
-                      event.target.value = '';
-                      return;
-                    }
-                    const emptyFile = files.find((file) => file.size === 0);
-                    if (emptyFile) {
-                      showToast('Empty Document', `${emptyFile.name} is empty. Choose a file with content.`, 'warning');
-                      event.target.value = '';
-                      return;
-                    }
-                    const oversized = files.find((file) => file.size > 10 * 1024 * 1024);
-                    if (oversized) {
-                      showToast('Document Too Large', `${oversized.name} exceeds the 10 MB limit.`, 'warning');
-                      event.target.value = '';
-                      return;
-                    }
-                    setBidDocuments(files);
-                    setUploadedBidDocuments([]);
-                  }}
-                  className="block w-full rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950 px-3 py-2 text-xs"
-                />
-                {bidDocuments.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {bidDocuments.map((file, index) => (
-                      <li key={`${file.name}-${file.lastModified}`} className="flex items-center justify-between gap-2 text-[11px]">
-                        <span className="inline-flex min-w-0 items-center gap-1.5 truncate text-slate-600 dark:text-gray-300">
-                          <Paperclip size={12} className="shrink-0" /> {file.name}
-                          <span className="text-slate-400">({formatFileSize(file.size)})</span>
-                        </span>
-                        <button
-                          type="button"
-                          disabled={isSubmittingQuote}
-                          onClick={() => {
-                            setBidDocuments((previous) => previous.filter((_, fileIndex) => fileIndex !== index));
-                            setUploadedBidDocuments([]);
-                          }}
-                          className="text-rose-600 hover:underline"
-                        >
-                          Remove
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
               </div>
             </div>
+        )}
 
-            <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-gray-800">
-              <button onClick={() => setBiddingOn(null)} disabled={isSubmittingQuote} className="btn btn-ghost btn-sm">
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmitQuote}
-                disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                className="btn btn-primary btn-sm px-4 text-xs font-bold disabled:opacity-50"
-              >
-                <Send size={13} /> {isSubmittingQuote ? 'Submitting...' : 'Submit Quotation'}
-              </button>
+        {/* Upgrade Subscription Modal */}
+        {showUpgradeModal && (
+          <div className="modal-backdrop">
+            <div className="glass-panel p-6 rounded-3xl max-w-lg w-full space-y-4 border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-100 dark:border-gray-800 pb-3">
+                <h3 className="font-black text-sm uppercase tracking-wider text-slate-800 dark:text-gray-100 flex items-center gap-2">
+                  {UI_STRINGS.vendorSubscriptionModal?.upgradeTitle || '🔒 Upgrade Plan to Submit Quotations'}
+                </h3>
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white font-extrabold text-sm border-none bg-transparent cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/40 text-xs leading-relaxed">
+                {UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedWarning || '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.'}
+              </div>
+
+              <div className="space-y-3">
+                {/* Option: Connect */}
+                <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${
+                  vendorSubscription === 'connect' ? 'border-indigo-500 bg-indigo-50/10' : 'border-indigo-200 dark:border-indigo-900/60'
+                }`}>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
+                      {UI_STRINGS.vendorSubscriptionModal?.connectTitle || 'Connect Model (₹2 / 3 mo)'}
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {UI_STRINGS.vendorSubscriptionModal?.connectDesc || 'Quote and download up to 50 RFQs in 3 months from Marketplace.'}
+                    </p>
+                  </div>
+                  {vendorSubscription === 'connect' ? (
+                    <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded">
+                      {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
+                    </span>
+                  ) : (
+                    <button
+                      data-plan="connect"
+                      onClick={handleUpgradeClick}
+                      className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700"
+                    >
+                      {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                    </button>
+                  )}
+                </div>
+
+                {/* Option: Select */}
+                <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${
+                  vendorSubscription === 'select' ? 'border-purple-500 bg-purple-50/10' : 'border-purple-200 dark:border-purple-900/60'
+                }`}>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
+                      {UI_STRINGS.vendorSubscriptionModal?.selectTitle || 'Select Model (₹5 / 3 mo)'}
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {UI_STRINGS.vendorSubscriptionModal?.selectDesc || 'Item Catalogue (100 products) + 100 RFQs / 3 months.'}
+                    </p>
+                  </div>
+                  {vendorSubscription === 'select' ? (
+                    <span className="text-[10px] font-bold text-purple-600 bg-purple-100 dark:bg-purple-950 px-2 py-0.5 rounded">
+                      {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
+                    </span>
+                  ) : (
+                    <button
+                      data-plan="select"
+                      onClick={handleUpgradeClick}
+                      className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-purple-600 hover:bg-purple-700"
+                    >
+                      {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  {UI_STRINGS.vendorSubscriptionModal?.closeAction || 'Close'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Upgrade Subscription Modal */}
-      {showUpgradeModal && (
-        <div className="modal-backdrop">
-          <div className="glass-panel p-6 rounded-3xl max-w-lg w-full space-y-4 border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-slate-100 dark:border-gray-800 pb-3">
-              <h3 className="font-black text-sm uppercase tracking-wider text-slate-800 dark:text-gray-100 flex items-center gap-2">
-                {UI_STRINGS.vendorSubscriptionModal?.upgradeTitle || '🔒 Upgrade Plan to Submit Quotations'}
-              </h3>
-              <button
-                onClick={() => setShowUpgradeModal(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-white font-extrabold text-sm border-none bg-transparent cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/40 text-xs leading-relaxed">
-              {UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedWarning || '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.'}
-            </div>
-
-            <div className="space-y-3">
-              {/* Option: Connect */}
-              <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${vendorSubscription === 'connect' ? 'border-indigo-500 bg-indigo-50/10' : 'border-indigo-200 dark:border-indigo-900/60'
-                }`}>
-                <div>
-                  <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    {UI_STRINGS.vendorSubscriptionModal?.connectTitle || 'Connect Model (₹2 / 3 mo)'}
-                  </h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    {UI_STRINGS.vendorSubscriptionModal?.connectDesc || 'Quote and download up to 50 RFQs in 3 months from Marketplace.'}
-                  </p>
-                </div>
-                {vendorSubscription === 'connect' ? (
-                  <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded">
-                    {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
-                  </span>
-                ) : (
-                  <button
-                    data-plan="connect"
-                    onClick={handleUpgradeClick}
-                    className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700"
-                  >
-                    {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
-                  </button>
-                )}
-              </div>
-
-              {/* Option: Select */}
-              <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${vendorSubscription === 'select' ? 'border-purple-500 bg-purple-50/10' : 'border-purple-200 dark:border-purple-900/60'
-                }`}>
-                <div>
-                  <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    {UI_STRINGS.vendorSubscriptionModal?.selectTitle || 'Select Model (₹5 / 3 mo)'}
-                  </h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    {UI_STRINGS.vendorSubscriptionModal?.selectDesc || 'Item Catalogue (100 products) + 100 RFQs / 3 months.'}
-                  </p>
-                </div>
-                {vendorSubscription === 'select' ? (
-                  <span className="text-[10px] font-bold text-purple-600 bg-purple-100 dark:bg-purple-950 px-2 py-0.5 rounded">
-                    {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
-                  </span>
-                ) : (
-                  <button
-                    data-plan="select"
-                    onClick={handleUpgradeClick}
-                    className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-purple-600 hover:bg-purple-700"
-                  >
-                    {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
-              <button
-                onClick={() => setShowUpgradeModal(false)}
-                className="btn btn-secondary btn-sm"
-              >
-                {UI_STRINGS.vendorSubscriptionModal?.closeAction || 'Close'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <SubscriptionPaymentModal
-        isOpen={!!pendingPayment}
-        onClose={() => setPendingPayment(null)}
-        planId={pendingPayment?.planId || 'connect'}
-        planName={pendingPayment?.planName || ''}
-        price={pendingPayment?.price || ''}
-        billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
-        breakdown={pendingPayment?.breakdown}
-        createPaymentLink={createVendorPaymentLink}
-      />
-    </div>
-  );
-}
+        <SubscriptionPaymentModal
+          isOpen={!!pendingPayment}
+          onClose={() => setPendingPayment(null)}
+          planId={pendingPayment?.planId || 'connect'}
+          planName={pendingPayment?.planName || ''}
+          price={pendingPayment?.price || ''}
+          billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+          breakdown={pendingPayment?.breakdown}
+          createPaymentLink={createVendorPaymentLink}
+        />
+      </div>
+    );
+  }

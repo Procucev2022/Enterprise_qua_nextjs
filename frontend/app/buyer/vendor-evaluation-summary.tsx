@@ -43,7 +43,7 @@ interface VendorEvaluationSummaryProps {
 export const isBuyerUploaded = (v: any): boolean => {
   if (!v) return false;
   const s = String(v.source || '').toLowerCase().trim();
-  const id = String(v.id || '').toLowerCase().trim();
+  const id = String(v.id || v.vendorId || '').toLowerCase().trim();
   return (
     s === 'buyer_uploaded' ||
     s === 'vendor_master_ingestion' ||
@@ -55,6 +55,9 @@ export const isBuyerUploaded = (v: any): boolean => {
     s.includes('ingestion') ||
     s.includes('purchase_dump') ||
     !!v.addedByBuyerCompany ||
+    !!v.buyerId ||
+    !!v.buyerAccountId ||
+    v.isBuyerUploaded === true ||
     id.startsWith('v-hist-') ||
     id.startsWith('v-navin-') ||
     id.startsWith('vm-') ||
@@ -173,8 +176,63 @@ export default function VendorEvaluationSummary({
   const { buyerVendors, vendorEvaluations, setActiveEvaluationRecord, showToast, addAuditLog, addFeedItem } = useApp();
 
   const activeRecord = evaluationRecord || vendorEvaluation;
-  // Determine initial vendor ID
-  const initialVendorId = activeRecord?.vendorId || (vendorEvaluations && vendorEvaluations[0]?.vendorId) || (buyerVendors && buyerVendors[0]?.id) || '';
+
+  // Combined company list for dropdown
+  const companyOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; category: string; source?: string; score: number; status?: string }>();
+
+    // From buyerVendors
+    (buyerVendors || []).forEach((v) => {
+      if (v.id) {
+        map.set(v.id, {
+          id: v.id,
+          name: v.name || (v as any).vendorName || 'Enterprise Supplier',
+          category: v.majorCategory || (v as any).category || 'General Industrial',
+          source: v.source,
+          score: Number(v.score) || 92,
+          status: v.status,
+        });
+      }
+    });
+
+    // From vendorEvaluations
+    (vendorEvaluations || []).forEach((e) => {
+      if (e.vendorId && !map.has(e.vendorId)) {
+        map.set(e.vendorId, {
+          id: e.vendorId,
+          name: e.vendorName || 'Enterprise Supplier',
+          category: e.category || 'General Industrial',
+          source: (e as any).source || 'evaluated',
+          score: Number(e.overallScore) || 90,
+          status: e.status,
+        });
+      }
+    });
+
+    // If initial record is passed and not yet in map
+    if (evaluationRecord && evaluationRecord.vendorId && !map.has(evaluationRecord.vendorId)) {
+      map.set(evaluationRecord.vendorId, {
+        id: evaluationRecord.vendorId,
+        name: evaluationRecord.vendorName,
+        category: evaluationRecord.category,
+        source: (evaluationRecord as any).source,
+        score: evaluationRecord.overallScore,
+        status: evaluationRecord.status,
+      });
+    }
+
+    const all = Array.from(map.values());
+    const buyerUploadedList = all.filter((c) => isBuyerUploaded(c) || (evaluationRecord && c.id === evaluationRecord.vendorId));
+    return buyerUploadedList.length > 0 ? buyerUploadedList : all;
+  }, [buyerVendors, vendorEvaluations, evaluationRecord]);
+
+  // Determine initial vendor ID: prioritize activeRecord or the buyer's approved company options
+  const initialVendorId =
+    activeRecord?.vendorId ||
+    (companyOptions.length > 0 ? companyOptions[0].id : '') ||
+    (buyerVendors && buyerVendors[0]?.id) ||
+    (vendorEvaluations && vendorEvaluations[0]?.vendorId) ||
+    '';
   const [selectedVendorId, setSelectedVendorId] = useState<string>(initialVendorId);
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -198,6 +256,15 @@ export default function VendorEvaluationSummary({
     }
   }, [evaluationRecord]);
 
+  // Synchronize selectedVendorId when navigating directly without evaluationRecord
+  useEffect(() => {
+    if (!evaluationRecord && companyOptions.length > 0) {
+      if (!selectedVendorId || !companyOptions.some((c) => c.id === selectedVendorId)) {
+        setSelectedVendorId(companyOptions[0].id);
+      }
+    }
+  }, [evaluationRecord, companyOptions, selectedVendorId]);
+
   // Resolve the active evaluation record
   const record: VendorEvaluationRecord | null = useMemo(() => {
     // 1. If explicit prop matches selected ID
@@ -213,23 +280,34 @@ export default function VendorEvaluationSummary({
       if (match) return match;
     }
 
-    // 3. Look up vendor in buyerVendors and build record
-    if (selectedVendorId && buyerVendors && buyerVendors.length > 0) {
-      const vendor = buyerVendors.find((v) => v.id === selectedVendorId);
+    // 3. Look up vendor in buyerVendors or companyOptions and build record
+    if (selectedVendorId) {
+      const vendor =
+        buyerVendors?.find((v) => v.id === selectedVendorId) ||
+        companyOptions.find((c) => c.id === selectedVendorId);
       if (vendor) {
         return buildEvaluationRecordForVendor(vendor);
       }
     }
 
-    // 4. Fallback to evaluationRecord prop, first vendorEvaluation, or first buyerVendor
+    // 4. Fallback to evaluationRecord prop
     if (evaluationRecord) return evaluationRecord;
+
+    // 5. Fallback to first company in companyOptions
+    if (companyOptions.length > 0) {
+      const firstCompany = companyOptions[0];
+      const match = vendorEvaluations?.find((e) => e.vendorId === firstCompany.id);
+      return match || buildEvaluationRecordForVendor(firstCompany);
+    }
+
+    // 6. Fallback to vendorEvaluations or buyerVendors
     if (vendorEvaluations && vendorEvaluations.length > 0) return vendorEvaluations[0];
     if (buyerVendors && buyerVendors.length > 0) {
       return buildEvaluationRecordForVendor(buyerVendors[0]);
     }
 
     return null;
-  }, [evaluationRecord, selectedVendorId, vendorEvaluations, buyerVendors]);
+  }, [evaluationRecord, selectedVendorId, vendorEvaluations, buyerVendors, companyOptions]);
 
   // Score override and local state
   const [overrideScore, setOverrideScore] = useState<number | null>(null);
@@ -250,54 +328,6 @@ export default function VendorEvaluationSummary({
     }
   }, [record]);
 
-  // Combined company list for dropdown
-  const companyOptions = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; category: string; source?: string; score: number; status?: string }>();
-
-    // From buyerVendors
-    (buyerVendors || []).forEach((v) => {
-      if (v.id) {
-        map.set(v.id, {
-          id: v.id,
-          name: v.name || 'Unnamed Vendor',
-          category: v.majorCategory || 'General',
-          source: v.source,
-          score: Number(v.score) || 92,
-          status: v.status,
-        });
-      }
-    });
-
-    // From vendorEvaluations
-    (vendorEvaluations || []).forEach((e) => {
-      if (e.vendorId && !map.has(e.vendorId)) {
-        map.set(e.vendorId, {
-          id: e.vendorId,
-          name: e.vendorName || 'Unnamed Vendor',
-          category: e.category || 'General',
-          source: (e as any).source || 'evaluated',
-          score: Number(e.overallScore) || 90,
-          status: e.status,
-        });
-      }
-    });
-
-    // If initial record is passed and not yet in map
-    if (evaluationRecord && evaluationRecord.vendorId && !map.has(evaluationRecord.vendorId)) {
-      map.set(evaluationRecord.vendorId, {
-        id: evaluationRecord.vendorId,
-        name: evaluationRecord.vendorName,
-        category: evaluationRecord.category,
-        source: (evaluationRecord as any).source,
-        score: evaluationRecord.overallScore,
-        status: evaluationRecord.status,
-      });
-    }
-
-    const all = Array.from(map.values());
-    return all.filter((c) => isBuyerUploaded(c));
-  }, [buyerVendors, vendorEvaluations, evaluationRecord]);
-
   const filteredCompanyOptions = useMemo(() => {
     if (!searchQuery.trim()) return companyOptions;
     const q = searchQuery.toLowerCase();
@@ -313,20 +343,37 @@ export default function VendorEvaluationSummary({
     setSelectedVendorId(vendorId);
     setDropdownOpen(false);
     setSearchQuery('');
-    const target = companyOptions.find((c) => c.id === vendorId);
+    const rawVendor = buyerVendors?.find((v) => v.id === vendorId);
+    const target = rawVendor || companyOptions.find((c) => c.id === vendorId);
     if (target) {
-      const evalRecord = buildEvaluationRecordForVendor(target);
+      const existingEval = vendorEvaluations?.find((e) => e.vendorId === vendorId);
+      const evalRecord = existingEval || buildEvaluationRecordForVendor(target);
       if (setActiveEvaluationRecord) {
         setActiveEvaluationRecord(evalRecord);
       }
-      showToast('Company Selected', `Loaded 360° evaluation summary for ${target.name}.`, 'info');
+      showToast('Company Selected', `Loaded 360° evaluation summary for ${evalRecord.vendorName || (target as any).name}.`, 'info');
     }
   };
 
   if (!record) {
     return (
-      <div className="p-8 text-center text-slate-500">
-        No evaluation record selected.
+      <div className="space-y-4 animate-fade-in p-8 text-center glass-panel rounded-2xl border border-slate-200 dark:border-slate-800 max-w-xl mx-auto my-12">
+        <div className="w-12 h-12 mx-auto rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 flex items-center justify-center">
+          <Building2 size={24} />
+        </div>
+        <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
+          No evaluation record selected.
+        </h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Your account does not have any approved internal suppliers uploaded or evaluated yet. Once you onboard suppliers to your roster, their dynamic 6-pillar 360° scorecard will be displayed here.
+        </p>
+        {onBack && (
+          <div className="pt-2">
+            <button onClick={onBack} className="btn btn-secondary btn-sm">
+              <ArrowLeft size={14} /> Back
+            </button>
+          </div>
+        )}
       </div>
     );
   }

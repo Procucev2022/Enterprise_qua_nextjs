@@ -164,16 +164,16 @@ function serveRFQs(fixtures: RFQFixture[]) {
       json: async () =>
         /\/api\/rfqs(\?|$)/.test(String(url))
           ? {
-            success: true,
-            data: fixtures.map((fixture) => ({
-              category: 'Engineering Spares - Mechanical',
-              status: 'Quotes Pending',
-              createdAt: '2026-09-04T10:00:00.000Z',
-              quotes: [],
-              extractedEntities: [],
-              ...fixture,
-            })),
-          }
+              success: true,
+              data: fixtures.map((fixture) => ({
+                category: 'Engineering Spares - Mechanical',
+                status: 'Quotes Pending',
+                createdAt: '2026-09-04T10:00:00.000Z',
+                quotes: [],
+                extractedEntities: [],
+                ...fixture,
+              })),
+            }
           : /\/api\/bootstrap/.test(String(url))
             ? { success: true, data: { vendors: [SELF_VENDOR_RECORD] } }
             : { success: true, data: {} },

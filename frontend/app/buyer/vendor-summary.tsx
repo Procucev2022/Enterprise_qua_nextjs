@@ -59,7 +59,7 @@ interface VendorSummaryProps {
 export const isBuyerUploaded = (v: any): boolean => {
   if (!v) return false;
   const s = String(v.source || '').toLowerCase().trim();
-  const id = String(v.id || '').toLowerCase().trim();
+  const id = String(v.id || v.vendorId || '').toLowerCase().trim();
   return (
     s === 'buyer_uploaded' ||
     s === 'vendor_master_ingestion' ||
@@ -71,6 +71,9 @@ export const isBuyerUploaded = (v: any): boolean => {
     s.includes('ingestion') ||
     s.includes('purchase_dump') ||
     !!v.addedByBuyerCompany ||
+    !!v.buyerId ||
+    !!v.buyerAccountId ||
+    v.isBuyerUploaded === true ||
     id.startsWith('v-hist-') ||
     id.startsWith('v-navin-') ||
     id.startsWith('vm-') ||

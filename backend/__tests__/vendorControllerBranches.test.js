@@ -860,12 +860,10 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       await vendorController.bulkImportVendors(
         {
           user: { role: 'buyer', email: 'buyer@authed.com' },
-          body: {
-            vendors: [
-              { name: 'Bulk Vendor', email: 'bulk1@vendor.com', majorCategory: 'Tools' },
-              { name: 'Bulk Vendor Two', email: 'bulk2@vendor.com', majorCategory: 'Tools' },
-            ]
-          },
+          body: { vendors: [
+            { name: 'Bulk Vendor', email: 'bulk1@vendor.com', majorCategory: 'Tools' },
+            { name: 'Bulk Vendor Two', email: 'bulk2@vendor.com', majorCategory: 'Tools' },
+          ] },
         },
         res,
         next
@@ -917,7 +915,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       const res = mockRes();
       const pool = require('../src/db/pool');
       const { logger } = require('../src/services/loggerService');
-      const logError = jest.spyOn(logger, 'error').mockImplementation(() => { });
+      const logError = jest.spyOn(logger, 'error').mockImplementation(() => {});
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       storeService.vendors = [
         { id: 'v-b1', name: 'Alpha Fasteners', email: 'alpha@fast.com', majorCategory: 'Industrial', buyerId: 'b-99' },
