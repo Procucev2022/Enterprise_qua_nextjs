@@ -83,7 +83,12 @@ async function reconcileLink(link) {
       if (!updated) throw new Error('Payment link expiration could not be recorded in durable storage.');
       return { status: 'expired', nonExistent: true };
     }
-    throw err;
+    throw Object.assign(new Error(String(err?.message || 'Zoho payment-link status lookup failed.')), {
+      code: 'ZOHO_STATUS_LOOKUP_FAILED',
+      cause: err,
+      status: err?.status,
+      statusCode: err?.statusCode,
+    });
   }
 
   // Zoho's own status strings are lowercase ('active', 'paid', 'expired',
@@ -124,10 +129,31 @@ function reconcileLinkOnce(link) {
         return { skipped: true, reason: claim?.reason || 'CLAIM_NOT_GRANTED' };
       }
 
-      // Keep the lease until expiry even after success. This avoids a second
-      // D1 write per link; the bounded lease also throttles repeated provider
-      // checks during failures and is reclaimed automatically after a crash.
-      return reconcileLink(link);
+      try {
+        // Keep the lease until expiry after success or a Zoho request failure.
+        // This avoids a second D1 write per successful link and throttles
+        // repeated provider checks during transient outages.
+        return await reconcileLink(link);
+      } catch (error) {
+        if (error?.code !== 'ZOHO_STATUS_LOOKUP_FAILED') {
+          try {
+            const released = await zohoReconciliationQueries.releasePaymentLinkReconciliation(linkId, claim.claimedAt);
+            if (released > 0) {
+              logger.info('Released Zoho payment-link reconciliation lease after a local failure', {
+                linkId,
+                errorCode: error?.code || 'UNCLASSIFIED_RECONCILIATION_FAILURE',
+              }, 'ZOHO_RECONCILIATION');
+            }
+          } catch (releaseError) {
+            logger.error('Failed to release Zoho payment-link reconciliation lease after a local failure', {
+              linkId,
+              error,
+              releaseError,
+            }, 'ZOHO_RECONCILIATION');
+          }
+        }
+        throw error;
+      }
     })
     .finally(() => {
       if (runtime.inFlightLinks.get(linkId) === operation) runtime.inFlightLinks.delete(linkId);

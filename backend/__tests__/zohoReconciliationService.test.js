@@ -20,6 +20,7 @@ describe('zohoReconciliationService', () => {
     zohoWebhookQueries.purgeExpiredWebhookEvents.mockResolvedValue(0);
     zohoReconciliationQueries.claimPaymentLinkReconciliation.mockResolvedValue({
       claimed: true,
+      claimedAt: '2026-11-11T00:00:00.000Z',
       leaseExpiresAt: '2026-11-11T00:03:00.000Z',
     });
     zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims.mockResolvedValue(0);
@@ -141,6 +142,43 @@ describe('zohoReconciliationService', () => {
       await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
 
       expect(zohoReconciliationQueries.claimPaymentLinkReconciliation).toHaveBeenCalledWith('pl-retry');
+      expect(zohoReconciliationQueries.releasePaymentLinkReconciliation).not.toHaveBeenCalled();
+    });
+
+    test('releases the owning lease immediately when durable status persistence fails', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([
+        { id: 'pl-write-failure', zohoPaymentLinkId: 'zoho-write-failure', status: 'active' },
+      ]);
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValue({ status: 'pending', rawResponse: {} });
+      storeService.updatePaymentLinkRecordDurably.mockResolvedValue(null);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+
+      expect(zohoReconciliationQueries.releasePaymentLinkReconciliation).toHaveBeenCalledWith(
+        'pl-write-failure',
+        '2026-11-11T00:00:00.000Z'
+      );
+    });
+
+    test('logs lease release failures and preserves the original reconciliation error', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const persistError = new Error('Payment link status could not be recorded in durable storage.');
+      const releaseError = new Error('lease database unavailable');
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([
+        { id: 'pl-release-failure', zohoPaymentLinkId: 'zoho-release-failure', status: 'active' },
+      ]);
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValue({ status: 'pending', rawResponse: {} });
+      storeService.updatePaymentLinkRecordDurably.mockRejectedValueOnce(persistError);
+      zohoReconciliationQueries.releasePaymentLinkReconciliation.mockRejectedValueOnce(releaseError);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Failed to release Zoho payment-link reconciliation lease after a local failure',
+        { linkId: 'pl-release-failure', error: persistError, releaseError },
+        'ZOHO_RECONCILIATION'
+      );
     });
 
     test('logs expired claim cleanup failures without blocking payment reconciliation', async () => {

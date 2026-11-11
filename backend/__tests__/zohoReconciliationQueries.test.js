@@ -36,6 +36,7 @@ describe('zohoReconciliationQueries', () => {
 
     await expect(reconciliationQueries.claimPaymentLinkReconciliation(' link-local ', now)).resolves.toEqual({
       claimed: true,
+      claimedAt: now.toISOString(),
       leaseExpiresAt: new Date(now.getTime() + ZOHO_CONFIG.RECONCILIATION_LEASE_MS).toISOString(),
       durable: false,
     });
@@ -48,6 +49,7 @@ describe('zohoReconciliationQueries', () => {
 
     await expect(reconciliationQueries.claimPaymentLinkReconciliation(' link-1 ', now)).resolves.toEqual({
       claimed: true,
+      claimedAt: now.toISOString(),
       leaseExpiresAt: new Date(now.getTime() + ZOHO_CONFIG.RECONCILIATION_LEASE_MS).toISOString(),
       durable: true,
     });
@@ -75,6 +77,40 @@ describe('zohoReconciliationQueries', () => {
       claimed: false,
       reason: 'LEASE_HELD',
     });
+  });
+
+  test('releases only the lease owned by the supplied claim timestamp', async () => {
+    pool.query.mockResolvedValue({ rowCount: 1 });
+    const claimedAt = '2026-11-11T00:00:00.000Z';
+
+    await expect(reconciliationQueries.releasePaymentLinkReconciliation(' link-1 ', claimedAt)).resolves.toBe(1);
+
+    expect(pool.query).toHaveBeenCalledWith(
+      'DELETE FROM zoho_reconciliation_claims WHERE payment_link_id = $1 AND claimed_at = $2',
+      ['link-1', claimedAt],
+      expect.objectContaining({
+        d1: true,
+        tag: 'zoho_reconciliation_claims',
+        useCache: false,
+        d1Text: 'DELETE FROM zoho_reconciliation_claims WHERE payment_link_id = $1 AND claimed_at = $2',
+      })
+    );
+  });
+
+  test('skips lease release when storage or claim identity is unavailable', async () => {
+    await expect(reconciliationQueries.releasePaymentLinkReconciliation('', 'claimed-at')).resolves.toBe(0);
+    await expect(reconciliationQueries.releasePaymentLinkReconciliation('link-1', '')).resolves.toBe(0);
+    expect(pool.query).not.toHaveBeenCalled();
+
+    pool.hasStorage.mockReturnValue(false);
+    await expect(reconciliationQueries.releasePaymentLinkReconciliation('link-1', 'claimed-at')).resolves.toBe(0);
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  test('reports zero when another claim has already replaced the lease', async () => {
+    pool.query.mockResolvedValue({ rowCount: 0 });
+
+    await expect(reconciliationQueries.releasePaymentLinkReconciliation('link-1', 'stale-claim')).resolves.toBe(0);
   });
 
   test('propagates configured-storage errors instead of running without a durable lease', async () => {

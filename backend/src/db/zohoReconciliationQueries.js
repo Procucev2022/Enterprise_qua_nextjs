@@ -13,7 +13,7 @@ async function claimPaymentLinkReconciliation(paymentLinkId, now = new Date()) {
 
   const nowIso = now.toISOString();
   const leaseExpiresAt = new Date(now.getTime() + ZOHO_CONFIG.RECONCILIATION_LEASE_MS).toISOString();
-  if (!pool.hasStorage()) return { claimed: true, leaseExpiresAt, durable: false };
+  if (!pool.hasStorage()) return { claimed: true, claimedAt: nowIso, leaseExpiresAt, durable: false };
 
   const rows = await pool.rows(
     `INSERT INTO zoho_reconciliation_claims (payment_link_id, lease_expires_at, claimed_at)
@@ -37,7 +37,23 @@ async function claimPaymentLinkReconciliation(paymentLinkId, now = new Date()) {
   );
 
   if (rows.length === 0) return { claimed: false, reason: 'LEASE_HELD' };
-  return { claimed: true, leaseExpiresAt, durable: true };
+  return { claimed: true, claimedAt: nowIso, leaseExpiresAt, durable: true };
+}
+
+async function releasePaymentLinkReconciliation(paymentLinkId, claimedAt) {
+  const normalizedId = normalizePaymentLinkId(paymentLinkId);
+  const normalizedClaimedAt = claimedAt === undefined || claimedAt === null ? '' : String(claimedAt).trim();
+  if (!normalizedId || !normalizedClaimedAt || !pool.hasStorage()) return 0;
+
+  const result = await pool.query(
+    'DELETE FROM zoho_reconciliation_claims WHERE payment_link_id = $1 AND claimed_at = $2',
+    [normalizedId, normalizedClaimedAt],
+    {
+      ...DB_OPTIONS,
+      d1Text: 'DELETE FROM zoho_reconciliation_claims WHERE payment_link_id = $1 AND claimed_at = $2',
+    }
+  );
+  return Number(result.rowCount || 0);
 }
 
 async function purgeExpiredPaymentLinkReconciliationClaims(now = new Date()) {
@@ -56,5 +72,6 @@ async function purgeExpiredPaymentLinkReconciliationClaims(now = new Date()) {
 module.exports = {
   normalizePaymentLinkId,
   claimPaymentLinkReconciliation,
+  releasePaymentLinkReconciliation,
   purgeExpiredPaymentLinkReconciliationClaims,
 };
