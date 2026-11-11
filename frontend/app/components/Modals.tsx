@@ -2226,7 +2226,7 @@ export function IntakeSourcesModal({
 
   const totalActiveRFQs = rfqs.length;
   const emailGatewayRFQs = rfqs.filter((r) => r.source === 'email_gateway' || r.source === 'email_upload');
-  const webPortalRFQs = rfqs.filter((r) => r.source === 'web_portal' || r.source === 'ai_extraction' || (!r.source && r.source !== 'manual_entry'));
+  const webPortalRFQs = rfqs.filter((r) => r.source !== 'email_gateway' && r.source !== 'email_upload' && r.source !== 'manual_entry');
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
   const filteredRfqs = rfqs.filter((rfq) => {
@@ -2235,7 +2235,7 @@ export function IntakeSourcesModal({
       selectedSourceTab === 'all'
         ? true
         : selectedSourceTab === 'web_portal'
-        ? rfq.source === 'web_portal' || rfq.source === 'ai_extraction' || (!rfq.source && rfq.source !== 'manual_entry')
+        ? rfq.source !== 'email_gateway' && rfq.source !== 'email_upload' && rfq.source !== 'manual_entry'
         : selectedSourceTab === 'email_gateway'
         ? rfq.source === 'email_gateway' || rfq.source === 'email_upload'
         : rfq.source === selectedSourceTab;
