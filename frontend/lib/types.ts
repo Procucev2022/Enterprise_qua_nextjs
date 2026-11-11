@@ -146,7 +146,9 @@ export interface VendorFollowUpRecord {
   call: VendorChannelCall;
   whatsapp: VendorChannelWhatsApp;
   sms: VendorChannelSMS;
+  email?: VendorChannelEmail;
   email24h?: VendorChannelEmail;
+  emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
   lastInteraction: string;
   attemptsCount: number;
@@ -729,6 +731,7 @@ export interface VendorOpportunity {
   buyerDetailsHiddenUntil?: string;
   sourcingMode?: string;
   category?: string;
+  assignedVendors?: RFQAssignedVendor[];
 }
 
 export interface AuditLogEntry {

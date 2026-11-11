@@ -691,7 +691,11 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                         const vCount = Math.max(
                           rfq.assignedVendors?.length || 0,
                           rfq.procucevVendorCount || 0,
-                          followUp?.totalInvited || 0
+                          followUp?.totalInvited || 0,
+                          followUp?.whatsappStats?.total || 0,
+                          followUp?.smsStats?.total || 0,
+                          followUp?.emailStats?.total || 0,
+                          Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
                         );
                         const isDispatched = rfq.status !== 'Parsing' && vCount > 0;
 
@@ -722,8 +726,25 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                           Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
                         );
                         const emailDelivered = emailDue ? (rawEmailDelivered || emailTotal) : 0;
-                        const totalInvited = Math.max(followUp?.totalInvited || 0, vCount);
-                        const responded = followUp?.respondedCount || 0;
+                        const totalInvited = Math.max(
+                          followUp?.totalInvited || 0,
+                          vCount,
+                          waTotal,
+                          smsTotal,
+                          emailTotal
+                        );
+                        const quotesCount = Math.max(
+                          Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
+                          rfq.quotesCount || 0
+                        );
+                        const vendorRespondedCount = Array.isArray(followUp?.vendors)
+                          ? followUp.vendors.filter((v: any) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
+                          : 0;
+                        const responded = Math.max(
+                          followUp?.respondedCount || 0,
+                          quotesCount,
+                          vendorRespondedCount
+                        );
 
                         if (!followUp && vCount === 0) {
                           return <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>;

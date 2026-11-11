@@ -1149,5 +1149,85 @@ describe('app/buyer/command-center.tsx', () => {
 
     jest.useRealTimers();
   });
+
+  test('accurately displays responded count and invited vendors when quotes exist and channels have 4 invited', () => {
+    const testRfq: RFQItem = {
+      id: 'rfq-resp-1',
+      rfqNumber: 'RFQ2611111076144',
+      title: 'Quotation 2026-27/329',
+      category: 'IT',
+      createdAt: '2026-11-04T10:00:00Z',
+      targetDeliveryDate: '2026-12-15',
+      status: 'In Evaluation',
+      sourcingMode: 'mode_1',
+      quotesCount: 1,
+      quotes: [
+        {
+          vendorId: 'v-1',
+          vendorName: 'Apex IT',
+          vendorCategory: 'Client List',
+          unitPrice: 15000,
+          totalPrice: 15000,
+          leadTimeDays: 7,
+          aiMatchScore: 90,
+          warrantyYears: 1,
+          complianceStatus: 'Fully Compliant',
+          paymentTerms: 'Net 30',
+          remarks: 'Standard quote',
+          status: 'submitted',
+          submittedAt: '2026-11-05T12:00:00Z',
+          source: 'portal',
+          submissionMethod: 'portal',
+          lineItemQuotes: [],
+        },
+      ],
+      budget: 50000,
+      source: 'web_portal',
+      buyerAccountId: 'acc-1',
+      extractedEntities: [],
+      chasingActive: true,
+      followUpData: {
+        rfqNumber: 'RFQ2611111076144',
+        autoChasingEnabled: true,
+        totalInvited: 0,
+        respondedCount: 0,
+        callStats: { total: 4, connected: 0, avgDuration: '0s' },
+        whatsappStats: { total: 4, delivered: 0, read: 0, replied: 0 },
+        smsStats: { total: 4, delivered: 0, clicked: 0 },
+        emailStats: { total: 4, delivered: 0, sent24h: 0, opened: 0 },
+        vendors: [],
+      },
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [testRfq],
+      aiFeed: [],
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: testRfq,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 4,
+      activeSubscription: 'growth',
+      activeBuyerAccount: { organizationName: 'Growel Feeds' },
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    expect(screen.getByText('1/4 responded')).toBeInTheDocument();
+    expect(screen.getByText('1 quotes')).toBeInTheDocument();
+  });
 });
 

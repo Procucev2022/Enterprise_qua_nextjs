@@ -2108,7 +2108,11 @@ export function ActivePipelineModal({
                     const vCount = Math.max(
                       rfq.assignedVendors?.length || 0,
                       rfq.procucevVendorCount || 0,
-                      followUp?.totalInvited || 0
+                      followUp?.totalInvited || 0,
+                      followUp?.whatsappStats?.total || 0,
+                      followUp?.smsStats?.total || 0,
+                      followUp?.emailStats?.total || 0,
+                      Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
                     );
                     if (!followUp && vCount === 0) return null;
 
@@ -2140,8 +2144,25 @@ export function ActivePipelineModal({
                       Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
                     );
                     const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
-                    const totalInvited = Math.max(followUp?.totalInvited || 0, vCount);
-                    const responded = followUp?.respondedCount || 0;
+                    const totalInvited = Math.max(
+                      followUp?.totalInvited || 0,
+                      vCount,
+                      waTotal,
+                      smsTotal,
+                      emailTotal
+                    );
+                    const quotesCount = Math.max(
+                      Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
+                      rfq.quotesCount || 0
+                    );
+                    const vendorRespondedCount = Array.isArray(followUp?.vendors)
+                      ? followUp.vendors.filter((v: any) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
+                      : 0;
+                    const responded = Math.max(
+                      followUp?.respondedCount || 0,
+                      quotesCount,
+                      vendorRespondedCount
+                    );
 
                     return (
                       <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-600 dark:text-gray-300 flex-wrap">

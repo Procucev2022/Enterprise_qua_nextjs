@@ -2133,6 +2133,17 @@ sellerDirectory: {
     creditsExhaustedToastDesc: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
   },
 
+  vendorQuotationPage: {
+    directClientEnquiries: 'Direct client enquiries',
+    allEnquiries: 'All enquiries',
+    awaitingYourQuote: 'Awaiting your quote',
+    quoteSubmitted: 'Quote submitted',
+    closedEnquiries: 'Closed enquiries',
+    directClientBadge: 'Direct Client',
+    directClientExclusive: 'Client Exclusive',
+    myRequestsGroup: 'My Requests (Direct & Submitted)',
+  },
+
   publicVendorDirectory: {
     title: 'Enterprise Vendor Directory',
     subtitle: 'Browse and discover verified industrial manufacturers, suppliers, and distributors across India.',

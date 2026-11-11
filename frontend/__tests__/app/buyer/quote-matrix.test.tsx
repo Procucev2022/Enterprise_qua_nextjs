@@ -5,6 +5,7 @@ import { useApp } from '../../../lib/store';
 import { formatCurrency, formatIndianDate } from '../../../lib/constants';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { UI_STRINGS } from '../../../lib/uiStrings';
+import type { RFQItem } from '../../../lib/types';
 
 jest.mock('../../../lib/store', () => ({
   useApp: jest.fn(),
@@ -928,6 +929,157 @@ describe('QuoteMatrix Component Tests', () => {
       const emailBadge = screen.getByTestId('quote-source-v-email-2');
       expect(emailBadge).toBeInTheDocument();
       expect(emailBadge).toHaveTextContent('✉️ Email');
+    });
+
+    it('renders followUpData AI strip with accurate responded and total invited counts and L2 rank badge', () => {
+      const pastTime = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+      const rfqWithFollowUp: RFQItem = {
+        ...mockRFQs[0],
+        id: 'rfq-fup-deep',
+        rfqNumber: 'RFQ-FUP-001',
+        createdAt: pastTime,
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        chasingActive: true,
+        extractedEntities: [],
+        assignedVendors: [],
+        procucevVendorCount: 4,
+        quotesCount: 1,
+        quotes: [
+          {
+            vendorId: 'v-1',
+            vendorName: 'Apex Supplies Ltd.',
+            vendorCategory: 'Procucev - AI Rec',
+            unitPrice: 12500,
+            totalPrice: 75000,
+            leadTimeDays: 14,
+            aiMatchScore: 94,
+            warrantyYears: 2,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: 'Net 30',
+            remarks: 'Early shipment offered',
+            isPreferred: true,
+            isBestPrice: true,
+            source: 'portal',
+            submissionMethod: 'portal',
+            status: 'submitted',
+          },
+          {
+            vendorId: 'v-2',
+            vendorName: 'Global Valves Ltd.',
+            vendorCategory: 'Client List',
+            unitPrice: 13000,
+            totalPrice: 78000,
+            leadTimeDays: 10,
+            aiMatchScore: 89,
+            warrantyYears: 2,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: 'Net 45',
+            remarks: 'Standard offer',
+            isPreferred: false,
+            isBestPrice: false,
+            source: 'email',
+            submissionMethod: 'email',
+            status: 'submitted',
+          },
+          {
+            vendorId: 'v-3',
+            vendorName: 'Precision Engineering',
+            vendorCategory: 'Procucev Network',
+            unitPrice: 14000,
+            totalPrice: 84000,
+            leadTimeDays: 20,
+            aiMatchScore: 85,
+            warrantyYears: 1,
+            complianceStatus: 'Minor Exception',
+            paymentTerms: 'Net 60',
+            remarks: 'Extended lead time',
+            isPreferred: false,
+            isBestPrice: false,
+            source: 'email',
+            submissionMethod: 'email',
+            status: 'submitted',
+          },
+        ],
+        followUpData: {
+          rfqNumber: 'RFQ-FUP-001',
+          autoChasingEnabled: true,
+          totalInvited: 0,
+          respondedCount: 0,
+          callStats: { total: 4, connected: 1, avgDuration: '45s' },
+          whatsappStats: { total: 4, delivered: 4, read: 2, replied: 1 },
+          smsStats: { total: 4, delivered: 4, clicked: 2 },
+          emailStats: { total: 4, delivered: 4, sent24h: 4, opened: 3 },
+          vendors: [
+            {
+              vendorId: 'v-1',
+              vendorName: 'Apex Supplies Ltd.',
+              phone: '9876543210',
+              contactPerson: 'Contact One',
+              bidStatus: 'Submitted',
+              overallStatus: 'Responded',
+              call: { status: 'connected', duration: '2m', lastAttempt: pastTime },
+              whatsapp: { status: 'read', lastAttempt: pastTime },
+              sms: { status: 'delivered', lastAttempt: pastTime },
+              email: { status: 'delivered', lastAttempt: pastTime, is24hReminderSent: false },
+              lastInteraction: pastTime,
+              attemptsCount: 1,
+            },
+            {
+              vendorId: 'v-2',
+              vendorName: 'Global Valves Ltd.',
+              phone: '9876543211',
+              contactPerson: 'Contact Two',
+              bidStatus: 'Submitted',
+              overallStatus: 'Responded',
+              call: { status: 'connected', duration: '1m', lastAttempt: pastTime },
+              whatsapp: { status: 'delivered', lastAttempt: pastTime },
+              sms: { status: 'sent', lastAttempt: pastTime },
+              emailSent: true,
+              lastInteraction: pastTime,
+              attemptsCount: 1,
+            },
+            {
+              vendorId: 'v-4',
+              vendorName: 'Vendor Four',
+              phone: '9876543213',
+              contactPerson: 'Contact Four',
+              bidStatus: 'Pending',
+              overallStatus: 'Follow-up Active',
+              call: { status: 'connected', duration: '0m', lastAttempt: pastTime },
+              whatsapp: { status: 'delivered', lastAttempt: pastTime },
+              sms: { status: 'pending', lastAttempt: pastTime },
+              lastInteraction: pastTime,
+              attemptsCount: 1,
+            },
+          ],
+        },
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        rfqs: [rfqWithFollowUp],
+        selectedRFQForMatrix: rfqWithFollowUp,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+      expect(screen.getByText('AI FOLLOW-UP STATUS:')).toBeInTheDocument();
+      expect(screen.getByText(/WA 4\/4/)).toBeInTheDocument();
+      expect(screen.getByText(/SMS 4\/4/)).toBeInTheDocument();
+      expect(screen.getByText(/Email 4\/4/)).toBeInTheDocument();
+      expect(screen.getByText(/Vendor Follow-Up Details \(3\/4 Responded\)/)).toBeInTheDocument();
+      expect(screen.getByText(/L2/)).toBeInTheDocument();
+      expect(screen.getByText(/L3/)).toBeInTheDocument();
+
+      const deepDiveBtn = screen.getByText(/Vendor Follow-Up Details \(3\/4 Responded\)/);
+      fireEvent.click(deepDiveBtn);
+      expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(rfqWithFollowUp);
     });
   });
 });

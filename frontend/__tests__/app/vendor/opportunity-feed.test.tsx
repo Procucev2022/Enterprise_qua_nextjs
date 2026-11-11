@@ -1101,4 +1101,228 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     await renderFeed();
     expect(downloadButtons().length).toBeGreaterThan(0);
   });
+
+  test('navigates to quotation form when clicking Submit Quote on direct invitation card', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+    const submitBtns = screen.getAllByRole('button', { name: /^Submit Quote$/i });
+    expect(submitBtns.length).toBeGreaterThan(0);
+    fireEvent.click(submitBtns[0]);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/quotation-form?rfq='));
+  });
+
+  test('navigates to details, downloads, and submits quote from network card', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed({ subscription: 'select' });
+    const viewDetailsBtns = screen.getAllByRole('button', { name: /View Details/i });
+    expect(viewDetailsBtns.length).toBeGreaterThan(0);
+    fireEvent.click(viewDetailsBtns[viewDetailsBtns.length - 1]);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/rfq-details?rfq='));
+
+    const submitBtns = screen.getAllByRole('button', { name: /^Submit Quote$/i });
+    fireEvent.click(submitBtns[submitBtns.length - 1]);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/quotation-form?rfq='));
+  });
+
+  test('renders closed badge for closed or expired RFQs in both sections', async () => {
+    const closedDirect: RFQFixture = {
+      id: 'rfq-closed-1',
+      rfqNumber: 'RFQ-CLOSED-01',
+      title: 'Closed Direct Gearbox',
+      sourcingMode: 'mode_1',
+      budget: 10000,
+      targetDeliveryDate: '2026-08-01',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      status: 'Closed',
+    };
+    const expiredNetwork: RFQFixture = {
+      id: 'rfq-expired-2',
+      rfqNumber: 'RFQ-EXPIRED-02',
+      title: 'Expired Network Valve',
+      sourcingMode: 'mode_3',
+      budget: 15000,
+      targetDeliveryDate: '2026-08-01',
+      buyerAccountName: 'Adani Enterprises Ltd.',
+      status: 'Expired',
+    };
+    serveRFQs([closedDirect, expiredNetwork]);
+    await renderFeed();
+    expect(screen.getAllByText('🔒 Closed').length).toBe(2);
+  });
+
+  test('matches minor category when major differs', async () => {
+    const minorMatchFixture: RFQFixture = {
+      ...DIRECT_OWN,
+      extractedEntities: [
+        {
+          id: 'ent-1',
+          itemName: 'Centrifugal Pump',
+          quantity: 1,
+          unit: 'Nos',
+          targetDate: '2026-12-15',
+          technicalSpecs: 'Standard',
+          confidence: 95,
+          category: 'Mechanical & Fluid Equipment',
+          majorCategory: 'Mechanical & Fluid Equipment',
+          minorCategory: 'Pumps & Accessories',
+        },
+      ],
+    };
+    serveRFQs([minorMatchFixture]);
+
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && /\/api\/vendors\/[^/]+$/.test(url) && !/payment-link/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              majorCategory: 'Different Category',
+              minorCategories: ['Pumps & Accessories'],
+            },
+          }),
+        });
+      }
+      return baseImpl(url, init);
+    });
+
+    await renderFeed();
+    await waitFor(() => expect(screen.getAllByText(/Primary Category Match/i).length).toBeGreaterThan(0));
+  });
+
+  test('identifies own buyer RFQ when explicitly listed in assignedVendors', async () => {
+    const assignedFixture: RFQFixture = {
+      id: 'rfq-assigned-1',
+      rfqNumber: 'RFQ-ASSIGNED-01',
+      title: 'Custom Assigned Machine',
+      sourcingMode: 'mode_2',
+      budget: 50000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Third Party Buyer',
+      assignedVendors: [
+        {
+          id: 'v-self',
+          name: 'Test Vendor Co',
+          email: 'buyer@procucev.com',
+        },
+      ],
+    };
+    serveRFQs([assignedFixture]);
+    await renderFeed({ subscription: 'premium' });
+    expect(screen.getByText('Client Exclusive')).toBeInTheDocument();
+    expect(screen.queryByText('🔒 Premium Locked')).not.toBeInTheDocument();
+  });
+
+  test('closes the subscription payment modal via onClose', async () => {
+    await renderFeed({ subscription: 'premium' });
+    const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    fireEvent.click(lockedBtns[0]);
+    const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
+    fireEvent.click(connectBtn);
+    expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
+    const cancelBtn = screen.getByRole('button', { name: /^Cancel$/i });
+    fireEvent.click(cancelBtn);
+    expect(screen.queryByText(/Secure Payment/i)).not.toBeInTheDocument();
+  });
+
+  test('identifies own buyer RFQ when matched by vendor id or vendor name or buyerAccountId', async () => {
+    const assignedById: RFQFixture = {
+      id: 'rfq-assigned-id',
+      rfqNumber: 'RFQ-ASSIGNED-ID',
+      title: 'Assigned By ID Machine',
+      sourcingMode: 'mode_2',
+      budget: 60000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Third Party Buyer',
+      assignedVendors: [
+        {
+          id: 'v-self',
+          name: 'Different Name',
+          email: 'other@procucev.com',
+        },
+      ],
+    };
+    const assignedByName: RFQFixture = {
+      id: 'rfq-assigned-name',
+      rfqNumber: 'RFQ-ASSIGNED-NAME',
+      title: 'Assigned By Name Machine',
+      sourcingMode: 'mode_2',
+      budget: 70000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Another Buyer',
+      assignedVendors: [
+        {
+          id: 'v-other',
+          name: 'Test Vendor Co',
+          email: 'another@procucev.com',
+        },
+      ],
+    };
+    const matchedByBuyerId: RFQFixture = {
+      id: 'rfq-matched-buyer-id',
+      rfqNumber: 'RFQ-MATCHED-BID',
+      title: 'Matched By Buyer Account ID',
+      sourcingMode: 'mode_2',
+      budget: 80000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Unlisted Buyer Co',
+      buyerAccountId: 'buyer-acc-123',
+    };
+
+    serveRFQs([assignedById, assignedByName, matchedByBuyerId]);
+
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && /\/api\/vendors\/[^/]+$/.test(url) && !/payment-link/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'v-self',
+              name: 'Test Vendor Co',
+              buyerAccountId: 'buyer-acc-123',
+              majorCategory: 'Mechanical & Fluid Equipment',
+              minorCategories: ['Structural Steel & Beams'],
+            },
+          }),
+        });
+      }
+      return baseImpl(url, init);
+    });
+
+    await renderFeed({ subscription: 'premium' });
+    expect(screen.getAllByText('Client Exclusive').length).toBe(3);
+  });
+
+  test('sorts direct invitations placing own buyer RFQs first', async () => {
+    const ownDirect: RFQFixture = {
+      id: 'rfq-own-direct',
+      rfqNumber: 'RFQ-OWN-DIR',
+      title: 'Own Direct RFQ',
+      sourcingMode: 'mode_1',
+      budget: 50000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      deadline: '2026-12-10T10:00:00Z',
+    };
+    const nonOwnDirect: RFQFixture = {
+      id: 'rfq-non-own-direct',
+      rfqNumber: 'RFQ-NON-DIR',
+      title: 'Non Own Direct RFQ',
+      sourcingMode: 'mode_1',
+      budget: 50000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Other Unaffiliated Buyer',
+      deadline: '2026-12-20T10:00:00Z',
+    };
+    serveRFQs([nonOwnDirect, ownDirect]);
+
+    await renderFeed({ subscription: 'premium' });
+    expect(screen.getByText('Own Direct RFQ')).toBeInTheDocument();
+    expect(screen.getByText('Non Own Direct RFQ')).toBeInTheDocument();
+  });
 });

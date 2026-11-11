@@ -1482,4 +1482,43 @@ describe("QuotationForm Comprehensive Suite", () => {
       expect(screen.getByText("Quote Submitted")).toBeInTheDocument();
     });
   });
+
+  test("filters and sorts direct client enquiries at the top of the active enquiries table", async () => {
+    authClient.setSession(
+      {
+        id: "vendor-user-1",
+        email: "vendor@test.com",
+        name: "Test Vendor",
+        role: "vendor",
+        orgId: "vendor-org-1",
+        orgName: "Test Vendor Co",
+      },
+      "fake-token-123",
+    );
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={jest.fn()} withSession customSubscription="free" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Active sourcing enquiries/i)).toBeInTheDocument();
+    });
+
+    const statusFilter = screen.getByRole("combobox", { name: /Filter enquiries by status/i });
+    expect(statusFilter).toBeInTheDocument();
+
+    // Select "Direct client enquiries"
+    fireEvent.change(statusFilter, { target: { value: "direct" } });
+
+    // Both direct RFQs or message should be in document
+    await waitFor(() => {
+      expect(screen.getByText(/Direct client enquiries/i)).toBeInTheDocument();
+    });
+
+    // Reset back to all enquiries
+    fireEvent.change(statusFilter, { target: { value: "all" } });
+    await waitFor(() => {
+      expect(screen.getByText(/All enquiries/i)).toBeInTheDocument();
+    });
+  });
 });

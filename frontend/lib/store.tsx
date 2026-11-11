@@ -137,11 +137,14 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     type: isNetwork ? 'network_marketplace' : 'direct_invitation',
     estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
     deliveryLocation: rfq.deliveryLocation || '',
-    status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
+    status: rfq.status === 'Closed' || rfq.status === 'Expired'
+      ? rfq.status
+      : (rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid'),
     majorCategory: rfq.category || '',
     minorCategory: rfq.extractedEntities?.[0]?.minorCategory || '',
     category: rfq.category || rfq.extractedEntities?.[0]?.majorCategory || '',
     sourcingMode: rfq.sourcingMode,
+    assignedVendors: rfq.assignedVendors,
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -2644,11 +2647,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       prev.map((r) => {
         if (r.rfqNumber === rfqNumber) {
           const updatedQuotes = [...r.quotes.map(q => ({ ...q, isBestPrice: false, isPreferred: false })), newQuote];
+          const updatedFollowUp = r.followUpData ? {
+            ...r.followUpData,
+            respondedCount: Math.max(r.followUpData.respondedCount || 0, updatedQuotes.length),
+          } : r.followUpData;
           return {
             ...r,
             quotesCount: updatedQuotes.length,
             status: 'AI Recommended',
             quotes: updatedQuotes,
+            followUpData: updatedFollowUp,
             aiScore: 95,
           };
         }

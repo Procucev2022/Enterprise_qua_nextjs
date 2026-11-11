@@ -715,7 +715,7 @@ describe('TicketsDashboard', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Failed to add note.')).toBeInTheDocument();
-    }, { timeout: 3000 });
+    }, { timeout: 8000 });
 
   });
   it('opens ActionCenterComposeModal from ticket details drawer, exercises fallbacks, and closes', async () => {

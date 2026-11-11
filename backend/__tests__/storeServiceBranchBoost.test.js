@@ -2493,6 +2493,51 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(prodNew.moq).toBe(10);
       expect(storeService.updateCatalogueProduct('non-existent-sku-id', {}, 'test@corp.com')).toBeNull();
     });
+
+    test('reconciles followUpData stats across whatsapp, sms, and email totals and quote match by vendorId, name, or email', () => {
+      const rfqWithFup = {
+        id: 'rfq-reconcile-test',
+        rfqNumber: 'RFQ-REC-01',
+        title: 'Reconciliation Test',
+        status: 'In Evaluation',
+        assignedVendors: [],
+        procucevVendorCount: 0,
+        followUpData: {
+          totalInvited: 2,
+          respondedCount: 0,
+          whatsappStats: { total: 4, delivered: 4, read: 2 },
+          smsStats: { total: 3, delivered: 3 },
+          emailStats: { total: 2, delivered: 1 },
+          vendors: [
+            { id: 'v-1', vendorId: 'v-1', vendorName: 'Vendor One', email: 'v1@test.com', bidStatus: 'Pending', overallStatus: 'Awaiting Bid' },
+            { id: 'v-2', vendorName: 'Vendor Two', email: 'v2@test.com', bidStatus: 'Pending', overallStatus: 'Awaiting Bid' },
+            { vendorId: 'v-3', vendorName: 'Vendor Three', email: 'v3@test.com', bidStatus: 'Pending', overallStatus: 'Awaiting Bid' },
+          ],
+        },
+        quotes: [
+          { vendorId: 'v-1', unitPrice: 100, totalPrice: 100 },
+          { vendorName: 'Vendor Two', unitPrice: 200, totalPrice: 200 },
+          { vendorEmail: 'v3@test.com', unitPrice: 300, totalPrice: 300 },
+        ],
+      };
+
+      const reconciled = storeService._reconcileRFQFollowUpStats(rfqWithFup);
+      expect(reconciled.followUpData.totalInvited).toBe(4);
+      expect(reconciled.followUpData.respondedCount).toBe(3);
+      expect(reconciled.followUpData.vendors[0].bidStatus).toBe('Submitted');
+      expect(reconciled.followUpData.vendors[1].bidStatus).toBe('Submitted');
+      expect(reconciled.followUpData.vendors[2].bidStatus).toBe('Submitted');
+
+      storeService.rfqs = [rfqWithFup];
+      const quoteRes = storeService.addQuoteToRFQ('rfq-reconcile-test', {
+        vendorId: 'v-2',
+        vendorEmail: 'v2@test.com',
+        unitPrice: 250,
+        totalPrice: 250,
+        submittedAt: new Date().toISOString(),
+      });
+      expect(quoteRes).toBeDefined();
+    });
   });
 });
 

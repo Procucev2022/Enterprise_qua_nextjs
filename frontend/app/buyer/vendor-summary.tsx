@@ -286,16 +286,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       ...(categoryTaxonomy && categoryTaxonomy.length > 0
         ? categoryTaxonomy.map((c) => c.majorCategory)
         : [
-          'Mechanical',
-          'Electrical',
-          'Civil',
-          'Instrumentation & Automation',
-          'Chemicals & Petrochemicals',
-          'Piping & Fittings',
-          'Safety & PPE',
-          'Raw Materials',
-          'General Industrial',
-        ]),
+            'Mechanical',
+            'Electrical',
+            'Civil',
+            'Instrumentation & Automation',
+            'Chemicals & Petrochemicals',
+            'Piping & Fittings',
+            'Safety & PPE',
+            'Raw Materials',
+            'General Industrial',
+          ]),
       'Mechanical',
       'Electrical',
       'Civil',
@@ -849,113 +849,113 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
           {/* Left: Vendor Brand & Info */}
           <div className="space-y-1.5 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
-                {vendor.id}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
+              {vendor.id}
+            </span>
+            <span className="text-xs text-slate-500 font-semibold">{vendor.majorCategory}</span>
+            <span className="text-slate-400">•</span>
+
+            {/* Primary Source Badge */}
+            {isUploaded ? (
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 flex items-center gap-1 shadow-xs">
+                <UploadCloud size={11} className="text-indigo-600 dark:text-indigo-400" />
+                Uploaded by Buyer
               </span>
-              <span className="text-xs text-slate-500 font-semibold">{vendor.majorCategory}</span>
-              <span className="text-slate-400">•</span>
-
-              {/* Primary Source Badge */}
-              {isUploaded ? (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 flex items-center gap-1 shadow-xs">
-                  <UploadCloud size={11} className="text-indigo-600 dark:text-indigo-400" />
-                  Uploaded by Buyer
-                </span>
-              ) : (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 flex items-center gap-1 shadow-xs">
-                  <ShieldCheck size={11} className="text-emerald-600 dark:text-emerald-400" />
-                  Procucev Vendor
-                </span>
-              )}
-
-              {/* Secondary Origin Tag */}
-              <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
-                {originDetails.origin}
+            ) : (
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 flex items-center gap-1 shadow-xs">
+                <ShieldCheck size={11} className="text-emerald-600 dark:text-emerald-400" />
+                Procucev Vendor
               </span>
+            )}
 
-              {/* RFQ Engagement & Upload Status Badge */}
-              {engagement.isEngaged ? (
-                <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 flex items-center gap-1">
-                  <CheckCircle2 size={10} /> {engagement.qualificationReason}
-                </span>
-              ) : (
+            {/* Secondary Origin Tag */}
+            <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
+              {originDetails.origin}
+            </span>
+
+            {/* RFQ Engagement & Upload Status Badge */}
+            {engagement.isEngaged ? (
+              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 flex items-center gap-1">
+                <CheckCircle2 size={10} /> {engagement.qualificationReason}
+              </span>
+            ) : (
+              <span
+                className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 flex items-center gap-1"
+                title="Vendor neither uploaded nor used in any RFQs by your organization"
+              >
+                <Lock size={10} /> No RFQs / Not Uploaded
+              </span>
+            )}
+
+            {isLockedForProcucevV2 && (
+              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 flex items-center gap-1">
+                <Lock size={10} /> Quote Submission Pending
+              </span>
+            )}
+          </div>
+
+          <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+            {vendor.name}
+            {showEvaluation && vendor.score && vendor.score >= 80 && (
+              <ShieldCheck className="text-emerald-500" size={16} />
+            )}
+          </h3>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-slate-500 dark:text-gray-400">
+            <span className="truncate">👤 Contact: {vendor.contactPerson}</span>
+            <span className="truncate">✉️ {vendor.email}</span>
+            <span className="truncate">📞 {vendor.phone}</span>
+            <span className="flex items-center gap-1">
+              <MapPin size={12} /> {vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`}
+            </span>
+          </div>
+
+          {vendor.minorCategories && vendor.minorCategories.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 pt-1">
+              <span className="text-[10px] text-slate-400 font-semibold">Minors:</span>
+              {vendor.minorCategories.map((m: string) => (
                 <span
-                  className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 flex items-center gap-1"
-                  title="Vendor neither uploaded nor used in any RFQs by your organization"
+                  key={m}
+                  className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40"
                 >
-                  <Lock size={10} /> No RFQs / Not Uploaded
+                  {m}
                 </span>
-              )}
-
-              {isLockedForProcucevV2 && (
-                <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 flex items-center gap-1">
-                  <Lock size={10} /> Quote Submission Pending
-                </span>
-              )}
+              ))}
             </div>
+          )}
 
-            <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-1.5">
-              {vendor.name}
-              {showEvaluation && vendor.score && vendor.score >= 80 && (
-                <ShieldCheck className="text-emerald-500" size={16} />
-              )}
-            </h3>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-slate-500 dark:text-gray-400">
-              <span className="truncate">👤 Contact: {vendor.contactPerson}</span>
-              <span className="truncate">✉️ {vendor.email}</span>
-              <span className="truncate">📞 {vendor.phone}</span>
-              <span className="flex items-center gap-1">
-                <MapPin size={12} /> {vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`}
-              </span>
-            </div>
-
-            {vendor.minorCategories && vendor.minorCategories.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1 pt-1">
-                <span className="text-[10px] text-slate-400 font-semibold">Minors:</span>
-                {vendor.minorCategories.map((m: string) => (
-                  <span
-                    key={m}
-                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40"
-                  >
-                    {m}
+          {/* Performance Rating Revision Badge / History Line */}
+          {vendor.latestRatingRevision && (
+            <div className="mt-2 p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-300">
+                  <Star size={12} className="fill-amber-500 text-amber-500" />
+                  <span>
+                    Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
+                    {vendor.latestRatingRevision.newCompositeScore}%)
                   </span>
-                ))}
-              </div>
-            )}
-
-            {/* Performance Rating Revision Badge / History Line */}
-            {vendor.latestRatingRevision && (
-              <div className="mt-2 p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-300">
-                    <Star size={12} className="fill-amber-500 text-amber-500" />
-                    <span>
-                      Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
-                      {vendor.latestRatingRevision.newCompositeScore}%)
-                    </span>
-                    <span className="text-[10px] font-normal text-slate-500">
-                      by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
-                    </span>
-                  </div>
-                  <p className="text-slate-600 dark:text-gray-300 italic text-[10.5px]">
-                    &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality:{' '}
-                    {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery:{' '}
-                    {vendor.latestRatingRevision.deliveryScore})
-                  </p>
+                  <span className="text-[10px] font-normal text-slate-500">
+                    by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
-                  }
-                  className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
-                >
-                  <Mail size={11} /> View Dispatched Email Notice
-                </button>
+                <p className="text-slate-600 dark:text-gray-300 italic text-[10.5px]">
+                  &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality:{' '}
+                  {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery:{' '}
+                  {vendor.latestRatingRevision.deliveryScore})
+                </p>
               </div>
-            )}
+              <button
+                type="button"
+                onClick={() =>
+                  vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
+                }
+                className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
+              >
+                <Mail size={11} /> View Dispatched Email Notice
+              </button>
+            </div>
+          )}
           </div>
         </div>
 
@@ -980,10 +980,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   {currentMode === 'mode_1' && !isUploaded
                     ? 'Hidden (V1 Restriction)'
                     : isLockedForProcucevV2
-                      ? 'Locked (Awaiting Quote)'
-                      : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                        ? 'Locked (Buyer Roster Only)'
-                        : 'Not Evaluated'}
+                    ? 'Locked (Awaiting Quote)'
+                    : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                    ? 'Locked (Buyer Roster Only)'
+                    : 'Not Evaluated'}
                 </div>
                 {vendor.rating && (
                   <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-end gap-0.5">
@@ -996,18 +996,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
           <div className="flex flex-col items-end gap-1.5">
             <span
-              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${currentMode === 'mode_1' && !isUploaded
+              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                currentMode === 'mode_1' && !isUploaded
                   ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
                   : getStatusStyle(vendor.status || '')
-                }`}
+              }`}
             >
               {currentMode === 'mode_1' && !isUploaded
                 ? 'UNAVAILABLE IN V1'
                 : isLockedForProcucevV2
-                  ? 'LOCKED (PENDING BID)'
-                  : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                    ? 'BUYER ROSTER (NO EVAL)'
-                    : vendor.status}
+                ? 'LOCKED (PENDING BID)'
+                : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                ? 'BUYER ROSTER (NO EVAL)'
+                : vendor.status}
             </span>
 
             {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
@@ -1581,8 +1582,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     maxLength={6}
                     value={formPincode}
                     onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className={`w-full text-xs p-2 rounded-lg border font-mono ${formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
-                      } bg-white dark:bg-gray-900`}
+                    className={`w-full text-xs p-2 rounded-lg border font-mono ${
+                      formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                    } bg-white dark:bg-gray-900`}
                   />
                   {formPincodeError && formPincode.trim().length >= 6 && (
                     <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
@@ -1911,8 +1913,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       maxLength={6}
                       value={formPincode}
                       onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      className={`w-full text-xs p-2 rounded-lg border font-mono ${formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
-                        } bg-white dark:bg-gray-900`}
+                      className={`w-full text-xs p-2 rounded-lg border font-mono ${
+                        formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                      } bg-white dark:bg-gray-900`}
                     />
                     {formPincodeError && formPincode.trim().length >= 6 && (
                       <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
@@ -2144,7 +2147,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <span className="text-slate-400 block text-[10px] font-semibold">Location / Address:</span>
                     <span>
                       {selectedVendorForCrud.location ||
-                        `${selectedVendorForCrud.city || ''}, ${selectedVendorForCrud.state || ''} ${selectedVendorForCrud.country || 'India'
+                        `${selectedVendorForCrud.city || ''}, ${selectedVendorForCrud.state || ''} ${
+                          selectedVendorForCrud.country || 'India'
                         }`}
                     </span>
                   </div>

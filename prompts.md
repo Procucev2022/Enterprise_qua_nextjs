@@ -5171,5 +5171,28 @@ Can you please check what is this issue.
 ```
 
 
+---
+
+### Prompt 134
+
+**Timestamp**: 2026-11-11T13:46:19+05:30
+
+```text
+This is the Vendor Portal. From a vendor’s perspective, my submitted request has moved down the list, while other requests are appearing at the top. This could create confusion and make it difficult for vendors to track their own requests.
+```
+
+---
+
+### Prompt 135
+
+**Timestamp**: 2026-11-11T14:48:33+05:30
+
+```text
+On the left - It is showing Quotes - 1 and the one with arrow marked showing 0/0 responded
+```
+
+
+
+
 
 
