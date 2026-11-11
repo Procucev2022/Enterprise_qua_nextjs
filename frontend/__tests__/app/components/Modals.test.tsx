@@ -549,6 +549,35 @@ describe('Modals.tsx', () => {
         <RFQFollowUpDeepDiveModal isOpen={false} onClose={mockOnClose} rfq={null} />
       );
       expect(container.firstChild).toBeNull();
+
+      const { container: openNullContainer } = render(
+        <RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={null} />
+      );
+      expect(openNullContainer.firstChild).toBeNull();
+    });
+
+    it('dismisses nested MultiChannelChaserModal before RFQFollowUpDeepDiveModal on Escape', () => {
+      mockOnClose.mockClear();
+      render(<RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={sampleRfq} />);
+
+      // Open nested MultiChannelChaserModal
+      const callBtns = screen.getAllByText('Call');
+      fireEvent.click(callBtns[0]);
+      expect(screen.getByTestId('multichannel-chaser-modal-backdrop')).toBeInTheDocument();
+
+      // Inner click inside chaser modal does not close
+      fireEvent.click(screen.getByText(/Dispatch AI Follow-Up/));
+      expect(screen.getByTestId('multichannel-chaser-modal-backdrop')).toBeInTheDocument();
+      expect(mockOnClose).not.toHaveBeenCalled();
+
+      // Escape closes nested chaser modal ONLY
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('multichannel-chaser-modal-backdrop')).not.toBeInTheDocument();
+      expect(mockOnClose).not.toHaveBeenCalled();
+
+      // Second Escape closes parent DeepDiveModal
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
 
     it('renders deep dive modal with all badge variants and channel filter tabs and sub-modals', () => {
@@ -668,6 +697,23 @@ describe('Modals.tsx', () => {
       expect(mockOnClose).toHaveBeenCalled();
 
       jest.useRealTimers();
+    });
+
+    it('dismisses VendorSurveyModal on Escape and backdrop click without closing on inner clicks', () => {
+      mockOnClose.mockClear();
+      render(<VendorSurveyModal isOpen={true} onClose={mockOnClose} />);
+
+      // Inner click must not dismiss
+      fireEvent.click(screen.getByText('Mode 3 AI Vendor Survey'));
+      expect(mockOnClose).not.toHaveBeenCalled();
+
+      // Backdrop click dismisses
+      fireEvent.click(screen.getByTestId('vendor-survey-modal-backdrop'));
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+
+      // Escape key dismisses
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(mockOnClose).toHaveBeenCalledTimes(2);
     });
   });
 

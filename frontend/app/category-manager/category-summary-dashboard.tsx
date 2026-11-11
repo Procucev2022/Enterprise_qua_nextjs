@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 import {
   Layers,
   Search,
@@ -212,6 +213,13 @@ export default function CategorySummaryDashboard() {
   const [selectedKpiModal, setSelectedKpiModal] = useState<'categories' | 'rfqs' | 'quotes' | 'buyers' | 'vendors' | null>(null);
   const [selectedCategoryDetails, setSelectedCategoryDetails] = useState<CategoryMetric | null>(null);
   const [categoryDetailTab, setCategoryDetailTab] = useState<'rfqs' | 'quotes' | 'buyers' | 'vendors' | 'minors'>('rfqs');
+
+  const closeKpiModal = (): void => setSelectedKpiModal(null);
+  const closeCategoryDetailsModal = (): void => setSelectedCategoryDetails(null);
+  useEscapeDismissStack([
+    { isOpen: selectedKpiModal !== null, onClose: closeKpiModal },
+    { isOpen: selectedCategoryDetails !== null, onClose: closeCategoryDetailsModal },
+  ]);
 
   // Filtered RFQs for selected timeframe
   const rfqsInSelectedTimeframe = useMemo(() => {
@@ -683,7 +691,12 @@ export default function CategorySummaryDashboard() {
       {/* KPI MODAL: Interactive Drilldowns for the 5 Top KPI Cards               */}
       {/* ────────────────────────────────────────────────────────────────────────── */}
       {selectedKpiModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+          {...backdropDismissProps(closeKpiModal)}
+        >
           <div className="glass-panel bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-gray-800 w-full max-w-4xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/50">
@@ -934,7 +947,12 @@ export default function CategorySummaryDashboard() {
       {/* CATEGORY DETAILS MODAL: Full breakdown for individual category row         */}
       {/* ────────────────────────────────────────────────────────────────────────── */}
       {selectedCategoryDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+          {...backdropDismissProps(closeCategoryDetailsModal)}
+        >
           <div className="glass-panel bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-gray-800 w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
             {/* Header */}
             <div className="p-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/50">

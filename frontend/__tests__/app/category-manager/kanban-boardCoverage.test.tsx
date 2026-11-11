@@ -118,4 +118,26 @@ describe('Kanban board sparse and legacy RFQs', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Matrix/i }));
     expect(jest.mocked(RFQEditModal).mock.lastCall?.[0]).toEqual(expect.objectContaining({ rfq }));
   });
+
+  it('dismisses summary filter modal on backdrop click and Escape without closing on inner clicks', () => {
+    const rfq = makeRfq({ quotesCount: 1 });
+    mockApp([rfq]);
+    render(<KanbanBoard />);
+
+    fireEvent.click(screen.getByRole('button', { name: /RFQs In Pipeline/i }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByText(/Live Operational Overview/i));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /RFQs In Pipeline/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

@@ -526,4 +526,17 @@ describe('VendorUploadModal', () => {
     await screen.findByText('dropped.xlsx');
     expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file);
   });
+
+  test('calls onClose on backdrop click and Escape without closing on inner clicks', () => {
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+
+    fireEvent.click(screen.getByText('Bulk Upload Vendors'));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('vendor-upload-modal'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
 });

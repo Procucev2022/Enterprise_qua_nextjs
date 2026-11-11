@@ -639,5 +639,41 @@ describe('InviteVendorsModal — All Vendors tab', () => {
         expect(screen.getByText('New Test Vendor')).toBeInTheDocument();
       });
     });
+
+    test('dismisses Add New Vendor submodal before main modal on Escape and backdrop click', () => {
+      const v0Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_0' };
+      render(
+        <InviteVendorsModal isOpen={true} rfq={v0Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />
+      );
+
+      // Inner click inside main modal does not dismiss
+      fireEvent.click(screen.getByText(S.title));
+      expect(mockOnClose).not.toHaveBeenCalled();
+
+      // Backdrop click on main modal calls onClose
+      fireEvent.click(screen.getByTestId('invite-vendors-modal'));
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+
+      // Open submodal: Escape closes submodal only without triggering outer onClose
+      fireEvent.click(screen.getByTestId('add-new-vendor-button'));
+      expect(screen.getByTestId('add-vendor-modal')).toBeInTheDocument();
+      fireEvent.click(within(screen.getByTestId('add-vendor-modal')).getByText('Add New Vendor'));
+      expect(screen.getByTestId('add-vendor-modal')).toBeInTheDocument();
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+
+      // Reopen submodal and close via submodal backdrop click
+      fireEvent.click(screen.getByTestId('add-new-vendor-button'));
+      fireEvent.click(screen.getByTestId('add-vendor-modal'));
+      expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+
+      // Next Escape dismisses outer modal
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(mockOnClose).toHaveBeenCalledTimes(2);
+    });
   });
 });

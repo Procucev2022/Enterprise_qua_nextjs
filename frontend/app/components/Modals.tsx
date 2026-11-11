@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
 import { SOURCING_MODES } from '@/lib/constants';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 import {
   X,
   FileCheck,
@@ -696,6 +697,8 @@ export function MultiChannelChaserModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, vendorName, vendorPhone, rfqNumber]);
 
+  useEscapeDismissStack([{ isOpen, onClose }]);
+
   if (!isOpen) return null;
 
   const handleSend = () => {
@@ -704,7 +707,13 @@ export function MultiChannelChaserModal({
   };
 
   return (
-    <div className="modal-overlay !z-[1050]" onClick={onClose}>
+    <div
+      className="modal-overlay !z-[1050]"
+      data-testid="multichannel-chaser-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
       <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40 animate-fade-in" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
@@ -902,6 +911,8 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
     channel: 'call' | 'whatsapp' | 'sms';
   } | null>(null);
 
+  useEscapeDismissStack([{ isOpen: Boolean(isOpen && rfq && !activeVendorModal), onClose }]);
+
   if (!isOpen || !rfq) return null;
 
   const followUp = rfq.followUpData;
@@ -1013,7 +1024,13 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div
+      className="modal-overlay"
+      data-testid="followup-deep-dive-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
       <div
         className="modal-content max-w-6xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40 animate-fade-in max-h-[92vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -1402,6 +1419,8 @@ export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
   const { showToast, addAuditLog } = useApp();
   const [submitting, setSubmitting] = useState(false);
 
+  useEscapeDismissStack([{ isOpen, onClose }]);
+
   if (!isOpen) return null;
 
   const handleTriggerSurvey = () => {
@@ -1415,7 +1434,13 @@ export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
   };
 
   return (
-    <div className="modal-overlay">
+    <div
+      className="modal-overlay"
+      data-testid="vendor-survey-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      {...backdropDismissProps(onClose)}
+    >
       <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-500/40">
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">

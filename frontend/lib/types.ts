@@ -3270,3 +3270,8 @@ export interface ActionCenterSummaryPopupModalProps<T = Record<string, unknown>>
   searchKeys?: string[];
   initialPageSize?: number;
 }
+
+export interface ModalDismissEntry {
+  isOpen: boolean;
+  onClose: () => void;
+}

@@ -1029,5 +1029,25 @@ describe('BuyersDirectory Component Suite', () => {
         fireEvent.click(allRows[3]);
       }
     });
+
+    test('dismisses column settings modal on backdrop click and Escape without closing on inner clicks', () => {
+      render(<BuyersDirectory />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Customize Columns' }));
+      const dialog = screen.getByRole('dialog', { name: 'Customize Columns' });
+      expect(dialog).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Column Settings'));
+      expect(screen.getByRole('dialog', { name: 'Customize Columns' })).toBeInTheDocument();
+
+      fireEvent.click(dialog);
+      expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Customize Columns' }));
+      expect(screen.getByRole('dialog', { name: 'Customize Columns' })).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+    });
   });
 });

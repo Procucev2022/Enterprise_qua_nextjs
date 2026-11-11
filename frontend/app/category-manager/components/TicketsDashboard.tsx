@@ -41,6 +41,7 @@ import {
 import type { Ticket, TicketSummary, TicketPriority, TicketStatus } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import ActionCenterComposeModal from './ActionCenterComposeModal';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 const TICKET_CATEGORIES = [
   'General',
@@ -110,6 +111,15 @@ export default function TicketsDashboard() {
   const [isEscalateOpen, setIsEscalateOpen] = useState<boolean>(false);
   const [isCommModalOpen, setIsCommModalOpen] = useState<boolean>(false);
   const [escalatingTicket, setEscalatingTicket] = useState<Ticket | null>(null);
+
+  const closeCreateModal = (): void => setIsCreateOpen(false);
+  const closeEscalateModal = (): void => setIsEscalateOpen(false);
+  const closeTicketDrawer = (): void => setSelectedTicket(null);
+  useEscapeDismissStack([
+    { isOpen: isEscalateOpen && escalatingTicket !== null, onClose: closeEscalateModal },
+    { isOpen: isCreateOpen, onClose: closeCreateModal },
+    { isOpen: selectedTicket !== null && !isCommModalOpen, onClose: closeTicketDrawer },
+  ]);
 
   // Create Form State
   const [newSubject, setNewSubject] = useState('');
@@ -793,7 +803,12 @@ export default function TicketsDashboard() {
 
       {/* CREATE TICKET MODAL */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in"
+          {...backdropDismissProps(closeCreateModal)}
+        >
           <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
@@ -948,7 +963,12 @@ export default function TicketsDashboard() {
 
       {/* ESCALATE MODAL */}
       {isEscalateOpen && escalatingTicket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in"
+          {...backdropDismissProps(closeEscalateModal)}
+        >
           <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
@@ -1015,7 +1035,13 @@ export default function TicketsDashboard() {
 
       {/* VIEW DETAILS DRAWER */}
       {selectedTicket && (
-        <div className="fixed inset-y-0 right-0 z-50 max-w-xl w-full bg-white dark:bg-slate-900 shadow-2xl border-l border-slate-200 dark:border-slate-800 flex flex-col animate-slide-left">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-2xs flex justify-end animate-in fade-in duration-150"
+          {...backdropDismissProps(closeTicketDrawer)}
+        >
+        <div className="relative z-10 max-w-xl w-full h-full bg-white dark:bg-slate-900 shadow-2xl border-l border-slate-200 dark:border-slate-800 flex flex-col animate-slide-left">
           <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
             <div>
               <div className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400 font-bold">
@@ -1143,6 +1169,7 @@ export default function TicketsDashboard() {
               </form>
             </div>
           </div>
+        </div>
         </div>
       )}
       <ColumnSettingsPopup

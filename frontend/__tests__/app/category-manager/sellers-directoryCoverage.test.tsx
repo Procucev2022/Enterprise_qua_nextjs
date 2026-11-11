@@ -14,6 +14,7 @@ import { useApp } from '@/lib/store';
 import * as reportsClient from '@/lib/reportsClient';
 import * as rfqClient from '@/lib/rfqClient';
 import { RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -64,6 +65,7 @@ const DOSSIER_RFQS: Fixture[] = [
     title: 'Email matched enquiry',
     sourcingMode: 'mode_unknown',
     assignedVendors: [{ email: 'SALES@dossier.example' }],
+    quotes: [{ vendorEmail: 'SALES@dossier.example', totalPrice: 120000 }],
   },
   {
     // Linked only through a quote filed under the supplier's name with a legacy vendor id.
@@ -469,7 +471,7 @@ describe('SellersDirectory coverage companion', () => {
       expect(row.getAllByText('India')).toHaveLength(2);
       expect(row.getByText('Industrial Supplies')).toBeInTheDocument();
       expect(row.getByText('Never')).toBeInTheDocument();
-      expect(row.getByText('4.5')).toBeInTheDocument();
+      expect(row.getByText('0')).toBeInTheDocument();
       expect(row.getByText('5 Credits')).toBeInTheDocument();
       expect(row.getByText('ACTIVE')).toBeInTheDocument();
       expect(within(cardOf('Network Suppliers')).getByText('1')).toBeInTheDocument();
@@ -477,19 +479,18 @@ describe('SellersDirectory coverage companion', () => {
       openDossier(/Verified Supplier/);
 
       expect(screen.getByRole('heading', { name: 'Verified Supplier' })).toBeInTheDocument();
-      expect(screen.getByText(/360° AI Score: 88\/100/)).toBeInTheDocument();
-      expect(screen.getByText(/Rating: ★ 4\.5/)).toBeInTheDocument();
+      expect(screen.getByText(/360° AI Score: Unscored/)).toBeInTheDocument();
+      expect(screen.getByText(/Rating: Unrated/)).toBeInTheDocument();
       const contact = within(cardOf('Contact Details'));
       expect(contact.getByText('Verified Supplier')).toBeInTheDocument();
       expect(contact.getByText('bare@supplier.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
+      expect(contact.getByText(UI_STRINGS.sellerDirectory.dossier.notProvided)).toBeInTheDocument();
       expect(contact.getByText('Company Location: India')).toBeInTheDocument();
       expect(contact.getByText('Delivery Location: India')).toBeInTheDocument();
       expect(contact.getByText('Last Login: Never logged in')).toBeInTheDocument();
       const statutory = within(cardOf('Statutory & Verification'));
-      expect(statutory.getByText('27AAACG0000A1Z5')).toBeInTheDocument();
-      expect(statutory.getByText('AAACG0000A')).toBeInTheDocument();
-      expect(statutory.getByText('Preferred Partner')).toBeInTheDocument();
+      expect(statutory.getAllByText(UI_STRINGS.sellerDirectory.dossier.notProvided).length).toBeGreaterThan(0);
+      expect(statutory.getByText(UI_STRINGS.sellerDirectory.dossier.freeTier || 'Free Tier')).toBeInTheDocument();
       expect(statutory.getByText('ACTIVE')).toBeInTheDocument();
       expect(screen.getByText('Major: Industrial Supplies')).toBeInTheDocument();
     });
@@ -514,7 +515,7 @@ describe('SellersDirectory coverage companion', () => {
       const suspended = within(rowOf(/City Logistics/));
       expect(suspended.getAllByText('Nagpur')).toHaveLength(2);
       expect(suspended.getByText('Logistics')).toBeInTheDocument();
-      expect(suspended.getByText('4.5')).toBeInTheDocument();
+      expect(suspended.getByText('0')).toBeInTheDocument();
       const suspendedBadge = suspended.getByText('SUSPENDED').parentElement;
       expect(suspendedBadge).toHaveClass('bg-slate-100');
       expect(suspendedBadge).not.toHaveClass('bg-emerald-50');
@@ -602,23 +603,22 @@ describe('SellersDirectory coverage companion', () => {
       const emailOnly = within(rowOf(/Verified Supplier/));
       expect(emailOnly.getAllByText('India')).toHaveLength(2);
       expect(emailOnly.getByText('Custom Client Category')).toBeInTheDocument();
-      expect(emailOnly.getByText('4.2')).toBeInTheDocument();
+      expect(emailOnly.getByText('0')).toBeInTheDocument();
       // No plan and no stored balance on the record: the default 5 free credits.
       expect(emailOnly.getByText('5 Credits')).toBeInTheDocument();
       expect(emailOnly.getByText('VERIFIED_CLIENT_LIST')).toBeInTheDocument();
       expect(emailOnly.getByText('Never')).toBeInTheDocument();
 
       openDossier(/Verified Supplier/);
-      expect(screen.getByText(/360° AI Score: 85\/100/)).toBeInTheDocument();
-      expect(screen.getByText(/Rating: ★ 4\.2/)).toBeInTheDocument();
+      expect(screen.getByText(/360° AI Score: Unscored/)).toBeInTheDocument();
+      expect(screen.getByText(/Rating: Unrated/)).toBeInTheDocument();
       const contact = within(cardOf('Contact Details'));
       expect(contact.getByText('Key Accounts Desk')).toBeInTheDocument();
       expect(contact.getByText('client@only.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
+      expect(contact.getByText(UI_STRINGS.sellerDirectory.dossier.notProvided)).toBeInTheDocument();
       const statutory = within(cardOf('Statutory & Verification'));
-      expect(statutory.getByText('27AAACB1111B1Z6')).toBeInTheDocument();
-      expect(statutory.getByText('AAACB1111B')).toBeInTheDocument();
-      expect(statutory.getByText('Verified Supplier')).toBeInTheDocument();
+      expect(statutory.getAllByText(UI_STRINGS.sellerDirectory.dossier.notProvided).length).toBeGreaterThan(0);
+      expect(statutory.getByText(UI_STRINGS.sellerDirectory.dossier.freeTier || 'Free Tier')).toBeInTheDocument();
       closeDossier();
 
       openDossier(/Named Client/);
@@ -814,7 +814,8 @@ describe('SellersDirectory coverage companion', () => {
       expect(screen.queryByText('RFQ-OTHER-4')).not.toBeInTheDocument();
 
       // Open Quote Details Modal
-      fireEvent.click(screen.getByText('RFQ-NAME-2'));
+      const detailsBtns = screen.getAllByRole('button', { name: 'Details' });
+      fireEvent.click(detailsBtns[1]);
       expect(screen.getByText(/Quotation Details:\s*RFQ-NAME-2/i)).toBeInTheDocument();
 
       // Click View Full Details
@@ -915,8 +916,8 @@ describe('SellersDirectory coverage companion', () => {
           LastLogin: formatIndianDateTime('2026-03-02T11:00:00.000Z'),
           Source: 'Procucev Network',
           MajorCategory: 'Industrial Supplies',
-          AIScore: 88,
-          StarRating: 4.5,
+          AIScore: 0,
+          StarRating: 0,
           FreeQuotationCredits: 5,
           RFQDownloadsUsed: 0,
           Status: 'ACTIVE',
@@ -947,8 +948,8 @@ describe('SellersDirectory coverage companion', () => {
           LastLogin: 'Never',
           Source: 'Buyer Uploaded',
           MajorCategory: 'Custom Client Category',
-          AIScore: 85,
-          StarRating: 4.2,
+          AIScore: 0,
+          StarRating: 0,
           FreeQuotationCredits: 5,
           RFQDownloadsUsed: 0,
           Status: 'VERIFIED_CLIENT_LIST',

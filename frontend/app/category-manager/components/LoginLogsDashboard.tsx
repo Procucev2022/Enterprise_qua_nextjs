@@ -37,6 +37,7 @@ import {
   FALLBACK_SUMMARY,
 } from '@/lib/loginLogsClient';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 // ---------------------------------------------------------------------------
 // Module-level constants
@@ -128,6 +129,9 @@ export default function LoginLogsDashboard() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [selectedLogForDetails, setSelectedLogForDetails] = useState<LoginLogEntry | null>(null);
   const itemsPerPage = 10;
+
+  const closeLogDetailsModal = (): void => setSelectedLogForDetails(null);
+  useEscapeDismissStack([{ isOpen: selectedLogForDetails !== null, onClose: closeLogDetailsModal }]);
 
   // -------------------------------------------------------------------------
   // Data loading
@@ -908,7 +912,12 @@ export default function LoginLogsDashboard() {
 
       {/* Session Details Modal */}
       {selectedLogForDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+          {...backdropDismissProps(closeLogDetailsModal)}
+        >
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150">
             <button
               type="button"

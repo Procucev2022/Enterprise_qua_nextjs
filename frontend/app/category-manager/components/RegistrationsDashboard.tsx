@@ -28,6 +28,7 @@ import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RegisteredClient, ActionCenterSummaryPopupColumn, RegistrationColumnConfig, RegistrationColumnKey } from '@/lib/types';
 import { REGISTRATION_CLIENT_TYPES, REGISTRATION_COLUMN_PREF_KEY, DEFAULT_REGISTRATION_COLUMNS } from '@/lib/constants';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 export interface RegistrationsDashboardProps {
   onTotalCountChange?: (count: number) => void;
@@ -68,6 +69,9 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
   const [sortField, setSortField] = useState<RegistrationColumnKey>('regDate');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  const closeColumnSettingsModal = (): void => setShowColumnSettings(false);
+  useEscapeDismissStack([{ isOpen: showColumnSettings, onClose: closeColumnSettingsModal }]);
 
   const handleSort = (field: RegistrationColumnKey) => {
     if (sortField === field) {
@@ -609,6 +613,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
           aria-modal="true"
           aria-label={strings.columnSettingsTitle}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          {...backdropDismissProps(closeColumnSettingsModal)}
         >
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">

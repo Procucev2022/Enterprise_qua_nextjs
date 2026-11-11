@@ -876,4 +876,68 @@ describe('TicketsDashboard', () => {
     expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument();
   });
 
+  it('dismisses create, escalate, and details drawer on backdrop click and Escape without closing underlying drawer first', async () => {
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+    });
+
+    // 1. Create Ticket Modal
+    const createBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tickets.createTicket });
+    fireEvent.click(createBtn);
+    let dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByText(UI_STRINGS.actionCenter.tickets.createTicket));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(createBtn);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 2. Escalate Modal
+    fireEvent.click(screen.getAllByTitle('Escalate Ticket')[0]);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByText(UI_STRINGS.actionCenter.tickets.escalateTitle));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTitle('Escalate Ticket')[0]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 3. View Details Drawer + stacked Compose Modal
+    fireEvent.click(screen.getAllByTitle('View Details')[0]);
+    await waitFor(() => {
+      expect(screen.getByText(/Initial ticket review/i)).toBeInTheDocument();
+    });
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByText(/Initial ticket review/i));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Open stacked Compose Modal from drawer -> Escape closes only Compose Modal
+    fireEvent.click(screen.getByRole('button', { name: /Send SMS \/ Email/i }));
+    await waitFor(() => {
+      expect(screen.getAllByRole('dialog')).toHaveLength(2);
+    });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    });
+
+    // Next Escape closes the drawer itself
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen drawer and close by clicking backdrop
+    fireEvent.click(screen.getAllByTitle('View Details')[0]);
+    const reopenedDialog = await screen.findByRole('dialog');
+    fireEvent.click(reopenedDialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
 });

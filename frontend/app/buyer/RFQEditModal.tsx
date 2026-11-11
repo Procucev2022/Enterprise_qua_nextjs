@@ -26,6 +26,7 @@ import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, res
 import { uploadRFQAttachment, classifyLineItems } from '@/lib/rfqClient';
 import { isPastDateString } from '@/lib/manualRfqModel';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 import type {
   ExtractedEntity,
   RFQAttachment,
@@ -404,6 +405,13 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
     setForm(null);
   }
 
+  const handleClose = (): void => {
+    if (isSaving) return;
+    onClose();
+  };
+
+  useEscapeDismissStack([{ isOpen: Boolean(rfq), onClose: handleClose }]);
+
   if (!rfq || !form) return null;
 
   const errors = submitAttempted ? validateRFQEdit(form, pincodeError) : {};
@@ -565,11 +573,6 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
     if (attachInputRef.current) attachInputRef.current.value = '';
   };
 
-  const handleClose = () => {
-    if (isSaving) return;
-    onClose();
-  };
-
   const handleSubmit = async () => {
     setSubmitAttempted(true);
     setSaveError(null);
@@ -598,6 +601,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
       aria-modal="true"
       aria-labelledby="rfq-edit-title"
       data-testid="rfq-edit-modal"
+      {...backdropDismissProps(handleClose)}
     >
       <div className="w-full max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto">
         <header className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-200 dark:border-gray-800">
@@ -1077,13 +1081,15 @@ export function RFQDeleteDialog({ rfq, onClose, onConfirm }: RFQDeleteDialogProp
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  if (!rfq) return null;
-
-  const handleClose = () => {
+  const handleClose = (): void => {
     if (isDeleting) return;
     setDeleteError(null);
     onClose();
   };
+
+  useEscapeDismissStack([{ isOpen: Boolean(rfq), onClose: handleClose }]);
+
+  if (!rfq) return null;
 
   const handleConfirm = async () => {
     setDeleteError(null);
@@ -1105,6 +1111,7 @@ export function RFQDeleteDialog({ rfq, onClose, onConfirm }: RFQDeleteDialogProp
       aria-modal="true"
       aria-labelledby="rfq-delete-title"
       data-testid="rfq-delete-dialog"
+      {...backdropDismissProps(handleClose)}
     >
       <div className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 p-5 space-y-4 text-xs">
         <div className="flex items-start gap-3">

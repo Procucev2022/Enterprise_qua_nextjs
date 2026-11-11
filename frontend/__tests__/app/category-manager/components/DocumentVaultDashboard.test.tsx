@@ -853,4 +853,28 @@ describe('DocumentVaultDashboard', () => {
     if (closeToast) fireEvent.click(closeToast);
   });
 
+  test('dismisses upload modal on backdrop click and Escape without closing on inner clicks', async () => {
+    render(<DocumentVaultDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('upload-document-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('upload-document-btn'));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('modal-doc-name-input'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('upload-document-btn'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
 });

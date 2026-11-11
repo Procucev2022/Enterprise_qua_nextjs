@@ -3139,4 +3139,64 @@ describe('Action Center & Internal Tasks Redesign', () => {
     expect(screen.queryByRole('columnheader', { name: /^Status/i })).not.toBeInTheDocument();
   });
 
+  test('dismisses filter drawer, create modal, and task details drawer on backdrop click and Escape without closing underlying drawer before compose modal', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    // 1. Filter drawer
+    const filterBtn = screen.getByRole('button', { name: /Filter/i });
+    fireEvent.click(filterBtn);
+    expect(screen.getByRole('heading', { name: 'Filter Tasks' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('heading', { name: 'Filter Tasks' }));
+    expect(screen.getByRole('heading', { name: 'Filter Tasks' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('filter-drawer-backdrop'));
+    expect(screen.queryByRole('heading', { name: 'Filter Tasks' })).not.toBeInTheDocument();
+
+    fireEvent.click(filterBtn);
+    expect(screen.getByRole('heading', { name: 'Filter Tasks' })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: 'Filter Tasks' })).not.toBeInTheDocument();
+
+    // 2. Create Task modal
+    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
+    fireEvent.click(createBtn);
+    expect(screen.getByRole('heading', { name: 'Create Internal Task' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('heading', { name: 'Create Internal Task' }));
+    expect(screen.getByRole('heading', { name: 'Create Internal Task' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('create-task-modal-backdrop'));
+    expect(screen.queryByRole('heading', { name: 'Create Internal Task' })).not.toBeInTheDocument();
+
+    fireEvent.click(createBtn);
+    expect(screen.getByRole('heading', { name: 'Create Internal Task' })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: 'Create Internal Task' })).not.toBeInTheDocument();
+
+    // 3. Task details drawer + stacked Compose Modal
+    fireEvent.click(screen.getAllByTitle('View details')[0]);
+    expect(screen.getByTestId('task-details-drawer')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('task-details-drawer'));
+    expect(screen.getByTestId('task-details-drawer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('drawer-compose-btn'));
+    await waitFor(() => {
+      expect(screen.getByText(UI_STRINGS.actionCenter.communicationModal.modalTitle)).toBeInTheDocument();
+    });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByText(UI_STRINGS.actionCenter.communicationModal.modalTitle)).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('task-details-drawer')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('task-details-drawer')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTitle('View details')[0]);
+    expect(screen.getByTestId('task-details-drawer')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('task-details-backdrop'));
+    expect(screen.queryByTestId('task-details-drawer')).not.toBeInTheDocument();
+  });
+
 });

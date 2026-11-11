@@ -565,4 +565,29 @@ describe('LoginLogsDashboard', () => {
     const endInput = screen.getByLabelText(strings.filters.endDate);
     fireEvent.change(endInput, { target: { value: '2026-10-31' } });
   });
+
+  it('dismisses session details modal on backdrop click and Escape without closing on inner clicks', async () => {
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    });
+
+    const viewBtns = screen.getAllByRole('button', { name: strings.actions.viewDetails });
+    fireEvent.click(viewBtns[0]);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(strings.details.title));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: strings.actions.viewDetails })[0]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import RegistrationsDashboard from '@/app/category-manager/components/RegistrationsDashboard';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
@@ -779,5 +779,31 @@ describe('RegistrationsDashboard', () => {
     fireEvent.change(clientSelect, { target: { value: 'seller' } });
     fireEvent.change(clientSelect, { target: { value: 'buyer' } });
     fireEvent.change(clientSelect, { target: { value: 'all' } });
+  });
+
+  test('dismisses column settings modal on backdrop click and Escape without closing on inner clicks', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    const dialog = screen.getByRole('dialog', { name: UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle });
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

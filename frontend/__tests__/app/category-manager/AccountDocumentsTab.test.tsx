@@ -515,5 +515,60 @@ describe('AccountDocumentsTab', () => {
         expect(screen.getByText('Failed to delete document.')).toBeInTheDocument();
       });
     });
+
+    it('dismisses upload, preview, and delete modals on backdrop click and Escape without closing on inner clicks', async () => {
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+
+      render(
+        <AccountDocumentsTab
+          accountType="buyer"
+          accountId="buyer-1"
+          accountName="Veera Babu Buyer Org"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('GST Registration Certificate')).toBeInTheDocument();
+      });
+
+      // 1. Upload modal
+      fireEvent.click(screen.getAllByText('Upload Document')[0]);
+      let dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByText('Upload Associated Document'));
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      fireEvent.click(dialog);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getAllByText('Upload Document')[0]);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      // 2. Preview modal
+      fireEvent.click(screen.getAllByTitle('Preview')[0]);
+      dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByText('GST Registration Certificate'));
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      fireEvent.click(dialog);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getAllByTitle('Preview')[0]);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      // 3. Delete confirmation modal
+      fireEvent.click(screen.getAllByTitle('Delete')[0]);
+      dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('heading', { name: 'Delete Document' }));
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      fireEvent.click(dialog);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getAllByTitle('Delete')[0]);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
   });
 });

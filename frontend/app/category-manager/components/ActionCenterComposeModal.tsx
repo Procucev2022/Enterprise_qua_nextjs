@@ -35,6 +35,7 @@ import type {
   ActionCenterAttachment,
   DocumentVaultItem,
 } from '@/lib/types';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 const EMPTY_ATTACHMENTS: ActionCenterAttachment[] = [];
 
@@ -393,6 +394,8 @@ export default function ActionCenterComposeModal({
     }
   };
 
+  useEscapeDismissStack([{ isOpen, onClose }]);
+
   if (!isOpen) return null;
 
   return (
@@ -401,6 +404,7 @@ export default function ActionCenterComposeModal({
       aria-modal="true"
       aria-labelledby="compose-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200"
+      {...backdropDismissProps(onClose)}
     >
       <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
         {/* Header */}

@@ -128,7 +128,25 @@ async function getCreditHistory(req, res, next) {
       totalConsumed = Number(creditInfo.freeCreditsUsed);
     }
 
-    const curBal = creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed);
+    // Reconcile with actual quote submissions across RFQs
+    const allRfqs = (typeof storeService.getRFQs === 'function' ? storeService.getRFQs() : []) || [];
+    const vEmail = (vendor.email || '').toLowerCase();
+    const vName = (vendor.name || vendor.companyName || '').toLowerCase();
+    const actualSubmittedQuotesCount = allRfqs.reduce((acc, rfq) => {
+      const hasQuote = (rfq?.quotes || []).some(
+        (q) =>
+          (q?.vendorId && q.vendorId === vendor.id) ||
+          (vEmail && q?.vendorEmail && String(q.vendorEmail).toLowerCase() === vEmail) ||
+          (vName && q?.vendorName && String(q.vendorName).toLowerCase() === vName)
+      );
+      return acc + (hasQuote ? 1 : 0);
+    }, 0);
+
+    if (actualSubmittedQuotesCount > totalConsumed) {
+      totalConsumed = actualSubmittedQuotesCount;
+    }
+
+    const curBal = Math.max(0, totalAllocated - totalConsumed);
     const summary = {
       totalCreditsAllocated: totalAllocated,
       totalCreditsConsumed: totalConsumed,

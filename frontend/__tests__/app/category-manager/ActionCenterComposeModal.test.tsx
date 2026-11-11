@@ -1009,4 +1009,25 @@ describe('ActionCenterComposeModal', () => {
       );
     });
   });
+
+  it('calls onClose on backdrop click and Escape without closing on inner clicks', async () => {
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-dismiss"
+      />
+    );
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(screen.getByText(strings.modalTitle));
+    expect(mockOnClose).not.toHaveBeenCalled();
+
+    fireEvent.click(dialog);
+    expect(mockOnClose).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(mockOnClose).toHaveBeenCalledTimes(2);
+  });
 });

@@ -22,6 +22,7 @@ import {
 import { SOURCING_MODES, formatIndianDateTime, rfqVersionLabel } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { RFQEditModal } from '@/app/buyer/RFQEditModal';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 const KANBAN = UI_STRINGS.categoryManagerKanban;
 
@@ -166,6 +167,9 @@ export default function KanbanBoard({
   const totalVendorsInvited = rfqs.reduce((sum, r) => sum + (r.assignedVendors?.length || 0), 0);
 
   const [summaryFilterModal, setSummaryFilterModal] = useState<'pipeline' | 'quotes' | 'awaiting' | null>(null);
+
+  const closeSummaryFilterModal = (): void => setSummaryFilterModal(null);
+  useEscapeDismissStack([{ isOpen: summaryFilterModal !== null, onClose: closeSummaryFilterModal }]);
 
   const summaryCards = [
     {
@@ -637,6 +641,7 @@ export default function KanbanBoard({
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
           role="dialog"
           aria-modal="true"
+          {...backdropDismissProps(closeSummaryFilterModal)}
         >
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
             {/* Modal Header */}

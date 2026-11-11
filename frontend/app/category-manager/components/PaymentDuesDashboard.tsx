@@ -56,6 +56,7 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import BuyerDetailsModal from '../BuyerDetailsModal';
 import VendorDetailsModal from '../VendorDetailsModal';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 const DEFAULT_COLUMNS: PaymentDuesColumnConfig[] = [
   { key: 'accountId', label: 'Account ID', visible: true },
@@ -116,18 +117,6 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState<boolean>(false);
   const [draggedColumnIndex, setDraggedColumnIndex] = useState<number | null>(null);
 
-  // Close column settings modal on Escape key
-  useEffect(() => {
-    if (!isColumnSettingsOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsColumnSettingsOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isColumnSettingsOpen]);
-
   // Profile Modals
   const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null);
   const [selectedBuyerName, setSelectedBuyerName] = useState<string | null>(null);
@@ -141,6 +130,22 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState<boolean>(false);
   const [isAckModalOpen, setIsAckModalOpen] = useState<boolean>(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState<boolean>(false);
+
+  const closeColumnSettingsModal = (): void => setIsColumnSettingsOpen(false);
+  const closeEmailModal = (): void => setIsEmailModalOpen(false);
+  const closeMessageModal = (): void => setIsMessageModalOpen(false);
+  const closeWhatsAppModal = (): void => setIsWhatsAppModalOpen(false);
+  const closeAckModal = (): void => setIsAckModalOpen(false);
+  const closeHistoryModal = (): void => setIsHistoryModalOpen(false);
+
+  useEscapeDismissStack([
+    { isOpen: isColumnSettingsOpen, onClose: closeColumnSettingsModal },
+    { isOpen: isEmailModalOpen && activeActionAccount !== null, onClose: closeEmailModal },
+    { isOpen: isMessageModalOpen && activeActionAccount !== null, onClose: closeMessageModal },
+    { isOpen: isWhatsAppModalOpen && activeActionAccount !== null, onClose: closeWhatsAppModal },
+    { isOpen: isAckModalOpen && activeActionAccount !== null, onClose: closeAckModal },
+    { isOpen: isHistoryModalOpen && activeActionAccount !== null, onClose: closeHistoryModal },
+  ]);
 
   // Form states for modals
   const [emailForm, setEmailForm] = useState({ recipient: '', subject: '', message: '', notes: '' });
@@ -1416,7 +1421,12 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 1. Email Modal */}
       {isEmailModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+          {...backdropDismissProps(closeEmailModal)}
+        >
           <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1520,7 +1530,12 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 2. In-App Message Modal */}
       {isMessageModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+          {...backdropDismissProps(closeMessageModal)}
+        >
           <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1609,7 +1624,12 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 3. WhatsApp Modal */}
       {isWhatsAppModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+          {...backdropDismissProps(closeWhatsAppModal)}
+        >
           <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1687,7 +1707,12 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 4. Acknowledgement Status Modal */}
       {isAckModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+          {...backdropDismissProps(closeAckModal)}
+        >
           <div className="bg-white dark:bg-slate-900 rounded-xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1771,7 +1796,12 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 5. Communication History & Audit Modal */}
       {isHistoryModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+          {...backdropDismissProps(closeHistoryModal)}
+        >
           <div className="bg-white dark:bg-slate-900 rounded-xl max-w-2xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">

@@ -27,6 +27,7 @@ import {
   parseVendorUploadFile,
 } from '@/lib/vendorUploadClient';
 import type { VendorUploadImportResponse, VendorUploadRow } from '@/lib/types';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 interface VendorUploadModalProps {
   isOpen: boolean;
@@ -227,6 +228,8 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     URL.revokeObjectURL(url);
   }
 
+  useEscapeDismissStack([{ isOpen, onClose }]);
+
   if (!isOpen) return null;
 
   return (
@@ -236,6 +239,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       aria-modal="true"
       aria-labelledby="vendor-upload-modal-title"
       data-testid="vendor-upload-modal"
+      {...backdropDismissProps(onClose)}
     >
       <div className="w-full max-w-4xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto">
         <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-200 dark:border-gray-800">

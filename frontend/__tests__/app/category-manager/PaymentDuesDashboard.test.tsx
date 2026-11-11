@@ -1356,6 +1356,41 @@ describe('PaymentDuesDashboard', () => {
       });
       fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
     });
+
+    it('dismisses communication, acknowledgement, history, and column modals on backdrop click and Escape without closing on inner clicks', async () => {
+      (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValue([]);
+      render(<PaymentDuesDashboard />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+      });
+
+      const modalCases = [
+        { trigger: () => fireEvent.click(screen.getByTitle('Customize Columns')), heading: 'Column Settings' },
+        { trigger: () => fireEvent.click(screen.getAllByTitle('Send Email')[0]), heading: 'Send Low-Credit Email Notification' },
+        { trigger: () => fireEvent.click(screen.getAllByTitle('Send Message')[0]), heading: 'Send In-App Notification' },
+        { trigger: () => fireEvent.click(screen.getAllByTitle('WhatsApp Notification')[0]), heading: 'Send WhatsApp Notification' },
+        { trigger: () => fireEvent.click(screen.getAllByTitle('Update Acknowledgement')[0]), heading: 'Update Acknowledgement Status' },
+        { trigger: () => fireEvent.click(screen.getAllByTitle('Communication History')[0]), heading: 'Communication & Acknowledgement Audit Trail' },
+      ];
+
+      for (const { trigger, heading } of modalCases) {
+        trigger();
+        const dialog = await screen.findByRole('dialog');
+        expect(screen.getByText(heading)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByText(heading));
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.click(dialog);
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+        trigger();
+        await screen.findByRole('dialog');
+        fireEvent.keyDown(window, { key: 'Escape' });
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      }
+    });
   });
 
 });

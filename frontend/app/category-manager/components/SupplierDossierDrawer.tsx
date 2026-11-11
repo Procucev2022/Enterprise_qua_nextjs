@@ -37,6 +37,7 @@ import {
   Upload,
   Plus,
   FileText,
+  Radio,
 } from 'lucide-react';
 import { getScenariosForEntityType, interpolateScenarioTemplate, getScenarioForCallOutcome } from '@/lib/emailScenarioTemplates';
 import { fetchDocuments } from '@/lib/documentVaultClient';
@@ -105,14 +106,23 @@ export interface SupplierDossierSeller {
   [key: string]: any;
 }
 
+export type SupplierDossierTab =
+  | 'profile'
+  | 'quotes'
+  | 'credit'
+  | 'communications'
+  | 'payments'
+  | 'documents'
+  | 'active_rfqs';
+
 export interface SupplierDossierDrawerProps {
   seller: SupplierDossierSeller;
   onClose: () => void;
   onSelectRFQ?: (rfq: RFQItem) => void;
   sellerRfqs?: RFQItem[];
   rfqs?: RFQItem[];
-  initialTab?: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents';
-  onTabChange?: (tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents') => void;
+  initialTab?: SupplierDossierTab;
+  onTabChange?: (tab: SupplierDossierTab) => void;
 }
 
 const DEFAULT_SUPPLIER_CATEGORIES = [
@@ -142,8 +152,8 @@ export default function SupplierDossierDrawer({
   const effectiveRfqs = useMemo(() => (sellerRfqs.length > 0 ? sellerRfqs : (rfqs || [])), [sellerRfqs, rfqs]);
 
   // Active Main Tab
-  const [dossierTab, setDossierTabState] = useState<'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents'>(initialTab || 'profile');
-  const setDossierTab = useCallback((tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents') => {
+  const [dossierTab, setDossierTabState] = useState<SupplierDossierTab>(initialTab || 'profile');
+  const setDossierTab = useCallback((tab: SupplierDossierTab) => {
     setDossierTabState(tab);
     if (onTabChange) onTabChange(tab);
   }, [onTabChange]);
@@ -170,7 +180,10 @@ export default function SupplierDossierDrawer({
   // 1. PROFILE TAB & CATEGORY EDIT (Tab 1: Profile)
   // ---------------------------------------------------------------------------
   const [supportedCategories, setSupportedCategories] = useState<string[]>(() => {
-    if (seller.categories && seller.categories.length > 0) return seller.categories;
+    if (Array.isArray(seller.vendorSelectedCategories) && seller.vendorSelectedCategories.length > 0) {
+      return seller.vendorSelectedCategories;
+    }
+    if (Array.isArray(seller.categories) && seller.categories.length > 0) return seller.categories;
     const cat = seller.majorCategory || seller.category;
     if (cat) return [cat];
     return ['Engineering Spares - Electrical'];
@@ -243,18 +256,6 @@ export default function SupplierDossierDrawer({
     return [];
   }, [selectedQuoteForModal]);
 
-  // Esc key listener to close modal
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (selectedQuoteForModal) setSelectedQuoteForModal(null);
-        if (isCategoryModalOpen) setIsCategoryModalOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedQuoteForModal, isCategoryModalOpen]);
-
   const supplierQuotesList = useMemo(() => {
     const list: Array<{ rfq: RFQItem; quote?: any }> = [];
     const vEmail = (seller.email || '').toLowerCase();
@@ -264,20 +265,86 @@ export default function SupplierDossierDrawer({
       const matchedQuote = (rfq.quotes || []).find(
         (q: any) =>
           q.vendorId === seller.id ||
-          q.vendorName?.toLowerCase() === vName
-      );
-      const isAssigned = (rfq.assignedVendors || []).some(
-        (v: any) =>
-          v.id === seller.id ||
-          v.email?.toLowerCase() === vEmail
+          (vEmail && q.vendorEmail && String(q.vendorEmail).toLowerCase() === vEmail) ||
+          (vName && q.vendorName && String(q.vendorName).toLowerCase() === vName)
       );
 
-      if (matchedQuote || isAssigned) {
+      if (matchedQuote) {
         list.push({ rfq, quote: matchedQuote });
       }
     }
     return list;
   }, [effectiveRfqs, seller.id, seller.email, seller.name, seller.companyName]);
+
+  // ---------------------------------------------------------------------------
+  // 2B. ACTIVE RFQS MATCHING SUPPLIER CATEGORIES (Tab: Active RFQs)
+  // ---------------------------------------------------------------------------
+  const [activeRfqSearch, setActiveRfqSearch] = useState<string>('');
+  const [activeRfqStatusFilter, setActiveRfqStatusFilter] = useState<string>('all');
+  const [activeRfqPage, setActiveRfqPage] = useState<number>(1);
+  const activeRfqPageSize = 10;
+
+  const activeMatchingRfqs = useMemo(() => {
+    return effectiveRfqs.filter((rfq) => {
+      if (!rfq) return false;
+      const st = String(rfq.status || '').trim().toLowerCase();
+      if (
+        st === 'closed' ||
+        st === 'cancelled' ||
+        st === 'expired' ||
+        st === 'draft' ||
+        st === 'po generated' ||
+        st === 'rejected' ||
+        rfq.poFinalised ||
+        Boolean(rfq.poNumber)
+      ) {
+        return false;
+      }
+      const deadlineStr = (rfq as any).targetDate || (rfq as any).deadline || rfq.targetDeliveryDate;
+      if (deadlineStr) {
+        const deadlineTime = new Date(deadlineStr).getTime();
+        if (!isNaN(deadlineTime) && deadlineTime < Date.now()) {
+          return false;
+        }
+      }
+
+      const rfqCat = (rfq.category || (rfq as any).majorCategory || '').trim().toLowerCase();
+      if (!rfqCat) return false;
+
+      return supportedCategories.some((c) => {
+        if (!c) return false;
+        const sCat = c.trim().toLowerCase();
+        if (sCat === rfqCat) return true;
+        if (rfqCat.includes(sCat) || sCat.includes(rfqCat)) return true;
+        const sRoot = sCat.replace(/s\b/g, '');
+        const rRoot = rfqCat.replace(/s\b/g, '');
+        return sRoot === rRoot || rRoot.includes(sRoot) || sRoot.includes(rRoot);
+      });
+    });
+  }, [effectiveRfqs, supportedCategories]);
+
+  const filteredActiveRfqs = useMemo(() => {
+    const q = activeRfqSearch.toLowerCase().trim();
+    return activeMatchingRfqs.filter((rfq) => {
+      const matchSearch =
+        !q ||
+        rfq.rfqNumber.toLowerCase().includes(q) ||
+        rfq.title.toLowerCase().includes(q) ||
+        (rfq.category && rfq.category.toLowerCase().includes(q)) ||
+        (((rfq as any).buyerCompanyName && String((rfq as any).buyerCompanyName).toLowerCase().includes(q)) ||
+         ((rfq as any).companyName && String((rfq as any).companyName).toLowerCase().includes(q)));
+      const matchStatus =
+        activeRfqStatusFilter === 'all' ||
+        String(rfq.status || '').toLowerCase() === activeRfqStatusFilter.toLowerCase();
+      return matchSearch && matchStatus;
+    });
+  }, [activeMatchingRfqs, activeRfqSearch, activeRfqStatusFilter]);
+
+  const totalActiveRfqPages = Math.max(1, Math.ceil(filteredActiveRfqs.length / activeRfqPageSize));
+  const paginatedActiveRfqs = useMemo(() => {
+    const start = (activeRfqPage - 1) * activeRfqPageSize;
+    return filteredActiveRfqs.slice(start, start + activeRfqPageSize);
+  }, [filteredActiveRfqs, activeRfqPage]);
 
   const filteredQuotes = useMemo(() => {
     return supplierQuotesList.filter(({ rfq, quote }) => {
@@ -551,17 +618,35 @@ export default function SupplierDossierDrawer({
   }, []);
   const [isSendingComm, setIsSendingComm] = useState<boolean>(false);
 
-  // Esc key listener to close compose modal or comm details modal
+  // Global Esc key listener: closes topmost open submodal, or the drawer itself if none open
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isComposeOpen) setIsComposeOpen(false);
-        if (selectedCommForModal) setSelectedCommForModal(null);
+        if (selectedQuoteForModal) {
+          setSelectedQuoteForModal(null);
+        } else if (isCategoryModalOpen) {
+          setIsCategoryModalOpen(false);
+        } else if (isAddQuoteCreditsModalOpen) {
+          setIsAddQuoteCreditsModalOpen(false);
+        } else if (selectedCommForModal) {
+          setSelectedCommForModal(null);
+        } else if (isComposeOpen) {
+          setIsComposeOpen(false);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isComposeOpen, selectedCommForModal]);
+  }, [
+    selectedQuoteForModal,
+    isCategoryModalOpen,
+    isAddQuoteCreditsModalOpen,
+    selectedCommForModal,
+    isComposeOpen,
+    onClose,
+  ]);
 
   const loadCommunications = useCallback(async () => {
     setLoadingComms(true);
@@ -727,163 +812,186 @@ export default function SupplierDossierDrawer({
 
   const displayName = seller.companyName || seller.name || 'Supplier Organization';
   const isNetwork = seller.source === 'procucev_network' || String(seller.id).startsWith('v-net-') || Boolean((seller as any).isNetwork);
-  const ratingVal = seller.rating ?? 4.5;
-  const scoreVal = seller.score360 ?? seller.score ?? 88;
-  const regDate = seller.createdAt || seller.created_at || '19 Sept 2026';
+  const ratingVal = typeof seller.rating === 'number' && seller.rating > 0 ? Number(seller.rating) : null;
+  const scoreVal = typeof seller.score360 === 'number' && seller.score360 > 0
+    ? seller.score360
+    : (typeof seller.score === 'number' && seller.score > 0 ? seller.score : null);
+  const regDate = seller.createdAt || seller.created_at || null;
 
   return (
     <div
-      role="region"
-      aria-label="Supplier 360° Dossier"
-      className="fixed inset-y-0 right-0 max-w-4xl w-full bg-white dark:bg-slate-900 shadow-2xl z-50 flex flex-col border-l border-slate-200 dark:border-slate-800 animate-in slide-in-from-right duration-200"
+      onClick={onClose}
+      data-testid="supplier-dossier-backdrop"
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end animate-in fade-in duration-150"
     >
-      {/* Toast Notification */}
-      {toast && (
-        <div
-          role="status"
-          className={`absolute top-4 right-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg text-xs font-semibold ${
-            toast.type === 'success'
-              ? 'bg-emerald-600 text-white'
-              : 'bg-rose-600 text-white'
-          }`}
-        >
-          {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-          <span>{toast.message}</span>
-        </div>
-      )}
-
-      {/* HEADER: HIDE SELLER ID, DISPLAY SUPPLIER NAME, SOURCE, 360 SCORE, RATING, CLOSE BUTTON */}
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-xl shadow-md shadow-emerald-500/20">
-              {displayName.charAt(0).toUpperCase()}
-            </div>
-            <div>
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-                  {displayName}
-                </h2>
-                <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
-                    isNetwork
-                      ? 'bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800'
-                      : 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
-                  }`}
-                >
-                  {isNetwork ? UI_STRINGS.sellerDirectory.procucevNetwork : UI_STRINGS.sellerDirectory.buyerUploaded}
-                </span>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
-                  <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                  {`${strings.score360Label}: ${scoreVal}/100`}
-                </span>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
-                  <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                  {`${strings.ratingLabel}: ★ ${ratingVal}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsAddQuoteCreditsModalOpen(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
-                  title="Add Quote Credits (1-5)"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.addCreditsBtn}</span>
-                </button>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {formatString(strings.registered, { date: formatIndianDateTime(regDate) })}
-              </p>
-            </div>
+      <div
+        role="region"
+        aria-label="Supplier 360° Dossier"
+        onClick={(e) => e.stopPropagation()}
+        className="max-w-4xl w-full bg-white dark:bg-slate-900 shadow-2xl h-full flex flex-col border-l border-slate-200 dark:border-slate-800 animate-in slide-in-from-right duration-200 overflow-hidden"
+      >
+        {/* Toast Notification */}
+        {toast && (
+          <div
+            role="status"
+            className={`absolute top-4 right-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg text-xs font-semibold ${
+              toast.type === 'success'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-rose-600 text-white'
+            }`}
+          >
+            {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+            <span>{toast.message}</span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={strings.closeDossier}
-            className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+        )}
 
-        {/* 5 NAVIGATION TABS: PROFILE, QUOTES, CREDIT, COMMUNICATIONS, PAYMENTS */}
-        <div className="flex items-center gap-2 mt-6 border-b border-slate-200 dark:border-slate-700">
-          <button
-            type="button"
-            onClick={() => setDossierTab('profile')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
-              dossierTab === 'profile'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <Building2 className="w-4 h-4" />
-            {strings.profileTab}
-          </button>
+        {/* HEADER: HIDE SELLER ID, DISPLAY SUPPLIER NAME, SOURCE, 360 SCORE, RATING, CLOSE BUTTON */}
+        <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-xl shadow-md shadow-emerald-500/20">
+                {displayName.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+                    {displayName}
+                  </h2>
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
+                      isNetwork
+                        ? 'bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800'
+                        : 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
+                    }`}
+                  >
+                    {isNetwork ? UI_STRINGS.sellerDirectory.procucevNetwork : UI_STRINGS.sellerDirectory.buyerUploaded}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                    <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                    {scoreVal !== null ? `${strings.score360Label}: ${scoreVal}/100` : `${strings.score360Label}: ${strings.unscored}`}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
+                    <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                    {ratingVal !== null ? `${strings.ratingLabel}: ★ ${ratingVal}` : `${strings.ratingLabel}: ${strings.unrated}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddQuoteCreditsModalOpen(true)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
+                    title="Add Quote Credits (1-5)"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.addCreditsBtn}</span>
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  {regDate ? formatString(strings.registered, { date: formatIndianDateTime(regDate) }) : 'Registration date not recorded'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={strings.closeDossier}
+              className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setDossierTab('quotes')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
-              dossierTab === 'quotes'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <FileCheck className="w-4 h-4" />
-            {strings.quotesTab} ({supplierQuotesList.length})
-          </button>
+          {/* 7 NAVIGATION TABS: PROFILE, QUOTES, CREDIT, COMMUNICATIONS, PAYMENTS, DOCUMENTS, ACTIVE RFQS */}
+          <div className="flex items-center gap-2 mt-6 border-b border-slate-200 dark:border-slate-700 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => setDossierTab('profile')}
+              className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                dossierTab === 'profile'
+                  ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <Building2 className="w-4 h-4" />
+              {strings.profileTab}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setDossierTab('credit')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
-              dossierTab === 'credit'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <CreditCard className="w-4 h-4" />
-            {strings.creditTab}
-          </button>
+            <button
+              type="button"
+              onClick={() => setDossierTab('quotes')}
+              className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                dossierTab === 'quotes'
+                  ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <FileCheck className="w-4 h-4" />
+              {strings.quotesTab} ({supplierQuotesList.length})
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setDossierTab('communications')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
-              dossierTab === 'communications'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            {strings.communicationsTab} ({communications.length})
-          </button>
+            <button
+              type="button"
+              onClick={() => setDossierTab('credit')}
+              className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                dossierTab === 'credit'
+                  ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <CreditCard className="w-4 h-4" />
+              {strings.creditTab}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setDossierTab('payments')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
-              dossierTab === 'payments'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <Receipt className="w-4 h-4" />
-            {strings.paymentsTab} ({payments.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setDossierTab('documents')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
-              dossierTab === 'documents'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            <FileText className="w-4 h-4" />
-            {strings.documentsTab || 'Documents'} ({docCount})
-          </button>
+            <button
+              type="button"
+              onClick={() => setDossierTab('communications')}
+              className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                dossierTab === 'communications'
+                  ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              {strings.communicationsTab} ({communications.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDossierTab('payments')}
+              className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                dossierTab === 'payments'
+                  ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <Receipt className="w-4 h-4" />
+              {strings.paymentsTab} ({payments.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDossierTab('documents')}
+              className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                dossierTab === 'documents'
+                  ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              {strings.documentsTab} ({docCount})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDossierTab('active_rfqs')}
+              className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                dossierTab === 'active_rfqs'
+                  ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <Radio className="w-4 h-4" />
+              {strings.activeRfqsTab} ({activeMatchingRfqs.length})
+            </button>
+          </div>
         </div>
       </div>
 
@@ -904,23 +1012,23 @@ export default function SupplierDossierDrawer({
                 <div className="space-y-2 text-xs">
                   <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
                     <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span className="font-semibold">{seller.contactPerson || seller.name || 'Primary Contact'}</span>
+                    <span className="font-semibold">{seller.contactPerson || seller.name || strings.notProvided}</span>
                   </div>
                   <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
                     <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{seller.email || 'supplier@procucev.com'}</span>
+                    <span>{seller.email || strings.notProvided}</span>
                   </div>
                   <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
                     <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{seller.phone || '+91 98765 43210'}</span>
+                    <span>{seller.phone || strings.notProvided}</span>
                   </div>
                   <div className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
                     <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                    <span>Company Location: {seller.location || 'India'}</span>
+                    <span>Company Location: {seller.location || strings.notSpecified}</span>
                   </div>
                   <div className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
                     <Truck className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                    <span>Delivery Location: {seller.deliveryLocation || seller.location || 'India'}</span>
+                    <span>Delivery Location: {seller.deliveryLocation || seller.location || strings.notSpecified}</span>
                   </div>
                   <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800">
                     <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -939,19 +1047,19 @@ export default function SupplierDossierDrawer({
                   <div>
                     <span className="text-slate-400">GSTIN:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {seller.gstin || seller.gstNumber || '27AAACG0000A1Z5'}
+                      {seller.gstin || seller.gstNumber || strings.notProvided}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-400">PAN:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {seller.pan || seller.panNumber || 'AAACG0000A'}
+                      {seller.pan || seller.panNumber || strings.notProvided}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-400">Subscription Tier:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200 capitalize">
-                      {seller.subscriptionPlan || 'Preferred Partner'}
+                      {seller.subscriptionPlan || strings.freeTier}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 pt-1">
@@ -1046,7 +1154,10 @@ export default function SupplierDossierDrawer({
                       filteredQuotes.map(({ rfq, quote }) => (
                         <tr
                           key={rfq.id}
-                          onClick={() => setSelectedQuoteForModal({ rfq, quote })}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedQuoteForModal({ rfq, quote });
+                          }}
                           className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
                         >
                           <td className="px-3.5 py-2.5">
@@ -1127,7 +1238,7 @@ export default function SupplierDossierDrawer({
                   {creditSummary?.currentCreditBalance ?? getVendorCreditBalance(seller)}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5 capitalize">
-                  {creditSummary?.subscriptionPlan || seller.subscriptionPlan || 'Preferred Partner'}
+                  {creditSummary?.subscriptionPlan || seller.subscriptionPlan || strings.freeTier}
                 </p>
               </div>
             </div>
@@ -1451,14 +1562,14 @@ export default function SupplierDossierDrawer({
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.payments.totalPaid}</span>
                 <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                  {formatCurrency(paymentSummary?.totalAmountPaid ?? 5999)}
+                  {formatCurrency(paymentSummary?.totalAmountPaid ?? 0)}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Subscription fees</p>
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.payments.successful}</span>
                 <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  {paymentSummary?.totalSuccessfulPayments ?? 1}
+                  {paymentSummary?.totalSuccessfulPayments ?? 0}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Settled invoices</p>
               </div>
@@ -1633,6 +1744,221 @@ export default function SupplierDossierDrawer({
             </div>
           </div>
         )}
+
+        {/* =================================================================== */}
+        {/* TAB 7: ACTIVE RFQS TAB (Matching Registered Categories)             */}
+        {/* =================================================================== */}
+        {dossierTab === 'active_rfqs' && (
+          <div className="space-y-6">
+            {/* MATCHING CATEGORIES SUMMARY BANNER */}
+            <div className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <Radio className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                    {strings.activeRfqs.title}
+                  </h4>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                    {formatString(strings.activeRfqs.matchingCategoriesSummary, {
+                      categories: supportedCategories.length > 0 ? supportedCategories.join(', ') : strings.notSpecified,
+                    })}
+                  </p>
+                </div>
+              </div>
+              <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 shadow-2xs">
+                {activeMatchingRfqs.length} Active {activeMatchingRfqs.length === 1 ? 'Opportunity' : 'Opportunities'}
+              </span>
+            </div>
+
+            {/* TOOLBAR FOR ACTIVE RFQS */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-1 max-w-md">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder={strings.activeRfqs.searchPlaceholder}
+                    value={activeRfqSearch}
+                    onChange={(e) => {
+                      setActiveRfqSearch(e.target.value);
+                      setActiveRfqPage(1);
+                    }}
+                    className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+                <select
+                  aria-label="Filter active RFQs by status"
+                  value={activeRfqStatusFilter}
+                  onChange={(e) => {
+                    setActiveRfqStatusFilter(e.target.value);
+                    setActiveRfqPage(1);
+                  }}
+                  className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                >
+                  <option value="all">{strings.activeRfqs.allStatuses}</option>
+                  <option value="In Evaluation">In Evaluation</option>
+                  <option value="AI Recommended">AI Recommended</option>
+                  <option value="Quotes Pending">Quotes Pending</option>
+                  <option value="Quotes Received">Quotes Received</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <span>Showing {paginatedActiveRfqs.length} of {filteredActiveRfqs.length} matching RFQs</span>
+              </div>
+            </div>
+
+            {/* ACTIVE RFQS TABLE */}
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900/60 shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
+                    <tr>
+                      <th className="px-3.5 py-2.5 font-semibold">{strings.activeRfqs.rfqNumberHeader}</th>
+                      <th className="px-3.5 py-2.5 font-semibold">{strings.activeRfqs.categoryHeader}</th>
+                      <th className="px-3.5 py-2.5 font-semibold">{strings.activeRfqs.buyerHeader}</th>
+                      <th className="px-3.5 py-2.5 font-semibold">{strings.activeRfqs.sourcingModeHeader}</th>
+                      <th className="px-3.5 py-2.5 font-semibold">{strings.activeRfqs.deadlineHeader}</th>
+                      <th className="px-3.5 py-2.5 font-semibold">{strings.activeRfqs.budgetHeader}</th>
+                      <th className="px-3.5 py-2.5 font-semibold">{strings.activeRfqs.participationHeader}</th>
+                      <th className="px-3.5 py-2.5 font-semibold text-right">{strings.activeRfqs.actionsHeader}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {paginatedActiveRfqs.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                          {strings.activeRfqs.noActiveRfqs}
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedActiveRfqs.map((rfq) => {
+                        const vEmail = (seller.email || '').toLowerCase();
+                        const vName = (seller.companyName || seller.name || '').toLowerCase();
+                        const hasSubmittedQuote = (rfq.quotes || []).some(
+                          (q: any) =>
+                            q.vendorId === seller.id ||
+                            (vEmail && q.vendorEmail && String(q.vendorEmail).toLowerCase() === vEmail) ||
+                            (vName && q.vendorName && String(q.vendorName).toLowerCase() === vName)
+                        );
+                        const isInvited = ((rfq as any).assignedVendors || []).some(
+                          (v: any) =>
+                            v.id === seller.id ||
+                            (vEmail && v.email && String(v.email).toLowerCase() === vEmail)
+                        );
+                        const buyerName =
+                          (rfq as any).buyerCompanyName ||
+                          (rfq as any).companyName ||
+                          rfq.raisedByEmail ||
+                          'Enterprise Buyer';
+                        const deadline = rfq.targetDeliveryDate || (rfq as any).deadline || (rfq as any).targetDate;
+
+                        return (
+                          <tr key={rfq.id || rfq.rfqNumber} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                            <td className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">{rfq.rfqNumber}</span>
+                              </div>
+                              <div className="text-[11px] text-slate-500 font-normal line-clamp-1 max-w-xs" title={rfq.title}>
+                                {rfq.title}
+                              </div>
+                            </td>
+                            <td className="px-3.5 py-2.5">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                                {rfq.category || (rfq as any).majorCategory || strings.notSpecified}
+                              </span>
+                            </td>
+                            <td className="px-3.5 py-2.5 text-slate-700 dark:text-slate-300">
+                              <div className="font-medium text-slate-800 dark:text-slate-200">{buyerName}</div>
+                              {rfq.deliveryLocation && (
+                                <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                  <MapPin className="w-2.5 h-2.5 shrink-0" />
+                                  <span>{rfq.deliveryLocation}</span>
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3.5 py-2.5 text-slate-600 dark:text-slate-400">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                {rfq.sourcingMode || 'Standard'}
+                              </span>
+                            </td>
+                            <td className="px-3.5 py-2.5 text-slate-700 dark:text-slate-300">
+                              {deadline ? formatIndianDateTime(deadline) : strings.notSpecified}
+                            </td>
+                            <td className="px-3.5 py-2.5 font-bold text-slate-900 dark:text-white">
+                              {typeof rfq.budget === 'number' && rfq.budget > 0
+                                ? formatCurrency(rfq.budget)
+                                : <span className="text-slate-400 font-normal text-[11px]">{strings.notProvided}</span>}
+                            </td>
+                            <td className="px-3.5 py-2.5">
+                              {hasSubmittedQuote ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                                  {strings.activeRfqs.quotedBadge}
+                                </span>
+                              ) : isInvited ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800">
+                                  {strings.activeRfqs.invitedBadge}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700">
+                                  {strings.activeRfqs.availableBadge}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3.5 py-2.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onSelectRFQ) {
+                                    onSelectRFQ(rfq);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors shadow-2xs"
+                                title={`Open ${rfq.rfqNumber}`}
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>{strings.activeRfqs.openRfqBtn}</span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* PAGINATION */}
+              {totalActiveRfqPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 text-xs text-slate-500">
+                  <span>
+                    Page {activeRfqPage} of {totalActiveRfqPages} ({filteredActiveRfqs.length} records)
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      aria-label="Previous active RFQ page"
+                      disabled={activeRfqPage === 1}
+                      onClick={() => setActiveRfqPage((p) => Math.max(1, p - 1))}
+                      className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Next active RFQ page"
+                      disabled={activeRfqPage === totalActiveRfqPages}
+                      onClick={() => setActiveRfqPage((p) => Math.min(totalActiveRfqPages, p + 1))}
+                      className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-40"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* FOOTER */}
@@ -1784,13 +2110,15 @@ export default function SupplierDossierDrawer({
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40">
                 <span className="text-[11px] text-slate-400">GST / Taxes</span>
                 <div className="text-base font-bold text-emerald-600 mt-0.5">
-                  {formatCurrency(selectedQuoteForModal.quote?.taxAmount || 63000)}
+                  {formatCurrency(selectedQuoteForModal.quote?.taxAmount || 0)}
                 </div>
               </div>
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40">
                 <span className="text-[11px] text-slate-400">Lead Time</span>
                 <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">
-                  {selectedQuoteForModal.quote?.leadTimeDays ? `${selectedQuoteForModal.quote.leadTimeDays} Days` : '7-14 Days'}
+                  {selectedQuoteForModal.quote?.leadTimeDays
+                    ? `${selectedQuoteForModal.quote.leadTimeDays} Days`
+                    : strings.notProvided}
                 </div>
               </div>
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40">
@@ -1819,7 +2147,7 @@ export default function SupplierDossierDrawer({
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {modalLineItems.length > 0 ? (
                       modalLineItems.map((item: any, idx: number) => {
-                        const unitRate = Number(selectedQuoteForModal.quote?.unitPrice || 70000);
+                        const unitRate = Number(selectedQuoteForModal.quote?.unitPrice || 0);
                         const lineTotal = Number(item.quantity || 1) * unitRate;
                         return (
                           <tr key={item.id || idx}>
@@ -2326,11 +2654,12 @@ export default function SupplierDossierDrawer({
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsAddQuoteCreditsModalOpen(false);
-          }}
+          onClick={() => setIsAddQuoteCreditsModalOpen(false)}
         >
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
+          <div
+            className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -2376,7 +2705,7 @@ export default function SupplierDossierDrawer({
               {/* Requested Credits */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
+                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel} <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="number"
@@ -2392,7 +2721,7 @@ export default function SupplierDossierDrawer({
               {/* Initiated By Select */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
+                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel} <span className="text-rose-500">*</span>
                 </label>
                 <select
                   value={quoteCreditInitiator}
@@ -2410,7 +2739,7 @@ export default function SupplierDossierDrawer({
               {/* Assigned Approver Select */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
+                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel} <span className="text-rose-500">*</span>
                 </label>
                 <select
                   value={quoteCreditApprover}
@@ -2454,13 +2783,13 @@ export default function SupplierDossierDrawer({
                 >
                   {isSubmittingQuoteCredits
                     ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
-                    : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submitBtn || UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.confirmBtn}
+                    : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submitBtn}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </div>
+      </div>
   );
 }

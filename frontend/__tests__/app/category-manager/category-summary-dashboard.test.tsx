@@ -961,6 +961,42 @@ describe('CategorySummaryDashboard', () => {
     fireEvent.click(screen.getByText('Close Details'));
   });
 
+  it('dismisses KPI and category details modals on backdrop click and Escape without closing on inner clicks', () => {
+    mockApp([], [], []);
+    render(<CategorySummaryDashboard />);
+
+    // 1. KPI Modal: inner click stays open, backdrop click closes
+    fireEvent.click(screen.getAllByText(/RFQs Raised/i)[0]);
+    const kpiDialog = screen.getByRole('dialog');
+    expect(kpiDialog).toBeInTheDocument();
+    fireEvent.click(within(kpiDialog).getByText(/No RFQs created in this timeframe/i));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(kpiDialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen KPI Modal and close with Escape
+    fireEvent.click(screen.getAllByText(/RFQs Raised/i)[0]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 2. Category Details Modal: inner click stays open, backdrop click closes
+    const detailsBtns = screen.getAllByRole('button', { name: /Details/i });
+    fireEvent.click(detailsBtns[0]);
+    const detailsDialog = screen.getByRole('dialog');
+    expect(detailsDialog).toBeInTheDocument();
+    fireEvent.click(within(detailsDialog).getByText('Close Details').closest('div') as HTMLElement);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(detailsDialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen Category Details Modal and close with Escape
+    fireEvent.click(screen.getAllByRole('button', { name: /Details/i })[0]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   describe('formatRating and formatContactPerson helpers', () => {
     it('formats rating correctly with fallback', () => {
       expect(formatRating(4.8)).toBe('4.8');

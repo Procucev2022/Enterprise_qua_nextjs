@@ -9,6 +9,7 @@ import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText
 import InviteVendorsModal from './InviteVendorsModal';
 import BuyerDetailsModal from './BuyerDetailsModal';
 import VendorDetailsModal from './VendorDetailsModal';
+import { useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 interface AllRFQsConsoleProps {
   /** Open the comparative quote matrix for one RFQ. */
@@ -107,6 +108,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
     rfq: RFQItem;
     mode: 'quotes' | 'assigned';
   } | null>(null);
+
+  const closeVendorListModal = (): void => setVendorListModalData(null);
+  useEscapeDismissStack([{ isOpen: vendorListModalData !== null, onClose: closeVendorListModal }]);
 
   const load = async () => {
     setLoading(true);

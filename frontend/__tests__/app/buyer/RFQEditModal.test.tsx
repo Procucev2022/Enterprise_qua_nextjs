@@ -1501,5 +1501,48 @@ describe('RFQDeleteDialog', () => {
       renderEdit(rfq);
       expect(screen.getByText('AI Extraction')).toBeInTheDocument();
     });
+
+    it('dismisses RFQEditModal and RFQDeleteDialog on Escape and backdrop click without closing on inner clicks', () => {
+      const customCloseEdit = jest.fn();
+      const customSave = jest.fn().mockResolvedValue({ rfqNumber: 'RFQ-001' });
+      const { unmount: unmountEdit } = render(
+        <RFQEditModal rfq={buildRFQ()} onClose={customCloseEdit} onSave={customSave} />
+      );
+
+      // Inner click inside dialog content must not close
+      fireEvent.click(screen.getByText(EDIT.dialogTitle));
+      expect(customCloseEdit).not.toHaveBeenCalled();
+
+      // Backdrop click closes
+      fireEvent.click(screen.getByTestId('rfq-edit-modal'));
+      expect(customCloseEdit).toHaveBeenCalledTimes(1);
+
+      // Escape key closes
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(customCloseEdit).toHaveBeenCalledTimes(2);
+      unmountEdit();
+
+      const customCloseDelete = jest.fn();
+      const customConfirm = jest.fn().mockResolvedValue(undefined);
+      render(
+        <RFQDeleteDialog
+          rfq={buildRFQ()}
+          onClose={customCloseDelete}
+          onConfirm={customConfirm}
+        />
+      );
+
+      // Inner click inside delete dialog must not close
+      fireEvent.click(screen.getByText(EDIT.deleteTitle));
+      expect(customCloseDelete).not.toHaveBeenCalled();
+
+      // Backdrop click closes
+      fireEvent.click(screen.getByTestId('rfq-delete-dialog'));
+      expect(customCloseDelete).toHaveBeenCalledTimes(1);
+
+      // Escape key closes
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(customCloseDelete).toHaveBeenCalledTimes(2);
+    });
   });
 });

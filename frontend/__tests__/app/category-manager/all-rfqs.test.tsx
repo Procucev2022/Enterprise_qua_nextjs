@@ -396,6 +396,38 @@ describe('AllRFQsConsole', () => {
     fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
+
+  it('dismisses VendorListModal on Escape and backdrop click without closing on inner clicks', async () => {
+    const multiRow = makeRfq({
+      id: '031',
+      title: 'Switchgear Assemblies',
+      status: 'Quotes Received',
+      quotesCount: 3,
+      quotes: [
+        { vendorId: 'v-1', vendorName: 'Vendor 1' },
+        { vendorId: 'v-2', vendorName: 'Vendor 2' },
+        { vendorId: 'v-3', vendorName: 'Vendor 3' },
+      ] as any,
+    });
+    mockFetch.mockResolvedValue({ success: true, rfqs: [multiRow] });
+
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Switchgear Assemblies')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /\+1 more/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/Quoted Vendors \(3\)/i));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /\+1 more/i }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
 });
 
 describe('CategoryManagerAllRFQsPage', () => {

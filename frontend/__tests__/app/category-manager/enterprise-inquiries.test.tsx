@@ -209,6 +209,32 @@ describe('EnterpriseInquiriesConsole (Category Manager)', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Lead Updated', 'Enterprise inquiry details saved.', 'success');
   });
 
+  it('dismisses manage modal on Escape and backdrop click without closing on inner clicks', async () => {
+    render(<EnterpriseInquiriesConsole />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Larsen & Toubro Heavy Engineering')).toBeInTheDocument();
+    });
+
+    const manageBtns = screen.getAllByRole('button', { name: /Manage & Notes/i });
+    fireEvent.click(manageBtns[0]);
+    expect(screen.getByText('Enterprise Contracts Inquiry Details')).toBeInTheDocument();
+
+    // Inner click must keep modal open
+    fireEvent.click(screen.getByText('Enterprise Contracts Inquiry Details'));
+    expect(screen.getByText('Enterprise Contracts Inquiry Details')).toBeInTheDocument();
+
+    // Backdrop click closes modal
+    fireEvent.click(screen.getByTestId('enterprise-inquiry-modal-backdrop'));
+    expect(screen.queryByText('Enterprise Contracts Inquiry Details')).not.toBeInTheDocument();
+
+    // Reopen and close via Escape key
+    fireEvent.click(screen.getAllByRole('button', { name: /Manage & Notes/i })[0]);
+    expect(screen.getByText('Enterprise Contracts Inquiry Details')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText('Enterprise Contracts Inquiry Details')).not.toBeInTheDocument();
+  });
+
   it('renders CategoryManagerEnterpriseInquiriesPage wrapper correctly', () => {
     const CategoryManagerEnterpriseInquiriesPage = require('@/app/category-manager/enterprise-inquiries/page').default;
     const { container } = render(<CategoryManagerEnterpriseInquiriesPage />);

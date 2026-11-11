@@ -34,6 +34,7 @@ import {
   updateDocument,
   deleteDocument,
 } from '@/lib/documentVaultClient';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 const DOC_VAULT_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'name', label: 'Document Name', visible: true, required: true },
@@ -68,6 +69,9 @@ export default function DocumentVaultDashboard() {
   const [editingDoc, setEditingDoc] = useState<DocumentVaultItem | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const closeUploadModal = (): void => setIsModalOpen(false);
+  useEscapeDismissStack([{ isOpen: isModalOpen, onClose: closeUploadModal }]);
 
   // Form states
   const [formDocName, setFormDocName] = useState<string>('');
@@ -724,6 +728,7 @@ export default function DocumentVaultDashboard() {
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          {...backdropDismissProps(closeUploadModal)}
         >
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
             <h2 className="text-base font-bold text-slate-900 dark:text-white mb-1">

@@ -27,6 +27,7 @@ import { fetchScorecardData } from '@/lib/scorecardClient';
 import type { ScorecardData, TeamScorecardRow } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 type PeriodType = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_quarter' | 'financial_year' | 'custom';
 type PillarType = 'all' | 'operations' | 'revenue' | 'sales';
@@ -84,6 +85,9 @@ export function ScorecardDashboard() {
 
   // Drilldown modal for executive
   const [drilldownExecutive, setDrilldownExecutive] = useState<TeamScorecardRow | null>(null);
+
+  const closeDrilldownModal = (): void => setDrilldownExecutive(null);
+  useEscapeDismissStack([{ isOpen: drilldownExecutive !== null, onClose: closeDrilldownModal }]);
 
   // Column customization states
   const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(() => {
@@ -980,7 +984,12 @@ export function ScorecardDashboard() {
 
       {/* Drilldown Modal for Individual Executive */}
       {drilldownExecutive && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          {...backdropDismissProps(closeDrilldownModal)}
+        >
           <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>

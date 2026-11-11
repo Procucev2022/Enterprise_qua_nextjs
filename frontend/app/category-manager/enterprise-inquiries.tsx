@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { formatIndianDateTime } from '@/lib/constants';
+import { useEscapeDismissStack, backdropDismissProps } from '@/lib/useModalDismiss';
 import {
   Building2,
   Mail,
@@ -90,6 +91,9 @@ export default function EnterpriseInquiriesConsole() {
   const [selectedInquiry, setSelectedInquiry] = useState<EnterpriseInquiry | null>(null);
   const [editingNotes, setEditingNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
+
+  const closeSelectedInquiry = (): void => setSelectedInquiry(null);
+  useEscapeDismissStack([{ isOpen: selectedInquiry !== null, onClose: closeSelectedInquiry }]);
 
   const fetchInquiries = async () => {
     setLoading(true);
@@ -560,7 +564,13 @@ export default function EnterpriseInquiriesConsole() {
       {/* LEAD DETAILS & NOTES MODAL */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {selectedInquiry && (
-        <div className="modal-overlay">
+        <div
+          className="modal-overlay"
+          data-testid="enterprise-inquiry-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          {...backdropDismissProps(closeSelectedInquiry)}
+        >
           <div className="modal-content max-w-lg p-5 sm:p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 animate-fade-in relative space-y-4">
             {/* Header */}
             <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800 gap-3">

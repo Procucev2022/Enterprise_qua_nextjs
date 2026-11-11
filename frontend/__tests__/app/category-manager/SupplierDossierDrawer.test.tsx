@@ -369,7 +369,7 @@ describe('SupplierDossierDrawer', () => {
     );
 
     // Switch to Quotes tab
-    const quotesTab = screen.getByRole('button', { name: /Quotes \(2\)/i });
+    const quotesTab = screen.getByRole('button', { name: /Quotes \(1\)/i });
     fireEvent.click(quotesTab);
 
     expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
@@ -409,7 +409,7 @@ describe('SupplierDossierDrawer', () => {
     );
 
     // Test Quote modal dismiss
-    fireEvent.click(screen.getByRole('button', { name: /Quotes \(2\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Quotes \(1\)/i }));
     fireEvent.click(screen.getByText('RFQ-2026-001'));
     expect(screen.getByText(/Quotation Details:\s*RFQ-2026-001/i)).toBeInTheDocument();
 
@@ -699,7 +699,7 @@ describe('SupplierDossierDrawer', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     // 2. Quotes: test Details button directly, stopPropagation on quote modal, Close button and backdrop click
-    fireEvent.click(screen.getByRole('button', { name: /Quotes \(2\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Quotes \(1\)/i }));
     const detailsBtns = screen.getAllByRole('button', { name: 'Details' });
     fireEvent.click(detailsBtns[0]); // direct button click
     const quoteDialog = screen.getByRole('dialog');
@@ -794,7 +794,7 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(screen.getByText('RFQ-LUMP-001'));
 
     expect(screen.getByText('Single lump-sum procurement requirement.')).toBeInTheDocument();
-    expect(screen.getByText('7-14 Days')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.notProvided || 'Not provided')).toBeInTheDocument();
 
     const viewFullBtn = screen.getByRole('button', { name: /View Full Details/i });
     fireEvent.click(viewFullBtn);
@@ -1817,6 +1817,271 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
 
     unmountComm();
 
+  });
+
+  test('Active RFQs tab renders matching RFQs, handles search, status filter, open RFQ action, and backdrop closing', async () => {
+    const onSelectRFQ = jest.fn();
+    const onClose = jest.fn();
+
+    const activeTestRfqs: any[] = [
+      {
+        id: 'rfq-active-1',
+        rfqNumber: 'RFQ-ACT-001',
+        title: 'Transformer Maintenance & Spares',
+        category: 'Engineering Spares - Electrical',
+        sourcingMode: 'mode_1',
+        status: 'Quotes Pending',
+        budget: 150000,
+        targetDeliveryDate: '2026-12-15T00:00:00.000Z',
+        deliveryLocation: 'Bengaluru Factory',
+        buyerCompanyName: 'MegaCorp Industries',
+        quotes: [
+          {
+            vendorId: mockSeller.id,
+            vendorName: mockSeller.name,
+            totalPrice: 140000,
+          },
+        ],
+        assignedVendors: [{ id: mockSeller.id, email: mockSeller.email }],
+      },
+      {
+        id: 'rfq-active-2',
+        rfqNumber: 'RFQ-ACT-002',
+        title: 'Factory Safety Gear & Supplies',
+        category: 'Industrial Supplies',
+        sourcingMode: 'mode_2',
+        status: 'In Evaluation',
+        budget: 0,
+        targetDeliveryDate: '2026-12-20T00:00:00.000Z',
+        deliveryLocation: 'Pune Plant',
+        buyerCompanyName: 'AutoMfg Pvt Ltd',
+        quotes: [],
+        assignedVendors: [{ id: mockSeller.id, email: mockSeller.email }],
+      },
+      {
+        id: 'rfq-closed-1',
+        rfqNumber: 'RFQ-CLOSED-001',
+        title: 'Old Electrical Equipment',
+        category: 'Engineering Spares - Electrical',
+        status: 'Closed',
+        quotes: [],
+      },
+    ];
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        onClose={onClose}
+        onSelectRFQ={onSelectRFQ}
+        sellerRfqs={activeTestRfqs}
+      />
+    );
+
+    // Click on Active RFQs tab
+    const activeRfqsBtn = screen.getByRole('button', { name: /Active RFQs/i });
+    expect(activeRfqsBtn).toBeInTheDocument();
+    fireEvent.click(activeRfqsBtn);
+
+    // Verify Active RFQs are shown and closed RFQ is excluded
+    expect(screen.getByText('RFQ-ACT-001')).toBeInTheDocument();
+    expect(screen.getByText('Transformer Maintenance & Spares')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-ACT-002')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-CLOSED-001')).not.toBeInTheDocument();
+
+    // Verify badges (quoted vs invited)
+    expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.quotedBadge)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.invitedBadge)).toBeInTheDocument();
+
+    // Click Open RFQ button
+    const openBtns = screen.getAllByRole('button', { name: /Open RFQ/i });
+    fireEvent.click(openBtns[0]);
+    expect(onSelectRFQ).toHaveBeenCalledWith(activeTestRfqs[0]);
+
+    // Search filter
+    const searchInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.searchPlaceholder);
+    fireEvent.change(searchInput, { target: { value: 'Transformer' } });
+    expect(screen.getByText('RFQ-ACT-001')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-ACT-002')).not.toBeInTheDocument();
+
+    // Clear search and test status filter
+    fireEvent.change(searchInput, { target: { value: '' } });
+    const statusSelect = screen.getByLabelText(/Filter active RFQs by status/i);
+    fireEvent.change(statusSelect, { target: { value: 'In Evaluation' } });
+    expect(screen.getByText('RFQ-ACT-002')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-ACT-001')).not.toBeInTheDocument();
+
+    // Empty search result
+    fireEvent.change(searchInput, { target: { value: 'UnmatchedQueryXYZ' } });
+    expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.noActiveRfqs)).toBeInTheDocument();
+
+    // Backdrop click closes drawer
+    const backdrop = screen.getByTestId('supplier-dossier-backdrop');
+    fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalled();
+
+    // Clicks inside drawer do not close drawer (stopPropagation)
+    onClose.mockClear();
+    const region = screen.getByRole('region', { name: 'Supplier 360° Dossier' });
+    fireEvent.click(region);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Escape key closes drawer when no submodals open
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test('Active RFQs pagination, sparse data fallbacks, search by buyer/category, and onTabChange', () => {
+    const onTabChange = jest.fn();
+    const sparseSeller = {
+      id: 'v-sparse-active',
+      name: 'Sparse Motors Ltd',
+      vendorSelectedCategories: ['Motors & Drives'],
+      email: '',
+      phone: '',
+      subscriptionPlan: '',
+      rating: 0,
+      score360: 0,
+    };
+
+    // 12 active RFQs to trigger pagination (> 10 items)
+    const paginatedRfqs: any[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `rfq-page-${i + 1}`,
+      rfqNumber: `RFQ-PAGE-${String(i + 1).padStart(3, '0')}`,
+      title: `Procurement Batch ${i + 1}`,
+      category: 'Motors & Drives',
+      sourcingMode: i % 2 === 0 ? 'mode_1' : undefined,
+      status: 'Quotes Pending',
+      budget: i === 0 ? 0 : 50000 * (i + 1),
+      targetDeliveryDate: i === 0 ? undefined : '2026-12-30T00:00:00.000Z',
+      deliveryLocation: i === 0 ? undefined : 'Bangalore',
+      companyName: i === 0 ? undefined : `BuyerOrg-${i + 1}`,
+      buyerCompanyName: i === 0 ? undefined : `BuyerOrg-${i + 1}`,
+      raisedByEmail: i === 0 ? 'buyer-zero@procucev.com' : undefined,
+      quotes: [],
+      assignedVendors: [],
+    }));
+
+    const { unmount } = render(
+      <SupplierDossierDrawer
+        seller={sparseSeller}
+        onClose={jest.fn()}
+        initialTab="active_rfqs"
+        onTabChange={onTabChange}
+        sellerRfqs={paginatedRfqs}
+      />
+    );
+
+    // Initial tab active_rfqs
+    expect(screen.getByText('RFQ-PAGE-001')).toBeInTheDocument();
+    expect(screen.getAllByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.availableBadge).length).toBeGreaterThan(0);
+    expect(screen.getByText('buyer-zero@procucev.com')).toBeInTheDocument();
+    expect(screen.getAllByText(UI_STRINGS.sellerDirectory.dossier.notSpecified).length).toBeGreaterThan(0);
+
+    // Check pagination controls
+    const nextBtn = screen.getByRole('button', { name: /Next active RFQ page/i });
+    const prevBtn = screen.getByRole('button', { name: /Previous active RFQ page/i });
+    expect(prevBtn).toBeDisabled();
+    expect(nextBtn).not.toBeDisabled();
+
+    // Go to page 2
+    fireEvent.click(nextBtn);
+    expect(screen.getByText('RFQ-PAGE-011')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-PAGE-012')).toBeInTheDocument();
+    expect(nextBtn).toBeDisabled();
+    expect(prevBtn).not.toBeDisabled();
+
+    // Go back to page 1
+    fireEvent.click(prevBtn);
+    expect(screen.getByText('RFQ-PAGE-001')).toBeInTheDocument();
+
+    // Search by category
+    const searchInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.searchPlaceholder);
+    fireEvent.change(searchInput, { target: { value: 'Motors' } });
+    expect(screen.getByText('RFQ-PAGE-001')).toBeInTheDocument();
+
+    // Search by buyer organization
+    fireEvent.change(searchInput, { target: { value: 'BuyerOrg-5' } });
+    expect(screen.getByText('RFQ-PAGE-005')).toBeInTheDocument();
+
+    // Switch tabs to trigger onTabChange
+    fireEvent.click(screen.getByRole('button', { name: /^Profile$/i }));
+    expect(onTabChange).toHaveBeenCalledWith('profile');
+
+    unmount();
+  });
+
+  test('covers Active RFQs exclusions, root-matching, expired deadline, and compose channel branches', () => {
+    const seller = {
+      id: 'v-root-test',
+      name: 'Roots Vendor',
+      companyName: 'Roots Vendor Org',
+      email: 'roots@test.com',
+      phone: '',
+      categories: ['Motors and Drives'],
+    };
+
+    const edgeRfqs: any[] = [
+      // 1. Excluded: draft
+      { id: 'rfq-ex-1', rfqNumber: 'RFQ-EX-1', status: 'draft', category: 'Motors and Drives' },
+      // 2. Excluded: po generated
+      { id: 'rfq-ex-2', rfqNumber: 'RFQ-EX-2', status: 'PO Generated', category: 'Motors and Drives' },
+      // 3. Excluded: rejected
+      { id: 'rfq-ex-3', rfqNumber: 'RFQ-EX-3', status: 'rejected', category: 'Motors and Drives' },
+      // 4. Excluded: poFinalised true
+      { id: 'rfq-ex-4', rfqNumber: 'RFQ-EX-4', status: 'Quotes Pending', poFinalised: true, category: 'Motors and Drives' },
+      // 5. Excluded: poNumber present
+      { id: 'rfq-ex-5', rfqNumber: 'RFQ-EX-5', status: 'Quotes Pending', poNumber: 'PO-999', category: 'Motors and Drives' },
+      // 6. Excluded: expired deadline
+      {
+        id: 'rfq-ex-6',
+        rfqNumber: 'RFQ-EX-6',
+        status: 'Quotes Pending',
+        category: 'Motors and Drives',
+        targetDate: '2020-01-01T00:00:00.000Z',
+      },
+      // 7. Excluded: no category
+      { id: 'rfq-ex-7', rfqNumber: 'RFQ-EX-7', status: 'Quotes Pending', category: '' },
+      // 8. Included: majorCategory fallback, matches root
+      {
+        id: 'rfq-in-1',
+        rfqNumber: 'RFQ-IN-1',
+        title: 'Single Root Motor',
+        status: 'Quotes Pending',
+        majorCategory: 'Motor and Drive',
+        quotes: [{ vendorEmail: 'roots@test.com', totalPrice: 10000 }],
+        assignedVendors: [{ email: 'roots@test.com' }],
+      },
+    ];
+
+    const { unmount } = render(
+      <SupplierDossierDrawer
+        seller={seller}
+        onClose={jest.fn()}
+        initialTab="active_rfqs"
+        sellerRfqs={edgeRfqs}
+      />
+    );
+
+    // Active opportunity count 1
+    expect(screen.getByText('RFQ-IN-1')).toBeInTheDocument();
+    expect(screen.getByText('1 Active Opportunity')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-EX-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-EX-6')).not.toBeInTheDocument();
+    unmount();
+
+    // Test compose channel recipient with email only seller
+    const { unmount: unmountCompose } = render(
+      <SupplierDossierDrawer
+        seller={{ id: 'v-comm-sparse', name: 'Comm Sparse', email: 'comm@sparse.com', phone: '' }}
+        onClose={jest.fn()}
+        initialTab="communications"
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Record Communication/i }));
+    const channelSelect = screen.getByDisplayValue('Email');
+    fireEvent.change(channelSelect, { target: { value: 'SMS' } });
+    fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
+    unmountCompose();
   });
 
 });

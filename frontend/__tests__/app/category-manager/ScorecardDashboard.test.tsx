@@ -729,4 +729,30 @@ describe('ScorecardDashboard', () => {
     const sortConvBtn = screen.getByTestId('scorecard-sort-conversionRates');
     fireEvent.click(sortConvBtn);
   });
+
+  it('dismisses executive drilldown modal on backdrop click and Escape without closing on inner clicks', async () => {
+    render(<ScorecardDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Pavani "Chief" Reddy')).toBeInTheDocument();
+    });
+
+    const viewDetailsButtons = screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.scorecard.viewDetails });
+    fireEvent.click(viewDetailsButtons[0]);
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(UI_STRINGS.actionCenter.scorecard.executivePerformanceTitle));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.scorecard.viewDetails })[0]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

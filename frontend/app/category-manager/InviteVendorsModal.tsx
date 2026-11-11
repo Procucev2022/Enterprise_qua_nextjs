@@ -31,6 +31,7 @@ import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
 import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 // "All Vendors" can legitimately span tens of thousands of rows (the real
 // directory is 80k+ vendors) — fetched and rendered a page at a time rather
@@ -95,6 +96,12 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
   // Add New Vendor (V0 & V2 feature)
   const [showAddVendorModal, setShowAddVendorModal] = useState(false);
+
+  const closeAddVendorModal = (): void => setShowAddVendorModal(false);
+  useEscapeDismissStack([
+    { isOpen: showAddVendorModal, onClose: closeAddVendorModal },
+    { isOpen, onClose },
+  ]);
   const [creatingVendor, setCreatingVendor] = useState(false);
   const [addVendorError, setAddVendorError] = useState<string | null>(null);
   const [newVendorName, setNewVendorName] = useState('');
@@ -599,6 +606,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       aria-modal="true"
       aria-labelledby="invite-vendors-modal-title"
       data-testid="invite-vendors-modal"
+      {...backdropDismissProps(onClose)}
     >
       <div className="w-full max-w-4xl lg:max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
         {/* Header */}
@@ -1033,6 +1041,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
           aria-modal="true"
           aria-labelledby="add-new-vendor-title"
           data-testid="add-vendor-modal"
+          {...backdropDismissProps(closeAddVendorModal)}
         >
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden animate-scale-up">
             <header className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-gray-800">

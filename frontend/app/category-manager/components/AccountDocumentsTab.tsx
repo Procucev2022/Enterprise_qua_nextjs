@@ -32,6 +32,7 @@ import {
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { AccountDocument } from '@/lib/types';
+import { backdropDismissProps, useEscapeDismissStack } from '@/lib/useModalDismiss';
 
 interface AccountDocumentsTabProps {
   accountType: 'buyer' | 'seller';
@@ -100,6 +101,15 @@ export default function AccountDocumentsTab({
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [previewDoc, setPreviewDoc] = useState<AccountDocument | null>(null);
   const [deleteConfirmDoc, setDeleteConfirmDoc] = useState<AccountDocument | null>(null);
+
+  const closeUploadModal = (): void => setIsUploadModalOpen(false);
+  const closePreviewDocModal = (): void => setPreviewDoc(null);
+  const closeDeleteConfirmModal = (): void => setDeleteConfirmDoc(null);
+  useEscapeDismissStack([
+    { isOpen: deleteConfirmDoc !== null, onClose: closeDeleteConfirmModal },
+    { isOpen: previewDoc !== null, onClose: closePreviewDocModal },
+    { isOpen: isUploadModalOpen, onClose: closeUploadModal },
+  ]);
 
   // Upload Form state
   const [uploadName, setUploadName] = useState<string>('');
@@ -535,6 +545,7 @@ export default function AccountDocumentsTab({
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          {...backdropDismissProps(closeUploadModal)}
         >
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
@@ -666,6 +677,7 @@ export default function AccountDocumentsTab({
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          {...backdropDismissProps(closePreviewDocModal)}
         >
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-4xl w-full h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             {/* Header */}
@@ -748,6 +760,7 @@ export default function AccountDocumentsTab({
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          {...backdropDismissProps(closeDeleteConfirmModal)}
         >
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3">

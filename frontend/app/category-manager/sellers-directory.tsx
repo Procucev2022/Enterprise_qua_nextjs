@@ -202,6 +202,17 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     saveColumns(DEFAULT_SELLER_DIRECTORY_COLUMNS);
   };
 
+  // Global escape key listener to close column settings modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showColumnSettings) {
+        setShowColumnSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showColumnSettings]);
+
   // Reset to first page when search or filters change
   useEffect(() => {
     setCurrentPage(1);
@@ -276,18 +287,18 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         majorCategory: (v as any).majorCategory || (v as any).category || 'Industrial Supplies',
         category: (v as any).majorCategory || (v as any).category || 'Industrial Supplies',
         minorCategories: Array.isArray((v as any).minorCategories) ? (v as any).minorCategories : [],
-        score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : 88,
-        score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : 88,
-        rating: typeof (v as any).rating === 'number' ? (v as any).rating : 4.5,
+        score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : (typeof (v as any).score === 'number' ? (v as any).score : 0),
+        score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : (typeof (v as any).score === 'number' ? (v as any).score : 0),
+        rating: typeof (v as any).rating === 'number' ? (v as any).rating : 0,
         status: (v as any).status || 'ACTIVE',
-        subscriptionPlan: (v as any).subscriptionPlan || 'Preferred Partner',
+        subscriptionPlan: (v as any).subscriptionPlan || 'Free Tier',
         // Plan balance for Connect/Select subscribers, free-tier balance otherwise.
         freeQuotationCredits: getVendorCreditBalance(v as any),
         rfqDownloadsUsed: (v as any).rfqDownloadsUsed ?? 0,
-        gstNumber: (v as any).gstNumber || '27AAACG0000A1Z5',
-        panNumber: (v as any).panNumber || 'AAACG0000A',
+        gstNumber: (v as any).gstNumber || (v as any).gstin || '',
+        panNumber: (v as any).panNumber || (v as any).pan || '',
         isNetwork: true,
-        createdAt: (v as any).createdAt || (v as any).created_at || '2026-03-01T10:00:00.000Z',
+        createdAt: (v as any).createdAt || (v as any).created_at || '',
       });
     });
 
@@ -316,17 +327,27 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           majorCategory: bv.majorCategory || 'Custom Client Category',
           category: bv.majorCategory || 'Custom Client Category',
           minorCategories: Array.isArray(bv.minorCategories) ? bv.minorCategories : [],
-          score: Math.round(Number((bv as any).qualityScore || bv.score || 85)),
-          score360: Math.round(Number((bv as any).qualityScore || bv.score || 85)),
-          rating: Number(bv.rating || 4.2),
-          status: 'VERIFIED_CLIENT_LIST',
-          subscriptionPlan: 'Verified Supplier',
+          score:
+            (bv as any).qualityScore !== undefined && !isNaN(Number((bv as any).qualityScore))
+              ? Math.round(Number((bv as any).qualityScore))
+              : ((bv as any).score !== undefined && !isNaN(Number((bv as any).score))
+                ? Math.round(Number((bv as any).score))
+                : 0),
+          score360:
+            (bv as any).qualityScore !== undefined && !isNaN(Number((bv as any).qualityScore))
+              ? Math.round(Number((bv as any).qualityScore))
+              : ((bv as any).score !== undefined && !isNaN(Number((bv as any).score))
+                ? Math.round(Number((bv as any).score))
+                : 0),
+          rating: typeof bv.rating === 'number' ? bv.rating : 0,
+          status: bv.status || 'VERIFIED_CLIENT_LIST',
+          subscriptionPlan: bv.subscriptionPlan || 'Free Tier',
           freeQuotationCredits: getVendorCreditBalance(bv as any),
           rfqDownloadsUsed: (bv as any).rfqDownloadsUsed ?? 0,
-          gstNumber: (bv as any).gstNumber || '27AAACB1111B1Z6',
-          panNumber: (bv as any).panNumber || 'AAACB1111B',
+          gstNumber: (bv as any).gstNumber || (bv as any).gstin || '',
+          panNumber: (bv as any).panNumber || (bv as any).pan || '',
           isNetwork: false,
-          createdAt: (bv as any).createdAt || (bv as any).created_at || '2026-03-01T10:00:00.000Z',
+          createdAt: (bv as any).createdAt || (bv as any).created_at || '',
         });
       }
     });
@@ -878,9 +899,13 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           role="dialog"
           aria-modal="true"
           aria-label="Customize Columns"
+          onClick={() => setShowColumnSettings(false)}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+          >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />

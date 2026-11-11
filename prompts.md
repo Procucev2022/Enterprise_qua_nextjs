@@ -8883,3 +8883,93 @@ use sudheer.kangala @procucev.com , srinivas.mukku@procucev.com
 ```text
 please check the pr and pass the all coverages and AI review and gemini pr check and merge in Test-v3
 ```
+
+---
+
+### Prompt 112
+
+**Timestamp**: 2026-11-10T20:47:00+05:30
+
+```text
+Supplier 360° Dossier – Required Updates
+
+Add Active RFQs Section: Add a new Active RFQs tab immediately after Documents. Display only currently active RFQs matching the supplier’s registered categories. Exclude closed, expired, and cancelled RFQs. Show relevant RFQ details and allow users to open each RFQ.
+
+Fix Quote & Credit Utilization: The supplier currently shows 2 quotes but 5 credits. Verify the actual quote submissions, available credits, and credit transaction history from the database. Display accurate credit usage and utilization. Do not use hardcoded or dummy values.
+
+Remove Dummy Data: Remove all mock/test data from the development environment and ensure every displayed field is populated using genuine database records and existing APIs.
+
+Global Popup Behaviour: Across all Category Manager sections, close any open modal, popup, or drawer when the user clicks outside it. Also support closing with the Escape key. Ensure clicks inside the popup do not close it.
+
+Important: Reuse existing APIs, database models, and business logic. Fix the root causes, verify all functionality end-to-end, and do not break existing features.
+```
+
+---
+
+### Prompt 113
+
+**Timestamp**: 2026-11-10T20:50:49+05:30
+
+```text
+Supplier 360° Dossier – Required Updates
+
+Add Active RFQs Section: Add a new Active RFQs tab immediately after Documents. Display only currently active RFQs matching the supplier’s registered categories. Exclude closed, expired, and cancelled RFQs. Show relevant RFQ details and allow users to open each RFQ.
+
+Fix Quote & Credit Utilization: The supplier currently shows 2 quotes but 5 credits. Verify the actual quote submissions, available credits, and credit transaction history from the database. Display accurate credit usage and utilization. Do not use hardcoded or dummy values.
+
+Remove Dummy Data: Remove all mock/test data from the development environment and ensure every displayed field is populated using genuine database records and existing APIs.
+
+Global Popup Behaviour: Across all Category Manager sections, close any open modal, popup, or drawer when the user clicks outside it. Also support closing with the Escape key. Ensure clicks inside the popup do not close it.
+
+Important: Reuse existing APIs, database models, and business logic. Fix the root causes, verify all functionality end-to-end, and do not break existing features.
+```
+
+---
+
+### Prompt 114
+
+**Timestamp**: 2026-11-10T21:05:00+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 115
+
+**Timestamp**: 2026-11-10T21:10:00+05:30
+
+```text
+All the files changes are not showing in source contol please continue and fix this issue as soon as possible very fast it is running from since 4 hr
+```
+
+---
+
+### Prompt 116
+
+**Timestamp**: 2026-11-10T21:14:40+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 117
+
+**Timestamp**: 2026-11-10T22:00:20+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 118
+
+**Timestamp**: 2026-11-11T08:32:32+05:30
+
+```text
+continue and  pass the coverages ans eploy it is running from 20 hr
+```

@@ -288,7 +288,7 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.getByText('RFQ-NET-001')).toBeInTheDocument();
 
     // Open quote details modal
-    fireEvent.click(screen.getByText('RFQ-NET-001'));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     const viewFullBtn = screen.getByRole('button', { name: /View Full Details/i });
     fireEvent.click(viewFullBtn);
     expect(onSelectRFQ).toHaveBeenCalled();
@@ -385,7 +385,7 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(rfqTab);
 
     // Click quote to open modal and click View Full Details
-    fireEvent.click(screen.getByText('RFQ-NET-001'));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     const viewFullBtn = screen.getByRole('button', { name: /View Full Details/i });
     fireEvent.click(viewFullBtn);
 
@@ -420,7 +420,7 @@ describe('SellersDirectory Component Suite', () => {
     const dossierBtns = screen.getAllByText('360° Dossier');
     // Clicking dossier must not throw "TypeError: can't access property toLowerCase, activeSeller.email is null"
     expect(() => fireEvent.click(dossierBtns[0])).not.toThrow();
-    expect(screen.getByText('supplier@procucev.com')).toBeInTheDocument();
+    expect(screen.getAllByText('Not provided').length).toBeGreaterThan(0);
   });
   test('opens and interacts with Column Settings modal, toggling columns and resetting', async () => {
     (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
