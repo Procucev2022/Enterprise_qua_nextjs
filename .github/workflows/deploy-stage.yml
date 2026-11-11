@@ -1,9 +1,10 @@
-name: Deploy to Cloudflare (Development)
+name: Deploy to Cloudflare (stage Environment)
 
 on:
   push:
     branches:
-      - main
+      - stage
+      - 'stage-*'
   workflow_dispatch:
 
 concurrency:
@@ -36,9 +37,9 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-          npm ci --prefix frontend --legacy-peer-deps || npm install --prefix frontend --legacy-peer-deps
-          npm ci --prefix backend --legacy-peer-deps || npm install --prefix backend --legacy-peer-deps
+          npm ci --include=optional --legacy-peer-deps || npm install --include=optional --legacy-peer-deps
+          npm ci --include=optional --prefix frontend --legacy-peer-deps || npm install --include=optional --prefix frontend --legacy-peer-deps
+          npm ci --include=optional --prefix backend --legacy-peer-deps || npm install --include=optional --prefix backend --legacy-peer-deps
 
       - name: Enforce Workspace Unit Tests & 90% Per-File Coverage
         run: npm run test:coverage
@@ -62,15 +63,20 @@ jobs:
           WRANGLER_ENV: dev
         working-directory: frontend
 
-      - name: Deploy Frontend to Cloudflare (Dev Environment)
-        run: npx wrangler deploy --env dev
+      - name: Deploy Frontend to Cloudflare (Stage Environment)
+        run: >
+          npx wrangler deploy
+          --config dist/server/wrangler.json
+          --name procucev-enterprise-frontend-stage
+          --var NODE_BACKEND_URL:https://procucev-enterprise-backend-stage.srinivas-mukku.workers.dev
+          --var NEXT_PUBLIC_BACKEND_URL:https://procucev-enterprise-backend-stage.srinivas-mukku.workers.dev
         working-directory: frontend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Deploy Backend Worker to Cloudflare (Dev Environment)
-        run: npx wrangler deploy --env dev
+      - name: Deploy Backend Worker to Cloudflare (Stage Environment)
+        run: npx wrangler deploy --config wrangler.jsonc --env dev
         working-directory: backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

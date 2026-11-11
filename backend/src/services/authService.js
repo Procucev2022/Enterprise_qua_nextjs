@@ -19,8 +19,6 @@ const d1Bridge = require('../db/d1Bridge');
 const { getWaitUntil } = d1Bridge;
 const vendorPresenceService = require('./vendorPresenceService');
 
-const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
-
 /**
  * Resolve the session-signing key.
  *
@@ -54,7 +52,12 @@ function resolveAuthSecret(env = process.env) {
   return ephemeral;
 }
 
-const AUTH_SECRET = resolveAuthSecret();
+let authSecret;
+
+function getAuthSecret() {
+  if (!authSecret) authSecret = resolveAuthSecret();
+  return authSecret;
+}
 
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
 
@@ -244,7 +247,7 @@ function generateSessionToken(user, options = {}) {
   ).toString('base64url');
 
   const signature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', getAuthSecret())
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -283,7 +286,7 @@ function verifySessionToken(token) {
 
   const [header, payload, signature] = parts;
   const expectedSignature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', getAuthSecret())
     .update(`${header}.${payload}`)
     .digest('base64url');
 
