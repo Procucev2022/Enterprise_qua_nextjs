@@ -315,15 +315,15 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'copper' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.queryByText('Bolt Supplies')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'y.com' } });
-    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: '' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
   });
 

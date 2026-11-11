@@ -496,19 +496,17 @@ describe('audit and classification logs', () => {
     expect(pool.rows.mock.calls.at(-1)[1]).toEqual([ORG, SESSION, 500, 10]);
   });
 
-  test.each([undefined, null, { classified: true }])('records classification metadata and an optional JSON result: %p', async (response) => {
-    expect(await queries.insertAiClassificationLog({ sessionId: SESSION, organizationId: ORG, response, attempt: response ? 2 : 0 })).toEqual(RECORD);
-    expect(pool.query.mock.calls[0][1][7]).toBe(response ? 2 : 1);
-    expect(pool.query.mock.calls[0][1].at(-1)).toBe(response ? JSON.stringify(response) : null);
-    pool.query.mockResolvedValue({ rows: [] });
-    expect(await queries.insertAiClassificationLog({ sessionId: SESSION, organizationId: ORG })).toBeNull();
+  test.each([undefined, null, { classified: true }])('records in-memory classification metadata and an optional JSON result: %p', async (response) => {
+    const res = await queries.insertAiClassificationLog({ sessionId: SESSION, organizationId: ORG, response, attempt: response ? 2 : 0 });
+    expect(res).toBeDefined();
+    expect(res.sessionId).toBe(SESSION);
+    expect(res.organizationId).toBe(ORG);
+    expect(res.response).toEqual(response || null);
+    expect(res.attempt).toBe(response ? 2 : 1);
   });
 
-  test('maps classification metrics and caps log retrieval', async () => {
-    pool.rows.mockResolvedValue([{ id: 'ai-log', vendor_code: ' V1 ', attempt: '2', prompt_chars: '100', po_count: '3', duration_ms: '50', error: null }]);
-    expect(await queries.findAiClassificationLogs(SESSION, ORG)).toEqual([expect.objectContaining({ id: 'ai-log', vendorCode: 'V1', attempt: 2, promptChars: 100, poCount: 3, durationMs: 50, error: '' })]);
-    expect(pool.rows.mock.calls[0][1]).toEqual([SESSION, ORG, 200]);
-    await queries.findAiClassificationLogs(SESSION, ORG, { limit: 1000 });
-    expect(pool.rows.mock.calls.at(-1)[1]).toEqual([SESSION, ORG, 500]);
+  test('returns empty classification logs without querying dropped database table', async () => {
+    expect(await queries.findAiClassificationLogs(SESSION, ORG)).toEqual([]);
+    expect(await queries.findAiClassificationLogs(SESSION, ORG, { limit: 1000 })).toEqual([]);
   });
 });

@@ -4092,6 +4092,43 @@ describe('demo RFQ seeding', () => {
       expect(v1Updated.isBestPrice).toBe(true);
     });
 
+    test('_reconcileRFQFollowUpStats accurately reconciles totalInvited from channels and respondedCount from quotes', () => {
+      const rfqWithChannelFollowUps = {
+        id: 'rfq-channel-followup-1',
+        rfqNumber: 'RFQ2611111076144',
+        title: 'Quotation 2026-27/329',
+        status: 'In Evaluation',
+        assignedVendors: [],
+        quotesCount: 1,
+        quotes: [
+          {
+            id: 'q-101',
+            vendorName: 'Vendor One',
+            vendorEmail: 'vendor1@example.com',
+            totalPrice: 15000,
+          },
+        ],
+        followUpData: {
+          rfqNumber: 'RFQ2611111076144',
+          totalInvited: 0,
+          respondedCount: 0,
+          whatsappStats: { total: 4, delivered: 4, read: 2 },
+          smsStats: { total: 4, delivered: 4, clicked: 1 },
+          emailStats: { total: 4, delivered: 4, sent24h: 1 },
+          vendors: [
+            { vendorName: 'Vendor One', email: 'vendor1@example.com', bidStatus: 'Pending', overallStatus: 'Chasing' },
+            { vendorName: 'Vendor Two', email: 'vendor2@example.com', bidStatus: 'Pending', overallStatus: 'Chasing' },
+          ],
+        },
+      };
+
+      const reconciled = storeService._reconcileRFQFollowUpStats(rfqWithChannelFollowUps);
+      expect(reconciled.followUpData.totalInvited).toBe(4);
+      expect(reconciled.followUpData.respondedCount).toBe(1);
+      expect(reconciled.followUpData.vendors[0].bidStatus).toBe('Submitted');
+      expect(reconciled.followUpData.vendors[0].overallStatus).toBe('Responded');
+    });
+
     test('resolveBuyerEmailForRFQ resolves corporateEmail, falls back to raisedByEmail, or returns null', () => {
       expect(storeService.resolveBuyerEmailForRFQ(null)).toBeNull();
 

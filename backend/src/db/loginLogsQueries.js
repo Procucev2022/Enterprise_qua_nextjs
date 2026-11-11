@@ -152,67 +152,7 @@ if (process.env.NODE_ENV === 'test') {
 async function listLoginLogs(options = {}) {
   const { userType, status, search, startDate, endDate, dateRangePreset, page = 1, limit = 50 } = options;
 
-  const sanitizedPage = Math.max(1, parseInt(page, 10) || 1);
-  const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
-  const offset = (sanitizedPage - 1) * sanitizedLimit;
-
-  if (pool && pool.hasStorage && pool.hasStorage()) {
-    try {
-      const conditions = [];
-      const values = [];
-      let idx = 1;
-
-      if (userType && userType !== 'all') {
-        conditions.push(`LOWER(user_type) = $${idx++}`);
-        values.push(userType.toLowerCase());
-      }
-
-      if (status && status !== 'all') {
-        conditions.push(`status = $${idx++}`);
-        values.push(status);
-      }
-
-      if (search && typeof search === 'string' && search.trim()) {
-        const escaped = `%${escapeLikeWildcards(search.trim().toLowerCase())}%`;
-        conditions.push(`(LOWER(user_name) LIKE $${idx} ESCAPE '\\' OR LOWER(email) LIKE $${idx + 1} ESCAPE '\\' OR LOWER(company_name) LIKE $${idx + 2} ESCAPE '\\' OR LOWER(phone_number) LIKE $${idx + 3} ESCAPE '\\')`);
-        values.push(escaped, escaped, escaped, escaped);
-        idx += 4;
-      }
-
-      const validStart = safeIsoDate(startDate);
-      if (validStart) {
-        conditions.push(`login_at >= $${idx++}`);
-        values.push(validStart);
-      }
-
-      const validEnd = safeIsoDate(endDate);
-      if (validEnd) {
-        conditions.push(`login_at <= $${idx++}`);
-        values.push(validEnd);
-      }
-
-      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      const countRes = await pool.query(`SELECT COUNT(*) as total FROM user_login_logs ${whereClause}`, values);
-      const total = parseInt(countRes.rows[0]?.total || 0, 10);
-
-      const limitParamIdx = idx++;
-      const offsetParamIdx = idx++;
-      const queryText = `SELECT * FROM user_login_logs ${whereClause} ORDER BY login_at DESC LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}`;
-      const queryValues = [...values, sanitizedLimit, offset];
-
-      const result = await pool.query(queryText, queryValues);
-      return {
-        logs: result.rows.map(mapRow),
-        total,
-        page: sanitizedPage,
-        totalPages: Math.ceil(total / sanitizedLimit) || 1,
-      };
-    } catch (err) {
-      logger.warn('listLoginLogs: query failed, falling back to memory', { error: err.message }, 'LOGIN_LOGS_QUERIES');
-    }
-  }
-
-  // In-memory fallback
+  // In-memory telemetry repository (table user_login_logs dropped per migration 0029)
   let items = Array.from(inMemoryLogs.values());
 
   if (userType && userType !== 'all') {
@@ -276,58 +216,6 @@ async function listLoginLogs(options = {}) {
  * Returns summary KPI metrics for the real-time login logs dashboard.
  */
 async function getLoginLogsSummary() {
-  if (pool && pool.hasStorage && pool.hasStorage()) {
-    try {
-      const now = new Date();
-      now.setHours(0, 0, 0, 0);
-      const startOfTodayIso = now.toISOString();
-
-      const todayRes = await pool.query(
-        'SELECT COUNT(*) as count FROM user_login_logs WHERE login_at >= $1',
-        [startOfTodayIso],
-        { d1: true }
-      );
-      const activeRes = await pool.query(
-        "SELECT COUNT(*) as count FROM user_login_logs WHERE status = 'ACTIVE'",
-        [],
-        { d1: true }
-      );
-      const buyerRes = await pool.query(
-        "SELECT COUNT(*) as count FROM user_login_logs WHERE LOWER(user_type) = 'buyer'",
-        [],
-        { d1: true }
-      );
-      const sellerRes = await pool.query(
-        "SELECT COUNT(*) as count FROM user_login_logs WHERE LOWER(user_type) IN ('seller', 'vendor', 'supplier')",
-        [],
-        { d1: true }
-      );
-      const durationRes = await pool.query(
-        "SELECT AVG(duration_seconds) as avg_sec FROM user_login_logs WHERE duration_seconds > 0",
-        [],
-        { d1: true }
-      );
-
-      const totalToday = parseInt(todayRes.rows[0]?.count || 0, 10);
-      const activeNow = parseInt(activeRes.rows[0]?.count || 0, 10);
-      const buyerLogins = parseInt(buyerRes.rows[0]?.count || 0, 10);
-      const sellerLogins = parseInt(sellerRes.rows[0]?.count || 0, 10);
-      const avgDurationSec = parseFloat(durationRes.rows[0]?.avg_sec || 0);
-      const avgDurationMinutes = Math.round(avgDurationSec / 60) || 0;
-
-      return {
-        totalToday,
-        activeNow,
-        buyerLogins,
-        sellerLogins,
-        avgDurationMinutes,
-        todayPeakHour: totalToday > 0 ? 'Live Telemetry Active' : 'None',
-      };
-    } catch (err) {
-      logger.warn('getLoginLogsSummary: DB query failed, falling back to memory', { error: err.message }, 'LOGIN_LOGS_QUERIES');
-    }
-  }
-
   const items = Array.from(inMemoryLogs.values());
   const now = new Date();
   now.setHours(0, 0, 0, 0);
@@ -400,34 +288,11 @@ async function recordLoginLog(data) {
 
   inMemoryLogs.set(id, entry);
 
-  if (pool && pool.hasStorage && pool.hasStorage()) {
-    try {
-      await pool.query(
-        `INSERT INTO user_login_logs 
-          (id, user_id, user_name, email, phone_number, company_name, user_type, login_at, status, ip_address, device_info, location, user_agent, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-        [
-          entry.id,
-          entry.userId,
-          entry.userName,
-          entry.email,
-          entry.phoneNumber,
-          entry.companyName,
-          entry.userType,
-          entry.loginAt,
-          entry.status,
-          entry.ipAddress,
-          entry.deviceInfo,
-          entry.location,
-          entry.userAgent,
-          entry.createdAt,
-          entry.updatedAt,
-        ]
-      );
-    } catch (err) {
-      logger.warn('recordLoginLog: DB insert failed, preserved in memory', { error: err.message }, 'LOGIN_LOGS_QUERIES');
-    }
-  }
+  logger.info(
+    `Recorded login event for ${entry.email} (${entry.userType})`,
+    { id: entry.id, email: entry.email, userType: entry.userType, ipAddress: entry.ipAddress },
+    'AUTH_LOGIN'
+  );
 
   return entry;
 }
@@ -451,16 +316,11 @@ async function recordLogoutLog({ email, userUuid, logoutReason }) {
       entry.updatedAt = nowIso;
       inMemoryLogs.set(id, entry);
 
-      if (pool && pool.hasStorage && pool.hasStorage()) {
-        try {
-          await pool.query(
-            `UPDATE user_login_logs SET logout_at = $1, duration_seconds = $2, status = $3, updated_at = $4 WHERE id = $5`,
-            [entry.logoutAt, entry.durationSeconds, entry.status, entry.updatedAt, id]
-          );
-        } catch (err) {
-          logger.warn('recordLogoutLog: DB update failed', { error: err.message }, 'LOGIN_LOGS_QUERIES');
-        }
-      }
+      logger.info(
+        `Recorded logout event for ${entry.email} (session duration: ${durationSeconds}s, reason: ${entry.status})`,
+        { id: entry.id, email: entry.email, durationSeconds, status: entry.status },
+        'AUTH_LOGOUT'
+      );
       return entry;
     }
   }

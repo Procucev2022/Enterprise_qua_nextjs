@@ -1947,27 +1947,15 @@ async function upsertAIFeedItemInDB(item) {
   return persistedItem;
 }
 
-// ── Audit logs (SHA-256 hash chain — sequence must reflect exact insertion
-// order, see schema.sql's comment on audit_logs.sequence) ───────────────────
+// ── Audit logs (Database table audit_logs dropped per migration 0029) ─────────
+// Audit events are logged to the filesystem locally and Cloudflare Observability in production.
 
 async function getAuditLogsFromDB(limit = null, { fresh = false } = {}) {
-  if (!pool.hasStorage()) return [];
-  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
-  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
-  const limitClause = hasLimit ? 'LIMIT $1' : 'LIMIT 1000';
-  const sql = `SELECT raw FROM audit_logs ORDER BY sequence DESC ${limitClause}`.trim();
-  const d1Sql = `SELECT raw FROM audit_logs ORDER BY rowid DESC ${limitClause}`.trim();
-  const result = await pool.query(
-    sql,
-    params,
-    { d1: true, d1Text: d1Sql, useCache: !fresh, tag: 'audit_logs', ttlMs: 30000 }
-  );
-  return result.rows.map((row) => parseRaw(row.raw));
+  // Table audit_logs was dropped via migration 0029. Return empty array without querying database.
+  return [];
 }
 
 async function upsertAuditLogInDB(entry) {
-  // Keep the legacy export safe for older callers: direct upserts bypass the
-  // shared audit-chain head and can make subsequent entries unverifiable.
   return auditLogQueries.appendAuditLogInDB(entry);
 }
 

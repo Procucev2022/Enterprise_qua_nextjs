@@ -732,23 +732,34 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(d1Binding.batch).toHaveBeenCalledTimes(1);
     });
 
-    test('rejects a multi-write D1 HTTP update before sending any request', async () => {
+    test('executes a multi-write D1 HTTP update with the atomic batch client', async () => {
       const d1Bridge = require('../src/db/d1Bridge');
       const keys = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_D1_DATABASE_ID', 'CLOUDFLARE_API_TOKEN'];
       const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
       keys.forEach((key, index) => { process.env[key] = `test-${index}`; });
       globalThis.__CF_ENV__ = undefined;
       d1Bridge.resetD1HttpClientCache();
-      const fetchSpy = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network should not be reached'));
+      const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          success: true,
+          result: [
+            { results: [{ uuid: 'org-1' }], meta: { changes: 0 } },
+            { results: [], meta: { changes: 1 } },
+            { results: [], meta: { changes: 1 } },
+          ],
+        })),
+      });
 
       try {
-        await expect(buyerProfileQueries.updateProfile({
+        const result = await buyerProfileQueries.updateProfile({
           organizationId: 'org-1',
           userId: 'user-1',
           patch: { companyName: 'ACME', contactName: 'Buyer' },
           categories: [],
-        })).rejects.toThrow('cannot guarantee multi-statement atomicity');
-        expect(fetchSpy).not.toHaveBeenCalled();
+        });
+        expect(result).toMatchObject({ updated: true });
+        expect(fetchSpy).toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();
         keys.forEach((key) => {

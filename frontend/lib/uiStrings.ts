@@ -244,7 +244,7 @@ export const UI_STRINGS = {
 
   },
 
-sellerDirectory: {
+  sellerDirectory: {
     title: 'Sellers Directory',
     searchPlaceholder: 'Search company, contact, email, category, city...',
     allSources: 'All Sources',
@@ -2119,9 +2119,9 @@ sellerDirectory: {
   vendorSubscriptionModal: {
     upgradeTitle: '🔒 Upgrade Plan to Submit Quotations',
     creditsExhaustedWarning: '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
-    connectTitle: 'Connect Model (₹2 / 3 mo)',
+    connectTitle: 'Connect Model (₹7,499 + 18% GST / yr)',
     connectDesc: 'Quote and download up to 50 RFQs in 3 months from Marketplace.',
-    selectTitle: 'Select Model (₹5 / 3 mo)',
+    selectTitle: 'Select Model (₹14,999 + 18% GST / yr)',
     selectDesc: 'Item Catalogue (100 products) + 100 RFQs / 3 months.',
     activeBadge: 'Active',
     upgradeAction: 'Upgrade',
@@ -2131,6 +2131,17 @@ sellerDirectory: {
     subscriptionRequiredToastDesc: 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
     creditsExhaustedToastTitle: 'Quotation Credits Exhausted',
     creditsExhaustedToastDesc: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+  },
+
+  vendorQuotationPage: {
+    directClientEnquiries: 'Direct client enquiries',
+    allEnquiries: 'All enquiries',
+    awaitingYourQuote: 'Awaiting your quote',
+    quoteSubmitted: 'Quote submitted',
+    closedEnquiries: 'Closed enquiries',
+    directClientBadge: 'Direct Client',
+    directClientExclusive: 'Client Exclusive',
+    myRequestsGroup: 'My Requests (Direct & Submitted)',
   },
 
   publicVendorDirectory: {
@@ -2868,7 +2879,7 @@ sellerDirectory: {
     },
   },
 
-  
+
 };
 
 /**

@@ -59,7 +59,7 @@ interface VendorSummaryProps {
 export const isBuyerUploaded = (v: any): boolean => {
   if (!v) return false;
   const s = String(v.source || '').toLowerCase().trim();
-  const id = String(v.id || '').toLowerCase().trim();
+  const id = String(v.id || v.vendorId || '').toLowerCase().trim();
   return (
     s === 'buyer_uploaded' ||
     s === 'vendor_master_ingestion' ||
@@ -71,6 +71,9 @@ export const isBuyerUploaded = (v: any): boolean => {
     s.includes('ingestion') ||
     s.includes('purchase_dump') ||
     !!v.addedByBuyerCompany ||
+    !!v.buyerId ||
+    !!v.buyerAccountId ||
+    v.isBuyerUploaded === true ||
     id.startsWith('v-hist-') ||
     id.startsWith('v-navin-') ||
     id.startsWith('vm-') ||
@@ -2163,20 +2166,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-700 dark:text-gray-300 font-mono text-[11px]">
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">GSTIN:</span>
-                    <strong>{selectedVendorForCrud.gst || selectedVendorForCrud.gstin || '27AAACD1234F1Z5'}</strong>
+                    <strong>{selectedVendorForCrud.gst || selectedVendorForCrud.gstin || 'Not Provided'}</strong>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">PAN:</span>
-                    <strong>{selectedVendorForCrud.pan || 'AAACD1234F'}</strong>
+                    <strong>
+                      {selectedVendorForCrud.pan ||
+                        ((selectedVendorForCrud.gst || selectedVendorForCrud.gstin || '').length === 15
+                          ? (selectedVendorForCrud.gst || selectedVendorForCrud.gstin).slice(2, 12).toUpperCase()
+                          : 'Not Provided')}
+                    </strong>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">MSME / UDYAM:</span>
-                    <span>{selectedVendorForCrud.msme || 'UDYAM-MH-0123'}</span>
+                    <span>{selectedVendorForCrud.msme || 'Not Provided'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">Turnover:</span>
                     <span className="font-sans font-semibold">
-                      {selectedVendorForCrud.annualTurnover || '₹25 Cr - ₹50 Cr'}
+                      {selectedVendorForCrud.annualTurnover || 'Not Disclosed'}
                     </span>
                   </div>
                 </div>

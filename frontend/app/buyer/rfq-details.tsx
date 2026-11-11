@@ -2118,11 +2118,25 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                           {activeRfq.followUpData.totalInvited} Outreach Dispatches
                         </span>
                       )}
-                      {typeof activeRfq?.followUpData?.respondedCount === 'number' && activeRfq.followUpData.respondedCount > 0 && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-2xs">
-                          {activeRfq.followUpData.respondedCount} Responded
-                        </span>
-                      )}
+                      {(() => {
+                        const quotesCount = Math.max(
+                          Array.isArray(activeRfq?.quotes) ? activeRfq.quotes.length : 0,
+                          activeRfq?.quotesCount || 0
+                        );
+                        const vendorRespondedCount = Array.isArray(activeRfq?.followUpData?.vendors)
+                          ? activeRfq.followUpData.vendors.filter((v: any) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
+                          : 0;
+                        const responded = Math.max(
+                          activeRfq?.followUpData?.respondedCount || 0,
+                          quotesCount,
+                          vendorRespondedCount
+                        );
+                        return responded > 0 ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-2xs">
+                            {responded} Responded
+                          </span>
+                        ) : null;
+                      })()}
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5" data-testid="v0-cm-vendor-cards">
                       {visibleAssigned.map((v: any) => renderFullCard(v))}

@@ -150,6 +150,51 @@ describe('Middleware Unit Tests', () => {
     errorSpy.mockRestore();
     process.env.NODE_ENV = originalEnv;
   });
+
+  test('errorHandler exposes service-level 503/502/504 errors, codes, details and dev mode messages', () => {
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    const err503 = Object.assign(new Error('Cloudflare D1 is temporarily unavailable'), {
+      statusCode: 503,
+      code: 'DATABASE_UNAVAILABLE',
+      details: { retryAfter: 5 },
+    });
+    errorHandler(err503, { method: 'POST', path: '/rfqs' }, res, jest.fn());
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      error: 'Cloudflare D1 is temporarily unavailable',
+      code: 'DATABASE_UNAVAILABLE',
+      details: { retryAfter: 5 },
+    }));
+
+    const empty503 = Object.assign(new Error(''), { statusCode: 503 });
+    errorHandler(empty503, { method: 'GET', path: '/health' }, res, jest.fn());
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Service temporarily unavailable. Please retry.',
+    }));
+
+    const exposed500 = Object.assign(new Error('Exposed internal error'), { statusCode: 500, expose: true });
+    errorHandler(exposed500, { method: 'GET', path: '/api' }, res, jest.fn());
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Exposed internal error',
+    }));
+
+    process.env.NODE_ENV = 'development';
+    const dev500 = Object.assign(new Error('Detailed crash reason'), { statusCode: 500 });
+    errorHandler(dev500, { method: 'GET', path: '/api' }, res, jest.fn());
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Detailed crash reason',
+    }));
+
+    const badStatusErr = Object.assign(new Error('Bad status code test'), { statusCode: 999 });
+    errorHandler(badStatusErr, { method: 'GET', path: '/api' }, res, jest.fn());
+    expect(res.status).toHaveBeenCalledWith(500);
+
+    process.env.NODE_ENV = originalEnv;
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

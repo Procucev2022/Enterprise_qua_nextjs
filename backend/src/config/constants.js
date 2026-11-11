@@ -304,7 +304,7 @@ const RFQ_CHASER_ERROR_MAX_LENGTH = 2000;
 // The previous first entry described 'Azure Database for MySQL (Shared Identity
 // Schema)' as ONLINE with an 18ms latency and 99.99% uptime. That database is no
 // longer part of this application at all.
-const DATABASE_HEALTH_SERVICE_LABEL = 'PostgreSQL Database (Neon)';
+const DATABASE_HEALTH_SERVICE_LABEL = 'Cloudflare D1 Database';
 const DATABASE_QUERY_LOGGING = Object.freeze({
   SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
   D1_SUCCESS_SAMPLE_RATE_DEFAULT: 0.01,
@@ -463,9 +463,9 @@ const AUTH_MESSAGES = {
   LOGOUT_REVOCATION_FAILED:
     'Your session could not be ended because the database is unreachable. Try again; if it persists, close the browser to discard the session locally.',
   IDENTITY_DB_UNAVAILABLE:
-    'The database is unreachable, so credentials cannot be verified right now. Confirm the DATABASE_URL in backend/.env is correct and that this host is allowed to reach the PostgreSQL instance, then retry.',
+    'The database is unreachable, so credentials cannot be verified right now. Please retry shortly.',
   IDENTITY_DB_NOT_CONFIGURED:
-    'No database is configured. Set DATABASE_URL in backend/.env so logins can be verified against real account records.',
+    'No database is configured. Ensure Cloudflare D1 database storage is configured so logins can be verified against real account records.',
   // Revocation is checked against the database, so an unreachable database means
   // the session cannot be confirmed as still valid. It fails closed and says so,
   // rather than reporting the credentials as invalid.
@@ -474,7 +474,7 @@ const AUTH_MESSAGES = {
   OTP_STORAGE_FAILED:
     'The verification code could not be saved, so it has not been sent. Try requesting a new code in a moment.',
   AUTH_STORAGE_UNAVAILABLE:
-    'Authentication is temporarily unavailable because session storage could not be reached. Please retry shortly.',
+    'Authentication is temporarily unavailable because the database could not be reached. Please retry shortly.',
   // Delivery is confirmed before "sent" is reported, so a failed send is told to
   // the visitor instead of leaving them waiting for a code that never arrives.
   OTP_DELIVERY_FAILED:
@@ -502,7 +502,7 @@ const AUTH_MESSAGES = {
   VENDOR_DIRECTORY_OTP_INVALID:
     'Invalid verification code. Please check and try again.',
   VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE:
-    'Vendor Directory sign-in is temporarily unavailable because session storage could not be reached. Please retry in a few minutes.',
+    'Vendor Directory sign-in is temporarily unavailable because the database could not be reached. Please retry in a few minutes.',
   VENDOR_DIRECTORY_INACTIVITY_TIMEOUT:
     'Your directory session ended due to 5 minutes of inactivity. Please sign in again.',
 };
@@ -1137,13 +1137,15 @@ const GEMINI_CONFIG = {
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
   // Ordered models attempted in sequence: gemini-3.5-flash-lite down to reasoning fallback models.
   // Extraction automatically advances through the backup models upon error or 503 overload.
-  MODELS: (
-    process.env.GEMINI_MODELS ||
-    'gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash'
-  )
-    .split(',')
-    .map((m) => m.trim().replace(/\s+/g, '-'))
-    .filter(Boolean),
+  // Code-owned model chain to prevent runtime environment discrepancies or accidental configuration drift.
+  MODELS: [
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+  ],
   get PRIMARY_MODEL() {
     return this.MODELS[0] || 'gemini-3.5-flash-lite';
   },
@@ -1424,24 +1426,14 @@ const ZOHO_WEBHOOK_MESSAGES = Object.freeze({
 });
 
 function getSellerSubscriptionPricing() {
-  const gstRate = (zohoConfigOverrides.GST_RATE !== undefined)
-    ? zohoConfigOverrides.GST_RATE
-    : getSubscriptionGstRate();
+  const connect12Base = Number(process.env.SELLER_V1_12M_PRICE || 7499);
+  const connect6Base = Number(process.env.SELLER_V1_6M_PRICE || 4125);
 
-  const connect12Inclusive = Number(process.env.SELLER_V1_12M_PRICE || 7499);
-  const connect6Inclusive = Number(process.env.SELLER_V1_6M_PRICE || 4125);
-  const connect12Base = Math.round((connect12Inclusive / (1 + gstRate)) * 100) / 100;
-  const connect6Base = Math.round((connect6Inclusive / (1 + gstRate)) * 100) / 100;
+  const select12Base = Number(process.env.SELLER_V2_12M_PRICE || 14999);
+  const select6Base = Number(process.env.SELLER_V2_6M_PRICE || 8250);
 
-  const select12Inclusive = Number(process.env.SELLER_V2_12M_PRICE || 14999);
-  const select6Inclusive = Number(process.env.SELLER_V2_6M_PRICE || 8250);
-  const select12Base = Math.round((select12Inclusive / (1 + gstRate)) * 100) / 100;
-  const select6Base = Math.round((select6Inclusive / (1 + gstRate)) * 100) / 100;
-
-  const v312Inclusive = Number(process.env.SELLER_V3_12M_PRICE || 19999);
-  const v36Inclusive = Number(process.env.SELLER_V3_6M_PRICE || 11000);
-  const v312Base = Math.round((v312Inclusive / (1 + gstRate)) * 100) / 100;
-  const v36Base = Math.round((v36Inclusive / (1 + gstRate)) * 100) / 100;
+  const v312Base = Number(process.env.SELLER_V3_12M_PRICE || 19999);
+  const v36Base = Number(process.env.SELLER_V3_6M_PRICE || 11000);
 
   return {
     connect: { '12_months': connect12Base, '6_months': connect6Base },
@@ -1732,10 +1724,10 @@ function resolveChaserDelay(envVal, defaultMs) {
 }
 
 const CHASER_DELAYS = {
-  SMS_MS:       resolveChaserDelay(process.env.CHASER_SMS_DELAY_MS, FIVE_MINUTES_MS),
-  CALL_MS:      resolveChaserDelay(process.env.CHASER_CALL_DELAY_MS, SIX_HOURS_MS),
-  WHATSAPP_MS:  resolveChaserDelay(process.env.CHASER_WHATSAPP_DELAY_MS, TWELVE_HOURS_MS),
-  EMAIL_MS:     resolveChaserDelay(process.env.CHASER_EMAIL_DELAY_MS, TWENTY_FOUR_HOURS_MS),
+  SMS_MS: resolveChaserDelay(process.env.CHASER_SMS_DELAY_MS, FIVE_MINUTES_MS),
+  CALL_MS: resolveChaserDelay(process.env.CHASER_CALL_DELAY_MS, SIX_HOURS_MS),
+  WHATSAPP_MS: resolveChaserDelay(process.env.CHASER_WHATSAPP_DELAY_MS, TWELVE_HOURS_MS),
+  EMAIL_MS: resolveChaserDelay(process.env.CHASER_EMAIL_DELAY_MS, TWENTY_FOUR_HOURS_MS),
 };
 
 const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
@@ -1764,9 +1756,9 @@ const VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH = 64;
 // OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
-    NAME:     'RFQ_Notification_Seller_Service',
+    NAME: 'RFQ_Notification_Seller_Service',
     REFERENCE_NUMBER: '11-2WNNMUNY6YY1',
-    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
+    SMSGID: process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
     CATEGORY: 'SERVICE_IMPLICIT',
     // Exact approved template text — static parts must match character-for-character.
     TEMPLATE: 'RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.',
@@ -1776,29 +1768,29 @@ const SMS_DLT_TEMPLATES = {
     URL_SHORTENING: false,
   },
   OTP: {
-    NAME:     'OTP_Procucev_GMT',
-    SMSGID:   process.env.SMS_GATEWAY_SMSGID || '1102294821',
+    NAME: 'OTP_Procucev_GMT',
+    SMSGID: process.env.SMS_GATEWAY_SMSGID || '1102294821',
     CATEGORY: 'TRANSACTIONAL',
     TEMPLATE: 'OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do not share. - Team Procucev.',
     VARIABLES: ['otp'],
   },
   BUYER_BIDS_UNLOCKED: {
-    NAME:     'Buyer_Quote_Matrix_Ready',
+    NAME: 'Buyer_Quote_Matrix_Ready',
     REFERENCE_NUMBER: '11-44JHMUY9DRFC',
-    SMSGID:   process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179138668879258',
+    SMSGID: process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179138668879258',
     CATEGORY: 'SERVICE_IMPLICIT',
-    HEADER:   'PROCUC',
+    HEADER: 'PROCUC',
     TEMPLATE: 'RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.',
     VARIABLES: ['rfqLabel', 'quotesCount', 'matrixLink'],
     VARIABLE_TYPES: ['alp', 'num', 'urg'],
     URL_SHORTENING: false,
   },
   ACTION_CENTER_COMM: {
-    NAME:     'Action_Center_Alert',
+    NAME: 'Action_Center_Alert',
     REFERENCE_NUMBER: '11-ACCOMM-2026',
-    SMSGID:   process.env.SMS_GATEWAY_ACTION_CENTER_SMSGID || '1777179138668879299',
+    SMSGID: process.env.SMS_GATEWAY_ACTION_CENTER_SMSGID || '1777179138668879299',
     CATEGORY: 'SERVICE_IMPLICIT',
-    HEADER:   'PROCUC',
+    HEADER: 'PROCUC',
     TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',
     VARIABLES: ['recipientName', 'alertMessage', 'linkUrl'],
     VARIABLE_TYPES: ['alp', 'alp', 'urg'],

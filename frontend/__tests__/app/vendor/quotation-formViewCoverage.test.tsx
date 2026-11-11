@@ -1181,8 +1181,8 @@ describe('upgrade and payment modals', () => {
   });
 
   test.each([
-    ['connect', 'Connect Model (Marketplace Access)', `${RUPEE}2 / 3 months`],
-    ['select', 'Select Model (Catalogue + Scale)', `${RUPEE}5 / 3 months`],
+    ['connect', 'Connect Model (Marketplace Access)', `${RUPEE}8,849`],
+    ['select', 'Select Model (Catalogue + Scale)', `${RUPEE}17,699`],
   ])('upgrading to the %s plan opens secure checkout for that plan and cancelling closes it', async (planId, planName, price) => {
     installLockedScenario();
     await renderForm();

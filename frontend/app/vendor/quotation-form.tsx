@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
@@ -58,13 +58,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     updateVendorSubscription,
   } = useApp();
   const [opportunitySearch, setOpportunitySearch] = useState('');
-  const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed'>('all');
+  const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed' | 'direct'>('all');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [pendingPayment, setPendingPayment] = useState<{
     planId: 'connect' | 'select';
     planName: string;
     price: string;
+    billingDurationLabel?: string;
+    breakdown?: {
+      basePrice: string;
+      gstAmount: string;
+    };
   } | null>(null);
 
   const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -76,9 +81,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       setShowUpgradeModal(false);
       return;
     }
-    const planName = plan === 'connect' ? 'Connect Model (Marketplace Access)' : 'Select Model (Catalogue + Scale)';
-    const price = plan === 'connect' ? '₹2 / 3 months' : '₹5 / 3 months';
-    setPendingPayment({ planId: plan, planName, price });
+    const isConnect = plan === 'connect';
+    const planName = isConnect ? 'Connect Model (Marketplace Access)' : 'Select Model (Catalogue + Scale)';
+    const price = isConnect ? '₹8,849' : '₹17,699';
+    const basePrice = isConnect ? '₹7,499' : '₹14,999';
+    const gstAmount = isConnect ? '+ ₹1,350 (18% GST)' : '+ ₹2,700 (18% GST)';
+    setPendingPayment({
+      planId: plan,
+      planName,
+      price,
+      billingDurationLabel: '12 Months (Recommended)',
+      breakdown: { basePrice, gstAmount },
+    });
     setShowUpgradeModal(false);
   };
 
@@ -200,11 +214,25 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
   // Direct-vs-marketplace reflects the real relationship:
   // When a buyer uploads or adds a vendor, the vendor is buyer-mapped and has unlimited quotations for that buyer's direct RFQs (V1).
-  // Network and marketplace sourcing modes (V0, V2, V3) require free credits or subscription plan.
-  const isOwnBuyerRfq = (rfqNumber: string) => {
+  // Network and marketplace sourcing modes (V0, V2, V3) require free credits or subscription plan unless specifically invited.
+  const isOwnBuyerRfq = useCallback((rfqNumber: string) => {
     const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
     const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
     if (!rfq && !rfqRecord) return false;
+
+    // Check if the vendor was explicitly invited/assigned by the buyer
+    const isExplicitlyAssigned = (rfqRecord?.assignedVendors || []).some((v) => {
+      const vEmail = (v.email || '').toLowerCase().trim();
+      const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
+      if (vEmail && sEmail && vEmail === sEmail) return true;
+      const vId = String(v.id || '').toLowerCase().trim();
+      if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
+      const vName = (v.name || '').toLowerCase().trim();
+      if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
+      return false;
+    });
+    if (isExplicitlyAssigned) return true;
+
     const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase();
     if (
       mode === 'mode_0' ||
@@ -212,15 +240,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       mode === 'version_0' ||
       mode === 'mode_3' ||
       mode === 'v3' ||
-      mode === 'version_3' ||
-      mode === 'mode_2' ||
-      mode === 'v2' ||
-      mode === 'version_2'
+      mode === 'version_3'
     ) {
       return false;
     }
-    const buyerName = rfq?.buyer || rfqRecord?.buyerAccountName || (rfqRecord as any)?.buyerCompany;
-    const buyerAccountId = (rfq as any)?.buyerAccountId || rfqRecord?.buyerAccountId;
+    const buyerName = rfq?.buyer || rfqRecord?.buyerAccountName || (rfqRecord as { buyerCompany?: string })?.buyerCompany;
+    const buyerAccountId = (rfq as { buyerAccountId?: string })?.buyerAccountId || rfqRecord?.buyerAccountId;
     if (myAddedByBuyerCompany && buyerName === myAddedByBuyerCompany) return true;
     if (myBuyerId && buyerAccountId === myBuyerId) return true;
     if (myVendorRecord) {
@@ -229,7 +254,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (myVendorRecord.buyerAccountId && buyerAccountId === myVendorRecord.buyerAccountId) return true;
     }
     return false;
-  };
+  }, [vendorOpportunities, rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
 
   // Extract distinct categories available across opportunities
   const availableCategories = useMemo(() => {
@@ -252,43 +277,75 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const totalSubmittedCount = submittedQuotes.length;
   const filteredOpportunities = useMemo(() => {
     const query = opportunitySearch.trim().toLocaleLowerCase();
-    return vendorOpportunities.filter((opp) => {
-      const quote = submittedQuotes.some((item) => item.rfqNumber === opp.rfqNumber);
-      const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
-      if (opportunityStatusFilter === 'submitted' && !quote && opp.status !== 'submitted' && opp.status !== 'under_review') return false;
-      if (opportunityStatusFilter === 'closed' && !isClosed) return false;
-      if (opportunityStatusFilter === 'open' && (isClosed || quote || opp.status === 'submitted')) return false;
+    return vendorOpportunities
+      .filter((opp) => {
+        const quote = submittedQuotes.some((item) => item.rfqNumber === opp.rfqNumber);
+        const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
+        if (opportunityStatusFilter === 'submitted' && !quote && opp.status !== 'submitted' && opp.status !== 'under_review') return false;
+        if (opportunityStatusFilter === 'closed' && !isClosed) return false;
+        if (opportunityStatusFilter === 'open' && (isClosed || quote || opp.status === 'submitted')) return false;
+        if (opportunityStatusFilter === 'direct' && !isOwnBuyerRfq(opp.rfqNumber)) return false;
 
-      const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
-      const oppCat = (opp.majorCategory || opp.category || rfqRecord?.category || rfqRecord?.extractedEntities?.[0]?.majorCategory || '').trim();
+        const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+        const oppCat = (opp.majorCategory || opp.category || rfqRecord?.category || rfqRecord?.extractedEntities?.[0]?.majorCategory || '').trim();
 
-      // Category filter check (multi-category support)
-      if (selectedCategories.length > 0) {
-        const matchesCategory = selectedCategories.some((cat) =>
-          cat.toLowerCase() === oppCat.toLowerCase() ||
-          (rfqRecord?.extractedEntities || []).some(
-            (ent) => (ent.majorCategory || ent.category || '').toLowerCase() === cat.toLowerCase()
-          )
-        );
-        if (!matchesCategory) return false;
-      }
+        // Category filter check (multi-category support)
+        if (selectedCategories.length > 0) {
+          const matchesCategory = selectedCategories.some((cat) =>
+            cat.toLowerCase() === oppCat.toLowerCase() ||
+            (rfqRecord?.extractedEntities || []).some(
+              (ent) => (ent.majorCategory || ent.category || '').toLowerCase() === cat.toLowerCase()
+            )
+          );
+          if (!matchesCategory) return false;
+        }
 
-      if (!query) return true;
-      const itemNames = (rfqRecord?.extractedEntities || []).map((item) => item.itemName);
-      return [
-        opp.rfqNumber,
-        opp.title,
-        opp.buyer,
-        opp.status,
-        opp.majorCategory,
-        rfqRecord?.category || '',
-        opp.deliveryLocation,
-        rfqRecord?.deliveryLocation || '',
-        ...itemNames,
-      ]
-        .some((value) => value.toLocaleLowerCase().includes(query));
-    });
-  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories]);
+        if (!query) return true;
+        const itemNames = (rfqRecord?.extractedEntities || []).map((item) => item.itemName);
+        return [
+          opp.rfqNumber,
+          opp.title,
+          opp.buyer,
+          opp.status,
+          opp.majorCategory,
+          rfqRecord?.category || '',
+          opp.deliveryLocation,
+          rfqRecord?.deliveryLocation || '',
+          ...itemNames,
+        ]
+          .some((value) => value.toLocaleLowerCase().includes(query));
+      })
+      .sort((a, b) => {
+        const aHasQuote = submittedQuotes.some((item) => item.rfqNumber === a.rfqNumber) || a.status === 'submitted';
+        const bHasQuote = submittedQuotes.some((item) => item.rfqNumber === b.rfqNumber) || b.status === 'submitted';
+        const aDirect = isOwnBuyerRfq(a.rfqNumber);
+        const bDirect = isOwnBuyerRfq(b.rfqNumber);
+
+        // Sorting priority to prevent vendor's own requests from being buried:
+        // Score 4: Direct client invitation awaiting quote (Highest urgency)
+        // Score 3: Submitted quote (Vendor's active submission tracking)
+        // Score 2: Direct client invitation (closed/other)
+        // Score 0: Generic marketplace / open network enquiry
+        const getPriority = (hasQuote: boolean, isDirect: boolean, opp: VendorOpportunity) => {
+          const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
+          if (isDirect && !hasQuote && !isClosed) return 4;
+          if (hasQuote) return 3;
+          if (isDirect) return 2;
+          return 0;
+        };
+
+        const aScore = getPriority(aHasQuote, aDirect, a);
+        const bScore = getPriority(bHasQuote, bDirect, b);
+
+        if (bScore !== aScore) {
+          return bScore - aScore;
+        }
+
+        const aTime = new Date(a.deadline || 0).getTime();
+        const bTime = new Date(b.deadline || 0).getTime();
+        return bTime - aTime;
+      });
+  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, isOwnBuyerRfq]);
 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
@@ -790,10 +847,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 onChange={(event) => setOpportunityStatusFilter(event.target.value as typeof opportunityStatusFilter)}
                 className="h-11 w-full rounded-xl border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-gray-950 dark:text-gray-200"
               >
-                <option value="all">All enquiries</option>
-                <option value="open">Awaiting your quote</option>
-                <option value="submitted">Quote submitted</option>
-                <option value="closed">Closed enquiries</option>
+                <option value="all">{UI_STRINGS.vendorQuotationPage?.allEnquiries || 'All enquiries'}</option>
+                <option value="direct">{UI_STRINGS.vendorQuotationPage?.directClientEnquiries || 'Direct client enquiries'}</option>
+                <option value="open">{UI_STRINGS.vendorQuotationPage?.awaitingYourQuote || 'Awaiting your quote'}</option>
+                <option value="submitted">{UI_STRINGS.vendorQuotationPage?.quoteSubmitted || 'Quote submitted'}</option>
+                <option value="closed">{UI_STRINGS.vendorQuotationPage?.closedEnquiries || 'Closed enquiries'}</option>
               </select>
             </label>
           </div>
@@ -954,10 +1012,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 })();
 
                 return (
-                  <tr key={opp.rfqNumber} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40">
+                  <tr
+                    key={opp.rfqNumber}
+                    className={`transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40 ${
+                      isDirectBuyer ? 'bg-indigo-50/25 dark:bg-indigo-950/15' : ''
+                    }`}
+                  >
                     {/* RFQ Number */}
                     <td data-label="RFQ Number" className="py-3 font-mono font-bold text-slate-900 dark:text-white">
-                      <div>{opp.rfqNumber}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>{opp.rfqNumber}</span>
+                        {isDirectBuyer && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            {UI_STRINGS.vendorQuotationPage?.directClientBadge || 'Direct Client'}
+                          </span>
+                        )}
+                      </div>
                       {versionBadge && (
                         <div className="mt-1">
                           <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${versionBadge.color}`}>
@@ -1691,6 +1761,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           planId={pendingPayment?.planId || 'connect'}
           planName={pendingPayment?.planName || ''}
           price={pendingPayment?.price || ''}
+          billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+          breakdown={pendingPayment?.breakdown}
           createPaymentLink={createVendorPaymentLink}
         />
       </div>

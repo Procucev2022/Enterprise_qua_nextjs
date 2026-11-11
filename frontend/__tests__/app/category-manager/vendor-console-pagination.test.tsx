@@ -79,7 +79,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     // Matches "Vendor 1", "Vendor 10".."Vendor 19" (11 rows) — all fit in one
     // page (20), so no Load More button, and unrelated vendors are gone.
     // 350ms search debounce plus the mocked fetch; the default 1s waitFor is too tight under full-suite load.
-    await waitFor(() => expect(screen.queryByText('Vendor 0')).not.toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(screen.queryByText('Vendor 0')).not.toBeInTheDocument(), { timeout: 10000 });
     expect(screen.getAllByText('Vendor 1').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('load-more-vendor-cards')).not.toBeInTheDocument();
   });

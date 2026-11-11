@@ -33,9 +33,37 @@ if (fs.existsSync(envSpecific)) {
 }
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID;
-const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+function resolveD1Config({ target = targetEnv, wranglerPath = path.resolve(__dirname, '../wrangler.jsonc') } = {}) {
+  let accountId = process.env.CLOUDFLARE_ACCOUNT_ID || null;
+  let databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID || null;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN || null;
+
+  if (!databaseId || !accountId) {
+    try {
+      if (fs.existsSync(wranglerPath)) {
+        const raw = fs.readFileSync(wranglerPath, 'utf8');
+        const sanitized = raw.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        const config = JSON.parse(sanitized);
+        if (!databaseId) {
+          databaseId = (target && config.env?.[target]?.d1_databases?.[0]?.database_id)
+            || config.d1_databases?.[0]?.database_id
+            || null;
+        }
+        if (!accountId) {
+          accountId = (target && config.env?.[target]?.account_id)
+            || config.account_id
+            || null;
+        }
+      }
+    } catch {
+      // Fall back to environment values
+    }
+  }
+
+  return { accountId, databaseId, apiToken };
+}
+
+const { accountId: ACCOUNT_ID, databaseId: DATABASE_ID, apiToken: API_TOKEN } = resolveD1Config();
 
 const SCHEMA_PATH = path.join(__dirname, '../src/db/schema.d1.sql');
 const MIGRATIONS_PATH = path.join(__dirname, '../src/db/migrations');
@@ -56,12 +84,12 @@ const REPORTED_TABLES = [
   'category_division', 'org_division_category', 'vendor_dispatch_templates',
   'auth_otp_codes', 'auth_revoked_tokens',
   'vendors', 'rfqs', 'evaluations', 'vendor_catalogue',
-  'buyer_accounts', 'ai_feed', 'audit_logs', 'audit_chain_state', 'event_outbox', 'notifications',
+  'buyer_accounts', 'ai_feed', 'event_outbox', 'notifications',
   'email_ingestion_log', 'zoho_oauth_token', 'payment_links',
   'vendor_ingestion_sessions', 'ingestion_jobs', 'vendor_master_records',
   'po_line_items', 'vendor_category_mappings', 'vendor_category_dispatches',
-  'vendor_email_dispatch_log', 'vendor_ingestion_audit', 'ai_classification_logs',
-  'bulk_vendor_import_sessions', 'vendor_directory_sessions', 'user_login_logs',
+  'vendor_email_dispatch_log', 'vendor_ingestion_audit',
+  'bulk_vendor_import_sessions', 'vendor_directory_sessions',
   'payment_dues_communications',
   'schema_migration_locks',
   'management_approvals',
@@ -73,7 +101,7 @@ const REPORTED_TABLES = [
   'vendor_credit_transactions', 'buyer_credit_transactions',
   'tickets', 'ticket_activities', 'internal_task_types',
   'internal_tasks', 'internal_task_activities', 'approvals',
-  'system_error_logs', 'vendor_categories_indexed', 'document_vault', 'account_documents',
+  'vendor_categories_indexed', 'document_vault', 'account_documents',
 ];
 
 async function d1Query(sql, params = []) {
@@ -376,8 +404,13 @@ async function migrate({
   migrationsPath = MIGRATIONS_PATH,
   includeRowCounts = process.argv.includes('--report-row-counts'),
   requireCredentials = true,
+  credentials = { accountId: ACCOUNT_ID, databaseId: DATABASE_ID, apiToken: API_TOKEN },
 } = {}) {
-  if (requireCredentials && (!ACCOUNT_ID || !DATABASE_ID || !API_TOKEN)) {
+  const accountId = credentials?.accountId;
+  const databaseId = credentials?.databaseId;
+  const apiToken = credentials?.apiToken;
+
+  if (requireCredentials && (!accountId || !databaseId || !apiToken)) {
     console.error(
       '[migrate-d1] Missing required env vars.\n' +
       '  Set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_API_TOKEN in .env'
@@ -512,4 +545,5 @@ module.exports = {
   splitStatements,
   REPORTED_TABLES,
   acquireMigrationLock,
+  resolveD1Config,
 };

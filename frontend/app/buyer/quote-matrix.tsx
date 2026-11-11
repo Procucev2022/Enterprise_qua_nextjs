@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { formatCurrency, formatIndianDate } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import type { RFQItem, QuoteComparison } from '@/lib/types';
+import type { RFQItem, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
@@ -253,7 +253,11 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           const vCount = Math.max(
             currentRFQ.assignedVendors?.length || 0,
             currentRFQ.procucevVendorCount || 0,
-            followUp?.totalInvited || 0
+            followUp?.totalInvited || 0,
+            followUp?.whatsappStats?.total || 0,
+            followUp?.smsStats?.total || 0,
+            followUp?.emailStats?.total || 0,
+            Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
           );
           const isDispatched = currentRFQ.status !== 'Parsing' && vCount > 0;
           const createdAtMs = currentRFQ.createdAt ? new Date(currentRFQ.createdAt).getTime() : Date.now();
@@ -266,23 +270,43 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           const rawWaRead = Math.max(
             followUp?.whatsappStats?.read || 0,
             followUp?.whatsappStats?.delivered || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
           );
           const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
 
           const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
           const rawSmsDelivered = Math.max(
             followUp?.smsStats?.delivered || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
           );
           const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
 
           const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
           const rawEmailDelivered = Math.max(
             followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.email?.status === 'delivered' || v?.email24h?.status === 'delivered' || v?.emailSent).length : 0
           );
           const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
+
+          const quotesCount = Math.max(
+            Array.isArray(currentRFQ.quotes) ? currentRFQ.quotes.length : 0,
+            currentRFQ.quotesCount || 0
+          );
+          const vendorRespondedCount = Array.isArray(followUp?.vendors)
+            ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
+            : 0;
+          const responded = Math.max(
+            followUp?.respondedCount || 0,
+            quotesCount,
+            vendorRespondedCount
+          );
+          const totalInvited = Math.max(
+            followUp?.totalInvited || 0,
+            vCount,
+            waTotal,
+            smsTotal,
+            emailTotal
+          );
 
           return (
             <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
@@ -309,7 +333,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                 className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
               >
                 <Search size={12} />
-                <span>Vendor Follow-Up Details ({followUp?.respondedCount || 0}/{Math.max(followUp?.totalInvited || 0, vCount)} Responded) ↗</span>
+                <span>Vendor Follow-Up Details ({responded}/{totalInvited} Responded) ↗</span>
               </button>
             </div>
           );

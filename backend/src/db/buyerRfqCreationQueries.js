@@ -345,10 +345,10 @@ async function createRFQWithCreditInDB(options) {
   const idempotencyKey = transactionKey(options.buyerId, options.rfq.id);
   const transactionId = options.transactionId || `credit-${require('crypto').randomUUID()}`;
   const normalized = { ...options, idempotencyKey, transactionId };
-  const binding = d1Bridge.getD1Binding();
-  if (binding) {
+  const db = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
+  if (db) {
     try {
-      const result = await createRFQWithCreditInD1(normalized, binding);
+      const result = await createRFQWithCreditInD1(normalized, db);
       queryCache.invalidate('buyer_accounts');
       queryCache.invalidate('buyer_credits');
       queryCache.invalidate('rfqs');
@@ -362,15 +362,11 @@ async function createRFQWithCreditInDB(options) {
       throw error;
     }
   }
-  if (d1Bridge.getD1HttpClient()) {
-    const error = new Error('Buyer RFQ credit consumption requires PostgreSQL transactions or a Workers D1 atomic batch.');
+
+  if (!pool.pool) {
+    const error = new Error('Database storage is unavailable for creating RFQ. Cloudflare D1 connection is required.');
     error.statusCode = 503;
-    error.code = 'ATOMIC_PERSISTENCE_REQUIRED';
-    logger.error('Buyer RFQ create rejected by the non-atomic D1 HTTP adapter', {
-      error,
-      buyerId: normalized.buyerId,
-      rfqId: normalized.rfq.id,
-    }, 'BUYER_RFQ_CREDIT');
+    error.code = 'DATABASE_UNAVAILABLE';
     throw error;
   }
 

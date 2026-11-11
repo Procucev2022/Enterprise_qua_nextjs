@@ -3447,26 +3447,28 @@ class StoreService {
 
   _reconcileRFQFollowUpStats(rfq) {
     if (!rfq) return rfq;
-    const hasAssigned = Array.isArray(rfq.assignedVendors);
-    const assigned = hasAssigned && rfq.assignedVendors.length > 0
+    const hasAssigned = Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0;
+    const assigned = hasAssigned
       ? rfq.assignedVendors
       : (Array.isArray(rfq.followUpData?.vendors) && rfq.followUpData.vendors.length > 0 ? rfq.followUpData.vendors : []);
 
     let vCount = assigned.length;
+    const fupExisting = rfq.followUpData;
     if (vCount === 0) {
-      if (!hasAssigned && rfq.followUpData?.totalInvited) {
-        vCount = rfq.followUpData.totalInvited;
-      } else if (!hasAssigned && rfq.followUpData?.smsStats?.total) {
-        vCount = rfq.followUpData.smsStats.total;
-      } else if (!hasAssigned && rfq.procucevVendorCount) {
-        vCount = rfq.procucevVendorCount;
-      }
+      vCount = fupExisting?.totalInvited || fupExisting?.whatsappStats?.total || fupExisting?.smsStats?.total || fupExisting?.emailStats?.total || rfq.procucevVendorCount || 0;
     } else {
-      vCount = Math.max(vCount, rfq.procucevVendorCount || 0, rfq.followUpData?.totalInvited || 0);
+      vCount = Math.max(
+        vCount,
+        rfq.procucevVendorCount || 0,
+        fupExisting?.totalInvited || 0,
+        fupExisting?.whatsappStats?.total || 0,
+        fupExisting?.smsStats?.total || 0,
+        fupExisting?.emailStats?.total || 0
+      );
     }
 
     if (vCount === 0 || rfq.status === 'Draft' || rfq.status === 'Parsing' || rfq.status === 'Ingested') {
-      if (rfq.followUpData && vCount === 0) {
+      if (rfq.followUpData) {
         rfq.followUpData.totalInvited = 0;
       }
       return rfq;
@@ -3487,9 +3489,41 @@ class StoreService {
     }
 
     const fup = rfq.followUpData;
-    fup.totalInvited = Math.max(fup.totalInvited || 0, vCount);
+    fup.totalInvited = Math.max(
+      fup.totalInvited || 0,
+      vCount,
+      fup.whatsappStats?.total || 0,
+      fup.smsStats?.total || 0,
+      fup.emailStats?.total || 0
+    );
     if (!Array.isArray(fup.vendors) || fup.vendors.length === 0) {
       fup.vendors = [...assigned];
+    }
+
+    const quotesCount = Math.max(
+      Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
+      rfq.quotesCount || 0
+    );
+    const vendorSubmittedCount = Array.isArray(fup.vendors)
+      ? fup.vendors.filter((v) => v && (v.bidStatus === 'Submitted' || v.overallStatus === 'Responded')).length
+      : 0;
+    fup.respondedCount = Math.max(fup.respondedCount || 0, quotesCount, vendorSubmittedCount);
+
+    if (Array.isArray(rfq.quotes) && rfq.quotes.length > 0 && Array.isArray(fup.vendors)) {
+      rfq.quotes.forEach((q) => {
+        if (!q) return;
+        const v = fup.vendors.find(
+          (vend) =>
+            vend &&
+            ((q.vendorId && (vend.vendorId === q.vendorId || vend.id === q.vendorId)) ||
+              (q.vendorName && vend.vendorName === q.vendorName) ||
+              (q.vendorEmail && vend.email === q.vendorEmail))
+        );
+        if (v) {
+          v.bidStatus = 'Submitted';
+          v.overallStatus = 'Responded';
+        }
+      });
     }
 
     const createdAtMs = new Date(rfq.createdAt || Date.now()).getTime();
@@ -3846,7 +3880,11 @@ class StoreService {
       );
       if (newRFQ.followUpData) {
         newRFQ.followUpData.vendors = newRFQ.assignedVendors;
-        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+        const remCount = newRFQ.assignedVendors.length;
+        newRFQ.followUpData.totalInvited = remCount;
+        ['callStats', 'whatsappStats', 'smsStats', 'emailStats'].forEach((stat) => {
+          if (newRFQ.followUpData[stat]) newRFQ.followUpData[stat].total = remCount;
+        });
       }
     }
 
@@ -3873,6 +3911,9 @@ class StoreService {
       if (newRFQ.followUpData) {
         newRFQ.followUpData.totalInvited = 0;
         newRFQ.followUpData.vendors = [];
+        ['callStats', 'whatsappStats', 'smsStats', 'emailStats'].forEach((stat) => {
+          if (newRFQ.followUpData[stat]) newRFQ.followUpData[stat].total = 0;
+        });
       }
       newRFQ.procucevVendorCount = 0;
       newRFQ.needsCategoryManagerAssignment = true;
@@ -4064,6 +4105,9 @@ class StoreService {
         if (newRFQ.followUpData) {
           newRFQ.followUpData.totalInvited = 0;
           newRFQ.followUpData.vendors = [];
+          ['callStats', 'whatsappStats', 'smsStats', 'emailStats'].forEach((stat) => {
+            if (newRFQ.followUpData[stat]) newRFQ.followUpData[stat].total = 0;
+          });
         }
         newRFQ.procucevVendorCount = 0;
         newRFQ.needsCategoryManagerAssignment = true;
@@ -4880,22 +4924,30 @@ class StoreService {
           ...(Array.isArray(rfq.followUpData.vendors) ? { vendors: [...rfq.followUpData.vendors] } : {}),
         }
       : rfq.followUpData;
-    if (followUpData && Array.isArray(followUpData.vendors)) {
-      const vIdx = followUpData.vendors.findIndex(
-        (v) => v.vendorId === quote.vendorId || (quote.vendorName && v.vendorName === quote.vendorName)
-      );
-      if (vIdx !== -1) {
-        const wasSubmitted = followUpData.vendors[vIdx].bidStatus === 'Submitted';
-        followUpData.vendors[vIdx] = {
-          ...followUpData.vendors[vIdx],
-          bidStatus: 'Submitted',
-          overallStatus: 'Responded',
-          lastInteraction: quote.submittedAt || new Date().toISOString(),
-        };
-        if (!wasSubmitted) {
-          followUpData.respondedCount = (followUpData.respondedCount || 0) + 1;
+    if (followUpData) {
+      if (Array.isArray(followUpData.vendors)) {
+        const vIdx = followUpData.vendors.findIndex(
+          (v) =>
+            v &&
+            (v.vendorId === quote.vendorId ||
+              v.id === quote.vendorId ||
+              (quote.vendorName && v.vendorName === quote.vendorName) ||
+              (quote.vendorEmail && v.email === quote.vendorEmail))
+        );
+        if (vIdx !== -1) {
+          const wasSubmitted = followUpData.vendors[vIdx].bidStatus === 'Submitted';
+          followUpData.vendors[vIdx] = {
+            ...followUpData.vendors[vIdx],
+            bidStatus: 'Submitted',
+            overallStatus: 'Responded',
+            lastInteraction: quote.submittedAt || new Date().toISOString(),
+          };
+          if (!wasSubmitted) {
+            followUpData.respondedCount = (followUpData.respondedCount || 0) + 1;
+          }
         }
       }
+      followUpData.respondedCount = Math.max(followUpData.respondedCount || 0, quotes.length);
     }
 
     const isV0 =
@@ -6889,6 +6941,7 @@ class StoreService {
 
     if (updated.followUpData) {
       const assignedCount = Array.isArray(updated.assignedVendors) ? updated.assignedVendors.length : 0;
+      updated.followUpData.totalInvited = Math.max(updated.followUpData.totalInvited || 0, assignedCount);
       if (!updated.followUpData.emailStats) {
         updated.followUpData.emailStats = { total: assignedCount, delivered: 0, sent24h: 0, opened: 0 };
       }
@@ -7165,6 +7218,7 @@ class StoreService {
 
     if (updated.followUpData) {
         const assignedCount = Array.isArray(updated.assignedVendors) ? updated.assignedVendors.length : 0;
+        updated.followUpData.totalInvited = Math.max(updated.followUpData.totalInvited || 0, assignedCount);
         if (!updated.followUpData.emailStats) {
           updated.followUpData.emailStats = { total: assignedCount, delivered: 0, sent24h: 0, opened: 0 };
         }

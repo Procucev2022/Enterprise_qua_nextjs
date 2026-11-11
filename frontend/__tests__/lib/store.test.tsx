@@ -3051,5 +3051,117 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       });
       expect(failedPayUrl).toBeNull();
     });
+
+    it('exercises vendor payment link and resolveVendorId flows', async () => {
+      const ctx = await mountStore();
+
+      mockFetch.mockImplementation(async (url: string) => {
+        const u = String(url);
+        if (u.includes('/payment-links')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, data: [{ id: 'link-v-1', status: 'PAID' }] }),
+          };
+        }
+        if (u.includes('/payment-link')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, data: { paymentUrl: 'https://pay.zoho.com/vendor-checkout' } }),
+          };
+        }
+        if (u.includes('/subscription')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, data: { subscriptionPlan: 'connect', rfqDownloadsUsed: 0 } }),
+          };
+        }
+        if (u.includes('/api/vendors')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                id: 'v-acme-1',
+                name: 'Acme Supplies',
+                email: 'buyer@procucev.com',
+                phone: '+91 9888877777',
+              },
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ success: true, data: [] }) };
+      });
+
+      // 1. Add vendor to buyerVendors
+      await act(async () => {
+        await ctx().addBuyerVendor({
+          name: 'Acme Supplies',
+          email: 'buyer@procucev.com',
+          phone: '+91 9888877777',
+          majorCategory: 'Mechanical',
+          minorCategories: [],
+          city: 'Hyderabad',
+          state: 'Telangana',
+          pincode: '500001',
+          country: 'India',
+          address: '123 Main St',
+          gstin: '36AAAAA0000A1Z5',
+          pan: 'AAAAA0000A',
+          turnover: '10 - 50 Cr',
+          status: 'PREFERRED ENTERPRISE',
+          rating: 4.5,
+          contactPerson: 'Acme Rep',
+          contactDesignation: 'Manager',
+        });
+      });
+
+      let vendorPayUrl: string | null = null;
+      await act(async () => {
+        vendorPayUrl = await ctx().createVendorPaymentLink('connect', '12_months');
+      });
+      expect(vendorPayUrl).toBe('https://pay.zoho.com/vendor-checkout');
+
+      // 3. updateVendorSubscription with matching vendor
+      let updateRes: boolean = false;
+      await act(async () => {
+        updateRes = await ctx().updateVendorSubscription('connect');
+      });
+      expect(updateRes).toBe(true);
+
+      // 4. checkVendorPaymentLinkStatus
+      mockFetch.mockImplementationOnce(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: [{ id: 'link-v-1', status: 'PAID' }] }),
+      }));
+      const linkStatus = await ctx().checkVendorPaymentLinkStatus('link-v-1');
+      expect(linkStatus).toBe('PAID');
+
+      // 5. checkVendorPaymentLinkStatus not found
+      mockFetch.mockImplementationOnce(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: [{ id: 'link-v-other', status: 'PAID' }] }),
+      }));
+      const missingLinkStatus = await ctx().checkVendorPaymentLinkStatus('link-v-1');
+      expect(missingLinkStatus).toBeNull();
+
+      // 6. HTTP failure & exception on createVendorPaymentLink
+      mockFetch.mockImplementationOnce(async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false }),
+      }));
+      const failedVendorPay = await ctx().createVendorPaymentLink('select');
+      expect(failedVendorPay).toBeNull();
+
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
+      const netErrVendorPay = await ctx().createVendorPaymentLink('select');
+      expect(netErrVendorPay).toBeNull();
+    });
   });
 });

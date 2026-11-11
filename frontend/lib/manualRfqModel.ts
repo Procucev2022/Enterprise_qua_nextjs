@@ -88,6 +88,7 @@ export function createEmptyManualRFQForm(): ManualRFQForm {
   return {
     title: '',
     majorCategory: '',
+    minorCategory: '',
     estimatedBudget: null,
     targetDeliveryDate: '',
     deliveryLocation: '',
@@ -290,6 +291,8 @@ export function toRFQCreatePayload(
     // Taken from the leading row rather than the header field: validation
     // guarantees every row carries a major category, so this is always set.
     category: clean(form.majorCategory) || (leading ? leading.majorCategory : ''),
+    majorCategory: clean(form.majorCategory) || (leading ? leading.majorCategory : ''),
+    minorCategory: clean(form.minorCategory) || (leading ? leading.minorCategory : ''),
     sourcingMode: form.sourcingMode,
     status: MANUAL.defaultStatus,
     source: source || 'manual_entry',

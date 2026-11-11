@@ -5051,3 +5051,216 @@ resume, resolve file conflict issues & PR checks, [https://github.com/Procucev20
 ```text
 resume, resolve file conflict issues & PR checks, [https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416)
 ```
+
+
+---
+
+### Prompt 122
+
+**Timestamp**: 2026-11-11T08:41:26+05:30
+
+```text
+Gemini model order was supposed to be gemini 3.5 flash lite, then gemini 3.1 flash lite, then gemini 3.8 flash, then gemini 3.7 flash, then gemini 3.6 flash, then gemini 3.5 flash
+
+Why a change, can you please check
+```
+
+
+---
+
+### Prompt 123
+
+**Timestamp**: 2026-11-11T08:45:47+05:30
+
+```text
+please do, who updated this order last time?
+```
+
+
+---
+
+### Prompt 124
+
+**Timestamp**: 2026-11-11T09:01:50+05:30
+
+```text
+Can we remove these gemini model configuration from env variables, this gemini model order is fine constants file, no need of env.
+```
+
+
+---
+
+### Prompt 125
+
+**Timestamp**: 2026-11-11T09:06:42+05:30
+
+```text
+Why this login error? for what purpose, session storage is needed in login?
+```
+
+
+---
+
+### Prompt 128
+
+**Timestamp**: 2026-11-11T09:32:03+05:30
+
+```text
+Why are we storing cloudlfare env variables in wrangler file, or in codebase, it should be fetched from cloudflare env variables in dashboard?
+```
+
+
+---
+
+### Prompt 129
+
+**Timestamp**: 2026-11-11T09:50:57+05:30
+
+```text
+In AI RFQ creation, in in Gemini extraction process minor category extraction is also mandatory. please check & fix it. Minor category extraction is also mandatory for AI extraction.
+```
+
+
+---
+
+### Prompt 130
+
+**Timestamp**: 2026-11-11T11:14:28+05:30
+
+```text
+Create RFQ failed, Can you please check logs, why it failed?
+```
+
+
+---
+
+### Prompt 131
+
+**Timestamp**: 2026-11-11T11:28:14+05:30
+
+```text
+Why postgres configuration are checked, remove postgres configuration from entire database. We use only cloudflare D1 database, 
+
+Also how to get these tables migrated? in prod, staging or dev deployment?
+
+Also why error message was not proper, in entire codebase error message should be proper.
+```
+
+
+---
+
+### Prompt 132
+
+**Timestamp**: 2026-11-11T12:40:42+05:30
+
+```text
+I want database migrations to happen via CI-CD pipeline,  for this where should we add env variables. i don't want to add env variables in codebase.
+```
+
+
+---
+
+### Prompt 133
+
+**Timestamp**: 2026-11-11T13:24:52+05:30
+
+```text
+We haven't added this information but PAN & Udhyam Number is showing. 
+
+Can you please check what is this issue.
+```
+
+
+---
+
+### Prompt 134
+
+**Timestamp**: 2026-11-11T13:46:19+05:30
+
+```text
+This is the Vendor Portal. From a vendor’s perspective, my submitted request has moved down the list, while other requests are appearing at the top. This could create confusion and make it difficult for vendors to track their own requests.
+```
+
+---
+
+### Prompt 135
+
+**Timestamp**: 2026-11-11T14:48:33+05:30
+
+```text
+On the left - It is showing Quotes - 1 and the one with arrow marked showing 0/0 responded
+```
+
+
+
+
+
+
+
+---
+
+### Prompt 136
+
+**Timestamp**: 2026-11-11T16:45:01+05:30
+
+```text
+Vendor-side Zoho payment is not working, and 18% GST is not being added to the subscription amount. Buyer-side payment is working correctly with 18% GST.
+```
+
+---
+
+### Prompt 137
+
+**Timestamp**: 2026-11-11T17:55:37+05:30
+
+```text
+https://qua.procucev.com/buyer/vendor-evaluation-summary
+
+This is not a vendor in our account, But the vendor is being displayed. Can you please check what could be the issue here.
+```
+
+---
+
+### Prompt 138
+
+**Timestamp**: 2026-11-11T18:37:11+05:30
+
+```text
+This is our vendor’s profile. The vendor has not yet signed in to the portal, but multiple attachments have already been uploaded on his behalf.
+
+Can you please check & fix this.
+```
+
+---
+
+### Prompt 139
+
+**Timestamp**: 2026-11-11T19:06:58+05:30
+
+```text
+Currently for any small change in antigravity, it is taking too much time in quality checks, any way to speed it up.
+```
+
+---
+
+### Prompt 140
+
+**Timestamp**: 2026-11-11T19:32:02+05:30
+
+```text
+Seems like logs are getting stored in database, in localhost running it should be stored in file system otherwise it should be properly logs in cloudflare, no need to save in database, delete any table if exists in any of the deployment for this. make such kind of database migration changes.
+```
+
+
+
+
+
+---
+
+### Prompt 141
+
+**Timestamp**: 2026-11-11T20:16:05+05:30
+
+```text
+Check if there is any logs getting saved in database, remove those as well
+```

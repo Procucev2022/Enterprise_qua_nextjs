@@ -100,13 +100,37 @@ function getD1HttpClient() {
   }
 
   /**
-   * Execute multiple statements as a single batch (one HTTP round-trip each
-   * for the REST API — D1's HTTP API does not have a true batch endpoint, so
-   * we run them in parallel via Promise.all, which is still far cheaper than
-   * sequential awaits and mirrors the Workers db.batch() intent).
+   * Execute multiple statements as an atomic batch using Cloudflare D1's native
+   * `/query` REST API batch payload `{ batch: [ { sql, params }, ... ] }`.
    */
   async function batchHttp(statements) {
-    return Promise.all(statements.map(({ sql, params }) => execHttp(sql, params)));
+    if (!statements || statements.length === 0) return [];
+    const body = JSON.stringify({
+      batch: statements.map((s) => ({ sql: s.sql, params: s.params || [] })),
+    });
+    const res = await fetch(baseUrl, { method: 'POST', headers, body });
+
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch {
+      throw new Error(`D1 HTTP API returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
+    }
+
+    if (!res.ok || !json.success) {
+      const msg = (json.errors && json.errors[0] && json.errors[0].message) || text.slice(0, 300);
+      throw new Error(`D1 HTTP batch failed (${res.status}): ${msg}`);
+    }
+
+    const rawResults = Array.isArray(json.result) ? json.result : [json.result];
+    return rawResults.map((item) => {
+      const rows = Array.isArray(item?.results) ? item.results : (Array.isArray(item?.rows) ? item.rows : []);
+      const meta = item?.meta || {};
+      return {
+        rows,
+        rowCount: meta.changes ?? item?.rowCount,
+        meta,
+      };
+    });
   }
 
   // The real Workers D1 binding's `.all()` resolves to `{results, success,
@@ -314,16 +338,6 @@ async function queryD1(db, text, params = []) {
  * `{ rows, rowCount }`-shaped result per statement, in the same order.
  */
 async function batchD1(db, statements) {
-  if (db && db._isHttpClient && statements.length > 1) {
-    const error = new Error('The D1 HTTP adapter cannot guarantee atomicity for a multi-statement batch. Use a Workers D1 binding.');
-    logger.error('Multi-statement D1 batch rejected by the non-atomic HTTP adapter', {
-      error,
-      operation: 'batchD1',
-      statementCount: statements.length,
-    }, 'DATABASE_D1_BATCH');
-    throw error;
-  }
-
   const prepared = statements.map(({ text, params = [] }) => {
     const stmt = db.prepare(toD1Sql(text));
     const boundParams = expandD1Params(text, params);

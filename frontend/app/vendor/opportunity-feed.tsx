@@ -35,6 +35,7 @@ export default function OpportunityFeed({
 }: OpportunityFeedProps) {
   const router = useRouter();
   const {
+    rfqs,
     vendorOpportunities,
     showToast,
     addAuditLog,
@@ -68,6 +69,8 @@ export default function OpportunityFeed({
   const [myMinorCategories, setMyMinorCategories] = React.useState<string[]>([]);
   const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = React.useState<string>('');
   const [myBuyerId, setMyBuyerId] = React.useState<string>('');
+  const [myVendorId, setMyVendorId] = React.useState<string>('');
+  const [myVendorName, setMyVendorName] = React.useState<string>('');
   const [myOnboardingSource, setMyOnboardingSource] = React.useState<'buyer' | 'self' | null>(null);
   React.useEffect(() => {
     let cancelled = false;
@@ -76,6 +79,8 @@ export default function OpportunityFeed({
     setMyOnboardingSource(null);
     setMyAddedByBuyerCompany('');
     setMyBuyerId('');
+    setMyVendorId('');
+    setMyVendorName('');
     fetch(`/api/vendors/${encodeURIComponent(email)}`)
       .then((res) => {
         if (!res.ok) {
@@ -94,6 +99,8 @@ export default function OpportunityFeed({
         setMyMinorCategories(Array.isArray(data.data.minorCategories) ? data.data.minorCategories : []);
         setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || '');
         setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || '');
+        setMyVendorId(data.data.id || '');
+        setMyVendorName(data.data.name || '');
         const isBuyerAdded = data.data.addedByBuyerCompany || data.data.buyerId || data.data.buyerAccountId;
         setMyOnboardingSource(
           isBuyerAdded ? 'buyer' : data.data.source === 'self_registration' ? 'self' : null
@@ -141,9 +148,55 @@ export default function OpportunityFeed({
     </option>
   );
 
-  // The RFQs this vendor has not quoted on yet, which is what the reminder banner
-  // is about. `pending_bid` is set by the store when an RFQ carries no quotes.
-  const pendingBidOpportunities = vendorOpportunities.filter((opp) => opp.status === 'pending_bid');
+  // Helper to map RFQs to Major and Minor Sourcing categories dynamically
+  const getOpportunityCategories = (opp: VendorOpportunity) => {
+    const title = opp.title.toLowerCase();
+    if (title.includes('pump') || title.includes('valve')) {
+      return { major: 'Mechanical & Fluid Equipment', minor: 'Pumps & Valves' };
+    }
+    if (title.includes('hvac') || title.includes('control')) {
+      return { major: 'Building & Infrastructure', minor: 'Building Automation & HVAC' };
+    }
+    return { major: 'Mechanical & Fluid Equipment', minor: 'Structural Steel & Beams' };
+  };
+
+  // Direct-vs-marketplace reflects the real relationship:
+  // Checks vendor's addedByBuyerCompany against the RFQ's buyerAccountName,
+  // buyer ID mapping, and explicit vendor assignment in assignedVendors.
+  const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
+  const isOwnBuyerRfq = React.useCallback((opp: VendorOpportunity) => {
+    const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
+    const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
+    const assignedList = opp.assignedVendors || rfqRecord?.assignedVendors;
+    if (assignedList && assignedList.length > 0) {
+      const isAssigned = assignedList.some((v) => {
+        const vEmail = (v.email || '').toLowerCase().trim();
+        if (vEmail && sessionEmail && vEmail === sessionEmail) return true;
+        const vId = String(v.id || '').trim();
+        if (vId && myVendorId && vId === myVendorId) return true;
+        const vName = (v.name || '').toLowerCase().trim();
+        return Boolean(vName && myVendorName && vName === myVendorName.toLowerCase().trim());
+      });
+      if (isAssigned) return true;
+    }
+
+    const bCompany = myAddedByBuyerCompany || myVendorRecord?.addedByBuyerCompany;
+    if (bCompany && opp.buyer === bCompany) return true;
+    const bId = myBuyerId || myVendorRecord?.buyerId || myVendorRecord?.buyerAccountId;
+    if (bId && opp.buyerAccountId === bId) return true;
+    return false;
+  }, [rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+
+  // The RFQs this vendor has not quoted on yet, prioritizing direct client invitations first
+  const pendingBidOpportunities = React.useMemo(() => {
+    return vendorOpportunities
+      .filter((opp) => opp.status === 'pending_bid')
+      .sort((a, b) => {
+        const aDirect = isOwnBuyerRfq(a) ? 1 : 0;
+        const bDirect = isOwnBuyerRfq(b) ? 1 : 0;
+        return bDirect - aDirect;
+      });
+  }, [vendorOpportunities, isOwnBuyerRfq]);
   const pendingBidCount = pendingBidOpportunities.length;
   const pendingBidOpportunity = pendingBidOpportunities[0];
 
@@ -163,36 +216,6 @@ export default function OpportunityFeed({
   };
   const handleMinorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedMinorCategoryNet(e.target.value);
   const handleSearchNet = (e: React.ChangeEvent<HTMLInputElement>) => setRfqSearchTermNet(e.target.value);
-
-  // Helper to map RFQs to Major and Minor Sourcing categories dynamically
-  const getOpportunityCategories = (opp: VendorOpportunity) => {
-    const title = opp.title.toLowerCase();
-    if (title.includes('pump') || title.includes('valve')) {
-      return { major: 'Mechanical & Fluid Equipment', minor: 'Pumps & Valves' };
-    }
-    if (title.includes('hvac') || title.includes('control')) {
-      return { major: 'Building & Infrastructure', minor: 'Building Automation & HVAC' };
-    }
-    return { major: 'Mechanical & Fluid Equipment', minor: 'Structural Steel & Beams' };
-  };
-
-  // Was a hardcoded list of 4 specific RFQ numbers standing in for "this
-  // vendor's own buyer roster" — direct-vs-marketplace now reflects the real
-  // relationship: this vendor's real addedByBuyerCompany against the RFQ's
-  // real buyerAccountName (the same real fields the backend's own quota
-  // enforcement in GET /api/rfqs/:id/email-preview checks).
-  const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
-  const isOwnBuyerRfq = (opp: VendorOpportunity) => {
-    if (!opp) return false;
-    if (myAddedByBuyerCompany && opp.buyer === myAddedByBuyerCompany) return true;
-    if (myBuyerId && opp.buyerAccountId === myBuyerId) return true;
-    if (myVendorRecord) {
-      if (myVendorRecord.addedByBuyerCompany && opp.buyer === myVendorRecord.addedByBuyerCompany) return true;
-      if (myVendorRecord.buyerId && opp.buyerAccountId === myVendorRecord.buyerId) return true;
-      if (myVendorRecord.buyerAccountId && opp.buyerAccountId === myVendorRecord.buyerAccountId) return true;
-    }
-    return false;
-  };
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     const isDirect = isOwnBuyerRfq(opp);
@@ -379,7 +402,16 @@ export default function OpportunityFeed({
   const directCatalogueMatchesCount = (vendorCatalogue || []).length > 0 ? eligibleDirectOpportunities.length : 0;
   const netCatalogueMatchesCount = (vendorCatalogue || []).length > 0 ? eligibleNetworkOpportunities.length : 0;
 
-  const directInvites = eligibleDirectOpportunities;
+  const directInvites = React.useMemo(() => {
+    return [...eligibleDirectOpportunities].sort((a, b) => {
+      const aDirect = isOwnBuyerRfq(a) ? 1 : 0;
+      const bDirect = isOwnBuyerRfq(b) ? 1 : 0;
+      if (bDirect !== aDirect) return bDirect - aDirect;
+      const aTime = new Date(a.deadline || 0).getTime();
+      const bTime = new Date(b.deadline || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [eligibleDirectOpportunities, isOwnBuyerRfq]);
   const networkOpps = eligibleNetworkOpportunities;
 
   const handleUpgradePlan = async (plan: 'premium' | 'connect' | 'select') => {
@@ -393,7 +425,16 @@ export default function OpportunityFeed({
   // Connect/Select advertise real $ prices, so — same as vendor-subscription.tsx
   // — they go through the dummy payment gateway rather than flipping the plan
   // for free on click. This modal previously bypassed that gate entirely.
-  const [pendingPayment, setPendingPayment] = React.useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
+  const [pendingPayment, setPendingPayment] = React.useState<{
+    planId: 'connect' | 'select';
+    planName: string;
+    price: string;
+    billingDurationLabel?: string;
+    breakdown?: {
+      basePrice: string;
+      gstAmount: string;
+    };
+  } | null>(null);
 
   const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     const plan = e.currentTarget.getAttribute('data-plan') || 'premium';
@@ -401,9 +442,18 @@ export default function OpportunityFeed({
       handleUpgradePlan(plan);
       return;
     }
-    const planName = plan === 'connect' ? 'Connect Model (50 RFQs / 3 Months)' : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
-    const price = plan === 'connect' ? '₹2' : '₹5';
-    setPendingPayment({ planId: plan as 'connect' | 'select', planName, price });
+    const isConnect = plan === 'connect';
+    const planName = isConnect ? 'Connect Model (50 RFQs / 3 Months)' : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+    const price = isConnect ? '₹8,849' : '₹17,699';
+    const basePrice = isConnect ? '₹7,499' : '₹14,999';
+    const gstAmount = isConnect ? '+ ₹1,350 (18% GST)' : '+ ₹2,700 (18% GST)';
+    setPendingPayment({
+      planId: plan as 'connect' | 'select',
+      planName,
+      price,
+      billingDurationLabel: '12 Months (Recommended)',
+      breakdown: { basePrice, gstAmount },
+    });
   };
 
   return (
@@ -997,7 +1047,7 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Connect Model (₹2 / 3 mo)
+                    Connect Model (₹7,499 + 18% GST / yr)
                   </h4>
                   <p className="text-[10px] text-slate-400 mt-0.5">Download up to 50 RFQs in 3 months from Marketplace.</p>
                 </div>
@@ -1020,7 +1070,7 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Select Model (₹5 / 3 mo)
+                    Select Model (₹14,999 + 18% GST / yr)
                   </h4>
                   <p className="text-[10px] text-slate-400 mt-0.5">Item Catalogue (100 products) + 100 RFQs / 3 months.</p>
                 </div>
@@ -1056,6 +1106,8 @@ export default function OpportunityFeed({
         planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
+        billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+        breakdown={pendingPayment?.breakdown}
         createPaymentLink={createVendorPaymentLink}
       />
     </div>

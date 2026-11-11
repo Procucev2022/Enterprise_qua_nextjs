@@ -146,7 +146,9 @@ export interface VendorFollowUpRecord {
   call: VendorChannelCall;
   whatsapp: VendorChannelWhatsApp;
   sms: VendorChannelSMS;
+  email?: VendorChannelEmail;
   email24h?: VendorChannelEmail;
+  emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
   lastInteraction: string;
   attemptsCount: number;
@@ -221,6 +223,7 @@ export interface ManualRFQForm {
   title: string;
   /** Header category, derived from the leading line item once one is classified. */
   majorCategory: string;
+  minorCategory?: string;
   /** `null` while unanswered. Optional for dispatch: a buyer need not publish a ceiling. */
   estimatedBudget: number | null;
   targetDeliveryDate: string;
@@ -387,6 +390,8 @@ export type PaymentLinkCreateResult =
 export interface RFQCreatePayload {
   title: string;
   category: string;
+  majorCategory?: string;
+  minorCategory?: string;
   sourcingMode: SourcingMode;
   status: string;
   source: RFQSource;
@@ -726,6 +731,7 @@ export interface VendorOpportunity {
   buyerDetailsHiddenUntil?: string;
   sourcingMode?: string;
   category?: string;
+  assignedVendors?: RFQAssignedVendor[];
 }
 
 export interface AuditLogEntry {
@@ -2002,6 +2008,8 @@ export interface RFQIngestionClassification {
 export interface RFQIngestionDraft {
   title: string;
   category: string;
+  majorCategory?: string;
+  minorCategory?: string;
   targetDeliveryDate: string;
   /**
    * Overall value read off the document: a stated grand total, else the sum of
@@ -2123,6 +2131,8 @@ export interface RFQExtractionRequest {
 export interface RFQExtractionMeta {
   model: string;
   deliveryDate?: string | null;
+  majorCategory?: string | null;
+  minorCategory?: string | null;
 }
 
 export interface RFQExtractionResult {

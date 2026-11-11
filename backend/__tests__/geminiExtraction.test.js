@@ -38,6 +38,7 @@ describe('Gemini category list in the extraction prompt', () => {
     expect(prompt).toContain('Civil Works');
     expect(prompt).toContain('Cement Bulkers');
     expect(prompt).toContain('copied exactly from the CATEGORY LIST');
+    expect(prompt).toContain('"minorCategory" extraction is MANDATORY');
   });
 
   test('omits the category block when the master holds no names', () => {
@@ -428,7 +429,7 @@ describe('Gemini document extraction service', () => {
       expect(global.fetch.mock.calls[0][0]).toContain(GEMINI_CONFIG.FALLBACK_MODELS[0]);
     });
 
-    test('resolveModelChain reflects ordered GEMINI_MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
+    test('resolveModelChain reflects ordered GEMINI_CONFIG.MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
       GEMINI_CONFIG.MODELS = [
         'gemini-3.5-flash-lite',
         'gemini-3.1-flash-lite',
@@ -2613,7 +2614,141 @@ describe('geminiService.generateJson', () => {
         const res = await gemini.extractLineItems({ documentText: 'Pump and Valve Procurement' });
         expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
         expect(res.category).toBe('Engineering Spares - Mechanical');
+        expect(res.majorCategory).toBe('Engineering Spares - Mechanical');
+        expect(res.minorCategory).toBeTruthy();
         expect(res.lineItems).toHaveLength(2);
+      });
+
+      test('inferMinorCategoryFromLineItems infers minor category from line item keywords and taxonomy', () => {
+        const pumpItems = [
+          { itemName: 'Centrifugal Pump 500 GPM', technicalSpecs: 'SS316 impeller' },
+        ];
+        const minor = gemini.inferMinorCategoryFromLineItems(pumpItems, 'Engineering Spares - Mechanical');
+        expect(minor).toBeTruthy();
+        expect(typeof minor).toBe('string');
+
+        // When items have no matches, falls back to default minor for major
+        const unknownItems = [{ itemName: 'Unknown widget 9999', technicalSpecs: 'xyz unknown' }];
+        const defaultMinor = gemini.inferMinorCategoryFromLineItems(unknownItems, 'Civil Works');
+        expect(defaultMinor).toBe('Plumbing');
+
+        // When empty or invalid, falls back safely
+        expect(gemini.inferMinorCategoryFromLineItems([])).toBe('Office & security Cabins');
+        expect(gemini.inferMinorCategoryFromLineItems(null, 'Civil Works')).toBe('Plumbing');
+      });
+
+      test('extractLineItems extracts mandatory minorCategory when model provides both major and minor', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(
+          geminiReply(
+            JSON.stringify({
+              documentTitle: 'Civil Works Procurement',
+              majorCategory: 'Civil Works',
+              minorCategory: 'Plumbing',
+              category: 'Plumbing',
+              items: [
+                { itemName: 'PVC Pipes 4 inch', quantity: 50, unit: 'Nos', technicalSpecs: 'Schedule 40', minorCategory: 'Plumbing', majorCategory: 'Civil Works' },
+              ],
+            })
+          )
+        );
+
+        const res = await gemini.extractLineItems({ documentText: 'Civil Works BOQ' });
+        expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(res.majorCategory).toBe('Civil Works');
+        expect(res.minorCategory).toBe('Plumbing');
+        expect(res.category).toBe('Civil Works');
+        expect(res.lineItems[0].minorCategory).toBe('Plumbing');
+        expect(res.lineItems[0].majorCategory).toBe('Civil Works');
+      });
+
+      test('extractLineItems infers mandatory minorCategory when model only provides minor in category', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(
+          geminiReply(
+            JSON.stringify({
+              documentTitle: 'Valve Requisition',
+              category: 'Valves',
+              items: [
+                ['Cast Iron Ball Valve 2 inch', 10, 'Nos', 'Class 150'],
+              ],
+            })
+          )
+        );
+
+        const res = await gemini.extractLineItems({ documentText: 'Valves requirement' });
+        expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(res.majorCategory).toBe('Engineering Spares - Mechanical');
+        expect(res.minorCategory).toBeTruthy();
+      });
+
+      test('toRawLineItems covers compact array variations with category, brand, date, and location', () => {
+        const parsed = {
+          items: [
+            ['Item A', 10, 'Nos', 'Spec A', 100, 1000, 'Civil Works', '2026-12-01', 'Mumbai'],
+            ['Item B', 5, 'Nos', 'Spec B', 50, 250, 'Tata', '2026-12-05', 'Delhi'],
+            ['Item C', 2, 'Nos', 'Spec C', 20, 40, 'Tata', 'Plumbing', '2026-12-10', 'Bangalore'],
+          ],
+        };
+        const raw = gemini.toRawLineItems(parsed);
+        expect(raw).toHaveLength(3);
+        expect(raw[0].category).toBe('Civil Works');
+        expect(raw[0].targetDate).toBe('2026-12-01');
+        expect(raw[0].deliveryLocation).toBe('Mumbai');
+        expect(raw[1].brand).toBe('Tata');
+        expect(raw[1].targetDate).toBe('2026-12-05');
+        expect(raw[1].deliveryLocation).toBe('Delhi');
+        expect(raw[2].brand).toBe('Tata');
+        expect(raw[2].category).toBe('Plumbing');
+        expect(raw[2].targetDate).toBe('2026-12-10');
+        expect(raw[2].deliveryLocation).toBe('Bangalore');
+      });
+
+      test('extractLineItems covers fallback branches for major/minor category resolution', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+
+        // 1. Unrecognized major and minor falling back to Others - New Product and default minor
+        global.fetch = jest.fn().mockResolvedValueOnce(
+          geminiReply(
+            JSON.stringify({
+              documentTitle: 'Exotic Requisition',
+              majorCategory: 'Unknown Nonexistent Major',
+              minorCategory: 'Unknown Nonexistent Minor',
+              items: [
+                ['Unknown Alien Artifact', 1, 'Unit', 'Unknown tech'],
+              ],
+            })
+          )
+        );
+        const res1 = await gemini.extractLineItems({ documentText: 'Alien Artifact' });
+        expect(res1.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(res1.majorCategory).toBe('Others – New Product');
+        expect(res1.minorCategory).toBe('Office & security Cabins');
+
+        // 2. Model returns rawMinor whose taxonomy major matches resolvedMajor
+        global.fetch = jest.fn().mockResolvedValueOnce(
+          geminiReply(
+            JSON.stringify({
+              documentTitle: 'Hardware Spares',
+              majorCategory: 'Engineering Spares - Mechanical',
+              minorCategory: 'Hardwares',
+              items: [
+                { itemName: 'Hex Bolt M12', quantity: 100, unit: 'Nos', category: 'Hardwares' },
+              ],
+            })
+          )
+        );
+        const res2 = await gemini.extractLineItems({ documentText: 'Hardware Spares' });
+        expect(res2.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(res2.minorCategory).toBe('Hardwares');
+        expect(res2.lineItems[0].minorCategory).toBe('Hardwares');
+
+        // 3. inferMinorCategoryFromLineItems with matching pair in items
+        const itemsWithMinor = [
+          { itemName: 'Pipes', minorCategory: 'Plumbing', technicalSpecs: 'PVC' },
+        ];
+        const inferredMinor = gemini.inferMinorCategoryFromLineItems(itemsWithMinor, 'Civil Works');
+        expect(inferredMinor).toBe('Plumbing');
       });
     });
   });

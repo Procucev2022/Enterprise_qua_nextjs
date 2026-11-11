@@ -137,11 +137,14 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     type: isNetwork ? 'network_marketplace' : 'direct_invitation',
     estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
     deliveryLocation: rfq.deliveryLocation || '',
-    status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
+    status: rfq.status === 'Closed' || rfq.status === 'Expired'
+      ? rfq.status
+      : (rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid'),
     majorCategory: rfq.category || '',
     minorCategory: rfq.extractedEntities?.[0]?.minorCategory || '',
     category: rfq.category || rfq.extractedEntities?.[0]?.majorCategory || '',
     sourcingMode: rfq.sourcingMode,
+    assignedVendors: rfq.assignedVendors,
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -484,21 +487,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // from the vendor's actual record in refreshFromDB once it loads.
   const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number>(0);
 
+  const resolveVendorId = async (sessionEmail?: string | null): Promise<string | null> => {
+    if (!sessionEmail) return null;
+    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
+    if (myVendor?.id) return myVendor.id;
+    try {
+      const res = await fetch(`/api/vendors/${encodeURIComponent(sessionEmail)}`, {
+        headers: authFetchHeaders(),
+      });
+      const json = await res.json().catch(() => null);
+      if (json?.success && json.data?.id) {
+        setBuyerVendors((prev) => [...prev.filter((v) => v.id !== json.data.id), json.data]);
+        return json.data.id;
+      }
+    } catch (err) {
+      logger.log('WARN', 'Failed to lookup vendor profile by email', { error: err }, 'VENDOR_SUBSCRIPTION');
+    }
+    return null;
+  };
+
   // Was pure local state (setVendorSubscription called directly) — reset on
   // every page refresh and never persisted anywhere. Now calls the real
   // PUT /api/vendors/:id/subscription and only updates local state once the
   // backend confirms it, mirroring the vendor rating-revision fix.
   const updateVendorSubscription = async (plan: 'premium' | 'connect' | 'select'): Promise<boolean> => {
     const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
-    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
-    if (!myVendor) {
+    const vendorId = await resolveVendorId(sessionEmail);
+    if (!vendorId) {
       showToast('Subscription Update Failed', 'Could not find your vendor profile.', 'warning');
       return false;
     }
 
     let res: Response;
     try {
-      res = await fetch(`/api/vendors/${encodeURIComponent(myVendor.id)}/subscription`, {
+      res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/subscription`, {
         method: 'PUT',
         headers: authFetchHeaders(),
         body: JSON.stringify({ plan }),
@@ -524,7 +546,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     setVendorSubscription(plan);
     setVendorRfqDownloadsUsed(data.data.rfqDownloadsUsed || 0);
-    setBuyerVendors((prev) => prev.map((v) => (v.id === myVendor.id ? { ...v, ...data.data } : v)));
+    setBuyerVendors((prev) => prev.map((v) => (v.id === vendorId || v.email?.toLowerCase() === sessionEmail ? { ...v, ...data.data } : v)));
     return true;
   };
 
@@ -533,13 +555,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     billingDuration?: '6_months' | '12_months'
   ): Promise<string | null> => {
     const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
-    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
-    if (!myVendor) {
+    const vendorId = await resolveVendorId(sessionEmail);
+    if (!vendorId) {
       showToast('Payment Failed', 'Could not find your vendor profile.', 'warning');
       return null;
     }
 
-    const result = await createPaymentLink(myVendor.id, plan, billingDuration);
+    const result = await createPaymentLink(vendorId, plan, billingDuration);
     if (!result.success) {
       showToast('Payment Failed', result.error, 'warning');
       return null;
@@ -566,9 +588,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const checkVendorPaymentLinkStatus = async (linkId: string): Promise<string | null> => {
     const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
-    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
-    if (!myVendor) return null;
-    return getVendorPaymentLinkStatus(myVendor.id, linkId);
+    const vendorId = await resolveVendorId(sessionEmail);
+    if (!vendorId) return null;
+    return getVendorPaymentLinkStatus(vendorId, linkId);
   };
 
   const checkBuyerPaymentLinkStatus = async (linkId: string): Promise<string | null> => {
@@ -2644,11 +2666,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       prev.map((r) => {
         if (r.rfqNumber === rfqNumber) {
           const updatedQuotes = [...r.quotes.map(q => ({ ...q, isBestPrice: false, isPreferred: false })), newQuote];
+          const updatedFollowUp = r.followUpData ? {
+            ...r.followUpData,
+            respondedCount: Math.max(r.followUpData.respondedCount || 0, updatedQuotes.length),
+          } : r.followUpData;
           return {
             ...r,
             quotesCount: updatedQuotes.length,
             status: 'AI Recommended',
             quotes: updatedQuotes,
+            followUpData: updatedFollowUp,
             aiScore: 95,
           };
         }

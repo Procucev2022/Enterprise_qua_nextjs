@@ -17,16 +17,11 @@ describe('atomic purchase-order persistence', () => {
     })).resolves.toBeNull();
   });
 
-  test('commits RFQ update and audit entry in one PostgreSQL transaction', async () => {
-    const auditState = { head_hash: 'pg-head', revision: 11 };
-    const transactionAudit = sealAuditEntry(auditEntry, auditState.head_hash);
-    const savedRFQ = { id: 'rfq-1', ...updates, poShaSignature: transactionAudit.shaSignature };
+  test('commits RFQ update in PostgreSQL transaction', async () => {
+    const canonicalAudit = sealAuditEntry(auditEntry, '');
+    const savedRFQ = { id: 'rfq-1', ...updates, poShaSignature: canonicalAudit.shaSignature };
     const client = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [auditState] })
-        .mockResolvedValueOnce({ rows: [{ raw: savedRFQ }] })
-        .mockResolvedValueOnce({ rows: [{ head_hash: transactionAudit.shaSignature }] })
-        .mockResolvedValueOnce({ rows: [{ raw: transactionAudit }] }),
+      query: jest.fn().mockResolvedValueOnce({ rows: [{ raw: savedRFQ }] }),
     };
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
@@ -36,25 +31,19 @@ describe('atomic purchase-order persistence', () => {
 
     await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
       rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
-    })).resolves.toEqual({ rfq: savedRFQ, auditEntry: transactionAudit });
+    })).resolves.toEqual({ rfq: savedRFQ, auditEntry: canonicalAudit });
 
-    expect(client.query).toHaveBeenCalledTimes(4);
-    expect(client.query.mock.calls[0][0]).toContain('FOR UPDATE');
-    expect(client.query.mock.calls[1][0]).toContain("COALESCE(raw->>'poFinalised', 'false') <> 'true'");
-    expect(client.query.mock.calls[1][1]).toEqual([
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(client.query.mock.calls[0][0]).toContain("COALESCE(raw->>'poFinalised', 'false') <> 'true'");
+    expect(client.query.mock.calls[0][1]).toEqual([
       'RFQ-1',
-      JSON.stringify({ ...updates, poShaSignature: transactionAudit.shaSignature }),
+      JSON.stringify({ ...updates, poShaSignature: canonicalAudit.shaSignature }),
     ]);
-    expect(client.query.mock.calls[2][0]).toContain('UPDATE audit_chain_state');
-    expect(client.query.mock.calls[3][0]).toContain('INSERT INTO audit_logs');
-    expect(client.query.mock.calls[3][1]).toEqual([auditEntry.id, JSON.stringify(transactionAudit)]);
   });
 
   test('returns null when PostgreSQL conditional update loses a concurrent approval', async () => {
     const client = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ head_hash: 'pg-head', revision: 11 }] })
-        .mockResolvedValueOnce({ rows: [] }),
+      query: jest.fn().mockResolvedValueOnce({ rows: [] }),
     };
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
@@ -65,7 +54,7 @@ describe('atomic purchase-order persistence', () => {
     await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
       rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
     })).resolves.toBeNull();
-    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query).toHaveBeenCalledTimes(1);
   });
 
   test('logs and rethrows PostgreSQL transaction errors', async () => {
@@ -83,88 +72,59 @@ describe('atomic purchase-order persistence', () => {
     expect(loggerSpy).toHaveBeenCalledWith('PostgreSQL purchase-order approval transaction failed', expect.any(Object), 'PURCHASE_ORDER');
   });
 
-  test('commits the update and conditional audit insert in one Worker D1 batch', async () => {
+  test('commits the update in one Worker D1 batch', async () => {
     const binding = { batch: jest.fn() };
-    const auditState = { head_hash: 'd1-head', revision: 3 };
-    const savedAudit = sealAuditEntry(auditEntry, auditState.head_hash);
-    const savedRFQ = { id: 'rfq-1', ...updates, poShaSignature: savedAudit.shaSignature };
+    const canonicalAudit = sealAuditEntry(auditEntry, '');
+    const savedRFQ = { id: 'rfq-1', ...updates, poShaSignature: canonicalAudit.shaSignature };
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
     jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
-    jest.spyOn(pool, 'query').mockResolvedValue({ rows: [auditState] });
     jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
-      { rows: [{ head_hash: savedAudit.shaSignature }], rowCount: 1 },
       { rows: [{ raw: savedRFQ }] },
-      { rows: [{ raw: savedAudit }] },
     ]);
     jest.spyOn(pool.queryAuditor, 'auditQuery').mockImplementation(() => {});
 
     await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
       rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
-    })).resolves.toEqual({ rfq: savedRFQ, auditEntry: savedAudit });
+    })).resolves.toEqual({ rfq: savedRFQ, auditEntry: canonicalAudit });
 
     const [receivedBinding, statements] = d1Bridge.batchD1.mock.calls[0];
     expect(receivedBinding).toBe(binding);
-    expect(statements[0].text).toContain('UPDATE audit_chain_state');
-    expect(statements[1].text).toContain('json_patch(raw, $2)');
-    expect(statements[1].text).toContain('changes() = 1');
-    expect(statements[2].text).toContain('WHERE changes() = 1');
-    expect(statements[0].params).toEqual([savedAudit.shaSignature, 'd1-head', 3, 'RFQ-1']);
-    expect(statements[1].params).toEqual([
-      'RFQ-1', JSON.stringify({ ...updates, poShaSignature: savedAudit.shaSignature }),
+    expect(statements[0].text).toContain('json_patch(raw, $2)');
+    expect(statements[0].params).toEqual([
+      'RFQ-1', JSON.stringify({ ...updates, poShaSignature: canonicalAudit.shaSignature }),
     ]);
-    expect(statements[2].params).toEqual([auditEntry.id, JSON.stringify(savedAudit)]);
   });
 
-  test('returns null after bounded D1 head compare-and-swap retries lose', async () => {
+  test('returns null when D1 batch update returns no row', async () => {
+    const binding = { batch: jest.fn() };
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
     jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
-    jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ head_hash: 'moving-head', revision: 8 }] });
+    jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([{ rows: [] }]);
     jest.spyOn(pool.queryAuditor, 'auditQuery').mockImplementation(() => {});
-    const batchSpy = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
-      { rows: [] }, { rows: [] }, { rows: [] },
-    ]);
 
     await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
       rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
     })).resolves.toBeNull();
-    expect(batchSpy).toHaveBeenCalledTimes(5);
   });
 
-  test('fails closed and logs when D1 audit-chain state is missing', async () => {
+  test('logs and rejects when D1 batch fails', async () => {
+    const binding = { batch: jest.fn() };
+    const failure = new Error('D1 write error');
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
     jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
-    jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+    jest.spyOn(d1Bridge, 'batchD1').mockRejectedValue(failure);
     const loggerSpy = jest.spyOn(logger, 'error');
     const durationSpy = jest.spyOn(pool.queryAuditor, 'auditQuery').mockImplementation(() => {});
 
     await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
       rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
-    })).rejects.toMatchObject({ code: 'AUDIT_CHAIN_STATE_MISSING', statusCode: 503 });
+    })).rejects.toBe(failure);
 
     expect(loggerSpy).toHaveBeenCalledWith('Atomic D1 purchase-order approval failed', expect.any(Object), 'PURCHASE_ORDER');
     expect(durationSpy).toHaveBeenCalled();
-  });
-
-  test('logs and rejects an incomplete atomic D1 result', async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
-    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
-    jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ head_hash: 'd1-head', revision: 3 }] });
-    jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
-      { rows: [{ head_hash: 'advanced-head' }] },
-      { rows: [] },
-      { rows: [] },
-    ]);
-    const loggerSpy = jest.spyOn(logger, 'error');
-    jest.spyOn(pool.queryAuditor, 'auditQuery').mockImplementation(() => {});
-
-    await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
-      rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
-    })).rejects.toThrow('Atomic purchase-order batch advanced the audit head without saving both records.');
-    expect(loggerSpy).toHaveBeenCalledWith('Atomic D1 purchase-order approval failed', expect.any(Object), 'PURCHASE_ORDER');
   });
 
   test('rejects the non-atomic D1 HTTP adapter', async () => {
@@ -178,70 +138,15 @@ describe('atomic purchase-order persistence', () => {
     })).rejects.toMatchObject({ statusCode: 503, code: 'ATOMIC_D1_BATCH_REQUIRED' });
   });
 
-  test('fails closed and logs when PostgreSQL audit-chain state is missing', async () => {
-    const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
-    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
-    jest.spyOn(pool, 'withTransaction').mockImplementation(async (callback) => callback(client));
-    const loggerSpy = jest.spyOn(logger, 'error');
-    jest.spyOn(pool.queryAuditor, 'auditQuery').mockImplementation(() => {});
-
-    await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
-      rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
-    })).rejects.toMatchObject({ code: 'AUDIT_CHAIN_STATE_MISSING', statusCode: 503 });
-    expect(loggerSpy).toHaveBeenCalledWith('PostgreSQL purchase-order approval transaction failed', expect.any(Object), 'PURCHASE_ORDER');
-  });
-
-  test('rolls back and logs when the PostgreSQL audit head update returns no row', async () => {
-    const client = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ head_hash: 'pg-head', revision: 11 }] })
-        .mockResolvedValueOnce({ rows: [{ raw: { id: 'rfq-1' } }] })
-        .mockResolvedValueOnce({ rows: [] }),
-    };
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
-    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
-    jest.spyOn(pool, 'withTransaction').mockImplementation(async (callback) => callback(client));
-    const loggerSpy = jest.spyOn(logger, 'error');
-    jest.spyOn(pool.queryAuditor, 'auditQuery').mockImplementation(() => {});
-
-    await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
-      rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
-    })).rejects.toThrow('Audit-chain head changed during purchase-order approval.');
-    expect(loggerSpy).toHaveBeenCalledWith('PostgreSQL purchase-order approval transaction failed', expect.any(Object), 'PURCHASE_ORDER');
-  });
-
-  test('logs when the PostgreSQL audit insert returns no persisted row', async () => {
-    const transactionAudit = sealAuditEntry(auditEntry, 'pg-head');
-    const client = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ head_hash: 'pg-head', revision: 11 }] })
-        .mockResolvedValueOnce({ rows: [{ raw: { id: 'rfq-1' } }] })
-        .mockResolvedValueOnce({ rows: [{ head_hash: transactionAudit.shaSignature }] })
-        .mockResolvedValueOnce({ rows: [] }),
-    };
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
-    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
-    jest.spyOn(pool, 'withTransaction').mockImplementation(async (callback) => callback(client));
-    const loggerSpy = jest.spyOn(logger, 'error');
-    jest.spyOn(pool.queryAuditor, 'auditQuery').mockImplementation(() => {});
-
-    await expect(purchaseOrderQueries.approvePurchaseOrderInDB({
-      rfqIdOrNumber: 'RFQ-1', updates, auditEntry,
-    })).rejects.toThrow('Purchase-order approval transaction did not persist its audit record.');
-    expect(loggerSpy).toHaveBeenCalledWith('PostgreSQL purchase-order approval transaction failed', expect.any(Object), 'PURCHASE_ORDER');
-  });
-
   test('parses string raw records and reports corrupt JSON', () => {
     expect(purchaseOrderQueries.parseRaw('{"id":"rfq-1"}')).toEqual({ id: 'rfq-1' });
     expect(purchaseOrderQueries.parseRaw(null)).toEqual({});
+    expect(purchaseOrderQueries.parseRaw('[]')).toEqual({});
+    expect(purchaseOrderQueries.parseRaw('"string"')).toEqual({});
+    expect(purchaseOrderQueries.parseRaw(['array'])).toEqual({});
     expect(() => purchaseOrderQueries.parseRaw('{')).toThrow('invalid JSON');
     const statements = purchaseOrderQueries.makeStatements('RFQ-1', updates, auditEntry);
-    expect(statements.postgres.audit).toContain('INSERT INTO audit_logs');
+    expect(statements.postgres.update).toContain("COALESCE(raw->>'poFinalised'");
     expect(statements.d1.update).toContain("json_extract(raw, '$.poFinalised')");
-    expect(statements.d1.updateAuditHead).toContain('audit_chain_state');
   });
 });

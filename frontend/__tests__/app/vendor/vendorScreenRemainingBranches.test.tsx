@@ -123,7 +123,7 @@ describe('vendor subscription pricing and payment reconciliation', () => {
     const selectData = ('select' in config.seller ? config.seller.select : undefined);
     const amount = selectData?.['12_months']?.totalWithGst ?? selectData?.['6_months']?.totalWithGst;
     expect(screen.getByTestId('checkout')).toHaveAttribute('data-plan', 'select');
-    expect(screen.getByTestId('checkout')).toHaveAttribute('data-price', amount ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '₹14,999');
+    expect(screen.getByTestId('checkout')).toHaveAttribute('data-price', amount ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '₹17,699');
     fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.actions.cancel }));
     expect(screen.queryByTestId('checkout')).not.toBeInTheDocument();
   });

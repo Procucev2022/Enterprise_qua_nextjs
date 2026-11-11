@@ -8,9 +8,10 @@ function errorHandler(err, req, res, next) {
   const statusCode = Number.isInteger(requestedStatus) && requestedStatus >= 400 && requestedStatus <= 599
     ? requestedStatus
     : 500;
-  const message = statusCode < 500 || err.expose
-    ? (err.message || 'Request failed.')
-    : 'Internal Server Error';
+  const isPublicError = statusCode < 500 || err.expose || statusCode === 502 || statusCode === 503 || statusCode === 504;
+  const message = isPublicError
+    ? (err.message || (statusCode >= 500 ? 'Service temporarily unavailable. Please retry.' : 'Request failed.'))
+    : (err.message && process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error');
   const requestPath = req.path || String(req.originalUrl || '').split('?')[0];
 
   // Structured Error Logging with fallback
@@ -43,6 +44,8 @@ function errorHandler(err, req, res, next) {
   res.status(statusCode).json({
     success: false,
     error: message,
+    ...(err.code ? { code: err.code } : {}),
+    ...(err.details ? { details: err.details } : {}),
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
   });
 }

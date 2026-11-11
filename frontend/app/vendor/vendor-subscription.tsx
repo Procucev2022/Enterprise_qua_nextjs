@@ -72,11 +72,32 @@ export default function VendorSubscriptionCenter() {
     })();
   }, [buyerVendors, currentUserSession?.email, checkVendorPaymentLinkStatus, refreshFromDB, showToast]);
 
-  const [pendingPayment, setPendingPayment] = useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
+  const [pendingPayment, setPendingPayment] = useState<{
+    planId: 'connect' | 'select';
+    planName: string;
+    price: string;
+    billingDurationLabel?: string;
+    breakdown?: {
+      basePrice: string;
+      gstAmount: string;
+    };
+  } | null>(null);
   const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);
   const [vendorPricing, setVendorPricing] = useState({
-    connect: { price: '₹7,499', chargeAmount: '₹7,499' },
-    select: { price: '₹14,999', chargeAmount: '₹14,999' },
+    connect: {
+      price: '₹7,499',
+      basePrice: '₹7,499',
+      gstAmount: '+ ₹1,350 (18% GST)',
+      totalWithGst: '₹8,849',
+      chargeAmount: '₹8,849',
+    },
+    select: {
+      price: '₹14,999',
+      basePrice: '₹14,999',
+      gstAmount: '+ ₹2,700 (18% GST)',
+      totalWithGst: '₹17,699',
+      chargeAmount: '₹17,699',
+    },
   });
 
   useEffect(() => {
@@ -86,15 +107,36 @@ export default function VendorSubscriptionCenter() {
       const formatINR = (val: number) => `₹${Math.round(val).toLocaleString('en-IN')}`;
       const connectData = config.seller.connect?.['12_months'] || config.seller.connect?.['6_months'];
       const selectData = config.seller.select?.['12_months'] || config.seller.select?.['6_months'];
-      setVendorPricing({
-        connect: {
-          price: connectData ? formatINR(connectData.totalWithGst) : '₹7,499',
-          chargeAmount: connectData ? formatINR(connectData.totalWithGst) : '₹7,499',
-        },
-        select: {
-          price: selectData ? formatINR(selectData.totalWithGst) : '₹14,999',
-          chargeAmount: selectData ? formatINR(selectData.totalWithGst) : '₹14,999',
-        },
+      const gstRate = config.gstRate ?? 0.18;
+      const gstPercent = config.gstPercent ?? 18;
+
+      setVendorPricing((prev) => {
+        const nextPricing = { ...prev };
+        if (connectData) {
+          const base = connectData.baseDurationPrice || 7499;
+          const gst = connectData.gstAmount || Math.round(base * gstRate * 100) / 100;
+          const total = connectData.totalWithGst || (base + gst);
+          nextPricing.connect = {
+            price: formatINR(base),
+            basePrice: formatINR(base),
+            gstAmount: `+ ${formatINR(gst)} (${gstPercent}% GST)`,
+            totalWithGst: formatINR(total),
+            chargeAmount: formatINR(total),
+          };
+        }
+        if (selectData) {
+          const base = selectData.baseDurationPrice || 14999;
+          const gst = selectData.gstAmount || Math.round(base * gstRate * 100) / 100;
+          const total = selectData.totalWithGst || (base + gst);
+          nextPricing.select = {
+            price: formatINR(base),
+            basePrice: formatINR(base),
+            gstAmount: `+ ${formatINR(gst)} (${gstPercent}% GST)`,
+            totalWithGst: formatINR(total),
+            chargeAmount: formatINR(total),
+          };
+        }
+        return nextPricing;
       });
     });
     return () => {
@@ -132,12 +174,22 @@ export default function VendorSubscriptionCenter() {
   // Premium is free (granted on buyer roster upload) so it switches instantly;
   // Connect/Select advertise real $ prices, so they go through the dummy
   // payment gateway first rather than flipping the plan for free on click.
-  const handlePlanButtonClick = (plan: 'premium' | 'connect' | 'select', price: string) => {
+  const handlePlanButtonClick = (plan: 'premium' | 'connect' | 'select') => {
     if (plan === 'premium') {
       handleSubscribe(plan);
       return;
     }
-    setPendingPayment({ planId: plan, planName: planLabel(plan), price });
+    const pricing = vendorPricing[plan];
+    setPendingPayment({
+      planId: plan,
+      planName: planLabel(plan),
+      price: pricing.totalWithGst,
+      billingDurationLabel: '12 Months (Recommended)',
+      breakdown: {
+        basePrice: pricing.basePrice,
+        gstAmount: pricing.gstAmount,
+      },
+    });
   };
 
   const getMaxQuota = () => {
@@ -334,14 +386,21 @@ export default function VendorSubscriptionCenter() {
                   </h3>
                 </div>
 
-                <div className="flex items-baseline gap-1.5 flex-wrap">
-                  {p.originalPrice && (
-                    <span className="text-sm font-semibold text-slate-400 dark:text-gray-500 line-through">
-                      {p.originalPrice}
+                <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    {p.originalPrice && (
+                      <span className="text-sm font-semibold text-slate-400 dark:text-gray-500 line-through">
+                        {p.originalPrice}
+                      </span>
+                    )}
+                    <span className="text-3xl font-black text-slate-900 dark:text-white">{p.price}</span>
+                    <span className="text-[11px] text-slate-400 dark:text-gray-500 font-medium">{p.billing}</span>
+                  </div>
+                  {p.id !== 'premium' && (
+                    <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 shrink-0">
+                      + 18% GST
                     </span>
                   )}
-                  <span className="text-3xl font-black text-slate-900 dark:text-white">{p.price}</span>
-                  <span className="text-[11px] text-slate-400 dark:text-gray-500 font-medium">{p.billing}</span>
                   {p.originalPrice && (
                     <span className="text-[9px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400 w-full">
                       #Annual Billing Only
@@ -390,7 +449,7 @@ export default function VendorSubscriptionCenter() {
               {/* Card Footer Button */}
               <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
-                  onClick={() => handlePlanButtonClick(p.id, p.chargeAmount)}
+                  onClick={() => handlePlanButtonClick(p.id)}
                   disabled={isActive || isUpdatingPlan}
                   className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${
                     isActive
@@ -417,6 +476,8 @@ export default function VendorSubscriptionCenter() {
         planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
+        billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+        breakdown={pendingPayment?.breakdown}
         createPaymentLink={createVendorPaymentLink}
       />
     </div>
