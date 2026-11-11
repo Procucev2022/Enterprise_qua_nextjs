@@ -3,6 +3,8 @@ const mailerService = require('../src/services/mailerService');
 const smsService = require('../src/services/smsService');
 const paymentDuesQueries = require('../src/db/paymentDuesQueries');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
+const pool = require('../src/db/pool');
+const eventOutboxService = require('../src/services/eventOutboxService');
 
 describe('actionCenterNotificationService', () => {
   beforeEach(() => {
@@ -53,6 +55,213 @@ describe('actionCenterNotificationService', () => {
   });
 
   describe('dispatchActionCenterCommunication', () => {
+    it('persists configured Action Center delivery before returning a queued retry', async () => {
+      const poolSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const pendingRecord = {
+        id: 'comm-durable-pending',
+        accountId: 'ticket-queued',
+        channel: 'EMAIL',
+        deliveryStatus: 'Pending',
+        metadata: {},
+      };
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingRecord);
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+        claimed: 0,
+        completed: 0,
+        retried: 0,
+        dead: 0,
+      });
+      const readSpy = jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(null);
+      const mailSpy = jest.spyOn(mailerService, 'deliver');
+      const taskSpy = jest.spyOn(internalTaskQueries, 'createInternalTask');
+
+      const result = await actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'ticket',
+        entityId: 'ticket-queued',
+        channel: 'EMAIL',
+        recipientEmail: 'vendor@example.test',
+        recipientName: 'Vendor',
+        subject: 'Review required',
+        message: 'Please review the ticket.',
+      }, { name: 'Category Manager', email: 'manager@example.test' });
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        deliveryStatus: 'Pending',
+        notificationStatus: 'Notification Pending',
+        metadata: expect.objectContaining({
+          deliveryTemplate: 'action_center',
+          deliveryRecipientEmail: 'vendor@example.test',
+        }),
+      }));
+      expect(recordSpy.mock.invocationCallOrder[0]).toBeLessThan(dispatchSpy.mock.invocationCallOrder[0]);
+      expect(dispatchSpy).toHaveBeenCalledWith(1, ['communication-delivery:comm-durable-pending']);
+      expect(readSpy).toHaveBeenCalledWith('comm-durable-pending');
+      expect(mailSpy).not.toHaveBeenCalled();
+      expect(taskSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        success: true,
+        queued: true,
+        communication: pendingRecord,
+        emailResult: { success: false, queued: true, error: 'Delivery is queued for retry.' },
+      });
+
+      taskSpy.mockRestore();
+      mailSpy.mockRestore();
+      readSpy.mockRestore();
+      dispatchSpy.mockRestore();
+      recordSpy.mockRestore();
+      poolSpy.mockRestore();
+    });
+
+    it('reports configured SMS delivery as queued while its retry is pending', async () => {
+      const poolSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const pendingRecord = { id: 'comm-sms-pending', channel: 'SMS', deliveryStatus: 'Pending', metadata: {} };
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingRecord);
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+        claimed: 1, completed: 0, retried: 1, dead: 0,
+      });
+      const readSpy = jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+        ...pendingRecord,
+        metadata: { deliveryChannels: { sms: { success: false } } },
+      });
+
+      const result = await actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'supplier_dossier',
+        entityId: 'vendor-sms-pending',
+        channel: 'SMS',
+        recipientPhone: '9123456780',
+        message: 'A durable SMS retry should run.',
+        metadata: null,
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        channel: 'SMS',
+        deliveryStatus: 'Pending',
+        metadata: expect.objectContaining({ deliveryTemplate: undefined }),
+      }));
+      expect(result).toMatchObject({
+        success: true,
+        queued: true,
+        smsResult: { success: false, queued: true, error: 'Delivery is queued for retry.' },
+      });
+      expect(result.emailResult).toBeNull();
+
+      readSpy.mockRestore();
+      dispatchSpy.mockRestore();
+      recordSpy.mockRestore();
+      poolSpy.mockRestore();
+    });
+
+    it('returns provider-confirmed email and SMS status after configured delivery', async () => {
+      const poolSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const pendingRecord = { id: 'comm-both-delivered', channel: 'BOTH', deliveryStatus: 'Pending', metadata: {} };
+      const deliveredRecord = {
+        ...pendingRecord,
+        deliveryStatus: 'Delivered',
+        metadata: {
+          deliveryChannels: {
+            email: { success: true, messageId: 'email-accepted' },
+            sms: { success: true, messageId: 'sms-accepted' },
+          },
+        },
+      };
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingRecord);
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+        claimed: 1, completed: 1, retried: 0, dead: 0,
+      });
+      const readSpy = jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(deliveredRecord);
+      const taskSpy = jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'task-both-sent' });
+
+      const result = await actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'payment_due',
+        entityId: 'due-both-sent',
+        channel: 'BOTH',
+        recipientEmail: 'buyer@example.test',
+        recipientPhone: '9123456780',
+        message: 'Both delivery channels were accepted.',
+        metadata: null,
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        queued: false,
+        communication: deliveredRecord,
+        emailResult: { success: true, messageId: 'email-accepted' },
+        smsResult: { success: true, messageId: 'sms-accepted' },
+      });
+      expect(taskSpy).toHaveBeenCalledTimes(1);
+
+      taskSpy.mockRestore();
+      readSpy.mockRestore();
+      dispatchSpy.mockRestore();
+      recordSpy.mockRestore();
+      poolSpy.mockRestore();
+    });
+
+    it('rejects configured delivery if persistence returns no record identifier', async () => {
+      const poolSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(null);
+      const mailSpy = jest.spyOn(mailerService, 'deliver');
+
+      await expect(actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'ticket',
+        entityId: 'ticket-empty-persistence',
+        channel: 'EMAIL',
+        recipientEmail: 'buyer@example.test',
+        message: 'Do not send without a durable history row.',
+      })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+
+      expect(mailSpy).not.toHaveBeenCalled();
+      mailSpy.mockRestore();
+      recordSpy.mockRestore();
+      poolSpy.mockRestore();
+    });
+
+    it('records no-destination requests without entering the configured delivery path', async () => {
+      const poolSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'comm-no-destination' });
+      const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms');
+
+      const result = await actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'supplier_dossier',
+        entityId: 'vendor-no-destination',
+        channel: 'SMS',
+        recipientName: '',
+        recipientEmail: 'fallback@example.test',
+        recipientPhone: '',
+        message: 'No channel recipient was supplied.',
+        metadata: null,
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({ recipient: 'fallback@example.test' }));
+      expect(smsSpy).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+
+      smsSpy.mockRestore();
+      recordSpy.mockRestore();
+      poolSpy.mockRestore();
+    });
+
+    it('does not contact an external provider when configured history persistence fails', async () => {
+      const poolSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const persistenceError = Object.assign(new Error('database unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockRejectedValue(persistenceError);
+      const mailSpy = jest.spyOn(mailerService, 'deliver');
+
+      await expect(actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'ticket',
+        entityId: 'ticket-no-history',
+        channel: 'EMAIL',
+        recipientEmail: 'vendor@example.test',
+        message: 'Please review the ticket.',
+      })).rejects.toBe(persistenceError);
+
+      expect(mailSpy).not.toHaveBeenCalled();
+      mailSpy.mockRestore();
+      recordSpy.mockRestore();
+      poolSpy.mockRestore();
+    });
+
     it('dispatches EMAIL successfully and creates tasks', async () => {
       const deliverSpy = jest.spyOn(mailerService, 'deliver').mockResolvedValueOnce({ messageId: 'msg-123' });
       const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValueOnce({
@@ -126,6 +335,24 @@ describe('actionCenterNotificationService', () => {
       deliverSpy.mockRestore();
       recordSpy.mockRestore();
       taskSpy.mockRestore();
+    });
+
+    it('reports an explicit email provider refusal when delivery resolves without acceptance', async () => {
+      const deliverSpy = jest.spyOn(mailerService, 'deliver').mockResolvedValueOnce({ sent: false });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValueOnce({ id: 'comm-email-refused' });
+
+      const result = await actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'ticket',
+        entityId: 'ticket-email-refused',
+        channel: 'EMAIL',
+        recipientEmail: 'buyer@example.test',
+        message: 'Provider did not accept this message.',
+      });
+
+      expect(result.emailResult).toMatchObject({ success: false, error: 'Email was not sent.' });
+      expect(result.success).toBe(false);
+      deliverSpy.mockRestore();
+      recordSpy.mockRestore();
     });
 
     it('handles mock email deliver branch when deliver is not a function', async () => {
@@ -217,6 +444,24 @@ describe('actionCenterNotificationService', () => {
       expect(res.smsResult.success).toBe(false);
       expect(res.smsResult.error).toContain('Gateway timeout');
 
+      smsSpy.mockRestore();
+      recordSpy.mockRestore();
+    });
+
+    it('reports a resolved SMS refusal when the provider supplies no error detail', async () => {
+      const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValueOnce({ success: false });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValueOnce({ id: 'comm-sms-refused' });
+
+      const result = await actionCenterNotificationService.dispatchActionCenterCommunication({
+        entityType: 'supplier_dossier',
+        entityId: 'vendor-sms-refused',
+        channel: 'SMS',
+        recipientPhone: '9123456780',
+        message: 'Provider did not accept this message.',
+      });
+
+      expect(result.smsResult).toMatchObject({ success: false, error: 'SMS delivery failed.' });
+      expect(result.success).toBe(false);
       smsSpy.mockRestore();
       recordSpy.mockRestore();
     });
@@ -455,6 +700,8 @@ describe('actionCenterNotificationService', () => {
     });
 
     it('covers sanitizeActionUrl and escapeHtml edge-cases', () => {
+      const { logger } = require('../src/services/loggerService');
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
       expect(actionCenterNotificationService.sanitizeActionUrl(null, 'https://fallback.com')).toBe('https://fallback.com');
       expect(actionCenterNotificationService.sanitizeActionUrl('not a valid url', 'https://fallback.com')).toBe('https://fallback.com');
       expect(actionCenterNotificationService.sanitizeActionUrl('javascript:alert(1)', 'https://fallback.com')).toBe('https://fallback.com');
@@ -463,6 +710,17 @@ describe('actionCenterNotificationService', () => {
 
       expect(actionCenterNotificationService.escapeHtml(null)).toBe('');
       expect(actionCenterNotificationService.escapeHtml('&<>"\'')).toBe('&amp;&lt;&gt;&quot;&#39;');
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Malformed action notification URL; using the configured fallback',
+        {},
+        'ACTION_CENTER'
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Unsupported action notification URL protocol; using the configured fallback',
+        {},
+        'ACTION_CENTER'
+      );
+      warnSpy.mockRestore();
     });
   });
 

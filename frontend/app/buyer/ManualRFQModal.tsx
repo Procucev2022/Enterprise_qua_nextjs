@@ -166,7 +166,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const [modalVendorCategoryTab, setModalVendorCategoryTab] = useState<'matched' | 'all' | 'mismatched'>('matched');
   const [confirmationRfq, setConfirmationRfq] = useState<RFQItem | null>(null);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
-  const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [completedCategoryEmailVendors, setCompletedCategoryEmailVendors] = useState<string[]>([]);
+  const categoryUpdateIdempotencyKeys = useRef<Record<string, string>>({});
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode>('mode_1');
 
@@ -181,19 +182,34 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         vendorName: vendor.name || vendor.contactPerson,
         rfqCategory: signals.join(', ') || form.lineItems?.[0]?.majorCategory || 'Requested Category',
         rfqTitle: form.title || 'Procurement Requisition',
+        idempotencyKey: categoryUpdateIdempotencyKeys.current[vendorKey],
       });
       if (res.success) {
-        setSentCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        delete categoryUpdateIdempotencyKeys.current[vendorKey];
+        setCompletedCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        const isQueued = res.deliveryStatus === 'queued';
         store?.showToast?.(
-          'Category Update Email Sent',
-          `An email has been sent to ${vendor.name || vendor.contactPerson || 'Vendor'} (${vendor.email}) requesting them to update their category to match this RFQ.`,
+          isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedTitle : UI_STRINGS.vendorCategoryUpdate.sentTitle,
+          formatString(
+            isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedMessage : UI_STRINGS.vendorCategoryUpdate.sentMessage,
+            { vendorName: vendor.name || vendor.contactPerson || 'Vendor', vendorEmail: vendor.email || '' }
+          ),
           'success'
         );
       } else {
-        store?.showToast?.('Email Delivery Issue', res.error || 'Failed to dispatch email.', 'warning');
+        if (res.idempotencyKey) categoryUpdateIdempotencyKeys.current[vendorKey] = res.idempotencyKey;
+        store?.showToast?.(
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
+          res.error || UI_STRINGS.vendorCategoryUpdate.failureMessage,
+          'warning'
+        );
       }
     } catch (err: any) {
-      store?.showToast?.('Error', err?.message || 'Failed to send update email.', 'warning');
+      store?.showToast?.(
+        UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+        err?.message || UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+        'warning'
+      );
     } finally {
       setSendingCategoryEmailVendors((prev) => prev.filter((id) => id !== vendorKey));
     }
@@ -1784,12 +1800,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                     {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <Loader2 size={10} className="animate-spin" />
-                                        <span>Sending Email...</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                       </>
-                                    ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                    ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <CheckCircle2 size={10} />
-                                        <span>Update Email Sent ✓</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                       </>
                                     ) : (
                                       <>
@@ -2161,12 +2177,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                           {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                             <>
                                               <Loader2 size={10} className="animate-spin" />
-                                              <span>Sending Email...</span>
+                                              <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                             </>
-                                          ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                          ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                             <>
                                               <CheckCircle2 size={10} />
-                                              <span>Update Email Sent ✓</span>
+                                              <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                             </>
                                           ) : (
                                             <>

@@ -1105,7 +1105,7 @@ export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
 
 /** Vendor live presence threshold & polling intervals (ms) */
 export const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
-export const PRESENCE_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+export const PRESENCE_HEARTBEAT_INTERVAL_MS = 4 * 60 * 1000;
 export const PRESENCE_POLL_INTERVAL_MS = 30 * 1000;
 
 /** RFQ vendor assignment limits per category (configurable via env) */
@@ -1614,6 +1614,21 @@ export type AccountDocumentFilterType = (typeof ACCOUNT_DOCUMENT_TYPES)[number];
 export const CREDIT_APPROVAL_APPROVERS = [
   'Srinu Sir',
   'Sudheer Sir',
+] as const;
+
+export const APPROVER_CONFIG = [
+  {
+    id: 'srinu_sir',
+    name: 'Srinu Sir',
+    email: 'srinivas.mukku@procucev.com',
+    title: 'Director / Management Authority',
+  },
+  {
+    id: 'sudheer_sir',
+    name: 'Sudheer Sir',
+    email: 'sudheer.kangala@procucev.com',
+    title: 'Management Authority',
+  },
 ] as const;
 
 export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];

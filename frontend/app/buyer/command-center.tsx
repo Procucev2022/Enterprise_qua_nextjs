@@ -92,7 +92,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   };
 
   // Intake Source Counts
-  const emailGatewayRFQs = rfqs.filter((r) => isEmailRfqSource(r.source));
+const emailGatewayRFQs = rfqs.filter((r) => isEmailRfqSource(r.source));
   const webPortalRFQs = rfqs.filter((r) => !isEmailRfqSource(r.source) && r.source !== 'manual_entry');
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
@@ -135,7 +135,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   };
 
   const filteredRFQs = rfqs.filter((rfq) => {
-    if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.source === 'manual_entry')) return false;
+if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.source === 'manual_entry')) return false;
     if (rfqSourceFilter === 'manual_entry' && rfq.source !== 'manual_entry') return false;
     if (rfqSourceFilter === 'email_gateway' && !isEmailRfqSource(rfq.source)) return false;
 

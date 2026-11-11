@@ -157,8 +157,13 @@ async function listAccountDocuments(filters = {}) {
           });
         });
       });
-    } catch {
-      // Non-blocking workflow doc ingestion
+    } catch (error) {
+      logger.error('Buyer RFQ workflow documents could not be aggregated for the account dossier', {
+        error,
+        operation: 'aggregate-buyer-rfq-documents',
+        accountType: normType,
+        accountIdPresent: Boolean(normId),
+      }, 'ACCOUNT_DOCUMENT_QUERIES');
     }
   } else if (normType === 'seller') {
     try {
@@ -229,8 +234,13 @@ async function listAccountDocuments(filters = {}) {
           }
         }
       }
-    } catch {
-      // Non-blocking workflow doc ingestion
+    } catch (error) {
+      logger.error('Seller evaluation and quotation workflow documents could not be aggregated for the account dossier', {
+        error,
+        operation: 'aggregate-seller-workflow-documents',
+        accountType: normType,
+        accountIdPresent: Boolean(normId),
+      }, 'ACCOUNT_DOCUMENT_QUERIES');
     }
   }
 

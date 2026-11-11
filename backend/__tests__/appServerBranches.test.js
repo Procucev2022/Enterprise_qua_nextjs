@@ -4,6 +4,7 @@ const { app, bootstrapServer, start } = require('../src/server');
 const storeService = require('../src/services/storeService');
 const pool = require('../src/db/pool');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const { logger } = require('../src/services/loggerService');
 
 describe('App & Server Dedicated Branch Boost Suite', () => {
@@ -26,6 +27,31 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       await new Promise((resolve) => server.close(resolve));
     });
 
+    test('bootstrapServer catches comparison queue recovery rejection and logs warning', async () => {
+      jest.spyOn(rfqChaserScheduler, 'recoverRFQComparisonJobsOnBoot')
+        .mockRejectedValueOnce(new Error('Comparison recovery crash'));
+      const warnSpy = jest.spyOn(logger, 'warn');
+
+      const server = await bootstrapServer(0);
+      expect(server).toBeDefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Failed to recover RFQ comparison notifications on boot',
+        expect.objectContaining({ error: 'Comparison recovery crash' }),
+        'SERVER'
+      );
+      await new Promise((resolve) => server.close(resolve));
+    });
+
+    test('bootstrapServer starts and stops the daily RFQ report scheduler with the server lifecycle', async () => {
+      const startScheduler = jest.spyOn(dailyRfqReportService, 'startDailyReportScheduler');
+      const stopScheduler = jest.spyOn(dailyRfqReportService, 'stopDailyReportScheduler');
+      const server = await bootstrapServer(0);
+
+      expect(startScheduler).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => server.close(resolve));
+      expect(stopScheduler).toHaveBeenCalledTimes(1);
+    });
+
     test('start() starts server successfully on designated port', async () => {
       const server = await start(0);
       expect(server).toBeDefined();
@@ -33,46 +59,66 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       await new Promise((resolve) => server.close(resolve));
     });
 
-    test('start() catches boot errors, logs to console, and exits with code 1', async () => {
+    test('start() catches boot errors, logs a structured error, and exits with code 1', async () => {
       jest.spyOn(storeService, 'hydrateFromDB').mockRejectedValueOnce(new Error('Fatal database boot error'));
       const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       await start(0);
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to start server:', expect.any(Error));
+      expect(errorLogSpy.mock.calls.map(([message, , category]) => [message, category])).toContainEqual([
+        'Failed to start server',
+        'SERVER',
+      ]);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });
 
   describe('app.js lazy hydration and middleware branches', () => {
-    test('lazy hydration skips when path is /api/bot or starts with /api/bot/', async () => {
+    test('lazy hydration skips health and database-only routes', async () => {
       const origHydrated = storeService.isHydratedFromDB;
       storeService.isHydratedFromDB = false;
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB');
 
-      // Exact match /api/bot
-      await request(app).get('/api/bot');
-      expect(hydrateSpy).not.toHaveBeenCalled();
+      const hydrationLayer = app._router.stack.find(
+        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.toString().includes('hydrationPromise')
+      );
+      const defaultPathNext = jest.fn();
+      hydrationLayer.handle({}, {}, defaultPathNext);
+      expect(defaultPathNext).toHaveBeenCalled();
 
-      // Prefix match /api/bot/webhook
+      await request(app).get('/health').expect(200);
+      await request(app).get('/api/enterprise-inquiries').expect(401);
+      await request(app).get('/api/db/status');
       await request(app).get('/api/bot/webhook');
       expect(hydrateSpy).not.toHaveBeenCalled();
 
       storeService.isHydratedFromDB = origHydrated;
     });
 
-    test('lazy hydration executes and logs error when hydrateFromDB fails', async () => {
+    test('lazy hydration rejects store-backed requests and logs errors when hydrateFromDB fails', async () => {
       const origHydrated = storeService.isHydratedFromDB;
       storeService.isHydratedFromDB = false;
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-      jest.spyOn(storeService, 'hydrateFromDB').mockRejectedValueOnce(new Error('Lazy hydration network drop'));
+      jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValueOnce({
+        hydrated: false,
+        error: 'Lazy hydration network drop',
+      }).mockResolvedValueOnce({ hydrated: false });
       const logErrorSpy = jest.spyOn(logger, 'error');
 
-      const res = await request(app).get('/health');
-      expect(res.statusCode).toBe(200);
-      expect(logErrorSpy).toHaveBeenCalledWith('Lazy on-request hydration failed', expect.any(Error), 'APP');
+      const res = await request(app).get('/api/rfqs');
+      expect(res.statusCode).toBe(503);
+      expect(res.body.retryable).toBe(true);
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        'Lazy on-request hydration failed; rejecting store-backed request',
+        expect.objectContaining({ error: expect.any(Error), path: '/api/rfqs' }),
+        'APP'
+      );
+
+      const fallbackRes = await request(app).get('/api/rfqs');
+      expect(fallbackRes.statusCode).toBe(503);
+      expect(logErrorSpy.mock.calls[1][1].error.message).toMatch(/temporarily unavailable/i);
 
       storeService.isHydratedFromDB = origHydrated;
     });
@@ -98,20 +144,39 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       const next2 = jest.fn();
 
       // First request initiates hydration
-      middleware({ path: '/health' }, {}, next1);
+      middleware({ path: '/api/rfqs' }, {}, next1);
       expect(hydrateSpy).toHaveBeenCalledTimes(1);
 
       // Concurrent second request hits (!hydrationPromise) === false and reuses in-flight promise
-      middleware({ path: '/health' }, {}, next2);
+      middleware({ path: '/api/rfqs' }, {}, next2);
       expect(hydrateSpy).toHaveBeenCalledTimes(1);
 
       // Resolve the deferred hydration promise
-      resolveHydration();
+      resolveHydration({ hydrated: true });
       await new Promise((r) => setImmediate(r));
 
       expect(next1).toHaveBeenCalled();
       expect(next2).toHaveBeenCalled();
 
+      storeService.isHydratedFromDB = origHydrated;
+    });
+
+    test('lazy hydration falls through to next when the response was already sent', async () => {
+      const origHydrated = storeService.isHydratedFromDB;
+      storeService.isHydratedFromDB = false;
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue({ hydrated: false });
+      const hydrationLayer = app._router.stack.find(
+        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.toString().includes('hydrationPromise')
+      );
+      const res = { headersSent: true, status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const next = jest.fn();
+
+      hydrationLayer.handle({ path: '/api/rfqs' }, res, next);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
       storeService.isHydratedFromDB = origHydrated;
     });
 

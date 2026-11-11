@@ -2,6 +2,7 @@ import {
   fetchAccountDocuments,
   uploadAccountDocument,
   deleteAccountDocument,
+  createCreditApprovalIdempotencyKey,
   requestBuyerCreditApproval,
   requestSellerQuoteCreditApproval,
   addSellerQuoteCredits,
@@ -18,6 +19,36 @@ describe('accountDocumentsClient', () => {
 
   afterEach(() => {
     global.fetch = origFetch;
+  });
+
+  it('creates a UUID idempotency key when crypto.randomUUID is unavailable', () => {
+    const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    const getRandomValues = jest.fn((bytes: Uint8Array) => bytes);
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } });
+
+    try {
+      expect(createCreditApprovalIdempotencyKey()).toMatch(
+        /^00000000-0000-4000-8000-000000000000$/i
+      );
+      expect(getRandomValues).toHaveBeenCalledWith(expect.any(Uint8Array));
+    } finally {
+      if (originalCrypto) Object.defineProperty(globalThis, 'crypto', originalCrypto);
+      else delete (globalThis as { crypto?: Crypto }).crypto;
+    }
+  });
+
+  it('keeps UUID format when the Web Crypto API is unavailable', () => {
+    const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+
+    try {
+      expect(createCreditApprovalIdempotencyKey()).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      );
+    } finally {
+      if (originalCrypto) Object.defineProperty(globalThis, 'crypto', originalCrypto);
+      else delete (globalThis as { crypto?: Crypto }).crypto;
+    }
   });
 
   describe('fetchAccountDocuments', () => {
@@ -242,6 +273,10 @@ describe('accountDocumentsClient', () => {
           method: 'POST',
         })
       );
+      const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+      expect(JSON.parse(requestOptions.body).idempotencyKey).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      );
     });
 
     it('handles failure when server rejects credit request', async () => {
@@ -295,6 +330,10 @@ describe('accountDocumentsClient', () => {
         expect.objectContaining({
           method: 'POST',
         })
+      );
+      const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+      expect(JSON.parse(requestOptions.body).idempotencyKey).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       );
     });
 

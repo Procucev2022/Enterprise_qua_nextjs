@@ -345,7 +345,7 @@ export default function ActionCenterComposeModal({
       if (result.success) {
         setIsDispatched(true);
         if (result.followupError) {
-          const warningText = formatString(strings.followupSchedulingWarning, {
+          const warningText = formatString(result.queued ? strings.queuedFollowupSchedulingWarning : strings.followupSchedulingWarning, {
             error: result.followupError,
           });
           setFollowupErrorNotice(warningText);
@@ -362,7 +362,7 @@ export default function ActionCenterComposeModal({
             ? strings.channelSms
             : strings.channelEmail;
 
-        const successText = formatString(strings.successToast, { channel: channelLabel });
+        const successText = formatString(result.queued ? strings.queuedToast : strings.successToast, { channel: channelLabel });
         setToastMessage(successText);
         if (onSuccess) {
           onSuccess(result);

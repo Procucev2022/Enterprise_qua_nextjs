@@ -1065,6 +1065,24 @@ describe('mailerService', () => {
       expect(emailFallback.html).toContain('Set during first login');
     });
 
+    test('bulk-import invitation uses OTP sign-in and escapes vendor data without credentials', () => {
+      const email = mailerService.buildVendorBulkImportInvitationEmail({
+        to: 'new-vendor@test.com',
+        recipientName: '<script>alert(1)</script>',
+        buyerOrganizationName: 'Buyer & Co',
+        vendorCode: 'V-<1>',
+      });
+
+      expect(email.to).toBe('new-vendor@test.com');
+      expect(email.subject).toContain('account is ready');
+      expect(email.html).toContain('Sign in with OTP');
+      expect(email.html).toContain('No password is included');
+      expect(email.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(email.html).toContain('Buyer &amp; Co');
+      expect(email.html).not.toContain('<script>');
+      expect(email.html).not.toContain('Temporary Password');
+    });
+
     test('buildRatingRevisionEmail renders rating update summary', () => {
       const email = mailerService.buildRatingRevisionEmail({
         to: 'rating@test.com',
@@ -1085,6 +1103,29 @@ describe('mailerService', () => {
       expect(email.subject).toContain('Mahindra');
       expect(email.html).toContain('4.5 / 5.0');
       expect(email.html).toContain('Great on-time delivery record');
+    });
+
+    test('buildRatingRevisionEmail escapes user content and prevents subject header injection', () => {
+      const email = mailerService.buildRatingRevisionEmail({
+        to: 'rating@test.com',
+        recipientName: '<img src=x onerror=alert(1)>',
+        buyerCompany: '<svg onload=alert(1)>\r\nBcc: attacker@example.test',
+        previousRating: 3.5,
+        newRating: 4.5,
+        previousScore: 70,
+        newScore: 90,
+        remarks: '<script>alert("bad")</script> & feedback',
+        qualityScore: 95,
+        costScore: 85,
+        deliveryScore: 90,
+      });
+
+      expect(email.html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+      expect(email.html).toContain('&lt;svg onload=alert(1)&gt;');
+      expect(email.html).toContain('&lt;script&gt;alert(&quot;bad&quot;)&lt;/script&gt; &amp; feedback');
+      expect(email.html).not.toContain('<script>');
+      expect(email.subject).not.toMatch(/[\r\n]/);
+      expect(email.subject).toContain('Bcc: attacker@example.test');
     });
 
     test('sendVendorIngestionEmail and isConfigured work properly', async () => {

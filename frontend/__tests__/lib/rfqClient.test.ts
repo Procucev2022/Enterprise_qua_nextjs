@@ -22,6 +22,7 @@ import {
   downloadAndUnlockRFQ,
 } from '@/lib/rfqClient';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQCreatePayload, RFQItem } from '@/lib/types';
 
@@ -1866,6 +1867,7 @@ describe('rfqClient.downloadQuoteAttachment', () => {
 
   test('returns a network error when the attachment request fails', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+    const errorLog = jest.spyOn(logger, 'error');
 
     await expect(downloadQuoteAttachment('1', {
       id: 'a1',
@@ -1874,6 +1876,11 @@ describe('rfqClient.downloadQuoteAttachment', () => {
       size: 10,
       uploadedAt: '',
     })).resolves.toEqual({ success: false, error: UI_STRINGS.auth.networkUnreachable });
+    expect(errorLog).toHaveBeenCalledWith(
+      'Quote attachment download request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'offline' }),
+      'RFQ_CLIENT'
+    );
   });
 });
 
@@ -1913,9 +1920,15 @@ describe('rfqClient inquiry APIs', () => {
 
   test('returns a network error when inquiry submission throws a non-Error value', async () => {
     global.fetch = jest.fn().mockRejectedValue(null);
+    const errorLog = jest.spyOn(logger, 'error');
 
     await expect(submitRFQInquiry('1', { message: 'Question' }))
       .resolves.toEqual({ success: false, error: 'Network error submitting inquiry.' });
+    expect(errorLog).toHaveBeenCalledWith(
+      'RFQ inquiry submission request failed',
+      expect.objectContaining({ errorName: 'UnknownError', errorMessage: 'Unknown request failure' }),
+      'RFQ_CLIENT'
+    );
   });
 
   test('replies to an inquiry and returns updated records', async () => {
@@ -1933,6 +1946,7 @@ describe('rfqClient inquiry APIs', () => {
   });
 
   test('returns API failures and network failures for inquiry replies', async () => {
+    const errorLog = jest.spyOn(logger, 'error');
     global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => ({ success: false, error: 'Reply rejected' }) });
     await expect(replyToRFQInquiry('1', '2', { reply: 'Reply' }))
       .resolves.toEqual({ success: false, error: 'Reply rejected' });
@@ -1940,6 +1954,11 @@ describe('rfqClient inquiry APIs', () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Offline'));
     await expect(replyToRFQInquiry('1', '2', { reply: 'Reply' }))
       .resolves.toEqual({ success: false, error: 'Offline' });
+    expect(errorLog).toHaveBeenCalledWith(
+      'RFQ inquiry reply request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Offline' }),
+      'RFQ_CLIENT'
+    );
   });
 });
 
@@ -1960,7 +1979,7 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
 
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ success: true, message: 'Email sent successfully.' }),
+      json: async () => ({ success: true, deliveryStatus: 'queued', message: 'Email queued successfully.' }),
     });
 
     const res = await requestVendorCategoryUpdateEmail({
@@ -1971,7 +1990,8 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
       rfqTitle: 'Pumps Requisition',
     });
 
-    expect(res).toEqual({ success: true, message: 'Email sent successfully.' });
+    expect(res).toMatchObject({ success: true, deliveryStatus: 'queued', message: 'Email queued successfully.' });
+    expect(res.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
     expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/request-vendor-category-update', expect.objectContaining({
       method: 'POST',
       headers: expect.objectContaining({
@@ -1979,6 +1999,24 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
         'Content-Type': 'application/json',
       }),
     }));
+    const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(JSON.parse(requestOptions.body)).toMatchObject({
+      idempotencyKey: res.idempotencyKey,
+      vendorId: 'v-123',
+    });
+  });
+
+  test('reuses a caller idempotency key and preserves provider acceptance', async () => {
+    const idempotencyKey = 'a24d35b5-7276-4652-8b6a-121aa3ab222f';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, deliveryStatus: 'sent', message: 'Accepted.' }),
+    });
+
+    await expect(requestVendorCategoryUpdateEmail({ vendorEmail: 'vendor@example.test', idempotencyKey }))
+      .resolves.toMatchObject({ success: true, deliveryStatus: 'sent', idempotencyKey });
+    const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(JSON.parse(requestOptions.body).idempotencyKey).toBe(idempotencyKey);
   });
 
   test('handles server failure response cleanly', async () => {
@@ -1988,14 +2026,22 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
     });
 
     const res = await requestVendorCategoryUpdateEmail({});
-    expect(res).toEqual({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    expect(res).toMatchObject({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    expect(res.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   test('handles network throw gracefully', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+    const errorLog = jest.spyOn(logger, 'error');
 
     const res = await requestVendorCategoryUpdateEmail({ vendorEmail: 'v@abc.com' });
-    expect(res).toEqual({ success: false, error: 'Network offline' });
+    expect(res).toMatchObject({ success: false, error: 'Network offline' });
+    expect(res.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(errorLog).toHaveBeenCalledWith(
+      'Vendor category update request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Network offline' }),
+      'RFQ_CLIENT'
+    );
   });
 
   describe('extendRFQ', () => {
@@ -2384,9 +2430,15 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
 
     test('handles network failure', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('fetch failed'));
+      const errorLog = jest.spyOn(logger, 'error');
       const res = await fetchVendorRfqCredits();
       expect(res.success).toBe(false);
       expect(res.error).toBe('fetch failed');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Vendor RFQ credit request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'fetch failed' }),
+        'RFQ_CLIENT'
+      );
     });
   });
 
@@ -2432,9 +2484,15 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
 
     test('handles network failure', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('timeout'));
+      const errorLog = jest.spyOn(logger, 'error');
       const res = await downloadAndUnlockRFQ('RFQ-001');
       expect(res.success).toBe(false);
       expect(res.error).toBe('timeout');
+      expect(errorLog).toHaveBeenCalledWith(
+        'RFQ unlock request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'timeout' }),
+        'RFQ_CLIENT'
+      );
     });
 
     test('handles default fallbacks for credits and unlock when error properties are omitted', async () => {

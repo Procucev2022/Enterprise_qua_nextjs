@@ -1,4 +1,5 @@
 import { authClient } from './authClient';
+import { logger } from './logger';
 import type {
   PaymentDuesAccount,
   PaymentDuesSummary,
@@ -18,6 +19,29 @@ function authHeaders(): Record<string, string> {
 
 function extractErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Network error';
+}
+
+const PAYMENT_DUES_LOG_CATEGORY = 'PAYMENT_DUES_CLIENT';
+
+function logPaymentDuesFailure(
+  operation: string,
+  error: unknown,
+  metadata: Record<string, unknown> = {}
+): void {
+  const errorDetails = error instanceof Error
+    ? { error, errorName: error.name, errorMessage: error.message }
+    : { errorName: 'UnknownError', errorMessage: 'Non-Error payment dues failure' };
+  logger.error(`Payment dues ${operation} failed`, { ...errorDetails, ...metadata }, PAYMENT_DUES_LOG_CATEGORY);
+}
+
+function logPaymentDuesResponseFailure(operation: string, status: number, responseErrorPresent = false): void {
+  const httpFailure = status < 200 || status >= 300;
+  const errorMessage = httpFailure ? `HTTP ${status}` : 'API response indicated failure';
+  logPaymentDuesFailure(operation, new Error(errorMessage), {
+    status,
+    responseErrorPresent,
+    errorName: httpFailure ? 'HttpError' : 'ApiResponseError',
+  });
 }
 
 function buildQueryParams(filters: PaymentDuesFilterParams): URLSearchParams {
@@ -59,10 +83,14 @@ const DEFAULT_SUMMARY: PaymentDuesSummary = {
 export async function fetchPaymentDuesSummary(): Promise<PaymentDuesSummary> {
   try {
     const res = await fetch('/api/payment-dues/summary', { headers: authHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      logPaymentDuesResponseFailure('summary fetch', res.status);
+      return DEFAULT_SUMMARY;
+    }
     const json = await res.json();
     return json.summary || DEFAULT_SUMMARY;
-  } catch {
+  } catch (error: unknown) {
+    logPaymentDuesFailure('summary fetch', error);
     return DEFAULT_SUMMARY;
   }
 }
@@ -88,9 +116,10 @@ export async function fetchPaymentDues(
       try {
         const errJson = await res.json();
         if (errJson && errJson.error) errMsg = errJson.error;
-      } catch {
-        // ignore
+      } catch (error: unknown) {
+        logPaymentDuesFailure('account-list error response parsing', error, { status: res.status });
       }
+      logPaymentDuesResponseFailure('account-list fetch', res.status, errMsg !== `Failed to load accounts (HTTP ${res.status})`);
       return {
         accounts: [],
         total: 0,
@@ -109,6 +138,7 @@ export async function fetchPaymentDues(
       limit: json.limit || 25,
     };
   } catch (err) {
+    logPaymentDuesFailure('account-list fetch', err);
     return {
       accounts: [],
       total: 0,
@@ -139,10 +169,12 @@ export async function sendPaymentDuesEmail(payload: {
     });
     const json = await res.json();
     if (!res.ok || !json.success) {
+      logPaymentDuesResponseFailure('email notification', res.status, Boolean(json.error));
       return { success: false, error: json.error || `HTTP ${res.status}` };
     }
     return { success: true, communication: json.communication };
   } catch (err: unknown) {
+    logPaymentDuesFailure('email notification', err, { method: 'POST' });
     return { success: false, error: extractErrorMessage(err) };
   }
 }
@@ -165,10 +197,12 @@ export async function sendPaymentDuesMessage(payload: {
     });
     const json = await res.json();
     if (!res.ok || !json.success) {
+      logPaymentDuesResponseFailure('in-app message notification', res.status, Boolean(json.error));
       return { success: false, error: json.error || `HTTP ${res.status}` };
     }
     return { success: true, communication: json.communication };
   } catch (err: unknown) {
+    logPaymentDuesFailure('in-app message notification', err, { method: 'POST' });
     return { success: false, error: extractErrorMessage(err) };
   }
 }
@@ -191,10 +225,12 @@ export async function sendPaymentDuesWhatsApp(payload: {
     });
     const json = await res.json();
     if (!res.ok || !json.success) {
+      logPaymentDuesResponseFailure('WhatsApp notification', res.status, Boolean(json.error));
       return { success: false, error: json.error || `HTTP ${res.status}` };
     }
     return { success: true, communication: json.communication, directLink: json.directLink };
   } catch (err: unknown) {
+    logPaymentDuesFailure('WhatsApp notification', err, { method: 'POST' });
     return { success: false, error: extractErrorMessage(err) };
   }
 }
@@ -216,10 +252,12 @@ export async function updatePaymentDuesAcknowledgement(payload: {
     });
     const json = await res.json();
     if (!res.ok || !json.success) {
+      logPaymentDuesResponseFailure('acknowledgement update', res.status, Boolean(json.error));
       return { success: false, error: json.error || `HTTP ${res.status}` };
     }
     return { success: true, communication: json.communication };
   } catch (err: unknown) {
+    logPaymentDuesFailure('acknowledgement update', err, { method: 'POST' });
     return { success: false, error: extractErrorMessage(err) };
   }
 }
@@ -234,10 +272,14 @@ export async function fetchPaymentDuesHistory(
     const res = await fetch(`/api/payment-dues/history/${encodeURIComponent(accountId)}`, {
       headers: authHeaders(),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      logPaymentDuesResponseFailure('communication history fetch', res.status);
+      return [];
+    }
     const json = await res.json();
     return json.history || [];
-  } catch {
+  } catch (error: unknown) {
+    logPaymentDuesFailure('communication history fetch', error);
     return [];
   }
 }

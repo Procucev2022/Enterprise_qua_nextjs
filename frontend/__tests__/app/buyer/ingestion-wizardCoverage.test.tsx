@@ -404,7 +404,7 @@ describe.each(['mode_1', 'mode_2'] as const)('IngestionWizard coverage: sparse r
 
   it('keys an id-less vendor by its email while the update request is sending and once it is sent', async () => {
     const { store, sendButtons } = await openMismatchTab();
-    const pending = createDeferred<{ success: boolean }>();
+    const pending = createDeferred<{ success: boolean; deliveryStatus?: 'sent' | 'queued' }>();
     mockEmail.mockReturnValueOnce(pending.promise);
 
     fireEvent.click(sendButtons[0]);
@@ -417,19 +417,22 @@ describe.each(['mode_1', 'mode_2'] as const)('IngestionWizard coverage: sparse r
       rfqTitle: 'Procurement Requisition',
     });
     expect(sendButtons[0]).toBeDisabled();
-    expect(sendButtons[0]).toHaveTextContent(/Sending Email/);
+    expect(sendButtons[0]).toHaveTextContent(UI_STRINGS.vendorCategoryUpdate.sendingButton);
     // Only the vendor being emailed is locked.
     expect(sendButtons[1]).toBeEnabled();
 
     await act(async () => {
-      pending.resolve({ success: true });
+      pending.resolve({ success: true, deliveryStatus: 'queued' });
     });
 
     expect(sendButtons[0]).toBeEnabled();
-    expect(sendButtons[0]).toHaveTextContent(/Update Email Sent/);
+    expect(sendButtons[0]).toHaveTextContent(UI_STRINGS.vendorCategoryUpdate.completedButton);
     expect(store.showToast).toHaveBeenCalledWith(
-      'Category Update Email Sent',
-      'An email has been sent to Priya Contact (noid@vendor.test) requesting them to update their category to match this RFQ.',
+      UI_STRINGS.vendorCategoryUpdate.queuedTitle,
+      formatString(UI_STRINGS.vendorCategoryUpdate.queuedMessage, {
+        vendorName: 'Priya Contact',
+        vendorEmail: 'noid@vendor.test',
+      }),
       'success'
     );
   });
@@ -441,8 +444,11 @@ describe.each(['mode_1', 'mode_2'] as const)('IngestionWizard coverage: sparse r
 
     await waitFor(() =>
       expect(store.showToast).toHaveBeenCalledWith(
-        'Category Update Email Sent',
-        'An email has been sent to Vendor (anon@vendor.test) requesting them to update their category to match this RFQ.',
+        UI_STRINGS.vendorCategoryUpdate.sentTitle,
+        formatString(UI_STRINGS.vendorCategoryUpdate.sentMessage, {
+          vendorName: 'Vendor',
+          vendorEmail: 'anon@vendor.test',
+        }),
         'success'
       )
     );
@@ -454,17 +460,27 @@ describe.each(['mode_1', 'mode_2'] as const)('IngestionWizard coverage: sparse r
   it('warns with default copy when the update email is refused or the request throws without a message', async () => {
     const { store, sendButtons } = await openMismatchTab();
 
-    mockEmail.mockResolvedValueOnce({ success: false });
+    const retryKey = 'a24d35b5-7276-4652-8b6a-121aa3ab222f';
+    mockEmail.mockResolvedValueOnce({ success: false, idempotencyKey: retryKey });
     fireEvent.click(sendButtons[1]);
     await waitFor(() =>
-      expect(store.showToast).toHaveBeenCalledWith('Email Delivery Issue', 'Failed to dispatch email.', 'warning')
+      expect(store.showToast).toHaveBeenCalledWith(
+        UI_STRINGS.vendorCategoryUpdate.failureTitle,
+        UI_STRINGS.vendorCategoryUpdate.failureMessage,
+        'warning'
+      )
     );
 
     mockEmail.mockRejectedValueOnce(new Error(''));
     fireEvent.click(sendButtons[1]);
     await waitFor(() =>
-      expect(store.showToast).toHaveBeenCalledWith('Error', 'Failed to send update email.', 'warning')
+      expect(store.showToast).toHaveBeenCalledWith(
+        UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+        UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+        'warning'
+      )
     );
+    expect(mockEmail).toHaveBeenLastCalledWith(expect.objectContaining({ idempotencyKey: retryKey }));
 
     // Neither failure marks the vendor as emailed, so the action stays available.
     expect(sendButtons[1]).toHaveTextContent(/Send Email to Update Category/);

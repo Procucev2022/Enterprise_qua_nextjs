@@ -4,6 +4,9 @@ import * as XLSX from 'xlsx';
 import InitialSetupModal, { IngestionProgressCard } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
+
+const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -143,10 +146,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
   afterAll(() => {
     global.FileReader = originalFileReader;
+    logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
+    logger.clearLogs();
   });
 
   beforeEach(() => {
     jest.clearAllMocks();
+    logger.isRemoteSyncEnabled = false;
+    logger.clearLogs();
     global.fetch = jest.fn(() =>
       Promise.resolve({
         ok: true,
@@ -876,7 +883,6 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
   });
 
   it('logs and continues locally when the AI cross-match API call rejects', async () => {
-    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const fetchSpy = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network down'));
 
     jest.useFakeTimers();
@@ -903,11 +909,17 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
 
     expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
-    expect(consoleWarnSpy).toHaveBeenCalledWith('Backend AI cross-match API error:', expect.any(Error));
+    expect(logger.buffer).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        level: 'WARN',
+        category: 'VENDOR_INGESTION',
+        message: 'Backend AI cross-match API failed; category matching continues without it',
+        metadata: expect.objectContaining({ error: expect.any(Error) }),
+      }),
+    ]));
 
     jest.useRealTimers();
     fetchSpy.mockRestore();
-    consoleWarnSpy.mockRestore();
   });
 
   it('polls PO Dump job progress live instead of freezing at the initial 0-processed snapshot', async () => {
@@ -1027,8 +1039,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       totalProcessed: 2,
       mappedCount: 1,
       mappedEmailsSent: 1,
+      mappedEmailsQueued: 0,
       unmappedCount: 1,
       unmappedEmailsSent: 1,
+      unmappedEmailsQueued: 0,
       failedEmailCount: 0,
       failedEmails: [],
       overallStatus: 'COMPLETED' as const,
@@ -1754,7 +1768,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
 
     const { container } = render(<InitialSetupModal />);
-    
+
     // Upload valid vendor master in Step 2
     fireEvent.click(screen.getByText('2. Vendor Master'));
     const vFile = createValidVendorMasterFile();

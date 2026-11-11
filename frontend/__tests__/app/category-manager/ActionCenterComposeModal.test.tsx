@@ -290,6 +290,33 @@ describe('ActionCenterComposeModal', () => {
     jest.useRealTimers();
   });
 
+  it('explains when a communication is queued for durable delivery retry', async () => {
+    mockDispatch.mockResolvedValueOnce({
+      success: true,
+      queued: true,
+      communication: { id: 'comm-queued', channel: 'EMAIL', deliveryStatus: 'Pending' },
+      emailResult: { success: false, queued: true, error: 'Delivery is queued for retry.' },
+    });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="ticket"
+        entityId="tkt-queued"
+        defaultRecipientEmail="queued@example.com"
+        defaultMessage="A durable retry should run."
+      />
+    );
+
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(
+        strings.queuedToast.replace('{channel}', strings.channelEmail)
+      );
+    });
+  });
+
   it('handles submission when channel is BOTH and SMS', async () => {
     mockDispatch.mockResolvedValueOnce({
       success: true,

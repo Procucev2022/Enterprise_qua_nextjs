@@ -164,6 +164,18 @@ describe('authService OTP delivery confirmation', () => {
       await expect(authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1')).rejects.toThrow(AUTH_MESSAGES.OTP_STORAGE_FAILED);
       expect(send).not.toHaveBeenCalled();
     });
+
+    test('preserves configured persistence failure so the API can return a retryable error', async () => {
+      authSessionQueries.saveOtp.mockRejectedValue(
+        Object.assign(new Error('D1 unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' })
+      );
+      const send = jest.spyOn(mailerService, 'sendOtpEmail');
+
+      await expect(authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+      expect(send).not.toHaveBeenCalled();
+    });
   });
 
   describe('requestOtp (registration)', () => {

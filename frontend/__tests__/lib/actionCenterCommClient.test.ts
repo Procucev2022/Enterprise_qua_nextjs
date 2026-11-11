@@ -23,6 +23,7 @@ describe('actionCenterCommClient', () => {
         ok: true,
         json: async () => ({
           success: true,
+          queued: true,
           message: 'Dispatched successfully',
           communication: { id: 'comm-100', channel: 'EMAIL' },
           emailResult: { success: true },
@@ -54,6 +55,7 @@ describe('actionCenterCommClient', () => {
         })
       );
       expect(res.success).toBe(true);
+      expect(res.queued).toBe(true);
       expect(res.message).toBe('Dispatched successfully');
       expect(res.communication?.id).toBe('comm-100');
       expect(res.completedTask?.id).toBe('task-1');

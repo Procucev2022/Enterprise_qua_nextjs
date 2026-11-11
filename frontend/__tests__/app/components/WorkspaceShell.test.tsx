@@ -3,10 +3,12 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import WorkspaceShell from '@/app/components/WorkspaceShell';
 import * as storeModule from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { LOGIN_ROUTE, ROLE_LANDING_ROUTE } from '@/lib/constants';
+import { LOGIN_ROUTE, PRESENCE_HEARTBEAT_INTERVAL_MS, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { sendVendorHeartbeat } from '@/lib/vendorPresenceClient';
 
 jest.mock('@/lib/store');
+jest.mock('@/lib/vendorPresenceClient', () => ({ sendVendorHeartbeat: jest.fn().mockResolvedValue({ success: true }) }));
 
 const mockReplace = jest.fn();
 jest.mock('next/navigation', () => ({
@@ -47,7 +49,25 @@ describe('WorkspaceShell route guard', () => {
   };
 
   afterEach(() => {
+    jest.useRealTimers();
     jest.clearAllMocks();
+  });
+
+  it('sends a vendor heartbeat on entry and at the configured interval', () => {
+    jest.useFakeTimers();
+    mockStore({ isLoggedIn: true, currentRole: 'vendor' });
+
+    const { unmount } = render(
+      <WorkspaceShell role="vendor">
+        <p>vendor screen</p>
+      </WorkspaceShell>
+    );
+
+    expect(sendVendorHeartbeat).toHaveBeenCalledWith({ status: 'online' });
+    expect(sendVendorHeartbeat).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(PRESENCE_HEARTBEAT_INTERVAL_MS);
+    expect(sendVendorHeartbeat).toHaveBeenCalledTimes(2);
+    unmount();
   });
 
   it('renders the requested screen for a matching role', () => {
@@ -171,6 +191,7 @@ describe('WorkspaceShell route guard', () => {
 
     expect(mockReplace).toHaveBeenCalledWith('/vendor-first-login');
     expect(screen.queryByText('vendor screen')).not.toBeInTheDocument();
+    expect(sendVendorHeartbeat).not.toHaveBeenCalled();
   });
 
   it('mounts the initial-setup modal only inside the buyer workspace', () => {
@@ -226,6 +247,19 @@ describe('WorkspaceShell route guard', () => {
     expect(mockReplace).toHaveBeenCalledWith(LOGIN_ROUTE);
     // Let the rejected logout promise settle so the swallow path executes.
     await Promise.resolve();
+  });
+
+  it('marks a vendor offline before clearing their session on logout', () => {
+    mockStore({ isLoggedIn: true, currentRole: 'vendor' });
+    render(
+      <WorkspaceShell role="vendor">
+        <p>screen</p>
+      </WorkspaceShell>
+    );
+
+    fireEvent.click(screen.getByText('rail-sign-out'));
+
+    expect(sendVendorHeartbeat).toHaveBeenLastCalledWith({ status: 'offline' });
   });
 
   it('falls back to the buyer workspace when the session role is unrecognised', () => {

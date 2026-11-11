@@ -16,6 +16,24 @@ import {
 import { UI_STRINGS } from '../../lib/uiStrings';
 
 describe('Frontend validationSchemas Unit Tests', () => {
+  test('validates enterprise inquiry details against bounded shared client rules', () => {
+    expect(validateFormData(FORM_SCHEMAS.enterpriseInquiry, {
+      companyName: ' Demo Company ',
+      email: 'buyer@example.test',
+      mobile: '+91 98765 43210',
+    }).isValid).toBe(true);
+
+    expect(validateFormData(FORM_SCHEMAS.enterpriseInquiry, {
+      companyName: 'X',
+      email: 'invalid',
+      mobile: '123',
+    }).fieldErrors).toEqual({
+      companyName: expect.any(String),
+      email: expect.any(String),
+      mobile: expect.any(String),
+    });
+  });
+
   describe('loginForm schema (email + mobile + password)', () => {
     const validLogin = {
       email: 'buyer@procucev.com',
@@ -341,6 +359,7 @@ describe('validatePincode async postal API validator', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 
   test('returns invalid for empty or non-string input', async () => {
@@ -450,6 +469,16 @@ describe('validatePincode async postal API validator', () => {
 
     const res = await validatePincode('400701');
     expect(res.isValid).toBe(true);
+  });
+
+  test('clears the request timeout after a network failure', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+    const result = await validatePincode('400701');
+
+    expect(result.isValid).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   test('handles empty, non-Indian, and dummy pincode validation branches', async () => {

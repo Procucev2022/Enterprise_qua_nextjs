@@ -97,6 +97,30 @@ export interface FieldRule {
 export type FormSchema = Record<string, FieldRule>;
 
 export const FORM_SCHEMAS: Record<string, FormSchema> = {
+  enterpriseInquiry: {
+    companyName: {
+      required: true,
+      type: 'string',
+      minLength: 2,
+      maxLength: 200,
+      message: 'Company name must be 2 to 200 characters.',
+    },
+    email: {
+      required: true,
+      type: 'string',
+      maxLength: 320,
+      pattern: EMAIL_PATTERN,
+      message: 'Enter a valid corporate email address.',
+    },
+    mobile: {
+      required: true,
+      type: 'string',
+      minLength: 8,
+      maxLength: 32,
+      pattern: PHONE_PATTERN,
+      message: 'Enter a valid mobile number including country code.',
+    },
+  },
   createInternalTask: {
     title: {
       required: true,
@@ -323,6 +347,7 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
 
   approvalActionForm: {
     action: { required: true, message: 'Action is required.' },
+    password: { required: true, minLength: 1, message: 'Approver password is required.' },
   },
 
   registrationActionForm: {
@@ -482,13 +507,13 @@ export async function validatePincode(
     };
   }
 
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    timeout = setTimeout(() => controller.abort(), 6000);
     const response = await fetch(`https://api.postalpincode.in/pincode/${pin}`, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (!response.ok) {
       return { isValid: true }; // Network fallback
@@ -510,6 +535,8 @@ export async function validatePincode(
     }
   } catch (error) {
     return { isValid: true }; // Network fallback
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

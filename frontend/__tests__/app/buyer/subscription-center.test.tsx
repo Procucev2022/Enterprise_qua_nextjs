@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import SubscriptionCenter from '@/app/buyer/subscription-center';
 import { useApp } from '@/lib/store';
 import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -10,6 +11,10 @@ jest.mock('@/lib/store', () => ({
 
 jest.mock('@/lib/subscriptionPaymentClient', () => ({
   fetchSubscriptionPricing: jest.fn(),
+}));
+
+jest.mock('@/lib/logger', () => ({
+  logger: { error: jest.fn() },
 }));
 
 const mockPricingConfig = {
@@ -369,7 +374,7 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Missing Details', expect.any(String), 'warning');
   });
 
-  it('handles enterprise submission with existing localStorage items and done button', async () => {
+  it('shows success only after the database confirms the inquiry and leaves browser storage untouched', async () => {
     localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify([{ id: 'existing-inq' }]));
     mockStore({
       activeBuyerAccount: {
@@ -397,14 +402,25 @@ describe('app/buyer/subscription-center.tsx', () => {
       expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
     });
 
-    const stored = JSON.parse(localStorage.getItem('procucev_enterprise_inquiries') || '[]');
-    expect(stored.length).toBe(2);
+    expect(JSON.parse(localStorage.getItem('procucev_enterprise_inquiries') || '[]')).toEqual([{ id: 'existing-inq' }]);
+    expect(global.fetch).toHaveBeenCalledWith('/api/enterprise-inquiries', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({
+        'Content-Type': 'application/json',
+        'Idempotency-Key': expect.stringMatching(/^[0-9a-f-]{36}$/i),
+      }),
+      body: JSON.stringify({
+        companyName: 'Tata Power Ltd',
+        email: 'procurement@tatapower.com',
+        mobile: '+91 98765 43210',
+      }),
+    }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(screen.queryByText('Enquiry Received!')).not.toBeInTheDocument();
   });
 
-  it('handles enterprise submission when response has no data and localStorage has corrupted non-array', async () => {
+  it('keeps the form open and reports failure when the server does not return a persisted record', async () => {
     localStorage.setItem('procucev_enterprise_inquiries', '{"invalid": "shape"}');
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
@@ -428,9 +444,41 @@ describe('app/buyer/subscription-center.tsx', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
 
-    await waitFor(() => {
-      expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(UI_STRINGS.enterpriseInquiry.submitErrorMessage);
+    expect(screen.queryByText('Enquiry Received!')).not.toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.enterpriseInquiry.submitErrorTitle,
+      UI_STRINGS.enterpriseInquiry.submitErrorMessage,
+      'warning'
+    );
+    expect(localStorage.getItem('procucev_enterprise_inquiries')).toBe('{"invalid": "shape"}');
+  });
+
+  it('reuses one idempotency key when the buyer retries an uncertain submission', async () => {
+    const fetchMock = jest.fn()
+      .mockRejectedValueOnce(new Error('Response was lost after submission'))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, data: { id: 'ent-inq-retried' } }) });
+    global.fetch = fetchMock;
+    mockStore({
+      activeBuyerAccount: {
+        id: 'buyer-retry',
+        organizationName: 'Retry Buyer Ltd',
+        corporateEmail: 'retry@buyer.test',
+        mobileNumber: '+91 98765 43210',
+      },
     });
+
+    render(<SubscriptionCenter />);
+    fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
+    fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
+    await screen.findByText('Enquiry Received!');
+
+    const submissions = fetchMock.mock.calls.filter(([url]) => url === '/api/enterprise-inquiries');
+    const firstKey = submissions[0][1].headers['Idempotency-Key'];
+    const retryKey = submissions[1][1].headers['Idempotency-Key'];
+    expect(retryKey).toBe(firstKey);
   });
 
   it('handles pricing config missing individual plan entries', async () => {
@@ -446,7 +494,7 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText('Silver Plan')).toBeInTheDocument();
   });
 
-  it('handles enterprise submission when fetch fails with network error and corrupt localStorage', async () => {
+  it('does not claim to submit an inquiry when the network request fails', async () => {
     localStorage.setItem('procucev_enterprise_inquiries', '{"corrupt": true}');
     global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
     mockStore({
@@ -463,9 +511,13 @@ describe('app/buyer/subscription-center.tsx', () => {
     fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
     fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
 
-    await waitFor(() => {
-      expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
-    });
-    expect(mockShowToast).toHaveBeenCalledWith('Enquiry Submitted', expect.any(String), 'success');
+    expect(await screen.findByRole('alert')).toHaveTextContent(UI_STRINGS.enterpriseInquiry.submitErrorMessage);
+    expect(screen.queryByText('Enquiry Received!')).not.toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.enterpriseInquiry.submitErrorTitle,
+      UI_STRINGS.enterpriseInquiry.submitErrorMessage,
+      'warning'
+    );
+    expect(localStorage.getItem('procucev_enterprise_inquiries')).toBe('{"corrupt": true}');
   });
 });

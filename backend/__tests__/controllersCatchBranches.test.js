@@ -43,10 +43,8 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     const next = jest.fn();
     const res = mockRes();
 
-    jest.spyOn(storeService, 'addAIFeedItem').mockImplementationOnce(() => {
-      throw new Error('Add feed fail');
-    });
-    await aiFeedController.createFeedItem({ body: { title: 'T', message: 'M' } }, res, next);
+    jest.spyOn(storeService, 'addAIFeedItemDurably').mockRejectedValueOnce(new Error('Add feed fail'));
+    await aiFeedController.createFeedItem({ user: { role: 'admin' }, body: { title: 'T', message: 'M' } }, res, next);
     expect(next).toHaveBeenCalled();
   });
 
@@ -54,13 +52,11 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     const next = jest.fn();
     const res = mockRes();
 
-    jest.spyOn(storeService, 'addAuditLog').mockImplementationOnce(() => {
-      throw new Error('Audit add fail');
-    });
-    await auditController.createAuditLog({ body: { action: 'Test' } }, res, next);
+    jest.spyOn(storeService, 'addAuditLogDurably').mockRejectedValueOnce(new Error('Audit add fail'));
+    await auditController.createAuditLog({ user: { email: 'admin@procucev.com' }, body: { action: 'Test' } }, res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(storeService, 'verifyAuditIntegrity').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'verifyAuditIntegrityDurably').mockImplementationOnce(() => {
       throw new Error('Audit verify fail');
     });
     await auditController.verifyIntegrity({}, res, next);
@@ -122,13 +118,13 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
       expect.objectContaining({ success: true, source: 'identity_database' })
     );
 
-    jest.spyOn(storeService, 'addBuyerAccount').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'addBuyerAccountDurably').mockImplementationOnce(() => {
       throw new Error('Create Acc Error');
     });
-    await buyerAccountController.createBuyerAccount({ body: { organizationName: 'Org', corporateEmail: 'e@o.com' }, user: buyerUser }, res, next);
+    await buyerAccountController.createBuyerAccount(buyerReq({ body: { organizationName: 'Org', corporateEmail: 'e@o.com' } }), res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(storeService, 'updateBuyerAccount').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'updateBuyerAccountDurably').mockImplementationOnce(() => {
       throw new Error('Update Acc Error');
     });
     await buyerAccountController.updateBuyerAccount({ params: { id: 'b-1' }, body: {}, user: buyerUser }, res, next);
@@ -182,7 +178,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     await catalogueController.getProducts({ query: {} }, res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(storeService, 'addProductToCatalogue').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'addProductToCatalogueDurably').mockImplementationOnce(() => {
       throw new Error('Add prod error');
     });
     await catalogueController.addProduct(
@@ -194,13 +190,13 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
 
     // 'prod-1' is a real seeded item (no owning vendorId); admin bypasses
     // ownership so the mocked store call below is actually reached.
-    jest.spyOn(storeService, 'updateCatalogueProduct').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'updateCatalogueProductDurably').mockImplementationOnce(() => {
       throw new Error('Update prod error');
     });
     await catalogueController.updateProduct({ params: { id: 'prod-1' }, body: {}, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(storeService, 'deleteCatalogueProduct').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'deleteCatalogueProductDurably').mockImplementationOnce(() => {
       throw new Error('Delete prod error');
     });
     await catalogueController.deleteProduct({ params: { id: 'prod-1' }, user: adminUser }, res, next);
@@ -252,7 +248,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     await evaluationController.getEvaluations({}, res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(storeService, 'createEvaluation').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'createEvaluationDurably').mockImplementationOnce(() => {
       throw new Error('Create eval error');
     });
     await evaluationController.createEvaluation({ body: { vendorName: 'Apex' } }, res, next);
@@ -494,7 +490,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     // 'v-1' never matches a real seeded vendor, so it always hit the 404
     // pre-check and never reached the mocked store call below; 'v-001' with
     // an admin caller (bypasses ownership) actually gets there.
-    jest.spyOn(storeService, 'updateVendor').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'updateVendorDurably').mockImplementationOnce(() => {
       throw new Error('Update vendor error');
     });
     await vendorController.updateVendor({ params: { id: 'v-001' }, body: {}, user: adminUser }, res, next);
@@ -512,7 +508,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     expect(next).toHaveBeenCalled();
 
     const notFoundRating = mockRes();
-    jest.spyOn(storeService, 'reviseVendorRating').mockReturnValueOnce(null);
+    jest.spyOn(storeService, 'reviseVendorRatingDurably').mockResolvedValueOnce(null);
     await vendorController.reviseRating(
       { params: { id: 'v-99' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 }, user: buyerUser },
       notFoundRating,
@@ -520,7 +516,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     );
     expect(notFoundRating.status).toHaveBeenCalledWith(404);
 
-    jest.spyOn(storeService, 'reviseVendorRating').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'reviseVendorRatingDurably').mockImplementationOnce(() => {
       throw new Error('Rating error');
     });
     await vendorController.reviseRating(
@@ -584,7 +580,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
 
     // Reaching the catch block requires the vendor lookup to succeed first, so
     // this names the vendor created above rather than the old seeded 'v-001'.
-    jest.spyOn(storeService, 'updateVendor').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'updateVendorDurably').mockImplementationOnce(() => {
       throw new Error('Update subscription error');
     });
     await vendorController.updateSubscription(

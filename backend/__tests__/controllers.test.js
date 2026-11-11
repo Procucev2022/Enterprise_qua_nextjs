@@ -10,6 +10,7 @@ const rfqController = require('../src/controllers/rfqController');
 const supportChatController = require('../src/controllers/supportChatController');
 const vendorController = require('../src/controllers/vendorController');
 const storeService = require('../src/services/storeService');
+const { logger } = require('../src/services/loggerService');
 const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 
@@ -47,30 +48,36 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await aiFeedController.getAIFeed({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await aiFeedController.createFeedItem({ body: { title: 'Test Feed', message: 'Test Message' } }, res, next);
+    await aiFeedController.createFeedItem(buyerReq({ body: { title: 'Test Feed', message: 'Test Message' } }), res, next);
     expect(res.status).toHaveBeenCalledWith(201);
 
-    await aiFeedController.createFeedItem({ body: {} }, res, next);
+    await aiFeedController.createFeedItem(buyerReq({ body: {} }), res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
     jest.spyOn(storeService, 'getAIFeed').mockImplementationOnce(() => {
       throw new Error('AI Feed Error');
     });
-    await aiFeedController.getAIFeed({}, res, next);
+    await aiFeedController.getAIFeed({ user: { role: 'admin' } }, res, next);
     expect(next).toHaveBeenCalled();
   });
 
   test('auditController methods & error handling', async () => {
     const next = jest.fn();
     const res = mockRes();
+    const auditSpy = jest.spyOn(logger, 'audit');
 
     await auditController.getAuditLogs({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await auditController.createAuditLog({ body: { action: 'TEST_ACTION', userEmail: 'test@user.com' } }, res, next);
+    await auditController.createAuditLog({
+      user: { email: 'session@user.test', role: 'admin' },
+      ip: '192.0.2.5',
+      body: { action: 'TEST_ACTION', userEmail: 'forged@user.test' },
+    }, res, next);
     expect(res.status).toHaveBeenCalledWith(201);
+    expect(auditSpy).toHaveBeenCalledTimes(1);
 
-    await auditController.createAuditLog({ body: {} }, res, next);
+    await auditController.createAuditLog({ user: { email: 'session@user.test' }, body: {} }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
     await auditController.verifyIntegrity({}, res, next);
@@ -102,10 +109,10 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const res = mockRes();
     const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
 
-    await buyerAccountController.getBuyerAccounts({}, res, next);
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await buyerAccountController.getActiveAccount({}, res, next);
+    await buyerAccountController.getActiveAccount({ user: buyerUser }, res, next);
     expect(res.json).toHaveBeenCalled();
 
     await buyerAccountController.setActiveAccount({ body: { id: 'buyer-1' }, user: buyerUser }, res, next);
@@ -134,7 +141,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     jest.spyOn(storeService, 'getBuyerAccounts').mockImplementationOnce(() => {
       throw new Error('Buyer Accounts Error');
     });
-    await buyerAccountController.getBuyerAccounts({}, res, next);
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
     expect(next).toHaveBeenCalled();
   });
 
@@ -813,8 +820,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     );
     // Session tracking is a real Postgres round trip too — mocked directly
     // rather than through the fake pool object, same reasoning as insertSpy.
-    const createSessionSpy = jest.spyOn(domainQueries, 'createBulkImportSessionInDB').mockResolvedValue({ id: 'bulk-import-test-session' });
-    const incrementSessionSpy = jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockResolvedValue({ id: 'bulk-import-test-session' });
+    const createSessionSpy = jest.spyOn(domainQueries, 'createBulkImportSessionInDB').mockImplementation(async (id) => ({ id }));
+    const incrementSessionSpy = jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockImplementation(async (id) => ({ id }));
 
     const mixedRes = mockRes();
     await vendorController.bulkImportVendors(
@@ -925,6 +932,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
       // Second chunk: reuses the returned sessionId — no new session created.
       const getSessionSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({
         id: firstPayload.data.sessionId,
+        created_by_email: categoryManagerUser.email,
         status: 'IN_PROGRESS',
       });
       const secondRes = mockRes();
@@ -959,28 +967,92 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const vendorUser = { role: 'vendor', email: 'vendor@procucev.com' };
 
     const unauthedRes = mockRes();
-    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' } }, unauthedRes, next);
+    const sessionId = '00000000-0000-4000-8000-000000000001';
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId } }, unauthedRes, next);
     expect(unauthedRes.status).toHaveBeenCalledWith(401);
 
     // A buyer may now also bulk-import their own vendor roster, so only a
     // vendor role (never a bulk-import actor) is rejected here.
     const forbiddenRes = mockRes();
-    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' }, user: vendorUser }, forbiddenRes, next);
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId }, user: vendorUser }, forbiddenRes, next);
     expect(forbiddenRes.status).toHaveBeenCalledWith(403);
 
-    const notFoundSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValueOnce(null);
+    const sessionRow = { id: sessionId, created_by_email: categoryManagerUser.email, status: 'IN_PROGRESS', processed_count: 10 };
+    const sessionSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(sessionRow)
+      .mockResolvedValueOnce({ ...sessionRow, created_by_email: 'another-manager@procucev.com' });
     const notFoundRes = mockRes();
-    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-missing' }, user: categoryManagerUser }, notFoundRes, next);
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId }, user: categoryManagerUser }, notFoundRes, next);
     expect(notFoundRes.status).toHaveBeenCalledWith(404);
 
-    const sessionRow = { id: 's-1', status: 'IN_PROGRESS', processed_count: 10 };
-    const foundSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValueOnce(sessionRow);
     const foundRes = mockRes();
-    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' }, user: categoryManagerUser }, foundRes, next);
-    expect(foundRes.json).toHaveBeenCalledWith({ success: true, data: sessionRow });
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId }, user: categoryManagerUser }, foundRes, next);
+    expect(foundRes.json).toHaveBeenCalledWith({
+      success: true,
+      data: { id: sessionId, status: 'IN_PROGRESS', processed_count: 10 },
+    });
 
-    notFoundSpy.mockRestore();
-    foundSpy.mockRestore();
+    const otherOwnerRes = mockRes();
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId }, user: categoryManagerUser }, otherOwnerRes, next);
+    expect(otherOwnerRes.status).toHaveBeenCalledWith(404);
+
+    const invalidIdRes = mockRes();
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 'short-id' }, user: categoryManagerUser }, invalidIdRes, next);
+    expect(invalidIdRes.status).toHaveBeenCalledWith(400);
+
+    sessionSpy.mockRestore();
+  });
+
+  test('vendorController.bulkImportVendors: a session cannot be reused by another authenticated owner', async () => {
+    const originalPool = domainPool.pool;
+    domainPool.pool = { query: jest.fn() };
+    const sessionId = '00000000-0000-4000-8000-000000000002';
+    const sessionSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({
+      id: sessionId,
+      created_by_email: 'owner@procucev.com',
+      status: 'IN_PROGRESS',
+    });
+    const addVendorsSpy = jest.spyOn(storeService, 'bulkAddVendors');
+    const incrementSpy = jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB');
+    const res = mockRes();
+    const next = jest.fn();
+
+    try {
+      await vendorController.bulkImportVendors(
+        {
+          body: {
+            sessionId,
+            vendors: [{ rowNumber: 1, name: 'Unauthorized Co', email: 'vendor@example.com', phone: '9876543210' }],
+          },
+          user: { role: 'category_manager', email: 'other-manager@procucev.com' },
+        },
+        res,
+        next
+      );
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(addVendorsSpy).not.toHaveBeenCalled();
+      expect(incrementSpy).not.toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+
+      const invalidSessionRes = mockRes();
+      await vendorController.bulkImportVendors(
+        {
+          body: { sessionId: 'short-id', vendors: [{ name: 'Invalid Session Co' }] },
+          user: { role: 'category_manager', email: 'other-manager@procucev.com' },
+        },
+        invalidSessionRes,
+        next
+      );
+      expect(invalidSessionRes.status).toHaveBeenCalledWith(400);
+      expect(sessionSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      domainPool.pool = originalPool;
+      sessionSpy.mockRestore();
+      addVendorsSpy.mockRestore();
+      incrementSpy.mockRestore();
+    }
   });
 });
 

@@ -7,6 +7,7 @@ const largeFileIngestionService = require('../src/services/largeFileIngestionSer
 const queries = require('../src/db/vendorIngestionQueries');
 const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const r2Client = require('../src/services/r2Client');
+const { logger } = require('../src/services/loggerService');
 const { VENDOR_INGESTION_SESSION_STATUS, VENDOR_INGESTION_STEP } = require('../src/config/constants');
 
 /**
@@ -92,12 +93,35 @@ describe('largeFileIngestionService unit tests', () => {
 
     it('handles error in buyerProfileQueries gracefully and falls back to sessionId', async () => {
       jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('DB connection failed'));
+      const warningSpy = jest.spyOn(logger, 'warn');
       jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce({
         id: 'sess-1',
         organizationId: 'org-from-session',
       });
       const orgId = await largeFileIngestionService.resolveOrganizationId({ sub: 'usr-err' }, 'sess-1');
       expect(orgId).toBe('org-from-session');
+      expect(warningSpy).toHaveBeenCalledWith(
+        'Could not resolve ingestion organization from the subject identity; checking alternate identity claims',
+        expect.objectContaining({ lookupSource: 'subject', hasSessionId: true }),
+        'LARGE_FILE_INGESTION'
+      );
+    });
+
+    it('logs user ID lookup errors before falling back to the session record', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('DB connection failed'));
+      const warningSpy = jest.spyOn(logger, 'warn');
+      jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce({
+        id: 'sess-user-id',
+        organizationId: 'org-from-session',
+      });
+
+      const orgId = await largeFileIngestionService.resolveOrganizationId({ userId: 'usr-err' }, 'sess-user-id');
+      expect(orgId).toBe('org-from-session');
+      expect(warningSpy).toHaveBeenCalledWith(
+        'Could not resolve ingestion organization from user identity claims; checking the session record',
+        expect.objectContaining({ lookupSource: 'user_id', hasSessionId: true }),
+        'LARGE_FILE_INGESTION'
+      );
     });
 
     it('falls back to sessionId lookup if user has no org and no sub', async () => {
@@ -110,9 +134,15 @@ describe('largeFileIngestionService unit tests', () => {
     });
 
     it('returns null if no organizationId can be found', async () => {
+      const errorSpy = jest.spyOn(logger, 'error');
       jest.spyOn(queries, 'findSessionById').mockRejectedValueOnce(new Error('not found'));
       const orgId = await largeFileIngestionService.resolveOrganizationId(null, 'sess-invalid');
       expect(orgId).toBeNull();
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Could not resolve ingestion organization from the session record',
+        expect.objectContaining({ lookupSource: 'session_id', hasSessionId: true }),
+        'LARGE_FILE_INGESTION'
+      );
     });
   });
 

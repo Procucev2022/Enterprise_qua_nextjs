@@ -2227,7 +2227,7 @@ export function IntakeSourcesModal({
   const [searchTerm, setSearchTerm] = useState('');
 
   const totalActiveRFQs = rfqs.length;
-  const emailGatewayRFQs = rfqs.filter((r) => isEmailRfqSource(r.source));
+const emailGatewayRFQs = rfqs.filter((r) => isEmailRfqSource(r.source));
   const webPortalRFQs = rfqs.filter((r) => !isEmailRfqSource(r.source) && r.source !== 'manual_entry');
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
@@ -2237,7 +2237,7 @@ export function IntakeSourcesModal({
       selectedSourceTab === 'all'
         ? true
         : selectedSourceTab === 'web_portal'
-        ? !isEmailRfqSource(rfq.source) && rfq.source !== 'manual_entry'
+? !isEmailRfqSource(rfq.source) && rfq.source !== 'manual_entry'
         : selectedSourceTab === 'email_gateway'
         ? isEmailRfqSource(rfq.source)
         : rfq.source === selectedSourceTab;

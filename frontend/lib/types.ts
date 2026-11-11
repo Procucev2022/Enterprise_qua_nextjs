@@ -735,12 +735,48 @@ export interface VendorOpportunity {
 export interface AuditLogEntry {
   id: string;
   timestamp: string;
-  user: string;
+  user?: string;
+  userEmail?: string;
   action: string;
   rfqNumber?: string;
   shaSignature: string;
-  status: 'VERIFIED' | 'TAMPER_CHECK_OK';
-  ipAddress: string;
+  previousHash?: string;
+  status?: 'VERIFIED' | 'TAMPER_CHECK_OK';
+  ipAddress?: string;
+}
+
+export type EnterpriseInquiryStatus = 'NEW' | 'CONTACTED' | 'IN_DISCUSSION' | 'CONTRACT_SIGNED' | 'CLOSED';
+
+export interface EnterpriseInquiry {
+  id: string;
+  companyName: string;
+  email: string;
+  mobile: string;
+  buyerAccountId?: string | null;
+  notes?: string;
+  status: EnterpriseInquiryStatus;
+  contactedBy?: string;
+  contactedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AuditVerificationIssue {
+  id: string | null;
+  index: number;
+  reason: string;
+}
+
+export interface AuditVerificationReport {
+  valid: boolean | null;
+  complete: boolean;
+  source: 'persisted' | 'in_memory';
+  expectedCount: number | null;
+  verifiedCount: number;
+  compromisedEntries: AuditVerificationIssue[];
+  timestamp?: string;
+  chainRevision?: number;
+  reason?: string;
 }
 
 export interface AzureServiceHealth {
@@ -985,9 +1021,17 @@ export interface VendorEntry {
 
   // Database Availability & Onboarding Credentials
   isExistingInDatabase?: boolean;
-  onboardingEmailStatus?: 'sent' | 'pending' | 'delivered' | 'failed' | 'account_exists';
+  onboardingEmailStatus?:
+    | 'sent'
+    | 'pending'
+    | 'delivered'
+    | 'failed'
+    | 'account_exists'
+    | 'skipped'
+    | 'invitation_pending'
+    | 'invitation_sent'
+    | 'invitation_failed';
   onboardingEmailDispatchedAt?: string;
-  tempPassword?: string;
   firstLoginCompleted?: boolean;
   reminderCadence?: 'every_3_days';
   nextReminderDate?: string;
@@ -1081,12 +1125,33 @@ export interface VendorUploadRow {
 export interface VendorUploadRowResult {
   rowNumber: number;
   status: 'imported' | 'duplicate' | 'failed';
+  vendorId?: string;
   email?: string;
   errors?: string[];
   reason?: string;
   missingEmail?: boolean;
   onboardingEmailStatus?: VendorEntry['onboardingEmailStatus'];
   onboardingError?: string;
+}
+
+export interface VendorBulkInvitationResult {
+  vendorId: string;
+  status:
+    | 'sent'
+    | 'queued'
+    | 'already_sent'
+    | 'not_found'
+    | 'not_eligible'
+    | 'missing_email'
+    | 'identity_missing'
+    | 'failed';
+}
+
+export interface VendorBulkInvitationResponse {
+  sentCount: number;
+  queuedCount: number;
+  failedCount: number;
+  results: VendorBulkInvitationResult[];
 }
 
 /** Aggregate response from one bulk-import chunk request. */
@@ -1100,6 +1165,7 @@ export interface VendorUploadImportResponse {
   duplicates: number;
   failed: number;
   onboardingFailed?: number;
+  onboardingSkipped?: number;
   results: VendorUploadRowResult[];
 }
 
@@ -1188,7 +1254,6 @@ export interface HistoricalPurchaseVendorRecord {
   secondSetMinorCategories: string[]; // 2nd Set: Minor Categories
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
   isExistingInDatabase?: boolean;
-  tempPassword?: string;
 }
 
 export interface IngestionFailedEmail {
@@ -1204,8 +1269,10 @@ export interface IngestionSummary {
   totalProcessed: number;
   mappedCount: number;
   mappedEmailsSent: number;
+  mappedEmailsQueued: number;
   unmappedCount: number;
   unmappedEmailsSent: number;
+  unmappedEmailsQueued: number;
   failedEmailCount: number;
   failedEmails: IngestionFailedEmail[];
   skippedCount?: number;
@@ -1712,7 +1779,6 @@ export interface VendorOnboardingEmailPayload {
   isExistingInDatabase: boolean;
   subject: string;
   username: string;
-  tempPassword: string;
   authInstructions: string;
   profileUpdateInstructions: string;
   categoryUpdateInstructions: string;
@@ -2483,11 +2549,12 @@ export interface ActionCenterCommunicationRecord {
 
 export interface ActionCenterCommunicationResult {
   success: boolean;
+  queued?: boolean;
   message?: string;
   error?: string;
   communication?: ActionCenterCommunicationRecord;
-  emailResult?: { success: boolean; recipient?: string; error?: string };
-  smsResult?: { success: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
+  emailResult?: { success: boolean; queued?: boolean; recipient?: string; error?: string };
+  smsResult?: { success: boolean; queued?: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
   completedTask?: { id: string; [key: string]: unknown } | null;
   followupTask?: { id: string; [key: string]: unknown } | null;
   followupError?: string | null;

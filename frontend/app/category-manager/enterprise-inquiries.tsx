@@ -1,8 +1,12 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { formatIndianDateTime } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
+import { authClient } from '@/lib/authClient';
+import type { EnterpriseInquiry, EnterpriseInquiryStatus } from '@/lib/types';
 import {
   Building2,
   Mail,
@@ -22,20 +26,9 @@ import {
   Briefcase,
 } from 'lucide-react';
 
-export type EnterpriseInquiryStatus = 'NEW' | 'CONTACTED' | 'IN_DISCUSSION' | 'CONTRACT_SIGNED' | 'CLOSED';
-
-export interface EnterpriseInquiry {
-  id: string;
-  companyName: string;
-  email: string;
-  mobile: string;
-  buyerAccountId?: string | null;
-  notes?: string;
-  status: EnterpriseInquiryStatus;
-  contactedBy?: string;
-  contactedAt?: string;
-  createdAt: string;
-  updatedAt?: string;
+function authHeaders(): Record<string, string> {
+  const token = authClient.getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 const STATUS_LABELS: Record<EnterpriseInquiryStatus, { label: string; badge: string; dot: string }> = {
@@ -66,85 +59,49 @@ const STATUS_LABELS: Record<EnterpriseInquiryStatus, { label: string; badge: str
   },
 };
 
-const DEFAULT_SEED_INQUIRIES: EnterpriseInquiry[] = [
-  {
-    id: 'ent-inq-1792066342226-1vkew',
-    companyName: 'Procucev  Navin Buyer',
-    email: 'navin.procucev@gmail.com',
-    mobile: '+919157154504',
-    buyerAccountId: '4fdcc92c-8421-4ab5-8258-0134375a3c86',
-    notes: '',
-    status: 'NEW',
-    createdAt: '2026-10-15T12:12:22.226Z',
-    updatedAt: '2026-10-15T12:12:22.226Z',
-  },
-];
-
 export default function EnterpriseInquiriesConsole() {
-  const { showToast, currentUserSession } = useApp();
+  const { showToast } = useApp();
+  const showToastRef = useRef(showToast);
 
   const [inquiries, setInquiries] = useState<EnterpriseInquiry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | EnterpriseInquiryStatus>('ALL');
   const [selectedInquiry, setSelectedInquiry] = useState<EnterpriseInquiry | null>(null);
   const [editingNotes, setEditingNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
 
-  const fetchInquiries = async () => {
+  useEffect(() => {
+    showToastRef.current = showToast;
+  }, [showToast]);
+
+  const fetchInquiries = useCallback(async () => {
     setLoading(true);
-    let serverInquiries: EnterpriseInquiry[] = [];
     try {
-      const res = await fetch('/api/enterprise-inquiries?limit=100');
+      const res = await fetch('/api/enterprise-inquiries?limit=100', { headers: authHeaders() });
       const json = await res.json();
-      if (json && json.success && Array.isArray(json.data)) {
-        serverInquiries = json.data;
+      if (!res.ok || !json?.success || !Array.isArray(json.data)) {
+        throw new Error('Enterprise inquiry list response was unsuccessful or malformed.');
       }
-    } catch {
-      // Graceful offline fallback
+      const persisted = (json.data as EnterpriseInquiry[]).filter((item) => item && item.id);
+      const sorted = persisted.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+      setInquiries(sorted);
+      setLoadError(false);
+    } catch (error) {
+      setLoadError(true);
+      showToastRef.current(UI_STRINGS.enterpriseInquiry.loadErrorTitle, UI_STRINGS.enterpriseInquiry.loadErrorMessage, 'warning');
+      logger.error('Database-backed enterprise inquiry list request failed', { error }, 'ENTERPRISE_INQUIRIES');
+    } finally {
+      setLoading(false);
     }
-
-    let localInquiries: EnterpriseInquiry[] = [];
-    try {
-      const stored = localStorage.getItem('procucev_enterprise_inquiries');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) localInquiries = parsed;
-      }
-    } catch (_) {}
-
-    const map = new Map<string, EnterpriseInquiry>();
-    if (serverInquiries.length > 0) {
-      for (const item of serverInquiries) {
-        if (item && item.id) map.set(item.id, item);
-      }
-      // Also include any locally created inquiries not yet synced to server
-      for (const item of localInquiries) {
-        if (item && item.id && !map.has(item.id)) map.set(item.id, item);
-      }
-    } else {
-      // Cold start / offline fallback: load default seed and locally submitted inquiries
-      for (const item of DEFAULT_SEED_INQUIRIES) {
-        if (item && item.id) map.set(item.id, item);
-      }
-      for (const item of localInquiries) {
-        if (item && item.id) map.set(item.id, item);
-      }
-    }
-
-    const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-    setInquiries(merged);
-    try {
-      localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify(merged));
-    } catch (_) {}
-    setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     void fetchInquiries();
-  }, []);
+  }, [fetchInquiries]);
 
   // Update status or notes on an inquiry
   const handleUpdateInquiry = async (
@@ -152,55 +109,29 @@ export default function EnterpriseInquiriesConsole() {
     updates: { status?: EnterpriseInquiryStatus; notes?: string }
   ) => {
     setSavingNotes(true);
-    let updatedRecord: EnterpriseInquiry | null = null;
     try {
       const res = await fetch(`/api/enterprise-inquiries/${encodeURIComponent(id)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...updates,
-          contactedBy: currentUserSession?.name || 'Category Manager',
-        }),
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(updates),
       });
-      const json = await res.json().catch(() => null);
-      if (json && json.success && json.data) {
-        updatedRecord = json.data;
+      const json = await res.json();
+      if (!res.ok || !json?.success || !json.data) {
+        throw new Error('Enterprise inquiry update was not confirmed by the database.');
       }
-    } catch {
-      // Offline fallback
+      setInquiries((previous) => previous.map((item) => {
+        if (item.id !== id) return item;
+        const merged = { ...item, ...json.data } as EnterpriseInquiry;
+        if (selectedInquiry?.id === id) setSelectedInquiry(merged);
+        return merged;
+      }));
+      showToast('Lead Updated', 'Enterprise inquiry details saved.', 'success');
+    } catch (error) {
+      showToast(UI_STRINGS.enterpriseInquiry.updateErrorTitle, UI_STRINGS.enterpriseInquiry.updateErrorMessage, 'warning');
+      logger.error('Database-backed enterprise inquiry update failed', { error, inquiryId: id }, 'ENTERPRISE_INQUIRIES');
+    } finally {
+      setSavingNotes(false);
     }
-
-    setInquiries((prev) => {
-      const nextList = prev.map((item) => {
-        if (item.id === id) {
-          const merged: EnterpriseInquiry = updatedRecord
-            ? { ...item, ...updatedRecord }
-            : {
-                ...item,
-                ...updates,
-                updatedAt: new Date().toISOString(),
-                ...(updates.status && updates.status !== 'NEW'
-                  ? {
-                      contactedBy: currentUserSession?.name || 'Category Manager',
-                      contactedAt: new Date().toISOString(),
-                    }
-                  : {}),
-              };
-          if (selectedInquiry?.id === id) {
-            setSelectedInquiry(merged);
-          }
-          return merged;
-        }
-        return item;
-      });
-      try {
-        localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify(nextList));
-      } catch (_) {}
-      return nextList;
-    });
-
-    showToast('Lead Updated', 'Enterprise inquiry details saved.', 'success');
-    setSavingNotes(false);
   };
 
   // Metrics
@@ -234,6 +165,11 @@ export default function EnterpriseInquiriesConsole() {
 
   return (
     <div className="space-y-4 animate-fade-in pb-10">
+      {loadError && (
+        <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-100">
+          {UI_STRINGS.enterpriseInquiry.loadErrorMessage}
+        </div>
+      )}
       {/* ── Top Actions ── */}
       <div className="flex items-center justify-end pb-1">
         <button
