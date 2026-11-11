@@ -1,5 +1,6 @@
 const documentVaultController = require('../src/controllers/documentVaultController');
 const documentVaultQueries = require('../src/db/documentVaultQueries');
+const { DOCUMENT_VAULT_MESSAGES } = require('../src/config/constants');
 
 function mockResponse() {
   const res = {};
@@ -69,6 +70,24 @@ describe('Document Vault Controller', () => {
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toBe('Failed to retrieve documents from vault');
+    });
+
+    test('returns a retryable service error when configured storage is unavailable', async () => {
+      const storageError = Object.assign(new Error('Database unavailable'), {
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+      const req = { query: {} };
+      const res = mockResponse();
+      jest.spyOn(documentVaultQueries, 'listDocuments').mockRejectedValueOnce(storageError);
+
+      await documentVaultController.listDocuments(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.body).toEqual({
+        success: false,
+        error: DOCUMENT_VAULT_MESSAGES.STORAGE_UNAVAILABLE,
+        retryable: true,
+      });
     });
   });
 

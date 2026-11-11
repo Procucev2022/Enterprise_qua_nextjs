@@ -10,6 +10,38 @@ function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
 }
 
+function respondIfAuthStorageUnavailable(res, err) {
+  if (err?.code !== 'PERSISTENCE_UNAVAILABLE') return false;
+  res.status(503).json({
+    success: false,
+    retryable: true,
+    error: AUTH_MESSAGES.AUTH_STORAGE_UNAVAILABLE,
+  });
+  return true;
+}
+
+async function recordSuccessfulLogin(user, ipAddress, authenticationMethod) {
+  try {
+    await loginLogsQueries.recordLoginLog({
+      userId: user.id,
+      userName: user.name,
+      email: user.email,
+      phoneNumber: user.mobile,
+      companyName: user.orgName || user.companyName || 'Enterprise Partner',
+      userType: user.role === 'vendor' ? 'vendor' : 'buyer',
+      ipAddress,
+    });
+  } catch (error) {
+    logger.error('Login succeeded but login history could not be persisted', {
+      error,
+      operation: 'record-successful-login',
+      authenticationMethod,
+      userIdPresent: Boolean(user.id),
+      userRole: user.role || 'unknown',
+    }, 'AUTH_CONTROLLER');
+  }
+}
+
 async function login(req, res, next) {
   try {
     const { email, password, code, mobile } = req.body || {};
@@ -23,17 +55,7 @@ async function login(req, res, next) {
     if (code) {
       const result = await authService.verifyOtp(email, code, ipAddress, mobile);
       if (result && result.success && result.user) {
-        try {
-          await loginLogsQueries.recordLoginLog({
-            userId: result.user.id,
-            userName: result.user.name,
-            email: result.user.email,
-            phoneNumber: result.user.mobile,
-            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
-            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
-            ipAddress,
-          });
-        } catch (_) {}
+        await recordSuccessfulLogin(result.user, ipAddress, 'otp');
       }
       return res.json(result);
     }
@@ -41,17 +63,7 @@ async function login(req, res, next) {
     if (password) {
       const result = await authService.authenticateWithPassword(email, password, ipAddress, mobile);
       if (result && result.success && result.user) {
-        try {
-          await loginLogsQueries.recordLoginLog({
-            userId: result.user.id,
-            userName: result.user.name,
-            email: result.user.email,
-            phoneNumber: result.user.mobile,
-            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
-            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
-            ipAddress,
-          });
-        } catch (_) {}
+        await recordSuccessfulLogin(result.user, ipAddress, 'password');
       }
       return res.json(result);
     }
@@ -60,9 +72,15 @@ async function login(req, res, next) {
   } catch (err) {
     logger.warn(
       'Login failure in authController',
-      { error: err.message, email: req.body?.email, hasPassword: Boolean(req.body?.password), hasCode: Boolean(req.body?.code) },
+      {
+        error: err,
+        hasEmail: Boolean(req.body?.email),
+        hasPassword: Boolean(req.body?.password),
+        hasCode: Boolean(req.body?.code),
+      },
       'AUTH_CONTROLLER'
     );
+    if (respondIfAuthStorageUnavailable(res, err)) return;
     return res.status(401).json({ success: false, error: err.message || AUTH_MESSAGES.AUTH_FAILED_FALLBACK });
   }
 }
@@ -80,7 +98,12 @@ async function requestOtp(req, res, next) {
     const result = await authService.requestOtp(email, mobile, roleHint, ipAddress, isRegistration);
     res.json(result);
   } catch (err) {
-    logger.warn('OTP request failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');
+    logger.warn('OTP request failed in authController', {
+      error: err,
+      hasEmail: Boolean(req.body?.email),
+      hasMobile: Boolean(req.body?.mobile),
+    }, 'AUTH_CONTROLLER');
+    if (respondIfAuthStorageUnavailable(res, err)) return;
     return res.status(400).json({ success: false, error: err.message || AUTH_MESSAGES.OTP_REQUEST_EMAIL_REQUIRED });
   }
 }
@@ -98,7 +121,13 @@ async function verifyOtp(req, res, next) {
     const result = await authService.verifyOtp(email, code, ipAddress, mobile);
     res.json(result);
   } catch (err) {
-    logger.warn('OTP verification failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');
+    logger.warn('OTP verification failed in authController', {
+      error: err,
+      hasEmail: Boolean(req.body?.email),
+      hasMobile: Boolean(req.body?.mobile),
+      hasCode: Boolean(req.body?.code),
+    }, 'AUTH_CONTROLLER');
+    if (respondIfAuthStorageUnavailable(res, err)) return;
     return res.status(400).json({ success: false, error: err.message || AUTH_MESSAGES.INVALID_OTP_FALLBACK });
   }
 }
@@ -182,6 +211,7 @@ async function register(req, res, next) {
       { error: err.message, email: req.body?.email },
       'AUTH_CONTROLLER'
     );
+    if (respondIfAuthStorageUnavailable(res, err)) return;
     return res.status(400).json({ success: false, error: err.message || AUTH_MESSAGES.AUTH_FAILED_FALLBACK });
   }
 }
@@ -196,6 +226,13 @@ async function getSession(req, res, next) {
 
     const verification = await authService.assertSessionActive(token);
     if (!verification.valid) {
+      if (verification.error === AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE) {
+        return res.status(503).json({
+          success: false,
+          retryable: true,
+          error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE,
+        });
+      }
       return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
     }
 
@@ -240,7 +277,11 @@ async function logout(req, res, next) {
           { userEmail, ipAddress },
           'AUTH_CONTROLLER'
         );
-        return res.status(503).json({ success: false, error: AUTH_MESSAGES.LOGOUT_REVOCATION_FAILED });
+        return res.status(503).json({
+          success: false,
+          retryable: true,
+          error: AUTH_MESSAGES.LOGOUT_REVOCATION_FAILED,
+        });
       }
     }
     if (userEmail && userEmail !== 'authenticated-user') {
@@ -301,6 +342,7 @@ async function changePassword(req, res, next) {
       { error: err.message, email: req.user?.email },
       'AUTH_CONTROLLER'
     );
+    if (respondIfAuthStorageUnavailable(res, err)) return;
     return res.status(400).json({
       success: false,
       error: err.message || AUTH_MESSAGES.CHANGE_PASSWORD_WRITE_FAILED,
@@ -324,6 +366,7 @@ async function completeBuyerOnboarding(req, res, next) {
       { error: err.message, email: req.user?.email },
       'AUTH_CONTROLLER'
     );
+    if (respondIfAuthStorageUnavailable(res, err)) return;
     return res.status(400).json({
       success: false,
       error: err.message || 'Failed to complete buyer onboarding profile.',
@@ -358,9 +401,10 @@ async function requestVendorDirectoryOtp(req, res, next) {
   } catch (err) {
     logger.warn(
       'Vendor directory OTP request failure in authController',
-      { error: err.message, email: req.body && req.body.email },
+      { error: err, hasEmail: Boolean(req.body && req.body.email) },
       'AUTH_CONTROLLER'
     );
+    if (respondIfAuthStorageUnavailable(res, err)) return;
     const status = err.message === AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY ? 403 : 400;
     return res.status(status).json({ success: false, error: err.message || AUTH_MESSAGES.OTP_DELIVERY_FAILED });
   }
@@ -380,11 +424,21 @@ async function verifyVendorDirectoryOtp(req, res, next) {
     const result = await authService.verifyVendorDirectoryOtp(email, code, ipAddress, userAgent);
     return res.json(result);
   } catch (err) {
-    logger.warn(
-      'Vendor directory OTP verification failure in authController',
-      { error: err.message, email: req.body && req.body.email },
-      'AUTH_CONTROLLER'
-    );
+    if (err.code === 'PERSISTENCE_UNAVAILABLE') {
+      logger.error('Vendor directory OTP verification could not persist its session', {
+        error: err,
+        hasEmail: Boolean(req.body && req.body.email),
+      }, 'AUTH_CONTROLLER');
+      return res.status(503).json({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE,
+      });
+    }
+    logger.warn('Vendor directory OTP verification failure in authController', {
+      error: err,
+      hasEmail: Boolean(req.body && req.body.email),
+    }, 'AUTH_CONTROLLER');
     const status = err.message === AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY ? 403 : 401;
     return res.status(status).json({ success: false, error: err.message || AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_INVALID });
   }

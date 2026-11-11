@@ -138,11 +138,19 @@ async function getBuyerProfileDetails(req, res, next) {
     const storeService = require('../services/storeService');
     const buyerProfileQueries = require('../db/buyerProfileQueries');
 
-    const email = req.query.email ? String(req.query.email).trim() : null;
-    const name = req.query.name ? String(req.query.name).trim() : null;
-    const accountId = req.query.accountId ? String(req.query.accountId).trim() : null;
+    const query = req.validatedBuyerProfileDetailsQuery || req.query || {};
+    const email = query.email ? String(query.email).trim() : null;
+    const name = query.name ? String(query.name).trim() : null;
+    const accountId = query.accountId ? String(query.accountId).trim() : null;
 
     logger.info('Buyer profile details requested', { email, name, accountId }, LOG_CATEGORY);
+
+    if (!email && !name && !accountId) {
+      return res.status(400).json({
+        success: false,
+        error: BUYER_PROFILE_MESSAGES.DETAILS_IDENTIFIER_REQUIRED,
+      });
+    }
 
     // 1. Check in-memory storeService first
     let account = null;
@@ -160,6 +168,7 @@ async function getBuyerProfileDetails(req, res, next) {
 
     // 2. Query Postgres identity tables
     let dbProfile = null;
+    let lookupFailure = null;
     try {
       const lookup = await buyerProfileQueries.findProfileByIdentifier({
         email: email || account?.corporateEmail,
@@ -169,9 +178,34 @@ async function getBuyerProfileDetails(req, res, next) {
       });
       if (lookup && lookup.found) {
         dbProfile = lookup.profile;
+      } else if (lookup && lookup.reason === 'DB_ERROR') {
+        lookupFailure = lookup.error || BUYER_PROFILE_MESSAGES.DETAILS_LOAD_FAILED;
       }
     } catch (dbErr) {
-      logger.warn('Failed querying buyer profile by identifier', { error: dbErr.message }, LOG_CATEGORY);
+      lookupFailure = dbErr.message || BUYER_PROFILE_MESSAGES.DETAILS_LOAD_FAILED;
+    }
+
+    if (lookupFailure) {
+      logger.warn(
+        'Buyer profile identity lookup failed',
+        { error: lookupFailure, hasLocalAccount: Boolean(account) },
+        LOG_CATEGORY
+      );
+      if (!account) {
+        return res.status(503).json({
+          success: false,
+          error: BUYER_PROFILE_MESSAGES.DETAILS_LOAD_FAILED,
+          retryable: true,
+        });
+      }
+    }
+
+    if (!dbProfile && !account) {
+      logger.info('Buyer profile identity lookup found no matching record', { email, name, accountId }, LOG_CATEGORY);
+      return res.status(404).json({
+        success: false,
+        error: BUYER_PROFILE_MESSAGES.DETAILS_NOT_FOUND,
+      });
     }
 
     const merged = {
@@ -199,7 +233,14 @@ async function getBuyerProfileDetails(req, res, next) {
       totalSpend: account?.totalSpend ? String(account.totalSpend).replace('$', '₹') : '₹0',
     };
 
-    return res.json({ success: true, data: merged });
+    return res.json({
+      success: true,
+      data: merged,
+      meta: {
+        source: dbProfile ? 'identity_database' : 'local_account_cache',
+        degraded: !dbProfile,
+      },
+    });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error fetching buyer profile details');
   }

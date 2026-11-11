@@ -14,7 +14,7 @@ function getEvaluations(req, res, next) {
   }
 }
 
-function createEvaluation(req, res, next) {
+async function createEvaluation(req, res, next) {
   try {
     // A qualification evaluation is a vendor's own self-assessment. Only a
     // vendor may submit one — previously any authenticated role, with any
@@ -54,7 +54,7 @@ function createEvaluation(req, res, next) {
     };
 
     logger.info(`Creating vendor evaluation for: ${identity.vendorName}`, { vendorName: identity.vendorName }, 'EVALUATION_CONTROLLER');
-    const created = storeService.createEvaluation({ ...body, ...identity });
+    const created = await storeService.createEvaluationDurably({ ...body, ...identity });
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating vendor evaluation', err, 'EVALUATION_CONTROLLER');

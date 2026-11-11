@@ -8,6 +8,9 @@
 
 const pool = require('./pool');
 const crypto = require('crypto');
+const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { logger } = require('../services/loggerService');
+const { APPROVAL_MESSAGES, isApproverPasswordConfigured, verifyApproverPassword } = require('../config/constants');
 
 const memoryApprovals = [
   {
@@ -256,44 +259,102 @@ const memoryApprovals = [
   },
 ];
 
-/**
- * Summary metrics of management approvals.
- */
-async function getApprovalSummary() {
-  if (pool.hasStorage()) {
-    try {
-      const sql = `
-        SELECT
-          COUNT(*) as total,
-          SUM(CASE WHEN lower(status) = 'pending' THEN 1 ELSE 0 END) as pending,
-          SUM(CASE WHEN lower(status) = 'approved' THEN 1 ELSE 0 END) as approved,
-          SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) as rejected
-        FROM approvals
-      `;
-      const res = await pool.query(sql, [], { d1: true, d1Text: sql, useCache: true, tag: 'approvals', ttlMs: 15000 });
-      if (res?.rows) {
-        if (res.rows.length === 0) {
-          return { total: 0, pending: 0, approved: 0, rejected: 0 };
-        }
-        const row = res.rows[0];
-        return {
-          total: Number(row.total || 0),
-          pending: Number(row.pending || 0),
-          approved: Number(row.approved || 0),
-          rejected: Number(row.rejected || 0),
-        };
-      }
-    } catch {
-      // fallback to memory
-    }
-  }
-  const pending = memoryApprovals.filter((a) => String(a.status || '').toLowerCase() === 'pending').length;
-  const approved = memoryApprovals.filter((a) => String(a.status || '').toLowerCase() === 'approved').length;
-  const rejected = memoryApprovals.filter((a) => String(a.status || '').toLowerCase() === 'rejected').length;
-  const total = memoryApprovals.length;
-  return { pending, approved, rejected, total };
+function persistenceUnavailable(error, operation) {
+  logger.error('Management approval persistence operation failed', {
+    error,
+    operation,
+  }, 'APPROVAL_PERSISTENCE');
+  const unavailable = new Error('Management approval persistence is temporarily unavailable.');
+  unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+  unavailable.cause = error;
+  return unavailable;
 }
 
+function approvalConflict() {
+  const conflict = new Error('This approval was already decided. Refresh the list before taking another action.');
+  conflict.code = 'APPROVAL_ALREADY_DECIDED';
+  return conflict;
+}
+
+function toSummary(rows) {
+  const summary = { pending: 0, approved: 0, rejected: 0, total: 0 };
+  rows.forEach(({ status, count }) => {
+    const normalizedStatus = String(status || '').toLowerCase();
+    if (Object.hasOwn(summary, normalizedStatus)) {
+      summary[normalizedStatus] = Number(count) || 0;
+    }
+  });
+  summary.total = summary.pending + summary.approved + summary.rejected;
+  return summary;
+}
+
+async function queryApprovals(sql, params = [], options = {}) {
+  return pool.query(sql, params, { d1: true, ...options });
+}
+
+async function findApprovalInDatabase(id) {
+  const sql = 'SELECT * FROM management_approvals WHERE id = $1 OR request_number = $1 LIMIT 1';
+  const result = await queryApprovals(sql, [id]);
+  return result.rows[0] || null;
+}
+
+/** Summary metrics use one aggregate query when durable storage is configured. */
+function approvalRecordsCte(d1 = false) {
+  const genericAssignedApprover = d1
+    ? "COALESCE(json_extract(raw, '$.assigned_approver'), approver_name)"
+    : "COALESCE(raw->>'assigned_approver', approver_name)";
+  const emptyRaw = d1 ? 'NULL' : 'NULL::jsonb';
+  return `WITH approval_records AS (
+    SELECT id, request_number, module, project, applicant_name, applicant_email,
+      value_impact, maker_name, maker_role, status, details, approver_name,
+      approver_remarks, approver_name AS assigned_approver, ${emptyRaw} AS raw,
+      created_at, updated_at, 2 AS source_priority
+    FROM management_approvals
+    UNION ALL
+    SELECT id, request_number, module, project, applicant_name, applicant_email,
+      value_impact, maker_name, maker_role, status, details, approver_name,
+      approver_remarks, ${genericAssignedApprover} AS assigned_approver, raw,
+      created_at, updated_at, 1 AS source_priority
+    FROM approvals
+  ), ranked_approval_records AS (
+    SELECT approval_records.*,
+      ROW_NUMBER() OVER (PARTITION BY request_number ORDER BY updated_at DESC, source_priority ASC) AS record_rank
+    FROM approval_records
+  )`;
+}
+
+/** Summary metrics aggregate both durable approval workflows in one query. */
+async function getApprovalSummary() {
+  if (pool.hasStorage()) {
+    const sql = `${approvalRecordsCte()}
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN lower(status) = 'pending' THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN lower(status) = 'approved' THEN 1 ELSE 0 END) AS approved,
+        SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
+      FROM ranked_approval_records WHERE record_rank = 1`;
+    const d1Text = `${approvalRecordsCte(true)}
+      SELECT CAST(COUNT(*) AS INTEGER) AS total,
+        SUM(CASE WHEN lower(status) = 'pending' THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN lower(status) = 'approved' THEN 1 ELSE 0 END) AS approved,
+        SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
+      FROM ranked_approval_records WHERE record_rank = 1`;
+    try {
+      const result = await queryApprovals(sql, [], { d1Text, useCache: true, tag: 'approvals', ttlMs: 15000 });
+      const rows = result?.rows || [];
+      if (rows.length > 0 && rows.some((row) => row.count !== undefined)) return toSummary(rows);
+      const row = rows[0] || {};
+      return {
+        total: Number(row.total || 0),
+        pending: Number(row.pending || 0),
+        approved: Number(row.approved || 0),
+        rejected: Number(row.rejected || 0),
+      };
+    } catch (error) {
+      throw persistenceUnavailable(error, 'get-approval-summary');
+    }
+  }
+  return toSummary(memoryApprovals.map(({ status }) => ({ status, count: 1 })));
+}
 /**
  * List approvals with module, status, project, assigned approver, and search filtering.
  */
@@ -308,130 +369,116 @@ async function getApprovals({
   sortBy = 'created_at',
   sortOrder = 'desc',
 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const safeSortFields = ['created_at', 'request_number', 'module', 'applicant_name', 'status', 'value_impact'];
+  const sortColumn = safeSortFields.includes(sortBy) ? sortBy : 'created_at';
+  const sortDirection = String(sortOrder || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
   if (pool.hasStorage()) {
+    const filters = [];
+    const params = [];
+    const addFilter = (value, predicate) => {
+      params.push(value);
+      filters.push(predicate(params.length));
+    };
+    if (module && module !== 'all') addFilter(String(module).toLowerCase(), (index) => `lower(module) = $${index}`);
+    if (status && status !== 'all') addFilter(String(status).toLowerCase(), (index) => `lower(status) = $${index}`);
+    if (project && project !== 'all') addFilter(`%${String(project).trim().toLowerCase()}%`, (index) => `lower(coalesce(project, '')) LIKE $${index}`);
+    if (assigned_approver && String(assigned_approver).trim()) {
+      addFilter(`%${String(assigned_approver).trim().toLowerCase()}%`, (index) => `lower(coalesce(assigned_approver, '')) LIKE $${index}`);
+    }
+    if (search && String(search).trim()) {
+      const searchValue = `%${String(search).trim().toLowerCase()}%`;
+      addFilter(searchValue, (index) => `(
+        lower(coalesce(request_number, '')) LIKE $${index} OR
+        lower(coalesce(applicant_name, '')) LIKE $${index} OR
+        lower(coalesce(applicant_email, '')) LIKE $${index} OR
+        lower(coalesce(maker_name, '')) LIKE $${index} OR
+        lower(coalesce(project, '')) LIKE $${index} OR
+        lower(coalesce(value_impact, '')) LIKE $${index} OR
+        lower(coalesce(assigned_approver, '')) LIKE $${index}
+      )`);
+    }
+    const where = filters.length > 0 ? `AND ${filters.join(' AND ')}` : '';
+    const records = approvalRecordsCte();
+    const d1Records = approvalRecordsCte(true);
+    const sql = `${records}
+      SELECT *, COUNT(*) OVER() AS total
+      FROM ranked_approval_records
+      WHERE record_rank = 1 ${where}
+      ORDER BY ${sortColumn} ${sortDirection}, request_number ASC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    const d1Text = `${d1Records}
+      SELECT *, COUNT(*) OVER() AS total
+      FROM ranked_approval_records
+      WHERE record_rank = 1 ${where}
+      ORDER BY ${sortColumn} ${sortDirection}, request_number ASC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     try {
-      const conditions = [];
-      const params = [];
+      const result = await queryApprovals(sql, [...params, safeLimit, safeOffset], {
+        d1Text,
+        useCache: true,
+        tag: 'approvals',
+        ttlMs: 10000,
+      });
+      const rows = (result?.rows || []).map((row) => {
+        const approval = hydrateApprovalRow(row);
+        if (approval) delete approval.total;
+        return approval;
+      }).filter(Boolean);
+      if (rows.length > 0) return { rows, total: Number(result.rows[0].total) || 0 };
 
-      if (module && module !== 'all') {
-        params.push(module.toLowerCase());
-        conditions.push(`(lower(module) = $${params.length} OR lower(coalesce(raw->>'request_type', '')) = $${params.length})`);
-      }
-
-      if (status && status !== 'all') {
-        params.push(status.toLowerCase());
-        conditions.push(`lower(status) = $${params.length}`);
-      }
-
-      if (project && project !== 'all') {
-        params.push(`%${project.toLowerCase()}%`);
-        conditions.push(`lower(coalesce(project, '')) LIKE $${params.length}`);
-      }
-
-      if (assigned_approver && assigned_approver.trim()) {
-        params.push(`%${assigned_approver.trim().toLowerCase()}%`);
-        conditions.push(`(lower(coalesce(approver_name, '')) LIKE $${params.length} OR lower(coalesce(raw->>'assigned_approver', '')) LIKE $${params.length})`);
-      }
-
-      if (search && search.trim()) {
-        const q = `%${search.trim().toLowerCase()}%`;
-        params.push(q);
-        const idx = params.length;
-        conditions.push(`(
-          lower(coalesce(request_number, '')) LIKE $${idx} OR
-          lower(coalesce(applicant_name, '')) LIKE $${idx} OR
-          lower(coalesce(applicant_email, '')) LIKE $${idx} OR
-          lower(coalesce(maker_name, '')) LIKE $${idx} OR
-          lower(coalesce(project, '')) LIKE $${idx} OR
-          lower(coalesce(value_impact, '')) LIKE $${idx} OR
-          lower(coalesce(raw->>'assigned_approver', '')) LIKE $${idx}
-        )`);
-      }
-
-      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      const countSql = `SELECT count(*) as total FROM approvals ${whereClause}`;
-      const countRes = await pool.query(countSql, params, { d1: true, d1Text: countSql, useCache: true, tag: 'approvals', ttlMs: 10000 });
-      const total = Number(countRes?.rows?.[0]?.total || 0);
-
-      if (total > 0) {
-        const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
-        const safeOffset = Math.max(Number(offset) || 0, 0);
-        const validSortFields = ['created_at', 'request_number', 'module', 'applicant_name', 'status', 'value_impact'];
-        const sortCol = validSortFields.includes(sortBy) ? sortBy : 'created_at';
-        const sortDir = (sortOrder || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-
-        const dataSql = `SELECT * FROM approvals ${whereClause} ORDER BY ${sortCol} ${sortDir} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-        const dataRes = await pool.query(dataSql, [...params, safeLimit, safeOffset], { d1: true, d1Text: dataSql });
-        const rows = (dataRes?.rows || []).map(hydrateApprovalRow);
-        return { rows, total };
-      }
-    } catch {
-      // Fallback to memory
+      const countSql = `${records}
+        SELECT COUNT(*) AS total FROM ranked_approval_records
+        WHERE record_rank = 1 ${where}`;
+      const d1CountSql = `${d1Records}
+        SELECT CAST(COUNT(*) AS INTEGER) AS total FROM ranked_approval_records
+        WHERE record_rank = 1 ${where}`;
+      const countResult = await queryApprovals(countSql, params, { d1Text: d1CountSql, useCache: true, tag: 'approvals', ttlMs: 10000 });
+      return { rows: [], total: Number(countResult?.rows?.[0]?.total || 0) };
+    } catch (error) {
+      throw persistenceUnavailable(error, 'list-approvals');
     }
   }
 
   let filtered = [...memoryApprovals];
-
   if (module && module !== 'all') {
-    const modLower = module.toLowerCase();
-    filtered = filtered.filter(
-      (a) => String(a.module || '').toLowerCase() === modLower || String(a.request_type || '').toLowerCase() === modLower
-    );
+    const normalizedModule = String(module).toLowerCase();
+    filtered = filtered.filter((approval) => String(approval.module || '').toLowerCase() === normalizedModule || String(approval.request_type || '').toLowerCase() === normalizedModule);
   }
-
   if (status && status !== 'all') {
-    const statLower = status.toLowerCase();
-    filtered = filtered.filter((a) => String(a.status || '').toLowerCase() === statLower);
+    const normalizedStatus = String(status).toLowerCase();
+    filtered = filtered.filter((approval) => String(approval.status || '').toLowerCase() === normalizedStatus);
   }
-
   if (project && project !== 'all') {
-    const projLower = project.toLowerCase();
-    filtered = filtered.filter((a) => String(a.project || '').toLowerCase().includes(projLower));
+    const normalizedProject = String(project).toLowerCase();
+    filtered = filtered.filter((approval) => String(approval.project || '').toLowerCase().includes(normalizedProject));
   }
-
-  if (assigned_approver && assigned_approver.trim()) {
-    const apprLower = assigned_approver.trim().toLowerCase();
-    filtered = filtered.filter(
-      (a) =>
-        String(a.assigned_approver || '').toLowerCase().includes(apprLower) ||
-        String(a.approver_name || '').toLowerCase().includes(apprLower)
-    );
+  if (assigned_approver && String(assigned_approver).trim()) {
+    const normalizedApprover = String(assigned_approver).trim().toLowerCase();
+    filtered = filtered.filter((approval) => String(approval.assigned_approver || approval.approver_name || '').toLowerCase().includes(normalizedApprover));
   }
-
-  if (search && search.trim()) {
-    const q = search.trim().toLowerCase();
-    filtered = filtered.filter(
-      (a) =>
-        String(a.request_number || '').toLowerCase().includes(q) ||
-        String(a.applicant_name || '').toLowerCase().includes(q) ||
-        String(a.applicant_email || '').toLowerCase().includes(q) ||
-        String(a.maker_name || '').toLowerCase().includes(q) ||
-        String(a.project || '').toLowerCase().includes(q) ||
-        String(a.value_impact || '').toLowerCase().includes(q) ||
-        String(a.assigned_approver || '').toLowerCase().includes(q) ||
-        String(a.details || '').toLowerCase().includes(q)
-    );
+  if (search && String(search).trim()) {
+    const normalizedSearch = String(search).trim().toLowerCase();
+    filtered = filtered.filter((approval) => [
+      approval.request_number, approval.applicant_name, approval.applicant_email,
+      approval.maker_name, approval.project, approval.value_impact,
+      approval.assigned_approver, approval.details,
+    ].some((value) => String(value || '').toLowerCase().includes(normalizedSearch)));
   }
-
-  // Sort
-  filtered.sort((a, b) => {
-    let valA = a[sortBy] ?? a.created_at ?? '';
-    let valB = b[sortBy] ?? b.created_at ?? '';
-    if (typeof valA === 'string') valA = valA.toLowerCase();
-    if (typeof valB === 'string') valB = valB.toLowerCase();
-    if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
-    if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+  filtered.sort((left, right) => {
+    const leftValue = left[sortColumn] ?? left.created_at ?? '';
+    const rightValue = right[sortColumn] ?? right.created_at ?? '';
+    const normalizedLeft = typeof leftValue === 'string' ? leftValue.toLowerCase() : leftValue;
+    const normalizedRight = typeof rightValue === 'string' ? rightValue.toLowerCase() : rightValue;
+    if (normalizedLeft < normalizedRight) return sortDirection === 'ASC' ? -1 : 1;
+    if (normalizedLeft > normalizedRight) return sortDirection === 'ASC' ? 1 : -1;
     return 0;
   });
-
   const total = filtered.length;
-  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
-  const safeOffset = Math.max(Number(offset) || 0, 0);
-  const rows = filtered.slice(safeOffset, safeOffset + safeLimit);
-
-  return { rows, total };
+  return { rows: filtered.slice(safeOffset, safeOffset + safeLimit), total };
 }
-
 function parseRawObject(raw) {
   if (typeof raw === 'string') {
     try {
@@ -471,6 +518,7 @@ function hydrateApprovalRow(row) {
     approver_remarks: row.approver_remarks || null,
     internal_task_id: raw.internal_task_id || null,
     buyer_id: raw.buyer_id || null,
+    seller_id: raw.seller_id || null,
     history: Array.isArray(raw.history) ? raw.history : [],
     attachments: Array.isArray(raw.attachments) ? raw.attachments : [],
     created_at: row.created_at ? new Date(row.created_at).toISOString() : now,
@@ -479,10 +527,20 @@ function hydrateApprovalRow(row) {
   };
 }
 
-/**
- * Create a new approval record in the database and in-memory store.
- */
-async function createApproval(data, actor = {}) {
+async function getApprovalById(id) {
+  if (!id) return null;
+  if (!pool.hasStorage()) return memoryApprovals.find((approval) => approval.id === id) || null;
+
+  const sql = 'SELECT * FROM approvals WHERE id = $1 LIMIT 1';
+  try {
+    const result = await pool.query(sql, [id], { d1: true, d1Text: sql });
+    return hydrateApprovalRow(result?.rows?.[0] || null);
+  } catch (error) {
+    throw persistenceUnavailable(error, 'get-approval-by-id');
+  }
+}
+
+function prepareApprovalCreate(data = {}, actor = {}) {
   const now = new Date().toISOString();
   const id = data.id || `appr_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const request_number = data.request_number || `REQ-CR-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -557,181 +615,292 @@ async function createApproval(data, actor = {}) {
     raw,
   };
 
-  memoryApprovals.unshift(item);
+  const sql = `
+    INSERT INTO approvals (
+      id, request_number, module, project, applicant_name, applicant_email,
+      value_impact, maker_name, maker_role, status, details, raw, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+  `;
+  const params = [
+    id,
+    request_number,
+    module,
+    project,
+    applicant_name,
+    applicant_email,
+    value_impact,
+    maker_name,
+    maker_role,
+    status,
+    details,
+    JSON.stringify(raw),
+    now,
+    now,
+  ];
 
+  return { item, statement: { text: sql, params } };
+}
+
+function rememberApproval(item) {
+  memoryApprovals.unshift(item);
+  return item;
+}
+
+/**
+ * Create a new approval record in the database and in-memory store.
+ */
+async function createApproval(data, actor = {}) {
+  const prepared = prepareApprovalCreate(data, actor);
   if (pool.hasStorage()) {
     try {
-      const sql = `
-        INSERT INTO approvals (
-          id, request_number, module, project, applicant_name, applicant_email,
-          value_impact, maker_name, maker_role, status, details, raw, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      `;
       await pool.query(
-        sql,
-        [
-          id,
-          request_number,
-          module,
-          project,
-          applicant_name,
-          applicant_email,
-          value_impact,
-          maker_name,
-          maker_role,
-          status,
-          details,
-          JSON.stringify(raw),
-          now,
-          now,
-        ],
-        { d1: true, d1Text: sql }
+        prepared.statement.text,
+        prepared.statement.params,
+        { d1: true, d1Text: prepared.statement.text }
       );
-    } catch {
-      // non-fatal if table not created
+    } catch (error) {
+      throw persistenceUnavailable(error, 'create-approval');
     }
   }
 
-  return item;
+  return rememberApproval(prepared.item);
 }
 
 /**
  * Process approval or rejection action.
  * For Buyer Credit Additions, updates buyer credit balance and synchronizes corresponding internal task.
  */
-async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
-  let item = memoryApprovals.find((a) => a.id === id || a.request_number === id);
+async function processApprovalAction(id, { action, remarks = '', password = '', approverName = '' }, actor = {}) {
+  if (!isApproverPasswordConfigured(approverName)) {
+    const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
+    configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';
+    configurationError.statusCode = 503;
+    throw configurationError;
+  }
+  if (!verifyApproverPassword(approverName, password)) {
+    const passwordError = new Error(APPROVAL_MESSAGES.PASSWORD_INVALID);
+    passwordError.code = 'APPROVER_PASSWORD_INVALID';
+    passwordError.statusCode = 401;
+    throw passwordError;
+  }
 
-  if (!item && pool.hasStorage()) {
+  const normalizedAction = String(action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
+  const now = new Date().toISOString();
+  const eventId = crypto.randomUUID();
+  const actorId = actor.uuid || actor.id || null;
+  const actorName = actor.name || actor.fullName || actor.email || 'Management Authority';
+  const actorEmail = actor.email || null;
+  const normalizedRemarks = String(remarks || '');
+
+  if (pool.hasStorage()) {
     try {
-      const dbRes = await pool.query(
-        'SELECT * FROM approvals WHERE id = $1 OR request_number = $1 LIMIT 1',
-        [id],
-        { d1: true }
-      );
-      if (dbRes?.rows?.length) {
-        item = hydrateApprovalRow(dbRes.rows[0]);
-        memoryApprovals.push(item);
+      const d1 = getD1Binding() || getD1HttpClient();
+      let managementApproval = null;
+      if (d1) {
+        const statements = [
+          {
+            text: `UPDATE management_approvals
+              SET status = $2, approver_id = $3, approver_name = $4,
+                  approver_email = $5, approver_remarks = $6,
+                  last_action_id = $7, updated_at = $8
+              WHERE (id = $1 OR request_number = $1) AND status = 'Pending'
+              RETURNING *`,
+            params: [id, normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, eventId, now],
+          },
+          {
+            text: `INSERT INTO management_approval_events
+              (id, approval_id, request_number, action, previous_status, new_status,
+               actor_id, actor_name, actor_email, remarks, created_at)
+              SELECT $1, id, request_number, $2, 'Pending', $2, $3, $4, $5, $6, $7
+              FROM management_approvals WHERE last_action_id = $1
+              RETURNING id`,
+            params: [eventId, normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, now],
+          },
+        ];
+        const results = await batchD1(d1, statements);
+        managementApproval = results[0]?.rows?.[0] || null;
+        if (managementApproval && !results[1]?.rows?.[0]) {
+          throw new Error('Approval state changed but its audit event was not written.');
+        }
+        if (!managementApproval) {
+          const existing = await findApprovalInDatabase(id);
+          if (existing) throw approvalConflict();
+        }
+      } else {
+        managementApproval = await pool.withTransaction(async (client) => {
+          const currentResult = await client.query(
+            'SELECT * FROM management_approvals WHERE id = $1 OR request_number = $1 FOR UPDATE',
+            [id]
+          );
+          const current = currentResult.rows[0];
+          if (!current) return null;
+          if (current.status !== 'Pending') throw approvalConflict();
+          const updateResult = await client.query(
+            `UPDATE management_approvals
+              SET status = $1, approver_id = $2, approver_name = $3,
+                  approver_email = $4, approver_remarks = $5,
+                  last_action_id = $6, updated_at = $7
+              WHERE id = $8 AND status = 'Pending'
+              RETURNING *`,
+            [normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, eventId, now, current.id]
+          );
+          const saved = updateResult.rows[0];
+          if (!saved) throw approvalConflict();
+          await client.query(
+            `INSERT INTO management_approval_events
+              (id, approval_id, request_number, action, previous_status, new_status,
+               actor_id, actor_name, actor_email, remarks, created_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [eventId, saved.id, saved.request_number, normalizedAction, current.status,
+              normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, now]
+          );
+          return saved;
+        });
       }
-    } catch {
-      // non-fatal
+
+      if (managementApproval) {
+        pool.queryCache.invalidate('management_approvals');
+        pool.queryCache.invalidate('management_approval_events');
+        pool.queryCache.invalidate('approvals');
+        logger.audit(`Management approval ${normalizedAction.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+          approvalId: managementApproval.id,
+          requestNumber: managementApproval.request_number,
+          actorId,
+          remarks: normalizedRemarks,
+          eventId,
+        }, managementApproval.request_number);
+        return managementApproval;
+      }
+
+      const genericResult = await queryApprovals(
+        'SELECT * FROM approvals WHERE id = $1 OR request_number = $1 LIMIT 1',
+        [id]
+      );
+      const genericApproval = genericResult.rows[0];
+      if (!genericApproval) return null;
+      if (genericApproval.status !== 'Pending') throw approvalConflict();
+
+      const approval = hydrateApprovalRow(genericApproval);
+      const history = Array.isArray(approval.history) ? [...approval.history] : [];
+      history.push({
+        action: normalizedAction.toUpperCase(),
+        actor_name: actorName,
+        actor_role: actor.role || 'Executive Approver',
+        timestamp: now,
+        remarks: normalizedRemarks || `Request ${normalizedAction.toLowerCase()} by ${actorName}.`,
+      });
+      const raw = { ...(approval.raw || {}), history };
+      const updateSql = `UPDATE approvals
+        SET status = $1, approver_name = $2, approver_remarks = $3, updated_at = $4, raw = $5
+        WHERE (id = $6 OR request_number = $6) AND status = 'Pending'
+        RETURNING *`;
+      const updatedResult = await pool.query(
+        updateSql,
+        [normalizedAction, actorName, normalizedRemarks, now, JSON.stringify(raw), id],
+        { d1: true, d1Text: updateSql }
+      );
+      const saved = updatedResult.rows?.[0];
+      if (!saved) {
+        const latest = await queryApprovals(
+          'SELECT * FROM approvals WHERE id = $1 OR request_number = $1 LIMIT 1',
+          [id]
+        );
+        if (!latest.rows?.[0]) return null;
+        throw approvalConflict();
+      }
+
+      const updatedApproval = hydrateApprovalRow(saved);
+      const memoryIndex = memoryApprovals.findIndex((entry) => entry.id === updatedApproval.id || entry.request_number === updatedApproval.request_number);
+      if (memoryIndex >= 0) memoryApprovals[memoryIndex] = updatedApproval;
+      pool.queryCache.invalidate('approvals');
+
+      if (updatedApproval.internal_task_id) {
+        try {
+          const internalTaskQueries = require('./internalTaskQueries');
+          if (normalizedAction === 'Approved' && internalTaskQueries.approveCreditTask) {
+            await internalTaskQueries.approveCreditTask(updatedApproval.internal_task_id, actor, normalizedRemarks);
+          } else if (normalizedAction === 'Rejected' && internalTaskQueries.rejectCreditTask) {
+            await internalTaskQueries.rejectCreditTask(updatedApproval.internal_task_id, actor, normalizedRemarks);
+          }
+        } catch (error) {
+          logger.error('Approval decision saved but internal credit task synchronization failed', {
+            approvalId: updatedApproval.id,
+            requestNumber: updatedApproval.request_number,
+            internalTaskId: updatedApproval.internal_task_id,
+            error,
+          }, 'APPROVAL_QUERIES');
+        }
+      }
+
+      try {
+        const actionCenterNotificationService = require('../services/actionCenterNotificationService');
+        if (actionCenterNotificationService?.dispatchActionCenterCommunication) {
+          await actionCenterNotificationService.dispatchActionCenterCommunication({
+            entityType: 'approval',
+            entityId: updatedApproval.id,
+            channel: 'EMAIL',
+            recipientEmail: updatedApproval.applicant_email || 'requester@procucev.com',
+            recipientName: updatedApproval.maker_name || 'Requester',
+            subject: `[Approval Update] Request ${updatedApproval.request_number} has been ${normalizedAction}`,
+            message: `Your approval request ${updatedApproval.request_number} (${updatedApproval.value_impact}) has been ${normalizedAction.toLowerCase()} by ${actorName}. Remarks: ${normalizedRemarks || 'None'}.`,
+          }, actor);
+        }
+      } catch (error) {
+        logger.error('Approval decision saved but requester notification failed', {
+          approvalId: updatedApproval.id,
+          requestNumber: updatedApproval.request_number,
+          error,
+        }, 'APPROVAL_QUERIES');
+      }
+
+      logger.audit(`Approval ${normalizedAction.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+        approvalId: updatedApproval.id,
+        requestNumber: updatedApproval.request_number,
+        actorId,
+        remarks: normalizedRemarks,
+        eventId,
+      }, updatedApproval.request_number);
+      return updatedApproval;
+    } catch (error) {
+      if (error?.code === 'APPROVAL_ALREADY_DECIDED') throw error;
+      throw persistenceUnavailable(error, 'process-approval-action');
     }
   }
 
+  const item = memoryApprovals.find((approval) => approval.id === id || approval.request_number === id);
   if (!item) return null;
-
-  const now = new Date().toISOString();
-  const normalizedAction = (action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
-  const approverName = actor.name || actor.fullName || actor.email || 'Management Authority';
-  const cleanRemarks = remarks ? String(remarks).trim() : '';
+  if (item.status !== 'Pending') throw approvalConflict();
 
   item.status = normalizedAction;
-  item.approver_name = approverName;
-  item.approver_remarks = cleanRemarks;
+  item.approver_id = actorId;
+  item.approver_name = actorName;
+  item.approver_email = actorEmail;
+  item.approver_remarks = normalizedRemarks;
   item.updated_at = now;
-
   if (!Array.isArray(item.history)) item.history = [];
   item.history.push({
     action: normalizedAction.toUpperCase(),
-    actor_name: approverName,
+    actor_name: actorName,
     actor_role: actor.role || 'Executive Approver',
     timestamp: now,
-    remarks: cleanRemarks || `Request ${normalizedAction.toLowerCase()} by ${approverName}.`,
+    remarks: normalizedRemarks || `Request ${normalizedAction.toLowerCase()} by ${actorName}.`,
   });
-
-  // Buyer Credit Addition Workflow Integration (Section 8)
-  const isCreditAddition =
-    String(item.module || '').toLowerCase().includes('credit') ||
-    String(item.request_type || '').toLowerCase().includes('credit') ||
-    Boolean(item.internal_task_id) ||
-    Boolean(item.buyer_id);
-
-  if (isCreditAddition && item.internal_task_id) {
-    try {
-      const internalTaskQueries = require('./internalTaskQueries');
-      if (normalizedAction === 'Approved' && internalTaskQueries.approveCreditTask) {
-        await internalTaskQueries.approveCreditTask(item.internal_task_id, actor, cleanRemarks);
-      } else if (normalizedAction === 'Rejected' && internalTaskQueries.rejectCreditTask) {
-        await internalTaskQueries.rejectCreditTask(item.internal_task_id, actor, cleanRemarks);
-      }
-    } catch {
-      // non-fatal
-    }
-  }
-
-  // Update in database if pool is active
-  if (pool.hasStorage()) {
-    try {
-      const updateSql = `
-        UPDATE approvals
-        SET status = $1, approver_name = $2, approver_remarks = $3, updated_at = $4,
-            raw = jsonb_set(coalesce(raw, '{}'::jsonb), '{history}', $5::jsonb)
-        WHERE id = $6 OR request_number = $6
-      `;
-      await pool.query(
-        updateSql,
-        [normalizedAction, approverName, cleanRemarks, now, JSON.stringify(item.history), id],
-        { d1: true, d1Text: updateSql }
-      );
-    } catch {
-      // non-fatal if table not yet populated
-    }
-  }
-
-  // Dispatch notification to requester if communication service is present
-  try {
-    const actionCenterNotificationService = require('../services/actionCenterNotificationService');
-    if (actionCenterNotificationService && actionCenterNotificationService.dispatchActionCenterCommunication) {
-      await actionCenterNotificationService.dispatchActionCenterCommunication(
-        {
-          entityType: 'approval',
-          entityId: item.id,
-          channel: 'EMAIL',
-          recipientEmail: item.applicant_email || 'requester@procucev.com',
-          recipientName: item.maker_name || 'Requester',
-          subject: `[Approval Update] Request ${item.request_number} has been ${normalizedAction}`,
-          message: `Your approval request ${item.request_number} (${item.value_impact}) has been ${normalizedAction.toLowerCase()} by ${approverName}. Remarks: ${cleanRemarks || 'None'}.`,
-        },
-        actor
-      );
-    }
-  } catch {
-    // Non-fatal notification error
-  }
-
-  // Audit log insertion
-  if (pool.hasStorage()) {
-    try {
-      const logId = `audit_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
-      const sql = `
-        INSERT INTO audit_logs (id, actor_email, action, entity_type, entity_id, description, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `;
-      await pool.query(
-        sql,
-        [
-          logId,
-          actor.email || 'admin@procucev.com',
-          `APPROVAL_${normalizedAction.toUpperCase()}`,
-          item.module,
-          item.request_number,
-          `Management ${normalizedAction} request ${item.request_number} (${item.value_impact}). Remarks: ${cleanRemarks || 'None'}`,
-          now,
-        ],
-        { d1: true, d1Text: sql }
-      );
-    } catch {
-      // Non-fatal audit log insertion
-    }
-  }
-
+  logger.audit(`Management approval ${normalizedAction.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+    approvalId: item.id,
+    requestNumber: item.request_number,
+    actorId,
+    remarks: normalizedRemarks,
+    eventId,
+  }, item.request_number);
   return item;
 }
-
 module.exports = {
   getApprovalSummary,
   getApprovals,
+  getApprovalById,
   createApproval,
+  prepareApprovalCreate,
+  rememberApproval,
   processApprovalAction,
   hydrateApprovalRow,
   memoryApprovals,

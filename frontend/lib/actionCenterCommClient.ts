@@ -48,6 +48,7 @@ export async function dispatchActionCenterCommunication(
 
     return {
       success: json.success !== false,
+      queued: json.queued === true,
       message: json.message,
       communication: json.communication,
       emailResult: json.emailResult,

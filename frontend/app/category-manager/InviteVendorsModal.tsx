@@ -560,8 +560,8 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       });
 
       showToast(
-        'Vendor Registered',
-        `${name} has been added as a Procucev Vendor and credentials emailed. Selected for invitation.`,
+        UI_STRINGS.vendorOnboarding.addedTitle,
+        formatString(UI_STRINGS.vendorOnboarding.registeredAndSelectedMessage, { name }),
         'success'
       );
       setShowAddVendorModal(false);

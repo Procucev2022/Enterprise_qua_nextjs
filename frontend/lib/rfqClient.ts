@@ -1,4 +1,5 @@
 import { authClient } from './authClient';
+import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
@@ -23,6 +24,18 @@ import type {
   VendorPageMeta,
 } from './types';
 
+function getRfqTransportErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function logRfqTransportFailure(operation: string, error: unknown): void {
+  logger.error(operation, {
+    errorName: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage: getRfqTransportErrorMessage(error, 'Unknown request failure'),
+    ...(error instanceof Error ? { error } : {}),
+  }, 'RFQ_CLIENT');
+}
+
 export async function downloadQuoteAttachment(
   rfqIdOrNumber: string,
   attachment: RFQQuoteAttachment
@@ -38,7 +51,8 @@ export async function downloadQuoteAttachment(
       return { success: false, error: body.error || 'The bid document could not be downloaded.' };
     }
     return { success: true, url: URL.createObjectURL(await response.blob()) };
-  } catch {
+  } catch (error: unknown) {
+    logRfqTransportFailure('Quote attachment download request failed', error);
     return { success: false, error: UI_STRINGS.auth.networkUnreachable };
   }
 }
@@ -437,6 +451,9 @@ export async function createRFQ(payload: RFQCreatePayload): Promise<RFQMutationR
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !body.data) {
@@ -490,6 +507,9 @@ export async function fetchRFQById(identifier: string): Promise<RFQFetchResult> 
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {
@@ -538,6 +558,9 @@ export async function fetchRFQList(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data)) {
@@ -585,6 +608,9 @@ export async function fetchAllRFQs(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data)) {
@@ -626,6 +652,9 @@ export async function fetchVendorCandidates(rfqId: string, limit?: number): Prom
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data)) {
@@ -677,6 +706,9 @@ export async function fetchAllVendors(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !Array.isArray(body.data) || !body.pagination) {
@@ -729,6 +761,9 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !body.data) {
@@ -785,6 +820,9 @@ export async function updateRFQ(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {
@@ -839,6 +877,9 @@ export async function extendRFQ(
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {
@@ -886,6 +927,9 @@ export async function deleteRFQ(identifier: string): Promise<RFQDeleteResult> {
   }
 
   if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      authClient.setSession(null, null);
+    }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (res.status === 404) {
@@ -924,8 +968,9 @@ export async function submitRFQInquiry(
       return { success: false, error: body.error || 'Failed to submit inquiry.' };
     }
     return { success: true, data: body.data, rfq: body.rfq };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error submitting inquiry.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ inquiry submission request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error submitting inquiry.') };
   }
 }
 
@@ -954,12 +999,14 @@ export async function replyToRFQInquiry(
       return { success: false, error: body.error || 'Failed to submit reply.' };
     }
     return { success: true, data: body.data, rfq: body.rfq };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error submitting reply.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ inquiry reply request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error submitting reply.') };
   }
 }
 
 export interface RequestVendorCategoryUpdatePayload {
+  idempotencyKey?: string;
   vendorId?: string;
   vendorEmail?: string;
   vendorName?: string;
@@ -973,26 +1020,52 @@ export interface RequestVendorCategoryUpdatePayload {
  */
 export async function requestVendorCategoryUpdateEmail(
   payload: RequestVendorCategoryUpdatePayload
-): Promise<{ success: boolean; message?: string; error?: string }> {
+): Promise<{
+  success: boolean;
+  deliveryStatus?: 'sent' | 'queued';
+  idempotencyKey?: string;
+  message?: string;
+  error?: string;
+}> {
   const token = authClient.getToken();
+  let idempotencyKey = payload.idempotencyKey || '';
 
   try {
+    if (!idempotencyKey) idempotencyKey = globalThis.crypto.randomUUID();
+    const requestPayload = { ...payload, idempotencyKey };
     const res = await fetch('/api/rfqs/request-vendor-category-update', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestPayload),
     });
 
     const body = await res.json();
     if (!res.ok || !body.success) {
-      return { success: false, error: body.error || 'Failed to dispatch category update email.' };
+      return {
+        success: false,
+        idempotencyKey,
+        error: body.error || 'Failed to dispatch category update email.',
+      };
     }
-    return { success: true, message: body.message };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error requesting category update.' };
+    const deliveryStatus = body.deliveryStatus === 'sent' || body.deliveryStatus === 'queued'
+      ? body.deliveryStatus
+      : undefined;
+    return {
+      success: true,
+      ...(deliveryStatus ? { deliveryStatus } : {}),
+      idempotencyKey,
+      message: body.message,
+    };
+  } catch (err: unknown) {
+    logRfqTransportFailure('Vendor category update request failed', err);
+    return {
+      success: false,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      error: getRfqTransportErrorMessage(err, 'Network error requesting category update.'),
+    };
   }
 }
 
@@ -1028,8 +1101,9 @@ export async function fetchVendorRfqCredits(vendorId?: string): Promise<{
       return { success: false, error: body.error || 'Failed to fetch vendor RFQ credits.' };
     }
     return { success: true, data: body.data };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error fetching RFQ credits.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('Vendor RFQ credit request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error fetching RFQ credits.') };
   }
 }
 
@@ -1070,7 +1144,8 @@ export async function downloadAndUnlockRFQ(rfqIdOrNumber: string): Promise<{
       alreadyUnlocked: body.alreadyUnlocked,
       freeCreditsRemaining: body.freeCreditsRemaining,
     };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error downloading RFQ.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ unlock request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error downloading RFQ.') };
   }
 }

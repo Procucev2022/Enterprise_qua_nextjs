@@ -23,6 +23,8 @@ export class ClientLogger {
   public buffer: FrontendLogEntry[] = [];
   public maxBufferSize: number = 200;
   public isRemoteSyncEnabled: boolean = true;
+  private lastRemoteSyncFailureAt: number = 0;
+  private suppressedRemoteSyncFailures: number = 0;
 
   constructor(maxBufferSize: number = 200) {
     this.maxBufferSize = maxBufferSize;
@@ -43,7 +45,9 @@ export class ClientLogger {
     const url = typeof window !== 'undefined' && window.location ? window.location.pathname : '/app';
 
     const stackTrace = metadata.error instanceof Error ? metadata.error.stack : undefined;
-    const userEmail = metadata.userEmail || 'buyer@tatasteel.com';
+    const identifiedUserEmail = typeof metadata.userEmail === 'string' ? metadata.userEmail.trim() : undefined;
+    const safeMetadata = { ...metadata };
+    delete safeMetadata.userEmail;
 
     const entry: FrontendLogEntry = {
       id,
@@ -51,8 +55,8 @@ export class ClientLogger {
       level,
       category,
       message,
-      metadata,
-      userEmail,
+      metadata: safeMetadata,
+      ...(identifiedUserEmail ? { userEmail: identifiedUserEmail } : {}),
       url,
       stackTrace,
     };
@@ -78,6 +82,12 @@ export class ClientLogger {
     if (this.isRemoteSyncEnabled && typeof fetch === 'function') {
       try {
         const token = authClient.getToken();
+        const remoteMetadata: Record<string, unknown> = { ...safeMetadata, url, id };
+        if (metadata.error instanceof Error) {
+          delete remoteMetadata.error;
+          remoteMetadata.errorName = metadata.error.name;
+          remoteMetadata.errorMessage = metadata.error.message;
+        }
         const endpoint = token ? '/api/logs' : '/api/logs/client-error';
         fetch(endpoint, {
           method: 'POST',
@@ -85,15 +95,26 @@ export class ClientLogger {
             'Content-Type': 'application/json',
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-          body: JSON.stringify({
+        body: JSON.stringify({
             level,
             message,
             category,
-            metadata: { ...metadata, url, id },
+            metadata: remoteMetadata,
+            ...(stackTrace ? { stackTrace } : {}),
           }),
-        }).catch(() => {});
-      } catch {
-        // Fallback
+        })
+          .then((response) => {
+            if (!response.ok) this.recordRemoteSyncFailure({ status: response.status });
+          })
+          .catch((error: unknown) => {
+            this.recordRemoteSyncFailure({
+              errorName: error instanceof Error ? error.name : 'UnknownError',
+            });
+          });
+      } catch (error: unknown) {
+        this.recordRemoteSyncFailure({
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
       }
     }
 
@@ -138,6 +159,39 @@ export class ClientLogger {
 
   public clearLogs(): void {
     this.buffer = [];
+  }
+
+  private recordRemoteSyncFailure(metadata: Record<string, number | string>): void {
+    const now = Date.now();
+    if (now - this.lastRemoteSyncFailureAt < 60_000) {
+      this.suppressedRemoteSyncFailures += 1;
+      return;
+    }
+
+    const entryMetadata = {
+      ...metadata,
+      ...(this.suppressedRemoteSyncFailures > 0
+        ? { suppressedRemoteSyncFailures: this.suppressedRemoteSyncFailures }
+        : {}),
+    };
+    this.suppressedRemoteSyncFailures = 0;
+    this.lastRemoteSyncFailureAt = now;
+
+    const entry: FrontendLogEntry = {
+      id: `flog-${now}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: this.formatTimestamp(),
+      level: 'ERROR',
+      category: 'LOG_SYNC',
+      message: 'Failed to persist frontend log to the backend',
+      metadata: entryMetadata,
+      url: typeof window !== 'undefined' && window.location ? window.location.pathname : '/app',
+    };
+    this.buffer.unshift(entry);
+    if (this.buffer.length > this.maxBufferSize) this.buffer.pop();
+
+    if (process.env.NODE_ENV !== 'test') {
+      console.error(`[${entry.timestamp}] [ERROR] [LOG_SYNC] ${entry.message}`, entryMetadata);
+    }
   }
 }
 

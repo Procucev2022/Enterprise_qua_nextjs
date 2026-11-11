@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const scorecardController = require('../controllers/scorecardController');
-const { optionalAuthenticate } = require('../middleware/auth');
+const { authenticate, requireRole } = require('../middleware/auth');
 
-// Fetch scorecard performance analytics
-router.get('/', optionalAuthenticate, scorecardController.getScorecard);
+// Scorecards expose cross-team performance and executive metrics.
+router.get('/', authenticate, requireRole('admin', 'category_manager'), scorecardController.getScorecard);
 
 module.exports = router;
 

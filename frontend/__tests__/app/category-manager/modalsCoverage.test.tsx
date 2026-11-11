@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import BuyerDetailsModal from '@/app/category-manager/BuyerDetailsModal';
 import VendorDetailsModal from '@/app/category-manager/VendorDetailsModal';
 import * as storeModule from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { BuyerAccount, QuoteComparison, RFQAssignedVendor, RFQItem, VendorEntry } from '@/lib/types';
 
 jest.mock('@/lib/store');
@@ -226,7 +227,49 @@ describe('BuyerDetailsModal', () => {
     await waitFor(() => {
       expect(screen.getByText('Unknown Buyer')).toBeInTheDocument();
     });
-    expect(screen.getByText(/Location Not Provided|Unverified Buyer/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.buyerProfile.unverifiedBuyer)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(UI_STRINGS.buyerProfile.detailsLoadError);
+  });
+
+  test('shows a degraded cache warning and retries the verified profile lookup', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        data: { companyName: 'Larsen & Toubro Limited' },
+        meta: { source: 'local_account_cache', degraded: true },
+      }),
+    });
+    render(
+      <BuyerDetailsModal
+        isOpen={true}
+        onClose={jest.fn()}
+        buyerName="Larsen & Toubro Limited"
+        buyerAccountId="buyer-1"
+      />
+    );
+
+    expect(await screen.findByText(UI_STRINGS.buyerProfile.detailsLocalFallback)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.buyerProfile.retryDetails }));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(UI_STRINGS.buyerProfile.detailsLocalFallback)).not.toBeInTheDocument());
+  });
+
+  test('shows the API error message when the identity database rejects a lookup', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: false,
+      json: () => Promise.resolve({ success: false, error: 'Identity database temporarily unavailable.' }),
+    });
+    render(
+      <BuyerDetailsModal
+        isOpen={true}
+        onClose={jest.fn()}
+        buyerName="Larsen & Toubro Limited"
+        buyerAccountId="buyer-1"
+      />
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Identity database temporarily unavailable.');
   });
 
   test('matches account via buyerName, rfq.buyerAccountName, and rfq.raisedByEmail', async () => {

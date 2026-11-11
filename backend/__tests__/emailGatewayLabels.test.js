@@ -12,6 +12,7 @@ const { google } = require('googleapis');
 const emailGatewayService = require('../src/services/emailGatewayService');
 const emailGatewayQueries = require('../src/db/emailGatewayQueries');
 const mailerService = require('../src/services/mailerService');
+const { logger } = require('../src/services/loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
   GMAIL_GATEWAY_LABELS,
@@ -289,6 +290,32 @@ describe('Gmail Label-Handling Workflow (Processed & Error Labels)', () => {
         requestBody: { removeLabelIds: ['UNREAD'] },
       });
     });
+
+    test('logs mark-read failures for duplicate messages while preserving the dedupe result', async () => {
+      const api = mockGmailApi({ messages: [{ id: 'dup_mark_read_failure' }] });
+      api.users.labels.list.mockRejectedValue(new Error('Labels API unavailable'));
+      api.users.labels.create.mockRejectedValue(new Error('Labels API unavailable'));
+      const markReadError = new Error('Gmail modify unavailable');
+      api.users.messages.modify.mockRejectedValue(markReadError);
+      jest.spyOn(google, 'gmail').mockReturnValue(api);
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(true);
+      jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
+
+      expect(result.outcomes[0]).toEqual(
+        expect.objectContaining({
+          uid: 'dup_mark_read_failure',
+          status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED,
+          labelApplied: null,
+        })
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Gmail mark-read failed for message dup_mark_read_failure',
+        markReadError,
+        'EMAIL_GATEWAY'
+      );
+    });
   });
 
   describe('Failed RFQ Creation -> Error Label & Debugging Retention', () => {
@@ -555,6 +582,34 @@ describe('Gmail Label-Handling Workflow (Processed & Error Labels)', () => {
       // Must not throw despite modify failure
       const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
       expect(result.outcomes[0].status).toBe(INGESTION_OUTCOME.INGESTED);
+    });
+
+    test('logs Gmail label-update timeouts while preserving successful ingestion', async () => {
+      const api = mockGmailApi({ messages: [{ id: 'timeout_modify' }] });
+      api.users.messages.modify.mockImplementation(() => new Promise(() => {}));
+      jest.spyOn(google, 'gmail').mockReturnValue(api);
+      jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValue({
+        status: INGESTION_OUTCOME.INGESTED,
+        detail: 'Created',
+        rfq: { id: 'rfq-timeout' },
+      });
+      jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      jest.useFakeTimers();
+      try {
+        const pollPromise = emailGatewayService.pollViaGmailApi(enabledConfig());
+        await jest.advanceTimersByTimeAsync(20 * 1000 + 1);
+        const result = await pollPromise;
+
+        expect(result.outcomes[0].status).toBe(INGESTION_OUTCOME.INGESTED);
+        expect(logger.warn).toHaveBeenCalledWith(
+          'Gmail move to Processed (post-process) did not complete for message timeout_modify',
+          expect.objectContaining({ message: 'Gmail move to Processed (post-process) timed out after 20000ms' }),
+          'EMAIL_GATEWAY'
+        );
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });

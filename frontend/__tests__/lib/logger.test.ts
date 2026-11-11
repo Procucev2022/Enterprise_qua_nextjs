@@ -11,13 +11,15 @@ describe('Frontend Client Logger Unit Tests', () => {
     const defaultLog = logger.log('INFO', 'Simple log');
     expect(defaultLog.level).toBe('INFO');
     expect(defaultLog.category).toBe('UI_ACTION');
-    expect(defaultLog.userEmail).toBe('buyer@tatasteel.com');
+    expect(defaultLog.userEmail).toBeUndefined();
+    expect(defaultLog.metadata).toEqual({});
 
     const infoLog = logger.info('User opened modal', { modalId: 'rfq-preview', userEmail: 'custom@buyer.com' }, 'UI_MODAL');
     expect(infoLog.level).toBe('INFO');
     expect(infoLog.message).toBe('User opened modal');
     expect(infoLog.category).toBe('UI_MODAL');
     expect(infoLog.userEmail).toBe('custom@buyer.com');
+    expect(infoLog.metadata).toEqual({ modalId: 'rfq-preview' });
     expect(infoLog.timestamp).toBeDefined();
 
     const warnLog = logger.warn('Subscription free trial limit reached', { remainingFreeRFQs: 0 });
@@ -76,7 +78,7 @@ describe('Frontend Client Logger Unit Tests', () => {
     expect(customLogger.getLogs().length).toBe(0);
   });
 
-  test('handles remote sync dispatch when fetch is available and rejects gracefully', () => {
+  test('records rejected remote sync attempts without recursively sending them', async () => {
     const originalFetch = global.fetch;
     const mockFetch = jest.fn().mockImplementation(() => Promise.reject(new Error('Network offline')));
     global.fetch = mockFetch as any;
@@ -87,7 +89,7 @@ describe('Frontend Client Logger Unit Tests', () => {
     const testLogger = new ClientLogger(50);
     testLogger.info('Remote dispatch test', { key: 'value' });
     testLogger.warn('Warning test');
-    testLogger.error('Error test');
+    testLogger.error('Error test', { error: new Error('Client exception') });
 
     // Headers are matched loosely: a signed-in session also attaches an
     // Authorization header, and asserting the exact object made this test fail for
@@ -100,7 +102,39 @@ describe('Frontend Client Logger Unit Tests', () => {
       })
     );
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const syncFailures = testLogger.getLogs({ category: 'LOG_SYNC' });
+    expect(syncFailures).toHaveLength(1);
+    expect(syncFailures[0].level).toBe('ERROR');
+    expect(syncFailures[0].metadata).toMatchObject({ errorName: 'Error' });
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    const remoteErrorPayload = JSON.parse(mockFetch.mock.calls[2][1].body as string);
+    expect(remoteErrorPayload.stackTrace).toContain('Error: Client exception');
+    expect(remoteErrorPayload.metadata.errorName).toBe('Error');
+
     (process.env as any).NODE_ENV = originalEnv;
+    global.fetch = originalFetch;
+  });
+
+  test('records non-success HTTP responses and normalizes unknown thrown values', async () => {
+    const originalFetch = global.fetch;
+    const mockFetch = jest.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockRejectedValueOnce('network-down');
+    global.fetch = mockFetch as any;
+
+    const testLogger = new ClientLogger(10);
+    testLogger.info('HTTP failure');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(testLogger.getLogs({ category: 'LOG_SYNC' })[0].metadata).toEqual({ status: 503 });
+
+    // A separate logger keeps its own throttle window and records unexpected
+    // non-Error rejection values without copying the raw value into logs.
+    const secondLogger = new ClientLogger(10);
+    secondLogger.info('Unknown transport failure');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(secondLogger.getLogs({ category: 'LOG_SYNC' })[0].metadata).toEqual({ errorName: 'UnknownError' });
+
     global.fetch = originalFetch;
   });
 

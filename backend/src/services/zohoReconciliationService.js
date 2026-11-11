@@ -15,6 +15,7 @@
 // ==============================================================================
 
 const storeService = require('../services/storeService');
+const zohoWebhookQueries = require('../db/zohoWebhookQueries');
 const zohoPaymentService = require('./zohoPaymentService');
 const { ZOHO_CONFIG } = require('../config/constants');
 const { logger } = require('./loggerService');
@@ -43,10 +44,11 @@ const RECONCILABLE_STATUSES = ['CREATED', 'pending', 'active'];
 async function reconcileLink(link) {
   if (!link || !link.zohoPaymentLinkId) {
     logger.warn(`Payment link ${link?.id} has no zohoPaymentLinkId; marking as expired`, { linkId: link?.id }, 'ZOHO_RECONCILIATION');
-    storeService.updatePaymentLinkRecord(link?.id, {
+    const updated = await storeService.updatePaymentLinkRecordDurably(link?.id, {
       status: 'expired',
       rawResponse: { error: 'Missing zohoPaymentLinkId', reconciledAt: new Date().toISOString() },
     });
+    if (!updated) throw new Error('Payment link expiration could not be recorded in durable storage.');
     return { status: 'expired', nonExistent: true };
   }
 
@@ -67,31 +69,45 @@ async function reconcileLink(link) {
         { linkId: link.id, zohoPaymentLinkId: link.zohoPaymentLinkId, message: msg },
         'ZOHO_RECONCILIATION'
       );
-      storeService.updatePaymentLinkRecord(link.id, {
+      const updated = await storeService.updatePaymentLinkRecordDurably(link.id, {
         status: 'expired',
         rawResponse: { error: msg, reconciledAt: new Date().toISOString() },
       });
+      if (!updated) throw new Error('Payment link expiration could not be recorded in durable storage.');
       return { status: 'expired', nonExistent: true };
     }
     throw err;
   }
 
-  storeService.updatePaymentLinkRecord(link.id, { status: result.status, rawResponse: result.rawResponse });
   // Zoho's own status strings are lowercase ('active', 'paid', 'expired',
   // 'cancelled') — compared case-insensitively since the webhook path
   // separately writes its own app-invented 'PAID' (uppercase) for the
   // same lifecycle point, and this check needs to recognize either.
   if (String(result.status || '').toLowerCase() === 'paid') {
-    if (link.payerType === 'buyer') {
-      storeService.activateBuyerSubscriptionFromPayment(link.id);
-    } else {
-      storeService.activateVendorSubscriptionFromPayment(link.id);
+    const activated = await storeService.activatePaymentLinkDurably(link.id, result.rawResponse);
+    if (!activated) {
+      throw Object.assign(new Error('The paid payment link could not be activated from durable storage.'), {
+        statusCode: 503,
+        code: 'PAYMENT_ACTIVATION_UNAVAILABLE',
+      });
     }
+  } else {
+    const updated = await storeService.updatePaymentLinkRecordDurably(link.id, { status: result.status, rawResponse: result.rawResponse });
+    if (!updated) throw new Error('Payment link status could not be recorded in durable storage.');
   }
   return result;
 }
 
 async function reconcileOnce() {
+  try {
+    const purgedCount = await zohoWebhookQueries.purgeExpiredWebhookEvents();
+    if (purgedCount > 0) {
+      logger.info('Expired Zoho webhook receipts purged', { purgedCount }, 'ZOHO_RECONCILIATION');
+    }
+  } catch (error) {
+    logger.error('Expired Zoho webhook receipt cleanup failed', { error }, 'ZOHO_RECONCILIATION');
+  }
+
   const pending = await storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
   for (const link of pending) {
     try {

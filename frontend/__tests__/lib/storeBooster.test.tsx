@@ -7,10 +7,14 @@ import {
   getSessionCache,
   setSessionCache,
   clearSessionCache,
+  getLastHistoricalDataError,
 } from '@/lib/store';
+import { RFQ_MODES } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
 
 jest.mock('@/lib/rfqClient', () => {
   const actual = jest.requireActual('@/lib/rfqClient');
@@ -18,6 +22,8 @@ jest.mock('@/lib/rfqClient', () => {
     ...actual,
     createRFQ: jest.fn().mockResolvedValue({ success: true, rfq: { id: 'rfq-1', rfqNumber: 'RFQ-001', title: 'Default' } }),
     fetchRFQList: jest.fn().mockResolvedValue({ success: true, rfqs: [] }),
+    fetchAllRFQs: jest.fn().mockResolvedValue({ success: true, rfqs: [] }),
+    fetchVendorRfqCredits: jest.fn().mockResolvedValue({ success: true, data: { credits: 10, unlockedRfqIds: [] } }),
     downloadAndUnlockRFQ: jest.fn().mockResolvedValue({ success: true, alreadyUnlocked: false, freeCreditsRemaining: 4 }),
     getVendorRfqCredits: jest.fn().mockResolvedValue({
       success: true,
@@ -228,6 +234,13 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       );
       await waitFor(() => expect(screen.getByTestId('ready')).toBeInTheDocument());
 
+      // Load bootstrap once, then verify both shared loaders use its warm cache.
+      await act(async () => {
+        await capturedApp?.ensureVendors(true);
+        await capturedApp?.ensureVendors(false);
+        await capturedApp?.ensureVendorEvaluations(false);
+      });
+
       // ensureRFQs
       await act(async () => {
         await capturedApp?.ensureRFQs(true);
@@ -261,6 +274,12 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       });
 
       expect(capturedApp?.categoryTaxonomy.length).toBeGreaterThan(0);
+
+      // A signed-out caller clears the AI feed without making a request.
+      jest.spyOn(authClient, 'getToken').mockReturnValue(null);
+      await act(async () => {
+        await capturedApp?.ensureAIFeed(true);
+      });
     });
 
     test('signed out state clears RFQs, activeBuyerAccount, and taxonomy', async () => {
@@ -789,6 +808,35 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
         email: 'exist@vendor.com',
       } as any);
       expect(added?.name).toBe('Existing Account Vendor');
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'v-pending-1',
+            name: 'Queued Email Vendor',
+            email: 'queued@vendor.com',
+            onboardingEmailStatus: 'pending',
+          },
+        }),
+      });
+
+      await act(async () => {
+        added = await capturedApp?.addBuyerVendor({
+          name: 'Queued Email Vendor',
+          email: 'queued@vendor.com',
+        } as any);
+      });
+      expect(added?.onboardingEmailStatus).toBe('pending');
+      expect(capturedApp?.toastMessage).toEqual({
+        title: UI_STRINGS.vendorOnboarding.credentialsQueuedTitle,
+        description: formatString(UI_STRINGS.vendorOnboarding.credentialsQueuedMessage, {
+          name: 'Queued Email Vendor',
+          email: 'queued@vendor.com',
+        }),
+        type: 'success',
+      });
     });
 
     test('getSessionCache and setSessionCache handle non-test environment and sessionStorage errors', () => {
@@ -1037,6 +1085,198 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       });
       res = await capturedApp?.processHistoricalPurchaseData('1_year', [{ companyName: 'Vendor 1' } as any]);
       expect(res).toBe(0);
+    });
+
+    test('refreshRFQs handles category_manager, admin, fetchAllRFQs failure fallback, and total error', async () => {
+      let captured: any = null;
+      function TestCM() {
+        captured = useApp();
+        return <div data-testid="cm-ready">CM Ready</div>;
+      }
+
+      const { unmount } = render(
+        <AppProvider>
+          <TestCM />
+        </AppProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('cm-ready')).toBeInTheDocument());
+
+      // Set role to category_manager
+      await act(async () => {
+        captured.setCurrentRole('category_manager');
+      });
+
+      (rfqClient.fetchAllRFQs as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfqs: [{ id: 'rfq-all-1', rfqNumber: 'RFQ-ALL-1', title: 'All RFQ' }],
+      });
+
+      await act(async () => {
+        await captured.ensureRFQs(true);
+      });
+      expect(rfqClient.fetchAllRFQs).toHaveBeenCalled();
+
+      // 2. role: category_manager with fetchAllRFQs failing, falling back to fetchRFQList
+      (rfqClient.fetchAllRFQs as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'All RFQs endpoint timed out',
+      });
+      (rfqClient.fetchRFQList as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfqs: [{ id: 'rfq-fallback-1', rfqNumber: 'RFQ-FB-1', title: 'Fallback RFQ' }],
+      });
+
+      await act(async () => {
+        await captured.refreshRFQs();
+      });
+      expect(rfqClient.fetchRFQList).toHaveBeenCalled();
+
+      // 3. role: admin with both failing
+      await act(async () => {
+        captured.setCurrentRole('admin');
+      });
+      (rfqClient.fetchAllRFQs as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'Forbidden',
+      });
+      (rfqClient.fetchRFQList as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'List failed too',
+      });
+      const errSpy = jest.spyOn(logger, 'log');
+
+      await act(async () => {
+        await captured.refreshRFQs();
+      });
+      expect(errSpy).toHaveBeenCalledWith('ERROR', 'Failed to load RFQs', { error: 'List failed too' }, 'RFQ_STORE');
+      errSpy.mockRestore();
+
+      // 4. authClient token absent
+      const tokenSpy = jest.spyOn(authClient, 'getToken').mockReturnValue(null as any);
+      await act(async () => {
+        await captured.refreshRFQs();
+      });
+      tokenSpy.mockRestore();
+
+      unmount();
+    });
+
+    test('exercises store branch boosts for payment links, feed, ensure methods, and deletions', async () => {
+      let captured: any = null;
+      function TestConsumer() {
+        captured = useApp();
+        return <div data-testid="boost-ready">Boost Ready</div>;
+      }
+
+      const { unmount } = render(
+        <AppProvider>
+          <TestConsumer />
+        </AppProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('boost-ready')).toBeInTheDocument());
+
+      // 1. getLastHistoricalDataError
+      expect(typeof getLastHistoricalDataError()).toBe('string');
+
+      // 2. createVendorPaymentLink when vendor profile is not found
+      const getSessionUserSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+        id: 'usr-unknown',
+        email: 'unknown-vendor@test.com',
+        role: 'vendor',
+      } as any);
+      const resVendorLink = await captured.createVendorPaymentLink('connect', 'annual');
+      expect(resVendorLink).toBeNull();
+      getSessionUserSpy.mockRestore();
+
+      // 3. refreshVendorCredits catch error
+      const creditSpy = jest.spyOn(rfqClient, 'fetchVendorRfqCredits').mockRejectedValueOnce(new Error('credit fetch failed'));
+      const errSpy = jest.spyOn(logger, 'log');
+      await act(async () => {
+        await captured.refreshVendorCredits();
+      });
+      expect(errSpy).toHaveBeenCalledWith('ERROR', 'Failed to refresh vendor RFQ credits', {
+        error: expect.any(Error),
+      }, 'VENDOR_CREDITS');
+      creditSpy.mockRestore();
+
+      // 4. ensureBootstrapData early return when already loaded via refreshFromDB
+      await act(async () => {
+        await captured.refreshFromDB();
+        await captured.ensureVendors(false);
+      });
+
+      // 5. refreshAIFeed when token absent
+      const noToken = jest.spyOn(authClient, 'getToken').mockReturnValue(null as any);
+      await act(async () => {
+        await captured.refreshAIFeed();
+      });
+      noToken.mockRestore();
+
+      // 6. ensureRouteData with unrecognised/other role
+      await act(async () => {
+        await captured.ensureRouteData('/somewhere', 'custom_role' as any);
+      });
+
+      // 7. deleteBuyerAccount backend failure and network error
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ success: false, error: 'Cannot delete account' }),
+      });
+      await act(async () => {
+        captured.deleteBuyerAccount('b-1');
+      });
+
+      (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error on delete'));
+      await act(async () => {
+        captured.deleteBuyerAccount('b-1');
+      });
+
+      // 8. deleteMultipleBuyerVendors fallback when bulk DELETE fails (not ok)
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false }),
+      });
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true }),
+      });
+      await act(async () => {
+        await captured.deleteMultipleBuyerVendors(['v-1']);
+      });
+
+      // deleteMultipleBuyerVendors fallback when bulk DELETE throws
+      (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('bulk delete exploded'));
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true }),
+      });
+      await act(async () => {
+        await captured.deleteMultipleBuyerVendors(['v-2']);
+      });
+
+      // 9. addNewRFQ with Mode 0 on free_trial
+      const rfqMode0 = {
+        title: 'Mode 0 Test RFQ',
+        sourcingMode: RFQ_MODES.MODE_0,
+        category: 'Civil Works',
+        extractedEntities: [],
+      };
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: { id: 'rfq-m0', rfqNumber: 'RFQ-M0', sourcingMode: RFQ_MODES.MODE_0 },
+        remainingFreeRFQs: 5,
+      });
+      await act(async () => {
+        captured.setActiveSubscription('free_trial');
+        captured.alignActiveBuyerAccount('b-1');
+      });
+      await act(async () => {
+        await captured.addNewRFQ(rfqMode0 as any);
+      });
+
+      errSpy.mockRestore();
+      unmount();
     });
   });
 });

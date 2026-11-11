@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
@@ -23,6 +23,14 @@ jest.mock('@/lib/rfqClient', () => ({
   fetchAllVendors: jest.fn(),
   requestVendorCategoryUpdateEmail: jest.fn(() => Promise.resolve({ success: true })),
 }));
+
+jest.mock('@/lib/validationSchemas', () => {
+  const actual = jest.requireActual('@/lib/validationSchemas');
+  return {
+    ...actual,
+    validatePincode: jest.fn(actual.validatePincode),
+  };
+});
 
 // The modal reads buyerVendors from useApp() inside a try/catch, since it can
 // render outside an AppProvider in some contexts. Defaults to throwing (the
@@ -62,6 +70,7 @@ jest.mock('@/lib/documentExtraction', () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const rfqClient = require('@/lib/rfqClient');
+const validationSchemas = require('@/lib/validationSchemas');
 
 const MODAL = UI_STRINGS.manualRfqModal;
 const MANUAL = UI_STRINGS.manualRfq;
@@ -185,6 +194,10 @@ import { setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 
 beforeEach(() => {
   jest.clearAllMocks();
+  validationSchemas.validatePincode.mockReset();
+  validationSchemas.validatePincode.mockImplementation(
+    jest.requireActual('@/lib/validationSchemas').validatePincode
+  );
   setCategoryTaxonomy(categoriesData);
   (useApp as jest.Mock).mockReturnValue({
     buyerVendors: [
@@ -1396,8 +1409,11 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           })
         );
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Category Update Email Sent',
-          expect.stringContaining('mismatch@vendor.com'),
+          UI_STRINGS.vendorCategoryUpdate.sentTitle,
+          formatString(UI_STRINGS.vendorCategoryUpdate.sentMessage, {
+            vendorName: 'Mismatch Vendor',
+            vendorEmail: 'mismatch@vendor.com',
+          }),
           'success'
         );
       });
@@ -1406,11 +1422,12 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
         success: false,
         error: 'SMTP quota exceeded',
+        idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
       });
       fireEvent.click(emailBtn);
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Email Delivery Issue',
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
           'SMTP quota exceeded',
           'warning'
         );
@@ -1423,11 +1440,14 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       fireEvent.click(emailBtn);
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Error',
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
           'Network timeout',
           'warning'
         );
       });
+      expect(rfqClient.requestVendorCategoryUpdateEmail).toHaveBeenLastCalledWith(expect.objectContaining({
+        idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
+      }));
     });
 
     it('covers pincode validation branch edge cases: dummy, invalid format, and server rejection', async () => {
@@ -1833,6 +1853,21 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
     });
 
+    it('does not repeat the category lookup when only delivery details change', async () => {
+      renderModal();
+      fillRow();
+
+      await waitFor(() => expect(rfqClient.fetchAllVendors).toHaveBeenCalled());
+      const categoryLookupCount = (rfqClient.fetchAllVendors as jest.Mock).mock.calls.length;
+
+      fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
+        target: { value: 'Second delivery site' },
+      });
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+
+      expect(rfqClient.fetchAllVendors).toHaveBeenCalledTimes(categoryLookupCount);
+    });
+
     it('covers handleSendCategoryUpdateEmail edge cases and badge statuses', async () => {
       const mockShowToast = jest.fn();
       const vNoName = {
@@ -1867,66 +1902,89 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       const emailBtns = screen.getAllByRole('button', { name: /Send Email to Update Category/i });
       fireEvent.click(emailBtns[0]);
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Email Delivery Issue', 'Failed to dispatch email.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
+          UI_STRINGS.vendorCategoryUpdate.failureMessage,
+          'warning'
+        );
       });
 
       // Trigger email for vNoContact with empty error thrown
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockRejectedValueOnce({});
       fireEvent.click(emailBtns[1]);
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Error', 'Failed to send update email.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+          'warning'
+        );
       });
 
-      // Trigger email with success to show "Update Email Sent ✓" badge
+      // Trigger email with success to show the saved request state.
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
         success: true,
+        deliveryStatus: 'queued',
       });
       fireEvent.click(emailBtns[0]);
       await waitFor(() => {
-        expect(screen.getByText(/Update Email Sent ✓/i)).toBeInTheDocument();
+        expect(screen.getByText(UI_STRINGS.vendorCategoryUpdate.completedButton)).toBeInTheDocument();
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.queuedTitle,
+          expect.stringContaining('saved and will retry automatically'),
+          'success'
+        );
       });
     });
 
-    it('covers debounced pincode API validation with valid and invalid server responses', async () => {
-      renderModal();
-      const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
+    it('covers debounced pincode state for valid, invalid, and failed requests', async () => {
+      const validatePincode = validationSchemas.validatePincode;
+      jest.useFakeTimers();
+      try {
+        renderModal();
+        const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
 
-      // 1. Debounced valid 6-digit pin
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{
-          Status: 'Success',
-          PostOffice: [{ Name: 'Indiranagar', District: 'Bengaluru', State: 'Karnataka' }],
-        }],
-      } as Response);
-      fireEvent.change(pinInput, { target: { value: '560038' } });
-      await waitFor(() => {
+        // 1. Debounced valid 6-digit pin
+        validatePincode.mockResolvedValueOnce({
+          isValid: true,
+          postOffices: [{ Name: 'Indiranagar', District: 'Bengaluru', State: 'Karnataka' }],
+        });
+        fireEvent.change(pinInput, { target: { value: '560038' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
         expect(screen.getByText('Valid')).toBeInTheDocument();
-      });
 
-      // 2. Debounced invalid 6-digit pin with custom message
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ Status: 'Error', Message: 'No record found' }],
-      } as Response);
-      fireEvent.change(pinInput, { target: { value: '999991' } });
-      await waitFor(() => {
+        // 2. Debounced invalid 6-digit pin with custom message
+        validatePincode.mockResolvedValueOnce({ isValid: false });
+        fireEvent.change(pinInput, { target: { value: '999991' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
         expect(screen.getByText('Invalid')).toBeInTheDocument();
-      });
 
-      // 3. Debounced 6-digit pin with fetch rejection (network fallback)
-      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network offline'));
-      fireEvent.change(pinInput, { target: { value: '999992' } });
-      await new Promise((r) => setTimeout(r, 400));
+        // 3. Debounced 6-digit pin with fetch rejection (network fallback)
+        validatePincode.mockRejectedValueOnce(new Error('Network offline'));
+        fireEvent.change(pinInput, { target: { value: '999992' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
 
-      // 4. Blur on non-6-digit pin (skips validation)
-      fireEvent.change(pinInput, { target: { value: '12' } });
-      fireEvent.blur(pinInput);
+        // 4. Blur on non-6-digit pin (skips validation)
+        fireEvent.change(pinInput, { target: { value: '12' } });
+        fireEvent.blur(pinInput);
 
-      // 5. Blur on 6-digit pin with rejection
-      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Postal timeout'));
-      fireEvent.change(pinInput, { target: { value: '560002' } });
-      fireEvent.blur(pinInput);
+        // 5. Blur on 6-digit pin with rejection
+        validatePincode.mockRejectedValueOnce(new Error('Postal timeout'));
+        fireEvent.change(pinInput, { target: { value: '560002' } });
+        await act(async () => {
+          fireEvent.blur(pinInput);
+          await Promise.resolve();
+        });
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+        validatePincode.mockReset();
+      }
     });
 
     it('covers handleAutoCategorizeAll with mixed classified, unclassified, and invalid taxonomy items', async () => {
@@ -2307,6 +2365,84 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       await waitFor(() => {
         expect(rfqClient.createRFQ).toHaveBeenCalled();
         expect(onCreated).toHaveBeenCalled();
+      });
+    });
+
+    it('covers adoptCreatedRFQ fallback and mode_0 uncategorized confirmation title', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0',
+          rfqNumber: 'RFQ-2026-UNCAT',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'mode_0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: undefined,
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
+
+    it('covers adoptCreatedRFQ with remaining count and v0 confirmation', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0-2',
+          rfqNumber: 'RFQ-2026-UNCAT-2',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'v0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: 5,
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
+
+    it('covers version_0 confirmation', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0-3',
+          rfqNumber: 'RFQ-2026-UNCAT-3',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'version_0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: 3,
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
       });
     });
   });

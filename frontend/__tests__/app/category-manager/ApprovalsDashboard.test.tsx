@@ -448,6 +448,9 @@ describe('ApprovalsDashboard', () => {
     const remarksInput = screen.getByPlaceholderText(strings.executiveRemarksPlaceholder);
     fireEvent.change(remarksInput, { target: { value: 'Approved by Director' } });
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'Procucev@2026' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
     fireEvent.click(confirmBtn);
 
@@ -455,7 +458,9 @@ describe('ApprovalsDashboard', () => {
       expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
         'appr-101',
         'APPROVE',
-        'Approved by Director'
+        'Approved by Director',
+        'Procucev@2026',
+        'Srinu Sir'
       );
     });
   });
@@ -472,6 +477,9 @@ describe('ApprovalsDashboard', () => {
 
     expect(screen.getByRole('heading', { name: strings.confirmRejectionTitle })).toBeInTheDocument();
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'Procucev@2026' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmRejectBtn });
     fireEvent.click(confirmBtn);
 
@@ -479,7 +487,9 @@ describe('ApprovalsDashboard', () => {
       expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
         'appr-101',
         'REJECT',
-        ''
+        '',
+        'Procucev@2026',
+        'Srinu Sir'
       );
     });
   });
@@ -517,11 +527,14 @@ describe('ApprovalsDashboard', () => {
     const approveButtons = screen.getAllByRole('button', { name: strings.approveBtn });
     fireEvent.click(approveButtons[0]);
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'Procucev@2026' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
     fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('Authority limit exceeded for this level.')).toBeInTheDocument();
+      expect(screen.getAllByText('Authority limit exceeded for this level.').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -822,12 +835,35 @@ describe('ApprovalsDashboard', () => {
     const approveButtons = screen.getAllByRole('button', { name: strings.approveBtn });
     fireEvent.click(approveButtons[0]);
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'Procucev@2026' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
     fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to process approval.')).toBeInTheDocument();
+      expect(screen.getByText(strings.invalidPasswordError)).toBeInTheDocument();
+      expect(screen.getByText(strings.databaseSyncError)).toBeInTheDocument();
     });
+  });
+
+  it('validates required password before submitting approval action', async () => {
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    const approveButtons = screen.getAllByRole('button', { name: strings.approveBtn });
+    fireEvent.click(approveButtons[0]);
+
+    const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(strings.passwordRequiredError)).toBeInTheDocument();
+    });
+    expect(approvalClient.processApprovalAction).not.toHaveBeenCalled();
   });
 
   it('handles summary card click when fetchApprovals fails', async () => {

@@ -387,6 +387,29 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
       );
     });
 
+    test('queues a registered buyer acknowledgement when the provider resolves with sent false', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockImplementation(async (email) =>
+        email.toLowerCase() === REG_BUYER_1.corporateEmail.toLowerCase() ? REG_BUYER_1 : null
+      );
+      jest.spyOn(storeService, 'createRFQ').mockReturnValue({
+        id: 'rfq-ack-provider-refused',
+        rfqNumber: 'RFQ-ACK-REFUSED',
+        title: 'Transformer',
+        category: 'Electrical Components & Equipment',
+        status: 'Quotes Pending',
+        buyerAccountId: REG_BUYER_1.id,
+      });
+      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+      const queueSpy = jest.spyOn(emailGatewayService, 'queueAcknowledgement').mockResolvedValue(true);
+
+      const emlSource = `From: ${REG_BUYER_1.corporateEmail}\r\nTo: rfq@procucev.com\r\nSubject: Need Transformers\r\n\r\nPlease quote a transformer.`;
+      const result = await emailGatewayService.processMessage(Buffer.from(emlSource, 'utf8'), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(queueSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ to: REG_BUYER_1.corporateEmail }));
+    });
+
     test('Scenario 2: Registered TO + Registered CC creates one logical RFQ accessible to both and notifies both', async () => {
       mockExtraction();
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockImplementation(async (email) => {
@@ -754,6 +777,33 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
       expect(queueSpy).toHaveBeenCalled();
     });
 
+    test('queues a buyer onboarding acknowledgement when the provider resolves with sent false', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      jest.spyOn(emailGatewayService, 'getOrCreateBuyerAccount').mockResolvedValue({
+        buyerAccount: { id: 'b-provider-refused', corporateEmail: UNREG_TO_EMAIL, status: 'PENDING_ONBOARDING' },
+        isNew: true,
+        isOnboardingPending: true,
+        tempPassword: 'Pass#123',
+      });
+      jest.spyOn(storeService, 'createRFQ').mockReturnValue({
+        id: 'rfq-onboard-provider-refused',
+        rfqNumber: 'RFQ-ONBOARD-REFUSED',
+        title: 'Transformers',
+        category: 'Electrical Components & Equipment',
+        status: 'Quotes Pending',
+        buyerAccountId: 'b-provider-refused',
+      });
+      jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+      const queueSpy = jest.spyOn(emailGatewayService, 'queueAcknowledgement').mockResolvedValue(true);
+
+      const emlSource = `From: ${UNREG_TO_EMAIL}\r\nTo: rfq@procucev.com\r\nSubject: Need Transformers\r\n\r\nItem details.`;
+      const result = await emailGatewayService.processMessage(Buffer.from(emlSource, 'utf8'), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(queueSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ to: UNREG_TO_EMAIL }));
+    });
+
 
     test('covers gateway outbound address detection to avoid loop (SKIPPED_OUTBOUND)', async () => {
       const emlSource = 'From: rfq@procucev.com\r\nTo: vendor@procucev.com\r\nSubject: RFQ Notification\r\n\r\nLoop test';
@@ -805,9 +855,8 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
         subject: 'Clarification query on RFQ-INQ-1',
         bodyText: 'Please clarify specification and drawings',
       };
-      const result = await emailGatewayService.processVendorQuoteMessage(message, targetRfq, vendorRecord);
-      expect(result.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
-      expect(result.isIssueOrQuery).toBe(true);
+      await expect(emailGatewayService.processVendorQuoteMessage(message, targetRfq, vendorRecord))
+        .rejects.toThrow('Inquiry DB error');
     });
 
     test('covers resolveMultiBuyerAttribution with legacy to/cc fields and restriction branches', async () => {

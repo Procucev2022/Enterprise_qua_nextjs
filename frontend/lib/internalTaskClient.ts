@@ -1,4 +1,5 @@
 import { authClient } from './authClient';
+import { logger } from './logger';
 import {
   DEFAULT_INTERNAL_MEMBERS,
   INTERNAL_TASK_CATEGORIES,
@@ -17,6 +18,20 @@ import type {
 } from './types';
 
 export type { InternalTeamMember, InternalTask, TaskSummary, InternalTaskCategory, InternalTaskStatus, InternalTaskPriority, DemoStatus, CreditAccountType };
+
+function getInternalTaskErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function logInternalTaskTransportFailure(operation: string, error: unknown, fallback: string): string {
+  const errorMessage = getInternalTaskErrorMessage(error, fallback);
+  logger.error(`${operation} request failed`, {
+    errorName: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage,
+    ...(error instanceof Error ? { error } : {}),
+  }, 'INTERNAL_TASK_CLIENT');
+  return errorMessage;
+}
 
 export interface TaskType {
   id: string;
@@ -431,8 +446,11 @@ export async function approveCreditTask(
       return { success: false, error: data.error || 'Failed to approve credit task.' };
     }
     return { success: true, message: data.message, task: data.task };
-  } catch (error) {
-    return { success: false, error: (error as Error).message };
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: logInternalTaskTransportFailure('Credit task approval', error, 'Failed to approve credit task.'),
+    };
   }
 }
 
@@ -451,8 +469,11 @@ export async function rejectCreditTask(
       return { success: false, error: data.error || 'Failed to reject credit task.' };
     }
     return { success: true, message: data.message, task: data.task };
-  } catch (error) {
-    return { success: false, error: (error as Error).message };
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: logInternalTaskTransportFailure('Credit task rejection', error, 'Failed to reject credit task.'),
+    };
   }
 }
 
@@ -471,8 +492,11 @@ export async function addTaskActivity(
       return { success: false, error: data.error || 'Failed to add activity.' };
     }
     return { success: true, activity: data.activity };
-  } catch (error) {
-    return { success: false, error: (error as Error).message };
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: logInternalTaskTransportFailure('Task activity submission', error, 'Failed to add activity.'),
+    };
   }
 }
 
@@ -494,8 +518,11 @@ export async function checkTaskReminders(): Promise<{
       return { success: false, error: data.error || 'Failed to check reminders.' };
     }
     return { success: true, count: data.count, dispatched: data.dispatched, message: data.message };
-  } catch (error) {
-    return { success: false, error: (error as Error).message };
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: logInternalTaskTransportFailure('Task reminder check', error, 'Failed to check reminders.'),
+    };
   }
 }
 

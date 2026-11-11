@@ -1,12 +1,35 @@
-const request = require('supertest');
+const supertest = require('supertest');
+const request = (app) => {
+  const agent = supertest(app);
+  return { get: (path) => agent.get(path).set('Authorization', 'Bearer scorecard-test-token') };
+};
 const app = require('../src/app');
 const scorecardQueries = require('../src/db/scorecardQueries');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
 const ticketQueries = require('../src/db/ticketQueries');
+const authService = require('../src/services/authService');
 
 describe('Scorecard API & Controller', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValue({
+      valid: true,
+      user: { sub: 'scorecard-staff-id', email: 'staff@example.test', role: 'category_manager' },
+    });
+  });
+
+  test('GET /api/scorecard rejects anonymous and non-staff callers', async () => {
+    const anonymous = await supertest(app).get('/api/scorecard');
+    expect(anonymous.status).toBe(401);
+
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValueOnce({
+      valid: true,
+      user: { sub: 'buyer-test-id', email: 'buyer@example.test', role: 'buyer' },
+    });
+    const buyer = await supertest(app)
+      .get('/api/scorecard')
+      .set('Authorization', 'Bearer buyer-token');
+    expect(buyer.status).toBe(403);
   });
 
   test('GET /api/scorecard returns performance analytics for team and periods', async () => {

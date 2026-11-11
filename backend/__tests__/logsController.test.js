@@ -4,6 +4,7 @@ const { logger } = require('../src/services/loggerService');
 const { logErrorResolver } = require('../src/services/logErrorResolver');
 const { performanceOptimizer } = require('../src/services/performanceOptimizer');
 const logsController = require('../src/controllers/logsController');
+const { CLIENT_LOG_LIMITS } = require('../src/config/validationSchemas');
 const { authHeader } = require('./testHelpers');
 
 describe('Backend Logs Controller & Endpoints Suite', () => {
@@ -63,7 +64,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
       .send({ level: 'INFO', category: 'UI' })
       .expect(400);
     expect(resBad.body.success).toBe(false);
-    expect(resBad.body.error).toMatch(/message is required/i);
+    expect(resBad.body.details.message).toMatch(/required/i);
 
     // Valid log with default level, category, and metadata
     const resDefaults = await request(app)
@@ -84,11 +85,20 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
         message: 'User clicked dispatch RFQ button',
         category: 'BUYER_UI',
         metadata: { rfqNumber: 'RFQ-2026-00450', mode: 'mode_3' },
+        stackTrace: 'Error: request failed\n    at submit (frontend/app.ts:22:1)',
       })
       .expect(201);
     expect(resGood.body.success).toBe(true);
     expect(resGood.body.data.message).toBe('User clicked dispatch RFQ button');
     expect(resGood.body.data.category).toBe('BUYER_UI');
+    expect(resGood.body.data.stackTrace).toContain('frontend/app.ts:22:1');
+
+    const oversizedStack = await request(app)
+      .post('/api/logs')
+      .set(authHeader('admin'))
+      .send({ message: 'Oversized stack trace', stackTrace: 'x'.repeat(CLIENT_LOG_LIMITS.STACK_TRACE_LENGTH + 1) })
+      .expect(400);
+    expect(oversizedStack.body.details.stackTrace).toMatch(/must not exceed/i);
   });
 
   test('POST /api/logs/purge triggers log purge mechanism with and without body', async () => {
@@ -195,7 +205,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     };
     const resGet = await request(app).get('/api/logs').set(authHeader('admin')).expect(500);
     expect(resGet.body.success).toBe(false);
-    expect(resGet.body.error).toBe('Unexpected Query Failure');
+    expect(resGet.body.error).toBe('Internal Server Error');
     logger.queryLogs = origQueryLogs;
 
     // 2. createLog error
@@ -205,7 +215,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     };
     const resCreate = await request(app).post('/api/logs').set(authHeader('admin')).send({ message: 'Valid message' }).expect(500);
     expect(resCreate.body.success).toBe(false);
-    expect(resCreate.body.error).toBe('Unexpected Create Failure');
+    expect(resCreate.body.error).toBe('Internal Server Error');
     logger.log = origLog;
 
     // 3. purgeLogs error
@@ -215,7 +225,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     };
     const resPurge = await request(app).post('/api/logs/purge').set(authHeader('admin')).send().expect(500);
     expect(resPurge.body.success).toBe(false);
-    expect(resPurge.body.error).toBe('Unexpected Purge Failure');
+    expect(resPurge.body.error).toBe('Internal Server Error');
     logger.purgeExpiredLogs = origPurge;
 
     // 4. getLogStats error
@@ -225,7 +235,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     };
     const resStats = await request(app).get('/api/logs/stats').set(authHeader('admin')).expect(500);
     expect(resStats.body.success).toBe(false);
-    expect(resStats.body.error).toBe('Unexpected Stats Failure');
+    expect(resStats.body.error).toBe('Internal Server Error');
     logger.getLogStats = origStats;
 
     // 5. diagnoseLogErrors error
@@ -234,7 +244,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
       throw new Error('Unexpected Diagnose Failure');
     };
     const resDiagErr = await request(app).get('/api/logs/diagnose').set(authHeader('admin')).expect(500);
-    expect(resDiagErr.body.error).toBe('Unexpected Diagnose Failure');
+    expect(resDiagErr.body.error).toBe('Internal Server Error');
     logErrorResolver.diagnoseErrors = origDiag;
 
     // 6. autoResolveLogErrors error
@@ -243,7 +253,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
       throw new Error('Unexpected AutoResolve Failure');
     };
     const resAutoResolveErr = await request(app).post('/api/logs/auto-resolve').set(authHeader('admin')).send().expect(500);
-    expect(resAutoResolveErr.body.error).toBe('Unexpected AutoResolve Failure');
+    expect(resAutoResolveErr.body.error).toBe('Internal Server Error');
     logErrorResolver.autoResolveAll = origAutoResolve;
 
     // 7. getPerformanceAudit error
@@ -252,7 +262,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
       throw new Error('Unexpected Perf Audit Failure');
     };
     const resAuditErr = await request(app).get('/api/logs/performance').set(authHeader('admin')).expect(500);
-    expect(resAuditErr.body.error).toBe('Unexpected Perf Audit Failure');
+    expect(resAuditErr.body.error).toBe('Internal Server Error');
     performanceOptimizer.auditPerformance = origAudit;
 
     // 8. optimizePerformance error
@@ -261,7 +271,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
       throw new Error('Unexpected Optimize Failure');
     };
     const resOptErr = await request(app).post('/api/logs/performance/optimize').set(authHeader('admin')).send().expect(500);
-    expect(resOptErr.body.error).toBe('Unexpected Optimize Failure');
+    expect(resOptErr.body.error).toBe('Internal Server Error');
     performanceOptimizer.optimizePerformance = origOpt;
   });
 });

@@ -6,7 +6,62 @@
 
 const pool = require('./pool');
 const crypto = require('crypto');
+const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { logger } = require('../services/loggerService');
 const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
+
+function createCreditRequestFingerprint(data, actor, approvalData) {
+  const fingerprintInput = {
+    task: {
+      title: data.title || '',
+      description: data.description || '',
+      creditAccountType: data.creditAccountType || data.credit_account_type || '',
+      creditAccountId: data.creditAccountId || data.credit_account_id || '',
+      creditQuantity: data.creditQuantity || data.credit_quantity || 0,
+      creditReason: data.creditReason || data.credit_reason || '',
+    },
+    actor: {
+      id: actor.uuid || actor.id || '',
+      email: actor.email || '',
+      name: actor.fullName || actor.name || '',
+      role: actor.role || '',
+    },
+    approval: {
+      module: approvalData.module || '',
+      project: approvalData.project || '',
+      applicantName: approvalData.applicant_name || '',
+      applicantEmail: approvalData.applicant_email || '',
+      valueImpact: approvalData.value_impact || '',
+      amount: approvalData.amount || 0,
+      quantity: approvalData.quantity || 0,
+      buyerId: approvalData.buyer_id || '',
+      sellerId: approvalData.seller_id || '',
+      assignedApprover: approvalData.assigned_approver || '',
+      details: approvalData.details || '',
+    },
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(fingerprintInput)).digest('hex');
+}
+
+function createIdempotentRecordId(prefix, idempotencyKey) {
+  const hash = crypto.createHash('sha256').update(String(idempotencyKey).toLowerCase()).digest('hex');
+  const hashLength = prefix === 'appr' ? 59 : 60;
+  return `${prefix}_${hash.slice(0, hashLength)}`;
+}
+
+function isUniqueConstraintViolation(error) {
+  const details = [error?.code, error?.cause?.code, error?.message, error?.cause?.message]
+    .filter(Boolean)
+    .join(' ');
+  return /23505|unique constraint failed|duplicate key value violates unique constraint/i.test(details);
+}
+
+function createIdempotencyConflict() {
+  const error = new Error('This idempotency key was already used for a different credit approval request.');
+  error.code = 'IDEMPOTENCY_CONFLICT';
+  error.statusCode = 409;
+  return error;
+}
 
 function parseJsonSafe(val, fallback = null) {
   if (val === null || val === undefined) return fallback;
@@ -502,18 +557,47 @@ async function getInternalTaskById(id) {
     try {
       const acctType = (task.credit_account_type || '').toLowerCase();
       if (acctType === 'vendor' || acctType === 'seller') {
-        const vRes = await pool.query('SELECT credits FROM vendors WHERE id = $1', [task.credit_account_id]);
+        const vRes = await pool.query(
+          'SELECT credits FROM vendors WHERE id = $1',
+          [task.credit_account_id],
+          {
+            d1: true,
+            d1Text: `SELECT COALESCE(
+              json_extract(raw, '$.credits'),
+              json_extract(raw, '$.freeQuotationCredits'),
+              json_extract(raw, '$.freeRfqDownloadCredits'),
+              0
+            ) AS credits FROM vendors WHERE id = $1`,
+          }
+        );
         if (vRes && vRes.rows && vRes.rows[0]) {
           task.current_account_credits = Number(vRes.rows[0].credits || 0);
         }
       } else {
-        const bRes = await pool.query('SELECT available_credits FROM buyer_accounts WHERE id = $1', [task.credit_account_id]);
+        const bRes = await pool.query(
+          'SELECT available_credits FROM buyer_accounts WHERE id = $1',
+          [task.credit_account_id],
+          {
+            d1: true,
+            d1Text: `SELECT COALESCE(
+              json_extract(raw, '$.creditBalance'),
+              json_extract(raw, '$.available_credits'),
+              0
+            ) AS available_credits FROM buyer_accounts WHERE id = $1`,
+          }
+        );
         if (bRes && bRes.rows && bRes.rows[0]) {
           task.current_account_credits = Number(bRes.rows[0].available_credits || 0);
         }
       }
-    } catch {
-      // Non-blocking
+    } catch (error) {
+      logger.error('Could not enrich internal task with the current credit balance', {
+        error,
+        operation: 'getInternalTaskById',
+        taskId: task.id,
+        accountId: task.credit_account_id,
+        accountType: task.credit_account_type,
+      }, 'INTERNAL_TASK_CREDIT_BALANCE');
     }
   }
 
@@ -523,9 +607,17 @@ async function getInternalTaskById(id) {
 /**
  * Create a new internal task.
  */
-async function createInternalTask(data = {}, actor = {}) {
-  const id = `tsk_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
-  const taskNumber = `TASK-${Date.now().toString().slice(-5)}`;
+async function createInternalTask(data = {}, actor = {}, options = {}) {
+  const idempotencyKey = options.approvalData ? (options.idempotencyKey || options.approvalData.idempotencyKey || '') : '';
+  const idempotencyFingerprint = idempotencyKey
+    ? createCreditRequestFingerprint(data, actor, options.approvalData)
+    : '';
+  const id = idempotencyKey
+    ? createIdempotentRecordId('tsk', idempotencyKey)
+    : `tsk_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
+  const taskNumber = idempotencyKey
+    ? `TASK-${crypto.createHash('sha256').update(String(idempotencyKey).toLowerCase()).digest('hex').slice(0, 16).toUpperCase()}`
+    : `TASK-${Date.now().toString().slice(-5)}`;
   const title = (data.title || '').trim();
   const description = (data.description || '').trim();
   const taskCategory = data.taskCategory || data.task_category || 'INTERNAL_OPERATIONS';
@@ -576,43 +668,67 @@ async function createInternalTask(data = {}, actor = {}) {
     creditAccountName,
     creditQuantity,
     creditReason,
+    ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
   };
   const raw = JSON.stringify(rawObj);
 
+  const task = {
+    id,
+    task_number: taskNumber,
+    task_category: taskCategory,
+    task_type: taskType,
+    title,
+    description,
+    task_type_id: taskTypeId,
+    priority,
+    status,
+    assigned_to_user_id: assignedToUserId,
+    assigned_to_name: assignedToName,
+    assigned_team: assignedTeam,
+    created_by_user_id: createdByUserId,
+    created_by_name: createdByName,
+    due_date: dueDate,
+    due_time: dueTime,
+    related_entity_type: relatedEntityType,
+    related_entity_id: relatedEntityId,
+    related_entity_label: relatedEntityLabel,
+    notes,
+    attachments: data.attachments || [],
+    approval_status: approvalStatus,
+    demo_date: demoDate,
+    demo_time: demoTime,
+    demo_status: demoStatus,
+    credit_account_type: creditAccountType,
+    credit_account_id: creditAccountId,
+    credit_account_name: creditAccountName,
+    credit_quantity: creditQuantity,
+    credit_reason: creditReason,
+    raw: rawObj,
+  };
+
   if (!pool.hasStorage()) {
-    return {
-      id,
-      task_number: taskNumber,
-      task_category: taskCategory,
-      task_type: taskType,
-      title,
-      description,
-      task_type_id: taskTypeId,
-      priority,
-      status,
-      assigned_to_user_id: assignedToUserId,
-      assigned_to_name: assignedToName,
-      assigned_team: assignedTeam,
-      created_by_user_id: createdByUserId,
-      created_by_name: createdByName,
-      due_date: dueDate,
-      due_time: dueTime,
-      related_entity_type: relatedEntityType,
-      related_entity_id: relatedEntityId,
-      related_entity_label: relatedEntityLabel,
-      notes,
-      attachments: data.attachments || [],
-      approval_status: approvalStatus,
-      demo_date: demoDate,
-      demo_time: demoTime,
-      demo_status: demoStatus,
-      credit_account_type: creditAccountType,
-      credit_account_id: creditAccountId,
-      credit_account_name: creditAccountName,
-      credit_quantity: creditQuantity,
-      credit_reason: creditReason,
-      raw: rawObj,
-    };
+    if (options.approvalData) {
+      const approvalQueries = require('./approvalQueries');
+      const approvalId = idempotencyKey ? createIdempotentRecordId('appr', idempotencyKey) : undefined;
+      const existingApproval = approvalId
+        ? approvalQueries.memoryApprovals.find((item) => item.id === approvalId)
+        : null;
+      if (existingApproval) {
+        if (existingApproval.raw?.idempotency_fingerprint === idempotencyFingerprint) return task;
+        throw createIdempotencyConflict();
+      }
+      await approvalQueries.createApproval({
+        ...options.approvalData,
+        ...(approvalId ? { id: approvalId } : {}),
+        internal_task_id: id,
+        raw: {
+          ...(options.approvalData.raw || {}),
+          internal_task_id: id,
+          ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
+        },
+      }, actor);
+    }
+    return task;
   }
 
   const insertSql = `
@@ -637,43 +753,39 @@ async function createInternalTask(data = {}, actor = {}) {
     )
   `;
 
-  await pool.query(
-    insertSql,
-    [
-      id,
-      taskNumber,
-      taskCategory,
-      taskType,
-      taskTypeId,
-      title,
-      description,
-      priority,
-      status,
-      assignedToUserId,
-      assignedToName,
-      assignedTeam,
-      createdByUserId,
-      createdByName,
-      dueDate,
-      dueTime,
-      relatedEntityType,
-      relatedEntityId,
-      relatedEntityLabel,
-      notes,
-      attachments,
-      approvalStatus,
-      demoDate,
-      demoTime,
-      demoStatus,
-      creditAccountType,
-      creditAccountId,
-      creditAccountName,
-      creditQuantity,
-      creditReason,
-      raw,
-    ],
-    { d1: true, d1Text: insertSql }
-  );
+  const insertParams = [
+    id,
+    taskNumber,
+    taskCategory,
+    taskType,
+    taskTypeId,
+    title,
+    description,
+    priority,
+    status,
+    assignedToUserId,
+    assignedToName,
+    assignedTeam,
+    createdByUserId,
+    createdByName,
+    dueDate,
+    dueTime,
+    relatedEntityType,
+    relatedEntityId,
+    relatedEntityLabel,
+    notes,
+    attachments,
+    approvalStatus,
+    demoDate,
+    demoTime,
+    demoStatus,
+    creditAccountType,
+    creditAccountId,
+    creditAccountName,
+    creditQuantity,
+    creditReason,
+    raw,
+  ];
 
   // Log activity
   const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
@@ -682,12 +794,129 @@ async function createInternalTask(data = {}, actor = {}) {
       id, task_id, action_type, actor_id, actor_name, comment
     ) VALUES ($1, $2, $3, $4, $5, $6)
   `;
-  await pool.query(actSql, [actId, id, 'CREATED', createdByUserId, createdByName, 'Task created.'], {
-    d1: true,
-    d1Text: actSql,
-  });
+  const activityParams = [actId, id, 'CREATED', createdByUserId, createdByName, 'Task created.'];
+
+  if (options.approvalData) {
+    const approvalQueries = require('./approvalQueries');
+    const approval = approvalQueries.prepareApprovalCreate({
+      ...options.approvalData,
+      ...(idempotencyKey ? { id: createIdempotentRecordId('appr', idempotencyKey) } : {}),
+      internal_task_id: id,
+      raw: {
+        ...(options.approvalData.raw || {}),
+        internal_task_id: id,
+        ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
+      },
+    }, actor);
+    const statements = [
+      { text: insertSql, params: insertParams },
+      { text: actSql, params: activityParams },
+      approval.statement,
+    ];
+
+    let provider = 'unknown';
+    try {
+      const d1Binding = getD1Binding();
+      const d1HttpClient = getD1HttpClient();
+      provider = d1Binding ? 'cloudflare-d1' : (d1HttpClient ? 'cloudflare-d1-http' : 'postgresql');
+      if (d1Binding) {
+        const results = await batchD1(d1Binding, statements);
+        if (results.length !== statements.length || results.some((result) => result?.rowCount === 0)) {
+          throw new Error('Credit approval request batch did not persist every task and approval row.');
+        }
+      } else if (d1HttpClient) {
+        await batchD1(d1HttpClient, statements);
+      } else {
+        await pool.withTransaction(async (client) => {
+          for (const statement of statements) {
+            const result = await client.query(statement.text, statement.params);
+            if (result?.rowCount === 0) {
+              throw new Error('Credit approval request transaction did not persist every task and approval row.');
+            }
+          }
+        });
+      }
+    } catch (error) {
+      if (idempotencyFingerprint && isUniqueConstraintViolation(error)) {
+        try {
+          const existingTask = await getInternalTaskById(id);
+          const existingApproval = await approvalQueries.getApprovalById(approval.item.id);
+          const taskFingerprint = existingTask?.raw?.idempotency_fingerprint;
+          const approvalFingerprint = existingApproval?.raw?.idempotency_fingerprint;
+          if (existingTask && existingApproval && taskFingerprint === idempotencyFingerprint
+            && approvalFingerprint === idempotencyFingerprint
+            && existingApproval.internal_task_id === existingTask.id) {
+            logger.info('Duplicate credit approval request resolved to its persisted task', {
+              operation: 'resolve-credit-approval-idempotency-replay',
+              taskId: existingTask.id,
+              approvalId: existingApproval.id,
+              provider,
+            }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+            return existingTask;
+          }
+          if (existingTask && existingApproval) throw createIdempotencyConflict();
+        } catch (replayError) {
+          if (replayError.code === 'IDEMPOTENCY_CONFLICT') throw replayError;
+          logger.error('Credit approval idempotency replay lookup failed', {
+            error: replayError,
+            operation: 'resolve-credit-approval-idempotency-replay',
+            taskId: id,
+            approvalId: approval.item.id,
+            provider,
+          }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+        }
+      }
+      const unavailable = new Error('Credit approval request persistence is temporarily unavailable.');
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      unavailable.cause = error;
+      logger.error('Atomic credit approval request persistence failed', {
+        error,
+        operation: 'create-credit-approval-request',
+        taskId: id,
+        approvalId: approval.item.id,
+        provider,
+      }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+      throw unavailable;
+    }
+
+    approvalQueries.rememberApproval(approval.item);
+    try {
+      pool.queryCache.invalidate('internal_tasks');
+      pool.queryCache.invalidate('internal_task_activities');
+      pool.queryCache.invalidate('approvals');
+    } catch (error) {
+      logger.warn('Credit approval request committed but query-cache invalidation failed', {
+        error,
+        operation: 'invalidate-credit-approval-request-cache',
+        taskId: id,
+        approvalId: approval.item.id,
+        cacheTags: ['internal_tasks', 'internal_task_activities', 'approvals'],
+      }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+    }
+
+    task.activities = [{
+      id: actId,
+      task_id: id,
+      action_type: 'CREATED',
+      actor_id: createdByUserId,
+      actor_name: createdByName,
+      comment: 'Task created.',
+      metadata: {},
+    }];
+    return task;
+  }
+
+  await pool.query(insertSql, insertParams, { d1: true, d1Text: insertSql });
+  await pool.query(actSql, activityParams, { d1: true, d1Text: actSql });
 
   return getInternalTaskById(id);
+}
+
+async function createInternalTaskWithApproval(taskData, actor = {}, approvalData = {}) {
+  return createInternalTask(taskData, actor, {
+    approvalData,
+    idempotencyKey: approvalData.idempotencyKey,
+  });
 }
 
 /**
@@ -947,6 +1176,232 @@ async function updateInternalTask(id, updates = {}, actor = {}) {
   return getInternalTaskById(existing.id);
 }
 
+async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemarks, isDeduct, creditQty, accountType, accountId) {
+  const buyerAccount = accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT';
+  const vendorAccount = accountType === 'SELLER' || accountType === 'VENDOR';
+  if (!buyerAccount && !vendorAccount) {
+    throw new Error(`Unsupported credit account type for task ${task.task_number || task.id}.`);
+  }
+  if (!accountId) {
+    throw new Error(`Credit account is missing for task ${task.task_number || task.id}.`);
+  }
+
+  const accountTable = buyerAccount ? 'buyer_accounts' : 'vendors';
+  const ledgerTable = buyerAccount ? 'buyer_credit_transactions' : 'vendor_credit_transactions';
+  const idempotencyKey = `task-approval-${task.id}`;
+  const transactionId = `${buyerAccount ? 'ctx' : 'vtx'}-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+  const activityId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+  const creditDelta = isDeduct ? -creditQty : creditQty;
+  const currentBalanceExpr = buyerAccount
+    ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), 0) AS INTEGER)`
+    : `CAST(COALESCE(json_extract(raw, '$.freeQuotationCredits'), json_extract(raw, '$.freeRfqDownloadCredits'), json_extract(raw, '$.credits'), 0) AS INTEGER)`;
+  const updatedBalanceExpr = `MAX(0, ${currentBalanceExpr} + $1)`;
+  const previousBalanceFromTask = `CAST(json_extract(t.raw, '$.__creditApprovalPreviousBalance') AS INTEGER)`;
+  const updatedBuyerBalance = `CAST(COALESCE(json_extract(b.raw, '$.creditBalance'), 0) AS INTEGER)`;
+  const updatedVendorBalance = `CAST(COALESCE(json_extract(v.raw, '$.freeQuotationCredits'), 0) AS INTEGER)`;
+  const previousBalanceExpr = buyerAccount
+    ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), 0) AS INTEGER)`
+    : `CAST(COALESCE(json_extract(raw, '$.freeQuotationCredits'), json_extract(raw, '$.freeRfqDownloadCredits'), json_extract(raw, '$.credits'), 0) AS INTEGER)`;
+  const taskRawWithPreviousBalance = `json_set(COALESCE(raw, '{}'), '$.__creditApprovalPreviousBalance', (SELECT ${previousBalanceExpr} FROM ${accountTable} WHERE id = $2))`;
+
+  const statements = [
+    {
+      text: `UPDATE internal_tasks
+        SET approval_status = 'PROCESSING',
+            raw = ${taskRawWithPreviousBalance},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+          AND COALESCE(approval_status, '') NOT IN ('APPROVED', 'PROCESSING')
+          AND status NOT IN ('Completed', 'Rejected', 'Cancelled')
+          AND EXISTS (SELECT 1 FROM ${accountTable} WHERE id = $2)
+        RETURNING id`,
+      params: [task.id, accountId],
+    },
+    {
+      text: `UPDATE ${accountTable}
+        SET raw = ${buyerAccount
+          ? `json_set(raw, '$.creditBalance', ${updatedBalanceExpr}, '$.available_credits', ${updatedBalanceExpr})`
+          : `json_set(raw, '$.freeQuotationCredits', ${updatedBalanceExpr}, '$.freeRfqDownloadCredits', ${updatedBalanceExpr}, '$.credits', ${updatedBalanceExpr})`},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+          AND EXISTS (SELECT 1 FROM internal_tasks WHERE id = $3 AND approval_status = 'PROCESSING')
+          AND NOT EXISTS (SELECT 1 FROM ${ledgerTable} WHERE idempotency_key = $4)
+        RETURNING id`,
+      params: [creditDelta, accountId, task.id, idempotencyKey],
+    },
+    buyerAccount
+      ? {
+        text: `INSERT INTO buyer_credit_transactions (
+            id, buyer_id, rfq_id, transaction_type, credit_source,
+            credits_added, credits_consumed, previous_balance, updated_balance,
+            payment_reference, status, description, idempotency_key, created_at
+          )
+          SELECT $1, b.id, NULL, $2, $3, $4, $5, ${previousBalanceFromTask},
+                 ${updatedBuyerBalance}, NULL, 'COMPLETED', $6, $7, CURRENT_TIMESTAMP
+          FROM buyer_accounts b
+          JOIN internal_tasks t ON t.id = $8
+          WHERE b.id = $9
+            AND t.approval_status = 'PROCESSING'
+            AND changes() > 0
+            AND NOT EXISTS (SELECT 1 FROM buyer_credit_transactions WHERE idempotency_key = $7)
+          ON CONFLICT (idempotency_key) DO NOTHING
+          RETURNING id`,
+        params: [
+          transactionId,
+          isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+          'Action Center Internal Tasks Approval',
+          isDeduct ? 0 : creditQty,
+          isDeduct ? creditQty : 0,
+          `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+          idempotencyKey,
+          task.id,
+          accountId,
+        ],
+      }
+      : {
+        text: `INSERT INTO vendor_credit_transactions (
+            id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at
+          )
+          SELECT $1, v.id, NULL, $2, $3, ${updatedVendorBalance}, $4, CURRENT_TIMESTAMP
+          FROM vendors v
+          JOIN internal_tasks t ON t.id = $5
+          WHERE v.id = $6
+            AND t.approval_status = 'PROCESSING'
+            AND changes() > 0
+            AND NOT EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $4)
+          ON CONFLICT (idempotency_key) DO NOTHING
+          RETURNING id`,
+        params: [
+          transactionId,
+          isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
+          creditQty,
+          idempotencyKey,
+          task.id,
+          accountId,
+        ],
+      },
+    buyerAccount
+      ? {
+        text: `INSERT INTO internal_task_activities (
+            id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
+          )
+          SELECT $1, $2, 'APPROVED', $3, $4, $5, 'Completed', $6
+          WHERE EXISTS (SELECT 1 FROM buyer_credit_transactions WHERE idempotency_key = $7)
+            AND EXISTS (SELECT 1 FROM internal_tasks WHERE id = $2 AND approval_status = 'PROCESSING')`,
+        params: [activityId, task.id, actorId, actorName, task.status, `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`, idempotencyKey],
+      }
+      : {
+        text: `INSERT INTO internal_task_activities (
+            id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
+          )
+          SELECT $1, $2, 'APPROVED', $3, $4, $5, 'Completed', $6
+          WHERE EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $7)
+            AND EXISTS (SELECT 1 FROM internal_tasks WHERE id = $2 AND approval_status = 'PROCESSING')`,
+        params: [activityId, task.id, actorId, actorName, task.status, `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`, idempotencyKey],
+      },
+    {
+      text: `UPDATE internal_tasks SET
+          status = 'Completed',
+          approval_status = 'APPROVED',
+          approver_id = $1,
+          approver_name = $2,
+          approved_at = CURRENT_TIMESTAMP,
+          approval_remarks = $3,
+          completed_at = CURRENT_TIMESTAMP,
+          completed_by_user_id = $1,
+          completed_by_name = $2,
+          completion_remarks = $3,
+          raw = json_remove(raw, '$.__creditApprovalPreviousBalance'),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+          AND approval_status = 'PROCESSING'
+          AND EXISTS (SELECT 1 FROM ${ledgerTable} WHERE idempotency_key = $5)
+        RETURNING id`,
+      params: [actorId, actorName, approvalRemarks, task.id, idempotencyKey],
+    },
+    {
+      text: `UPDATE internal_tasks
+        SET approval_status = $1,
+            raw = json_remove(raw, '$.__creditApprovalPreviousBalance'),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+          AND approval_status = 'PROCESSING'
+          AND NOT EXISTS (SELECT 1 FROM ${ledgerTable} WHERE idempotency_key = $3)
+        RETURNING id`,
+      params: [task.approval_status || null, task.id, idempotencyKey],
+    },
+  ];
+
+  let results;
+  const startedAt = Date.now();
+  try {
+    results = await batchD1(d1, statements);
+  } catch (err) {
+    logger.error('Atomic D1 credit approval batch failed', {
+      error: err,
+      operation: 'approveCreditTask',
+      taskId: task.id,
+      queryCount: statements.length,
+      durationMs: Date.now() - startedAt,
+    }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+    throw err;
+  }
+
+  const durationMs = Date.now() - startedAt;
+  pool.queryAuditor.auditQuery(statements.map(({ text }) => text).join('; '), [], durationMs, false);
+  logger.info('Atomic D1 credit approval batch completed', {
+    operation: 'approveCreditTask',
+    taskId: task.id,
+    tables: [...new Set(statements.map(({ text }) => pool.queryAuditor.detectTable(text)))],
+    statementCount: statements.length,
+    durationMs,
+  }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+
+  const claimed = results[0]?.rows?.[0];
+  if (!claimed) {
+    const currentTask = await getInternalTaskById(task.id);
+    if (currentTask && (currentTask.approval_status === 'APPROVED' || currentTask.status === 'Completed')) {
+      return currentTask;
+    }
+    throw new Error('Credit task could not be claimed. Check the task status and credit account before retrying.');
+  }
+
+  const completed = results[4]?.rows?.[0];
+  if (!completed) {
+    logger.error('D1 credit approval had no durable credit ledger row; approval claim was restored', {
+      operation: 'approveCreditTask',
+      taskId: task.id,
+      accountType,
+      accountExists: Boolean(results[1]?.rows?.[0]),
+      taskRestored: Boolean(results[5]?.rows?.[0]),
+    }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+    throw new Error('Credit balance could not be updated, so the approval was rolled back. Verify the account exists and retry.');
+  }
+
+  pool.queryCache.invalidate('internal_tasks');
+  pool.queryCache.invalidate(buyerAccount ? 'buyer_credits' : 'vendor_credits');
+  pool.queryCache.invalidate(buyerAccount ? 'buyer_accounts' : 'vendors');
+
+  const storeService = require('../services/storeService');
+  const updatedTask = await getInternalTaskById(task.id);
+  const updatedBalance = Number(updatedTask?.current_account_credits);
+  if (Number.isFinite(updatedBalance)) {
+    if (buyerAccount && storeService.updateBuyerAccount) {
+      storeService.updateBuyerAccount(accountId, {
+        creditBalance: updatedBalance,
+        available_credits: updatedBalance,
+      }, { persist: false });
+    } else if (vendorAccount && storeService.updateVendor) {
+      storeService.updateVendor(accountId, {
+        freeQuotationCredits: updatedBalance,
+        freeRfqDownloadCredits: updatedBalance,
+        credits: updatedBalance,
+      }, { persist: false });
+    }
+  }
+  return updatedTask;
+}
+
 /**
  * Approve a Credit Add/Delete task and update database balance.
  * Executes database updates as the authoritative source of truth first,
@@ -973,6 +1428,31 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
 
   const storeService = require('../services/storeService');
   const domainQueries = require('./domainQueries');
+
+  const d1Binding = getD1Binding();
+  if (d1Binding) {
+    return approveCreditTaskInD1(
+      d1Binding,
+      task,
+      actorId,
+      actorName,
+      approvalRemarks,
+      isDeduct,
+      creditQty,
+      accountType,
+      accountId
+    );
+  }
+
+  if (getD1HttpClient()) {
+    const error = new Error('Credit approvals require a Workers D1 binding with atomic batch support.');
+    logger.error('Credit approval rejected because the D1 HTTP adapter cannot guarantee atomicity', {
+      error,
+      operation: 'approveCreditTask',
+      taskId: task.id,
+    }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+    throw error;
+  }
 
   let updatedBuyerInfo = null;
   let updatedVendorInfo = null;
@@ -1019,8 +1499,8 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
           }
         }
         const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-        await client.query(bSql, [updatedBal, targetBuyerId], { d1: true, d1Text: bSql });
+        const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+        await client.query(bSql, [updatedBal, targetBuyerId]);
 
         if (domainQueries.recordBuyerCreditTransactionInDB) {
           const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
@@ -1037,6 +1517,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
             status: 'COMPLETED',
             description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
             idempotencyKey: `task-approval-${task.id}`,
+            queryClient: client,
           });
         }
         updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
@@ -1060,8 +1541,8 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
           }
         }
         const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        const vSql = `UPDATE vendors SET raw = jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-        await client.query(vSql, [updatedBal, targetVendorId], { d1: true, d1Text: vSql });
+        const vSql = `UPDATE vendors SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), '{freeRfqDownloadCredits}', to_jsonb($1::numeric)), '{credits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+        await client.query(vSql, [updatedBal, targetVendorId]);
 
         if (domainQueries.recordCreditTransactionInDB) {
           const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
@@ -1073,6 +1554,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
             amount: creditQty,
             balanceAfter: updatedBal,
             idempotencyKey: `task-approval-${task.id}`,
+            queryClient: client,
           });
         }
         updatedVendorInfo = { vendorId: targetVendorId, updatedBal };
@@ -1094,7 +1576,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
           updated_at = CURRENT_TIMESTAMP
         WHERE id = $4
       `;
-      await client.query(updateSql, [actorId, actorName, approvalRemarks, task.id], { d1: true, d1Text: updateSql });
+      await client.query(updateSql, [actorId, actorName, approvalRemarks, task.id]);
 
       // Log approval activity record in database
       const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
@@ -1114,8 +1596,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
           task.status,
           'Completed',
           `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`,
-        ],
-        { d1: true, d1Text: actSql }
+        ]
       );
 
       // Commit transaction
@@ -1132,12 +1613,16 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
 
   // Synchronize in-memory caches ONLY after database transaction has successfully committed
   if (updatedBuyerInfo && storeService.updateBuyerAccount) {
-    storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, { creditBalance: updatedBuyerInfo.updatedBal });
+    storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, {
+      creditBalance: updatedBuyerInfo.updatedBal,
+      available_credits: updatedBuyerInfo.updatedBal,
+    }, { persist: false });
   } else if (updatedVendorInfo && storeService.updateVendor) {
     storeService.updateVendor(updatedVendorInfo.vendorId, {
       freeQuotationCredits: updatedVendorInfo.updatedBal,
       freeRfqDownloadCredits: updatedVendorInfo.updatedBal,
-    });
+      credits: updatedVendorInfo.updatedBal,
+    }, { persist: false });
   }
 
   return getInternalTaskById(task.id);
@@ -1401,8 +1886,14 @@ async function getInternalAssignees() {
           }
         });
       }
-    } catch {
-      // Return defaults on error
+    } catch (error) {
+      // Keep the configured fallback available while making the database fault
+      // visible; otherwise an unavailable assignee table looks like valid data.
+      logger.warn(
+        'Internal assignee lookup failed; using configured defaults',
+        { error, fallbackCount: assigneesMap.size },
+        'INTERNAL_TASKS'
+      );
     }
   }
 
@@ -1418,6 +1909,7 @@ module.exports = {
   getInternalTaskSummary,
   getInternalTaskById,
   createInternalTask,
+  createInternalTaskWithApproval,
   updateInternalTask,
   deleteInternalTask,
   searchRelatedEntities,

@@ -5,6 +5,7 @@ const evaluationService = require('../src/services/evaluationService');
 const storeService = require('../src/services/storeService');
 const dbPool = require('../src/db/pool');
 const { bootstrapServer, start } = require('../src/server');
+const { logger } = require('../src/services/loggerService');
 const auditController = require('../src/controllers/auditController');
 const evaluationController = require('../src/controllers/evaluationController');
 const buyerAccountController = require('../src/controllers/buyerAccountController');
@@ -37,7 +38,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     await evaluationController.getEvaluations({}, res, next);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
-    await buyerAccountController.getBuyerAccounts({}, res, next);
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
     await rfqController.getRFQs({}, res, next);
@@ -83,7 +84,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     const vendorEmailEmpty = emailService.generateVendorOnboardingEmail({});
     expect(vendorEmailEmpty.recipientName).toBe('Vendor Partner');
-    expect(vendorEmailEmpty.tempPassword).toBe('Procucev#2026!Vendor');
+    expect(vendorEmailEmpty).not.toHaveProperty('tempPassword');
   });
 
   test('auditService fallback default parameters', () => {
@@ -141,6 +142,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
   });
 
   test('start runner error handling branch and AUTO_START_SERVER branch', async () => {
+    const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
     const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
       throw new Error(`process.exit: ${code}`);
     });
@@ -149,6 +151,10 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     });
 
     await expect(start(-1)).rejects.toThrow();
+    expect(errorLogSpy.mock.calls.map(([message, , category]) => [message, category])).toContainEqual([
+      'Failed to start server',
+      'SERVER',
+    ]);
     exitSpy.mockRestore();
 
     process.env.PORT = '0';
@@ -437,7 +443,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       error: expect.stringContaining('does not include mode_2'),
     }));
 
-    // 2. Free trial buyer with 0 remaining credits requesting mode_1 (disallowed)
+    // 2. The atomic store rejects an exhausted trial against the current balance.
     storeService.addBuyerAccount({
       organizationName: 'Trial Exhausted Org',
       corporateEmail: 'exhausted@example.com',
@@ -457,12 +463,12 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       },
       user: { email: 'exhausted@example.com' },
     }, resExhausted, next);
-    expect(resExhausted.status).toHaveBeenCalledWith(403);
-    expect(resExhausted.json).toHaveBeenCalledWith(expect.objectContaining({
-      error: expect.stringContaining('5 free trial RFQ credits for V1/V2/V3 have been fully used'),
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
     }));
 
-    // 3. Free trial buyer with remaining credits but tryConsumeFreeRFQ returns false
+    // 3. A local store that cannot reserve a credit also fails closed.
     storeService.addBuyerAccount({
       organizationName: 'Trial Active Org',
       corporateEmail: 'trialactive@example.com',
@@ -483,9 +489,9 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       },
       user: { email: 'trialactive@example.com' },
     }, resConsumeFail, next);
-    expect(resConsumeFail.status).toHaveBeenCalledWith(403);
-    expect(resConsumeFail.json).toHaveBeenCalledWith(expect.objectContaining({
-      error: expect.stringContaining('free trial RFQs are used up'),
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
     }));
 
     // 4. Paid plan buyer (version_1) requesting mode_1 (allowed, no free trial consumed)
@@ -555,6 +561,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     // 3rd attempt in Mode 3 is blocked (0 credits left)
     const resRfq3Blocked = mockRes();
+    next.mockClear();
     await rfqController.createRFQ({
       body: {
         title: 'Multi RFQ 3 Blocked',
@@ -567,7 +574,10 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       },
       user: { email: 'multirfq@example.com' },
     }, resRfq3Blocked, next);
-    expect(resRfq3Blocked.status).toHaveBeenCalledWith(403);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+    }));
 
     // Mode 0 remains allowed (0 credits consumed) even with 0 credits
     const resRfq4Mode0 = mockRes();
@@ -776,11 +786,77 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     // 2. buyerAccountController with limit and invalid limit
     const resBuyer = mockRes();
-    await buyerAccountController.getBuyerAccounts({ query: { limit: '2' } }, resBuyer, next);
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: { limit: '2' } }, resBuyer, next);
     expect(resBuyer.json).toHaveBeenCalled();
+
+    // buyerAccountController when buyerAccounts is empty and DB storage is available
+    const origAccounts = storeService.buyerAccounts;
+    storeService.buyerAccounts = [];
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValueOnce(true);
+    const persistedBuyerAccounts = jest.spyOn(domainQueries, 'getBuyerAccountsFromDB')
+      .mockResolvedValueOnce({ accounts: [], activeId: null });
+    const resBuyerSync = mockRes();
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: { limit: '50' } }, resBuyerSync, next);
+    expect(persistedBuyerAccounts).toHaveBeenCalledWith(50);
+    expect(resBuyerSync.json).toHaveBeenCalled();
+    storeService.buyerAccounts = origAccounts;
+
     const resBuyerInvalid = mockRes();
-    await buyerAccountController.getBuyerAccounts({ query: { limit: 'abc' } }, resBuyerInvalid, next);
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: { limit: 'abc' } }, resBuyerInvalid, next);
     expect(resBuyerInvalid.json).toHaveBeenCalled();
+
+    // buyerAccountController.requestCreditApproval branches
+    const resCredit404 = mockRes();
+    await buyerAccountController.requestCreditApproval(
+      { user: { role: 'admin' }, params: { id: 'non-existent-buyer-id' }, body: {} },
+      resCredit404,
+      next
+    );
+    expect(resCredit404.status).toHaveBeenCalledWith(404);
+
+    const resCreditErr = mockRes();
+    const throwNext = jest.fn();
+    jest.spyOn(storeService, 'getBuyerAccounts').mockImplementationOnce(() => { throw new Error('DB Crash'); });
+    await buyerAccountController.requestCreditApproval(
+      { user: { role: 'admin' }, params: { id: 'some-id' }, body: {} },
+      resCreditErr,
+      throwNext
+    );
+    expect(throwNext).toHaveBeenCalled();
+
+    // buyerAccountController.recordBuyerCommunication external email & SMS branches
+    const buyerTarget = { id: 'b-comm-test', organizationName: 'Target Buyer', corporateEmail: 'target@corp.com', phone: '9876543210' };
+    storeService.buyerAccounts.push(buyerTarget);
+
+    const resCommEmail = mockRes();
+    const mailerService = require('../src/services/mailerService');
+    const deliverSpy = jest.spyOn(mailerService, 'deliver').mockImplementation(() => Promise.resolve({ success: true }));
+    await buyerAccountController.recordBuyerCommunication(
+      {
+        user: { role: 'admin', email: 'admin@corp.com' },
+        params: { id: buyerTarget.id },
+        body: { channel: 'EMAIL', recipient: 'target@corp.com', subject: 'Notice', message: 'Hello' },
+      },
+      resCommEmail,
+      next
+    );
+    expect(resCommEmail.status).toHaveBeenCalledWith(201);
+    deliverSpy.mockRestore();
+
+    const resCommSms = mockRes();
+    const smsService = require('../src/services/smsService');
+    const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockImplementation(() => Promise.resolve({ success: true }));
+    await buyerAccountController.recordBuyerCommunication(
+      {
+        user: { role: 'category_manager', email: 'cm@corp.com' },
+        params: { id: buyerTarget.id },
+        body: { channel: 'SMS', recipient: '9876543210', subject: 'SMS Notice', message: 'Hello SMS' },
+      },
+      resCommSms,
+      next
+    );
+    expect(resCommSms.status).toHaveBeenCalledWith(201);
+    smsSpy.mockRestore();
 
     // 3. catalogueController with limit and invalid limit
     const resCat = mockRes();
@@ -890,7 +966,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     }
   });
 
-  test('rfqController getRFQs limit query parameter and storeService getRFQByIdAsync clean null return', async () => {
+  test('rfqController getRFQs limit query parameter and storeService getRFQByIdAsync fails closed', async () => {
     const res = mockRes();
     const next = jest.fn();
 
@@ -916,13 +992,15 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       getSpy.mockResolvedValueOnce(null);
       const result = await storeService.getRFQByIdAsync('definitely-non-existent-rfq-id-12345');
       expect(result).toBeUndefined();
-      expect(syncSpy).toHaveBeenCalledTimes(1);
+      expect(syncSpy).not.toHaveBeenCalled();
 
       // 3. storeService.getRFQByIdAsync when DB throws error
       getSpy.mockRejectedValueOnce(new Error('DB connection drop'));
-      const resultAfterErr = await storeService.getRFQByIdAsync('definitely-non-existent-rfq-id-12345');
-      expect(resultAfterErr).toBeUndefined();
-      expect(syncSpy).toHaveBeenCalledTimes(2);
+      await expect(storeService.getRFQByIdAsync('definitely-non-existent-rfq-id-12345')).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+      expect(syncSpy).not.toHaveBeenCalled();
     } finally {
       storageSpy.mockRestore();
       getSpy.mockRestore();
@@ -1084,10 +1162,6 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(storeService.getVendorCatalogue('v-cat')).toHaveLength(3);
     expect(storeService.getVendorCatalogue(null, 2)).toHaveLength(2);
 
-    storeService.enterpriseInquiries = [{ id: 'inq-1' }, { id: 'inq-2' }, { id: 'inq-3' }];
-    expect(storeService.getEnterpriseInquiries(2)).toHaveLength(2);
-    expect(storeService.getEnterpriseInquiries()).toHaveLength(3);
-
     storeService.buyerAccounts = [{ id: 'b-1' }, { id: 'b-2' }, { id: 'b-3' }];
     expect(storeService.getBuyerAccounts(2)).toHaveLength(2);
     expect(storeService.getBuyerAccounts()).toHaveLength(3);
@@ -1100,7 +1174,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     storeService.buyerAccounts = [{ id: 'ba-1' }, { id: 'ba-2' }, { id: 'ba-3' }];
     const resBA = mockRes();
-    buyerAccountController.getBuyerAccounts({ query: { limit: '2' } }, resBA, jest.fn());
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: { limit: '2' } }, resBA, jest.fn());
     expect(resBA.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
       data: [{ id: 'ba-1' }, { id: 'ba-2' }],
@@ -1116,26 +1190,21 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     storeService.vendorCatalogue = [{ id: 'prod-1' }, { id: 'prod-2' }, { id: 'prod-3' }];
     const resCat = mockRes();
-    catalogueController.getProducts({ query: { limit: '2' } }, resCat, jest.fn());
+    await catalogueController.getProducts({ query: { limit: '2' } }, resCat, jest.fn());
     expect(resCat.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
       data: [{ id: 'prod-1' }, { id: 'prod-2' }],
     }));
   });
 
-  test('upsertAuditLogInDB invalidates audit_logs cache', async () => {
-    const { queryCache } = require('../src/db/queryCache');
-    const invalidateSpy = jest.spyOn(queryCache, 'invalidate');
-    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
-    dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: { id: 'log-cache-1' } }] }) };
+  test('legacy audit upsert delegates to the chain-safe append', async () => {
+    const auditLogQueries = require('../src/db/auditLogQueries');
+    const entry = { id: 'log-cache-1', action: 'TEST' };
+    const appendSpy = jest.spyOn(auditLogQueries, 'appendAuditLogInDB').mockResolvedValue(entry);
 
-    try {
-      await domainQueries.upsertAuditLogInDB({ id: 'log-cache-1', action: 'TEST' });
-      expect(invalidateSpy).toHaveBeenCalledWith('audit_logs');
-    } finally {
-      invalidateSpy.mockRestore();
-      storageSpy.mockRestore();
-    }
+    await domainQueries.upsertAuditLogInDB(entry);
+
+    expect(appendSpy).toHaveBeenCalledWith(entry);
   });
 
   test('vendorIngestionController getVendorMasterPreview respects limit query', async () => {
@@ -1198,7 +1267,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     };
     const res = mockRes();
     await aiFeedController.getAIFeed(req, res, jest.fn());
-    expect(feedSpy).toHaveBeenCalledWith(1);
+    expect(feedSpy).toHaveBeenCalledWith(100);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       data: [{ id: 'f-1' }],
@@ -1307,6 +1376,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     const authSessionQueries = require('../src/db/authSessionQueries');
     const realAuth = authSessionQueries.__real || authSessionQueries;
     const { queryCache } = require('../src/db/queryCache');
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
     const rowsSpy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
     const querySpy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
     const invalidateSpy = jest.spyOn(queryCache, 'invalidate');
@@ -1325,6 +1395,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       await realAuth.purgeExpiredAuthState();
       expect(invalidateSpy).toHaveBeenCalledWith('auth_revoked_tokens');
     } finally {
+      storageSpy.mockRestore();
       rowsSpy.mockRestore();
       querySpy.mockRestore();
       invalidateSpy.mockRestore();
@@ -1354,13 +1425,13 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
   test('graphql resolvers aiFeed forwards limit when caller is unrestricted', async () => {
     const rootResolvers = require('../src/graphql/resolvers');
-    const getAIFeedSpy = jest.spyOn(storeService, 'getAIFeed').mockReturnValue([
+    const getAIFeedSpy = jest.spyOn(storeService, 'getAIFeedDurably').mockResolvedValue([
       { id: 'feed-1', title: 'Feed 1' },
       { id: 'feed-2', title: 'Feed 2' },
     ]);
     try {
       const result = await rootResolvers.aiFeed({ limit: 5 }, { req: { user: { role: 'admin' } } });
-      expect(getAIFeedSpy).toHaveBeenCalledWith(5);
+      expect(getAIFeedSpy).toHaveBeenCalledWith(100);
       expect(result).toHaveLength(2);
     } finally {
       getAIFeedSpy.mockRestore();
@@ -1930,6 +2001,8 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     const resCat2 = mockRes();
     const vendorForCat = { id: 'v-cat-req', email: 'vcat@test.com', name: 'CatVendor', contactPerson: 'John', majorCategory: 'Civil Works' };
     storeService.vendors.push(vendorForCat);
+    jest.spyOn(require('../src/services/vendorCategoryUpdateNotificationService'), 'sendVendorCategoryUpdateNotification')
+      .mockResolvedValue({ sent: true });
     await rfqController.requestVendorCategoryUpdate(
       {
         body: { vendorId: 'v-cat-req', vendorEmail: 'vcat@test.com', rfqCategory: 'Electrical', rfqTitle: 'Supply Cables', rfqNumber: 'RFQ-CAT-1' },

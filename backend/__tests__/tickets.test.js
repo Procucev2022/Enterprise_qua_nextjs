@@ -1,12 +1,45 @@
-const request = require('supertest');
+const supertest = require('supertest');
+const request = (app) => {
+  const agent = supertest(app);
+  return {
+    get: (path) => agent.get(path).set('Authorization', 'Bearer ticket-test-token'),
+    post: (path) => agent.post(path).set('Authorization', 'Bearer ticket-test-token'),
+    put: (path) => agent.put(path).set('Authorization', 'Bearer ticket-test-token'),
+    delete: (path) => agent.delete(path).set('Authorization', 'Bearer ticket-test-token'),
+  };
+};
 const app = require('../src/app');
 const ticketQueries = require('../src/db/ticketQueries');
 const ticketController = require('../src/controllers/ticketController');
 const pool = require('../src/db/pool');
+const authService = require('../src/services/authService');
 
 describe('Tickets API & Controller', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValue({
+      valid: true,
+      user: {
+        sub: 'ticket-staff-id',
+        email: 'category.manager@example.test',
+        fullName: 'Category Manager',
+        role: 'category_manager',
+      },
+    });
+  });
+
+  test('GET /api/tickets rejects anonymous and non-staff callers', async () => {
+    const anonymous = await supertest(app).get('/api/tickets');
+    expect(anonymous.status).toBe(401);
+
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValueOnce({
+      valid: true,
+      user: { sub: 'buyer-test-id', email: 'buyer@example.test', role: 'buyer' },
+    });
+    const buyer = await supertest(app)
+      .get('/api/tickets')
+      .set('Authorization', 'Bearer buyer-token');
+    expect(buyer.status).toBe(403);
   });
 
   test('GET /api/tickets/summary returns ticket summary metrics', async () => {

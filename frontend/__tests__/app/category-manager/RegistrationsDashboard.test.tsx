@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import RegistrationsDashboard from '@/app/category-manager/components/RegistrationsDashboard';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { authClient } from '@/lib/authClient';
 
 const mockClients = [
   {
@@ -89,6 +90,7 @@ const mockClients = [
 describe('RegistrationsDashboard', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
+    jest.spyOn(authClient, 'getToken').mockReturnValue('registration-session-token');
     global.fetch = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (typeof url === 'string' && url.includes('/api/internal-tasks/registrations') && !url.includes('/action')) {
         return Promise.resolve({
@@ -155,7 +157,10 @@ describe('RegistrationsDashboard', () => {
     fireEvent.change(sourceSelect, { target: { value: 'WhatsApp' } });
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('sourceType=WhatsApp'));
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('sourceType=WhatsApp'),
+        expect.objectContaining({ headers: { Authorization: 'Bearer registration-session-token' } })
+      );
     });
   });
 
@@ -170,7 +175,10 @@ describe('RegistrationsDashboard', () => {
     fireEvent.change(searchInput, { target: { value: 'GOVARDHAN' } });
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('search=GOVARDHAN'));
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('search=GOVARDHAN'),
+        expect.objectContaining({ headers: { Authorization: 'Bearer registration-session-token' } })
+      );
     });
   });
 
@@ -192,6 +200,7 @@ describe('RegistrationsDashboard', () => {
         expect.stringContaining('/api/internal-tasks/registrations/reg-client-102/action'),
         expect.objectContaining({
           method: 'POST',
+          headers: expect.objectContaining({ Authorization: 'Bearer registration-session-token' }),
           body: JSON.stringify({ action: 'accept' }),
         })
       );
@@ -219,6 +228,7 @@ describe('RegistrationsDashboard', () => {
         expect.stringContaining('/api/internal-tasks/registrations/reg-client-102/action'),
         expect.objectContaining({
           method: 'POST',
+          headers: expect.objectContaining({ Authorization: 'Bearer registration-session-token' }),
           body: JSON.stringify({ action: 'reject' }),
         })
       );
@@ -348,7 +358,10 @@ describe('RegistrationsDashboard', () => {
     fireEvent.change(pageSizeSelect, { target: { value: '25' } });
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('limit=25'));
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('limit=25'),
+        expect.objectContaining({ headers: { Authorization: 'Bearer registration-session-token' } })
+      );
     });
   });
 
@@ -663,7 +676,10 @@ describe('RegistrationsDashboard', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('clientType=buyer')
+        expect.stringContaining('clientType=buyer'),
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer registration-session-token' },
+        })
       );
     });
 
@@ -671,7 +687,10 @@ describe('RegistrationsDashboard', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('clientType=seller')
+        expect.stringContaining('clientType=seller'),
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer registration-session-token' },
+        })
       );
     });
   });

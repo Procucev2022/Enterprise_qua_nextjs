@@ -7,7 +7,32 @@
 
 const approvalQueries = require('../db/approvalQueries');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+const { APPROVAL_MESSAGES } = require('../config/constants');
 const { logger } = require('../services/loggerService');
+
+function sendApprovalError(res, error, fallbackMessage) {
+  if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
+    return res.status(503).json({
+      success: false,
+      error: APPROVAL_MESSAGES.DATABASE_UNAVAILABLE,
+      retryable: true,
+    });
+  }
+  if (error?.code === 'APPROVAL_ALREADY_DECIDED') {
+    return res.status(409).json({
+      success: false,
+      error: APPROVAL_MESSAGES.ALREADY_DECIDED,
+      retryable: false,
+    });
+  }
+  if (error?.code === 'APPROVER_PASSWORD_INVALID') {
+    return res.status(401).json({ success: false, error: APPROVAL_MESSAGES.PASSWORD_INVALID, retryable: false });
+  }
+  if (error?.code === 'APPROVER_PASSWORD_NOT_CONFIGURED') {
+    return res.status(503).json({ success: false, error: APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE, retryable: false });
+  }
+  return res.status(500).json({ success: false, error: fallbackMessage });
+}
 
 function extractActor(req) {
   if (req.user) {
@@ -35,7 +60,7 @@ async function getSummary(req, res) {
     return res.json({ success: true, summary });
   } catch (err) {
     logger.error('Failed to fetch approval summary', err, 'APPROVAL_CONTROLLER');
-    return res.status(500).json({ success: false, error: 'Failed to retrieve approval summary statistics.' });
+    return sendApprovalError(res, err, 'Failed to retrieve approval summary statistics.');
   }
 }
 
@@ -65,7 +90,7 @@ async function getApprovals(req, res) {
     });
   } catch (err) {
     logger.error('Failed to retrieve approval requests', err, 'APPROVAL_CONTROLLER');
-    return res.status(500).json({ success: false, error: 'Failed to retrieve approval requests.' });
+    return sendApprovalError(res, err, 'Failed to retrieve approval requests.');
   }
 }
 
@@ -94,7 +119,7 @@ async function processAction(req, res) {
     return res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Failed to process approval action on ${req.params.id}`, err, 'APPROVAL_CONTROLLER');
-    return res.status(500).json({ success: false, error: 'Failed to process approval action.' });
+    return sendApprovalError(res, err, 'Failed to process approval action.');
   }
 }
 

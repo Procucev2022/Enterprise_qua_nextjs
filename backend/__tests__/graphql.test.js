@@ -4,6 +4,7 @@ const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const { queryCache } = require('../src/db/queryCache');
 const { handleGraphQL } = require('../src/controllers/graphqlController');
+const { logger } = require('../src/services/loggerService');
 const { authHeader, TEST_USERS } = require('./testHelpers');
 
 describe('GraphQL API & Controller Integration Tests', () => {
@@ -122,7 +123,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
     expect(res.body.data.rfqById.id).toBe(testRFQ.id);
     expect(res.body.data.rfqByNum.rfqNumber).toBe(testRFQ.rfqNumber);
     expect(res.body.data.vendorById.id).toBe(testVendor.id);
-    expect(res.body.data.vendorByEmail.email.toLowerCase()).toBe(testVendor.email.toLowerCase());
+    expect(res.body.data.vendorByEmail.email.toLowerCase()).toBe('fxxxx@graphql-vendor.test');
   });
 
   test('POST /graphql queries evaluations, auditLogs, catalogue, aiFeed, config, dbHealth, and optimizationMetrics', async () => {
@@ -171,6 +172,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('admin'))
       .send({ query })
       .expect(200);
 
@@ -292,7 +294,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         clearQueryCache
       }
     `;
-    const resClearCache = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: clearCacheMutation }).expect(200);
+    const resClearCache = await request(app).post('/graphql').set(authHeader('admin')).send({ query: clearCacheMutation }).expect(200);
     expect(resClearCache.body.data.clearQueryCache).toBe(true);
 
     // 8. Purge Logs (admin-only)
@@ -331,10 +333,11 @@ describe('GraphQL API & Controller Integration Tests', () => {
     expect(resNonAdmin.body.data.purgeLogs).toBeNull();
   });
 
-  test('GET /graphql supports query execution and handles string variables and invalid JSON variables fallback', async () => {
+  test('GET /graphql supports query execution and rejects malformed variables', async () => {
     const query = 'query { systemConfig { maintenanceMode } }';
     const res = await request(app)
       .get(`/graphql?query=${encodeURIComponent(query)}&variables=${encodeURIComponent('{}')}`)
+      .set(authHeader('admin'))
       .expect(200);
 
     expect(res.body.data.systemConfig).toBeDefined();
@@ -342,8 +345,79 @@ describe('GraphQL API & Controller Integration Tests', () => {
     // Invalid JSON string in variables
     const resInvalidJson = await request(app)
       .get(`/graphql?query=${encodeURIComponent(query)}&variables=INVALID_JSON`)
-      .expect(200);
-    expect(resInvalidJson.body.data.systemConfig).toBeDefined();
+      .set(authHeader('admin'))
+      .expect(400);
+    expect(resInvalidJson.body.errors[0].message).toMatch(/valid JSON object/i);
+  });
+
+  test('GraphQL request complexity, batch count, and body size are bounded', async () => {
+    const tooManyFields = `query { ${Array.from({ length: 51 }, (_, index) => `field${index}: systemConfig { maintenanceMode }`).join(' ')} }`;
+    const complexQuery = await request(app)
+      .post('/graphql')
+      .send({ query: tooManyFields })
+      .expect(413);
+    expect(complexQuery.body.errors[0].message).toMatch(/complexity limit/i);
+
+    const oversizedBatch = Array.from({ length: 6 }, () => ({ query: 'query { systemConfig { maintenanceMode } }' }));
+    const batchResponse = await request(app).post('/graphql').send(oversizedBatch).expect(413);
+    expect(batchResponse.body.errors[0].message).toMatch(/at most 5 operations/i);
+
+    const malformedVariables = await request(app)
+      .post('/graphql')
+      .send({ query: 'query { systemConfig { maintenanceMode } }', variables: 'not-json' })
+      .expect(400);
+    expect(malformedVariables.body.errors[0].message).toMatch(/valid JSON object/i);
+
+    const nonObjectVariables = await request(app)
+      .post('/graphql')
+      .send({ query: 'query { __typename }', variables: 12 })
+      .expect(400);
+    expect(nonObjectVariables.body.errors[0].message).toMatch(/valid JSON object/i);
+
+    const oversizedBody = JSON.stringify({ query: 'x'.repeat(1024 * 1024 + 1) });
+    await request(app)
+      .post('/graphql')
+      .set('Content-Type', 'application/json')
+      .send(oversizedBody)
+      .expect(413);
+
+    const oversizedQueryText = await request(app)
+      .post('/graphql')
+      .send({ query: ' '.repeat(20001) })
+      .expect(413);
+    expect(oversizedQueryText.body.errors[0].message).toMatch(/complexity limit/i);
+
+    const deepQuery = `query { ${'a { '.repeat(11)}__typename${' }'.repeat(11)} }`;
+    const deepResponse = await request(app).post('/graphql').send({ query: deepQuery }).expect(413);
+    expect(deepResponse.body.errors[0].message).toMatch(/complexity limit/i);
+
+    const batchWithInvalidVariables = await request(app)
+      .post('/graphql')
+      .send([{ query: 'query { __typename }', variables: 'not-json' }])
+      .expect(400);
+    expect(batchWithInvalidVariables.body.errors[0].message).toMatch(/valid JSON object/i);
+
+    const batchWithInvalidOperation = await request(app).post('/graphql').send([null]).expect(400);
+    expect(batchWithInvalidOperation.body.errors[0].message).toMatch(/include a query string/i);
+
+    const batchWithComplexOperation = await request(app)
+      .post('/graphql')
+      .send([{ query: tooManyFields }])
+      .expect(413);
+    expect(batchWithComplexOperation.body.errors[0].message).toMatch(/complexity limit/i);
+  });
+
+  test('GraphQL execution warnings log query metadata without the source text', async () => {
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const source = 'query { unknownGraphField } # PRIVATE_QUERY_MARKER';
+    await request(app).post('/graphql').send({ query: source }).expect(200);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('GraphQL Execution had'),
+      expect.objectContaining({ queryLength: source.length }),
+      'GRAPHQL_API'
+    );
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('PRIVATE_QUERY_MARKER');
+    warnSpy.mockRestore();
   });
 
   test('POST /graphql returns 400 when query string is missing', async () => {
@@ -384,7 +458,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const res = await request(app).post('/graphql').send({ query }).expect(200);
+    const res = await request(app).post('/graphql').set(authHeader('buyer')).send({ query }).expect(200);
     expect(res.body.data.rfqsFiltered).toBeDefined();
     expect(res.body.data.vendorsFiltered).toBeDefined();
     expect(res.body.data.catalogueFiltered).toBeDefined();
@@ -405,7 +479,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const statusRes = await request(app).post('/graphql').send({ query: statusQuery }).expect(200);
+    const statusRes = await request(app).post('/graphql').set(authHeader('admin')).send({ query: statusQuery }).expect(200);
     expect(statusRes.body.data.cryptoStatus.status).toBe('HEALTHY');
     expect(statusRes.body.data.cryptoStatus.algorithm).toBe('aes-256-gcm');
 
@@ -443,6 +517,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
     `;
     const decRes = await request(app)
       .post('/graphql')
+      .set(authHeader('admin'))
       .send({
         query: decQuery,
         variables: { input: { token: encRes.body.data.encryptData.encoded } },
@@ -451,9 +526,20 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     expect(decRes.body.data.decryptData.plaintext).toBe('Confidential ERP Quote');
 
+    const deniedDecrypt = await request(app)
+      .post('/graphql')
+      .set(authHeader('buyer'))
+      .send({
+        query: decQuery,
+        variables: { input: { token: encRes.body.data.encryptData.encoded } },
+      })
+      .expect(200);
+    expect(deniedDecrypt.body.errors[0].message).toContain('permission');
+
     // Decrypt with structured input
     const decStructRes = await request(app)
       .post('/graphql')
+      .set(authHeader('admin'))
       .send({
         query: decQuery,
         variables: {
@@ -474,13 +560,14 @@ describe('GraphQL API & Controller Integration Tests', () => {
   test('POST /graphql supports batched queries array and handles empty batch validation', async () => {
     // 1. Valid batched queries
     const batchOperations = [
-      { query: 'query { systemConfig { maintenanceMode } }' },
+      { query: 'query { systemConfig { maintenanceMode } }', variables: '{}' },
       { query: 'query { dbHealth { isConfigured provider } }' },
       { query: 'query { optimizationMetrics { cache { hits misses } } }' },
     ];
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('admin'))
       .send(batchOperations)
       .expect(200);
 
@@ -497,6 +584,12 @@ describe('GraphQL API & Controller Integration Tests', () => {
       .expect(400);
 
     expect(emptyRes.body.errors[0].message).toMatch(/Batched query array must not be empty/i);
+
+    const batchWithExecutionError = await request(app)
+      .post('/graphql')
+      .send([{ query: 'query { unknownBatchField }' }])
+      .expect(200);
+    expect(batchWithExecutionError[0]?.errors || batchWithExecutionError.body[0].errors).toBeDefined();
   });
 
   test('POST /graphql executes composite multi-entity query in a single roundtrip', async () => {
@@ -514,7 +607,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
-      .set(authHeader('buyer'))
+      .set(authHeader('category_manager'))
       .send({ query: compositeQuery })
       .expect(200);
 

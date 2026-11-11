@@ -385,13 +385,45 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.organizationName).toBe('Larsen & Toubro Limited');
+      expect(res.body.meta).toEqual({ source: 'identity_database', degraded: false });
       expect(res.body.data.contactPerson).toBe('Rajesh Sharma');
       expect(res.body.data.corporateEmail).toBe('buyer@procucev.com');
       expect(res.body.data.mobileNumber).toBe('+919820144820');
       expect(res.body.data.city).toBe('Mumbai');
     });
 
-    test('falls back gracefully when database lookup fails or finds nothing', async () => {
+    test('rejects malformed or oversized lookup values before querying the identity database', async () => {
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      const lookupSpy = jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier');
+
+      const invalidEmail = await request(app)
+        .get('/api/buyer-profile/details?email=not-an-email')
+        .set(authHeader('category_manager'));
+      const oversizedName = await request(app)
+        .get(`/api/buyer-profile/details?name=${'A'.repeat(256)}`)
+        .set(authHeader('category_manager'));
+
+      expect(invalidEmail.statusCode).toBe(400);
+      expect(invalidEmail.body.error).toBe(BUYER_PROFILE_MESSAGES.DETAILS_INVALID_QUERY);
+      expect(invalidEmail.body.fieldErrors.email).toBeDefined();
+      expect(oversizedName.statusCode).toBe(400);
+      expect(oversizedName.body.fieldErrors.name).toBeDefined();
+      expect(lookupSpy).not.toHaveBeenCalled();
+    });
+
+    test('rejects repeated lookup parameters instead of coercing arrays into strings', async () => {
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      const lookupSpy = jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier');
+      const res = await request(app)
+        .get('/api/buyer-profile/details?name=Acme&name=Other')
+        .set(authHeader('category_manager'));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.name).toBeDefined();
+      expect(lookupSpy).not.toHaveBeenCalled();
+    });
+
+    test('reports a retryable database failure when no local buyer record can be used', async () => {
       const buyerProfileQueries = require('../src/db/buyerProfileQueries');
       jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockRejectedValue(new Error('DB connection timeout'));
 
@@ -399,10 +431,33 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
         .get('/api/buyer-profile/details?email=unknown@buyer.com&name=Acme%20Corp')
         .set(authHeader('category_manager'));
 
-      expect(res.statusCode).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.data.organizationName).toBe('Acme Corp');
-      expect(res.body.data.corporateEmail).toBe('unknown@buyer.com');
+      expect(res.statusCode).toBe(503);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe(BUYER_PROFILE_MESSAGES.DETAILS_LOAD_FAILED);
+      expect(res.body.retryable).toBe(true);
+    });
+
+    test('returns not found for a successful lookup with no buyer profile', async () => {
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValue({ found: false, reason: 'USER_NOT_FOUND' });
+
+      const res = await request(app)
+        .get('/api/buyer-profile/details?email=unknown@buyer.com')
+        .set(authHeader('category_manager'));
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe(BUYER_PROFILE_MESSAGES.DETAILS_NOT_FOUND);
+    });
+
+    test('requires an identifier instead of returning a fabricated profile', async () => {
+      const res = await request(app)
+        .get('/api/buyer-profile/details')
+        .set(authHeader('category_manager'));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe(BUYER_PROFILE_MESSAGES.DETAILS_IDENTIFIER_REQUIRED);
     });
   });
 });
