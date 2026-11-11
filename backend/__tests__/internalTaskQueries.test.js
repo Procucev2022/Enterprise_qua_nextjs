@@ -1,5 +1,26 @@
 const pool = require('../src/db/pool');
 const queries = require('../src/db/internalTaskQueries');
+const approvalQueries = require('../src/db/approvalQueries');
+const d1Bridge = require('../src/db/d1Bridge');
+const { logger } = require('../src/services/loggerService');
+
+function createD1Binding(batchRows) {
+  const statements = [];
+  const db = {
+    prepare: (text) => ({
+      bind: (...params) => {
+        const statement = { text, params };
+        statements.push(statement);
+        return statement;
+      },
+    }),
+    batch: jest.fn().mockResolvedValue(batchRows.map((rows) => ({
+      results: rows,
+      meta: { changes: rows.length },
+    }))),
+  };
+  return { db, statements };
+}
 
 describe('internalTaskQueries', () => {
   beforeEach(() => {
@@ -366,6 +387,424 @@ describe('internalTaskQueries', () => {
     });
   });
 
+  describe('createInternalTaskWithApproval', () => {
+    const taskData = {
+      title: 'Grant credits to a buyer',
+      taskCategory: 'CREDIT_MANAGEMENT',
+      taskType: 'Add Credits',
+      creditAccountType: 'BUYER',
+      creditAccountId: 'buyer-atomic-1',
+      creditQuantity: 25,
+    };
+    const approvalData = {
+      id: 'approval-atomic-test',
+      module: 'Buyer Credit Addition',
+      request_type: 'Buyer Credit Addition',
+      amount: 25,
+      quantity: 25,
+      buyer_id: 'buyer-atomic-1',
+      assigned_approver: 'Finance Manager',
+      raw: { source: 'internal-task-test' },
+    };
+
+    test('keeps the task and linked approval in memory when storage is intentionally unconfigured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const existingApproval = approvalQueries.memoryApprovals.find((item) => item.id === approvalData.id);
+      if (existingApproval) approvalQueries.memoryApprovals.splice(approvalQueries.memoryApprovals.indexOf(existingApproval), 1);
+
+      try {
+        const task = await queries.createInternalTaskWithApproval(taskData, { name: 'Test Manager' }, approvalData);
+        const approval = approvalQueries.memoryApprovals.find((item) => item.id === approvalData.id);
+
+        expect(task.status).toBe('Pending Approval');
+        expect(approval).toMatchObject({ internal_task_id: task.id, buyer_id: 'buyer-atomic-1' });
+        expect(approval.raw.internal_task_id).toBe(task.id);
+      } finally {
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => item.id !== approvalData.id)
+        );
+      }
+    });
+
+    test('reuses no-storage credit requests by idempotency key and rejects changed request data', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const idempotencyKey = 'a1111111-1111-4111-8111-111111111111';
+      const keyedApproval = { ...approvalData, idempotencyKey };
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+
+      try {
+        const first = await queries.createInternalTaskWithApproval(taskData, { id: 'manager-1' }, keyedApproval);
+        const replay = await queries.createInternalTaskWithApproval(taskData, { id: 'manager-1' }, {
+          ...keyedApproval,
+          idempotencyKey: idempotencyKey.toUpperCase(),
+        });
+        expect(replay.id).toBe(first.id);
+        expect(replay.task_number).toBe(first.task_number);
+
+        await expect(queries.createInternalTaskWithApproval(
+          { ...taskData, creditQuantity: 26 },
+          { id: 'manager-1' },
+          { ...keyedApproval, amount: 26, quantity: 26 }
+        )).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
+      } finally {
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+      }
+    });
+
+    test('resolves database replays to the original task and rejects changed request data', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db } = createD1Binding([]);
+      const uniqueFailure = new Error('UNIQUE constraint failed: internal_tasks.id');
+      db.batch.mockReset()
+        .mockResolvedValueOnce([
+          { results: [{}], meta: { changes: 1 } },
+          { results: [{}], meta: { changes: 1 } },
+          { results: [{}], meta: { changes: 1 } },
+        ])
+        .mockRejectedValueOnce(uniqueFailure)
+        .mockRejectedValueOnce(uniqueFailure);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+      let storedTask = null;
+      let storedApproval = null;
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('FROM internal_tasks t')) return { rows: storedTask ? [storedTask] : [] };
+        if (sql.includes('FROM internal_task_activities')) return { rows: [] };
+        if (sql.includes('FROM buyer_accounts')) return { rows: [{ available_credits: 25 }] };
+        if (sql.includes('SELECT * FROM approvals')) return { rows: storedApproval ? [storedApproval] : [] };
+        return { rows: [] };
+      });
+      const idempotencyKey = 'a2222222-2222-4222-8222-222222222222';
+      const keyedApproval = { ...approvalData, idempotencyKey };
+
+      try {
+        const first = await queries.createInternalTaskWithApproval(taskData, { id: 'manager-2' }, keyedApproval);
+        const approval = approvalQueries.memoryApprovals.find((item) => item.internal_task_id === first.id);
+        storedTask = {
+          ...first,
+          attachments: JSON.stringify(first.attachments),
+          raw: JSON.stringify(first.raw),
+        };
+        storedApproval = { ...approval, raw: JSON.stringify(approval.raw) };
+
+        const replay = await queries.createInternalTaskWithApproval(taskData, { id: 'manager-2' }, keyedApproval);
+        expect(replay.id).toBe(first.id);
+        expect(db.batch).toHaveBeenCalledTimes(2);
+
+        await expect(queries.createInternalTaskWithApproval(
+          { ...taskData, creditQuantity: 26 },
+          { id: 'manager-2' },
+          { ...keyedApproval, amount: 26, quantity: 26 }
+        )).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
+        expect(db.batch).toHaveBeenCalledTimes(3);
+      } finally {
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('persists the task, activity, and approval in one Worker D1 batch', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db, statements } = createD1Binding([[{}], [{}], [{}]]);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+      const approvalWithoutRaw = { ...approvalData, raw: undefined };
+
+      try {
+        const task = await queries.createInternalTaskWithApproval(taskData, { id: 'user-atomic-1', name: 'Test Manager' }, approvalWithoutRaw);
+        const approvalStatement = statements[2];
+        const approvalRaw = JSON.parse(approvalStatement.params[11]);
+
+        expect(db.batch).toHaveBeenCalledTimes(1);
+        expect(statements).toHaveLength(3);
+        expect(statements[0].text).toContain('INSERT INTO internal_tasks');
+        expect(statements[1].text).toContain('INSERT INTO internal_task_activities');
+        expect(statements[2].text).toContain('INSERT INTO approvals');
+        expect(approvalRaw.internal_task_id).toBe(statements[0].params[0]);
+        expect(task.id).toBe(statements[0].params[0]);
+        expect(approvalQueries.memoryApprovals.find((item) => item.id === approvalData.id).internal_task_id).toBe(task.id);
+      } finally {
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('fails closed when a Worker D1 batch reports a missing insert result', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db } = createD1Binding([[{}], [{}], []]);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+
+      try {
+        await expect(queries.createInternalTaskWithApproval(taskData, {}, approvalData)).rejects.toMatchObject({
+          code: 'PERSISTENCE_UNAVAILABLE',
+        });
+        expect(db.batch).toHaveBeenCalledTimes(1);
+        expect(approvalQueries.memoryApprovals.some((item) => item.id === approvalData.id)).toBe(false);
+      } finally {
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('keeps duplicate-key failures unavailable when replay lookup finds no persisted pair', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db } = createD1Binding([]);
+      db.batch.mockRejectedValue(new Error('UNIQUE constraint failed: internal_tasks.id'));
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const approvalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+
+      try {
+        await expect(queries.createInternalTaskWithApproval(taskData, {}, {
+          ...approvalData,
+          idempotencyKey: 'a3333333-3333-4333-8333-333333333333',
+        })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Atomic credit approval request persistence failed'), expect.any(Object), 'INTERNAL_TASK_APPROVAL_REQUEST');
+      } finally {
+        errorSpy.mockRestore();
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => approvalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('logs an idempotency replay lookup failure without hiding the persistence error', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db } = createD1Binding([]);
+      const uniqueFailure = new Error('UNIQUE constraint failed: internal_tasks.id');
+      const lookupFailure = new Error('Replay lookup unavailable');
+      db.batch.mockRejectedValue(uniqueFailure);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(lookupFailure);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const approvalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+
+      try {
+        await expect(queries.createInternalTaskWithApproval(taskData, {}, {
+          ...approvalData,
+          idempotencyKey: 'a4444444-4444-4444-8444-444444444444',
+        })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE', cause: uniqueFailure });
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Credit approval idempotency replay lookup failed'), expect.objectContaining({
+          error: lookupFailure,
+        }), 'INTERNAL_TASK_APPROVAL_REQUEST');
+      } finally {
+        errorSpy.mockRestore();
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => approvalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('logs a cache invalidation failure after a successful atomic request', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db } = createD1Binding([[{}], [{}], [{}]]);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+      const cacheSpy = jest.spyOn(pool.queryCache, 'invalidate').mockImplementation(() => {
+        throw new Error('Cache unavailable');
+      });
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      try {
+        const task = await queries.createInternalTaskWithApproval(taskData, {}, approvalData);
+        expect(task.id).toBeTruthy();
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Credit approval request committed but query-cache invalidation failed'), expect.objectContaining({
+          taskId: task.id,
+        }), 'INTERNAL_TASK_APPROVAL_REQUEST');
+      } finally {
+        cacheSpy.mockRestore();
+        warnSpy.mockRestore();
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('logs a failed Worker D1 batch and does not remember a phantom approval', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const failure = new Error('D1 insert rejected');
+      const { db } = createD1Binding([]);
+      db.batch.mockRejectedValue(failure);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+
+      try {
+        await expect(queries.createInternalTaskWithApproval(taskData, {}, approvalData)).rejects.toMatchObject({
+          code: 'PERSISTENCE_UNAVAILABLE',
+          cause: failure,
+        });
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Atomic credit approval request persistence failed'), expect.objectContaining({
+          approvalId: approvalData.id,
+          provider: 'cloudflare-d1',
+        }), 'INTERNAL_TASK_APPROVAL_REQUEST');
+        expect(approvalQueries.memoryApprovals.some((item) => item.id === approvalData.id)).toBe(false);
+      } finally {
+        errorSpy.mockRestore();
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('refuses a multi-statement D1 HTTP write before creating a partial request', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const envNames = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_D1_DATABASE_ID', 'CLOUDFLARE_API_TOKEN'];
+      const originalEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+      delete globalThis.__CF_ENV__;
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'test-account';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'test-database';
+      process.env.CLOUDFLARE_API_TOKEN = 'test-token';
+      d1Bridge.resetD1HttpClientCache();
+
+      try {
+        await expect(queries.createInternalTaskWithApproval(taskData, {}, approvalData)).rejects.toMatchObject({
+          code: 'PERSISTENCE_UNAVAILABLE',
+        });
+        expect(approvalQueries.memoryApprovals.some((item) => item.id === approvalData.id)).toBe(false);
+      } finally {
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+        envNames.forEach((name) => {
+          if (originalEnv[name] === undefined) delete process.env[name];
+          else process.env[name] = originalEnv[name];
+        });
+        d1Bridge.resetD1HttpClientCache();
+      }
+    });
+
+    test('commits the task, activity, and approval together in a PostgreSQL transaction', async () => {
+      const originalPool = pool.pool;
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+      const queriesRun = [];
+      const client = {
+        query: jest.fn(async (sql) => {
+          queriesRun.push(sql.trim().split(/\s+/).slice(0, 3).join(' '));
+          return { rowCount: 1 };
+        }),
+        release: jest.fn(),
+      };
+      pool.pool = { connect: jest.fn().mockResolvedValue(client) };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      try {
+        const task = await queries.createInternalTaskWithApproval(taskData, {}, approvalData);
+
+        expect(queriesRun).toEqual([
+          'BEGIN',
+          'INSERT INTO internal_tasks',
+          'INSERT INTO internal_task_activities',
+          'INSERT INTO approvals',
+          'COMMIT',
+        ]);
+        expect(task.id).toBeTruthy();
+        expect(client.release).toHaveBeenCalledTimes(1);
+        expect(approvalQueries.memoryApprovals.find((item) => item.id === approvalData.id).internal_task_id).toBe(task.id);
+      } finally {
+        pool.pool = originalPool;
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+      }
+    });
+
+    test('rolls back and logs when one PostgreSQL insert reports no persisted row', async () => {
+      const originalPool = pool.pool;
+      const originalApprovalIds = new Set(approvalQueries.memoryApprovals.map((item) => item.id));
+      const queriesRun = [];
+      const client = {
+        query: jest.fn(async (sql) => {
+          const normalized = sql.trim().split(/\s+/).slice(0, 3).join(' ');
+          queriesRun.push(normalized);
+          return { rowCount: normalized === 'INSERT INTO internal_task_activities' ? 0 : 1 };
+        }),
+        release: jest.fn(),
+      };
+      pool.pool = { connect: jest.fn().mockResolvedValue(client) };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      try {
+        await expect(queries.createInternalTaskWithApproval(taskData, {}, approvalData)).rejects.toMatchObject({
+          code: 'PERSISTENCE_UNAVAILABLE',
+        });
+        expect(queriesRun).toEqual([
+          'BEGIN',
+          'INSERT INTO internal_tasks',
+          'INSERT INTO internal_task_activities',
+          'ROLLBACK',
+        ]);
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Atomic credit approval request persistence failed'), expect.objectContaining({
+          provider: 'postgresql',
+        }), 'INTERNAL_TASK_APPROVAL_REQUEST');
+        expect(approvalQueries.memoryApprovals.some((item) => item.id === approvalData.id)).toBe(false);
+        expect(client.release).toHaveBeenCalledTimes(1);
+      } finally {
+        errorSpy.mockRestore();
+        pool.pool = originalPool;
+        approvalQueries.memoryApprovals.splice(
+          0,
+          approvalQueries.memoryApprovals.length,
+          ...approvalQueries.memoryApprovals.filter((item) => originalApprovalIds.has(item.id))
+        );
+      }
+    });
+  });
+
   describe('updateInternalTask', () => {
     test('updates task and logs activity when status changes', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
@@ -729,9 +1168,16 @@ describe('internalTaskQueries', () => {
     test('handles database query error gracefully and returns defaults', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(pool, 'query').mockRejectedValue(new Error('D1 Connection Timeout'));
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       const assignees = await queries.getInternalAssignees();
       expect(assignees.length).toBeGreaterThanOrEqual(5);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Internal assignee lookup failed; using configured defaults',
+        expect.objectContaining({ fallbackCount: expect.any(Number) }),
+        'INTERNAL_TASKS'
+      );
+      warnSpy.mockRestore();
     });
   });
 
@@ -775,7 +1221,7 @@ describe('internalTaskQueries', () => {
 
       const res = await queries.approveCreditTask('tsk_cred_add', { id: 'admin-1', name: 'Admin Approver' }, 'Approved 20 credits');
       expect(res).toBeDefined();
-      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_101', { creditBalance: 70 });
+      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_101', { creditBalance: 70, available_credits: 70 }, { persist: false });
       expect(recordBuyerTxSpy).toHaveBeenCalled();
     });
 
@@ -819,7 +1265,11 @@ describe('internalTaskQueries', () => {
 
       const res = await queries.approveCreditTask('tsk_cred_ded', { id: 'admin-1', name: 'Admin Approver' }, 'Deducted 5 credits');
       expect(res).toBeDefined();
-      expect(updateVendorSpy).toHaveBeenCalledWith('v_202', { freeQuotationCredits: 10, freeRfqDownloadCredits: 10 });
+      expect(updateVendorSpy).toHaveBeenCalledWith('v_202', {
+        freeQuotationCredits: 10,
+        freeRfqDownloadCredits: 10,
+        credits: 10,
+      }, { persist: false });
       expect(recordVendorTxSpy).toHaveBeenCalled();
     });
 
@@ -867,7 +1317,7 @@ describe('internalTaskQueries', () => {
 
       const buyerRes = await queries.approveCreditTask('tsk_cred_db_b', { id: 'adm' });
       expect(buyerRes).toBeDefined();
-      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_db_1', { creditBalance: 95 });
+      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_db_1', { creditBalance: 95, available_credits: 95 }, { persist: false });
 
       // Now test vendor DB branch
       jest.spyOn(pool, 'query').mockImplementation((sql) => {
@@ -902,7 +1352,11 @@ describe('internalTaskQueries', () => {
 
       const vendorRes = await queries.approveCreditTask('tsk_cred_db_v', { id: 'adm' });
       expect(vendorRes).toBeDefined();
-      expect(updateVendorSpy).toHaveBeenCalledWith('ven_db_1', { freeQuotationCredits: 30, freeRfqDownloadCredits: 30 });
+      expect(updateVendorSpy).toHaveBeenCalledWith('ven_db_1', {
+        freeQuotationCredits: 30,
+        freeRfqDownloadCredits: 30,
+        credits: 30,
+      }, { persist: false });
     });
 
     test('approveCreditTask checks out client from pool.pool.connect and releases on completion', async () => {
@@ -1150,7 +1604,7 @@ describe('internalTaskQueries', () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
 
       // 1. Vendor credit account
-      jest.spyOn(pool, 'query').mockImplementation((sql, params) => {
+      const creditQuerySpy = jest.spyOn(pool, 'query').mockImplementation((sql, params) => {
         if (sql.includes('FROM internal_tasks t')) {
           return Promise.resolve({
             rows: [
@@ -1176,9 +1630,13 @@ describe('internalTaskQueries', () => {
       const vendorTask = await queries.getInternalTaskById('tsk_cred_vendor');
       expect(vendorTask).toBeDefined();
       expect(vendorTask.current_account_credits).toBe(45);
+      expect(creditQuerySpy.mock.calls.find(([sql]) => sql.includes('SELECT credits FROM vendors'))[2]).toEqual(expect.objectContaining({
+        d1: true,
+        d1Text: expect.stringContaining("json_extract(raw, '$.credits')"),
+      }));
 
       // 2. Buyer credit account
-      jest.spyOn(pool, 'query').mockImplementation((sql, params) => {
+      creditQuerySpy.mockImplementation((sql, params) => {
         if (sql.includes('FROM internal_tasks t')) {
           return Promise.resolve({
             rows: [
@@ -1204,6 +1662,246 @@ describe('internalTaskQueries', () => {
       const buyerTask = await queries.getInternalTaskById('tsk_cred_buyer');
       expect(buyerTask).toBeDefined();
       expect(buyerTask.current_account_credits).toBe(120);
+      expect(creditQuerySpy.mock.calls.find(([sql]) => sql.includes('SELECT available_credits FROM buyer_accounts'))[2])
+        .toEqual(expect.objectContaining({
+          d1: true,
+          d1Text: expect.stringContaining("json_extract(raw, '$.creditBalance')"),
+        }));
+    });
+
+    test('logs a non-blocking current-credit lookup failure with task and account context', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('FROM internal_tasks t')) return { rows: [{
+          id: 'task-credit-read-failure',
+          credit_account_id: 'vendor-credit-read-failure',
+          credit_account_type: 'vendor',
+          attachments: '[]',
+          raw: '{}',
+        }] };
+        if (sql.includes('FROM internal_task_activities')) return { rows: [] };
+        if (sql.includes('SELECT credits FROM vendors')) throw new Error('D1 credit lookup failed');
+        return { rows: [] };
+      });
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      try {
+        const task = await queries.getInternalTaskById('task-credit-read-failure');
+
+        expect(task).toBeDefined();
+        expect(task.current_account_credits).toBeNull();
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Could not enrich internal task'), expect.objectContaining({
+          taskId: 'task-credit-read-failure',
+          accountId: 'vendor-credit-read-failure',
+        }), 'INTERNAL_TASK_CREDIT_BALANCE');
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    test.each([
+      {
+        name: 'buyer credit addition',
+        accountType: 'BUYER',
+        accountId: 'buyer-d1',
+        taskType: 'Add Credits',
+        creditQuantity: 20,
+        startingBalance: 50,
+        balance: 70,
+        accountTable: 'buyer_accounts',
+        aliasPath: "'$.available_credits'",
+        accountUpdates: { creditBalance: 70, available_credits: 70 },
+      },
+      {
+        name: 'buyer credit deduction',
+        accountType: 'BUYER',
+        accountId: 'buyer-d1-deduction',
+        taskType: 'Delete Credits',
+        creditQuantity: 5,
+        startingBalance: 10,
+        balance: 5,
+        accountTable: 'buyer_accounts',
+        aliasPath: "'$.available_credits'",
+        accountUpdates: { creditBalance: 5, available_credits: 5 },
+      },
+      {
+        name: 'vendor credit deduction',
+        accountType: 'VENDOR',
+        accountId: 'vendor-d1',
+        taskType: 'Delete Credits',
+        creditQuantity: 5,
+        startingBalance: 15,
+        balance: 10,
+        accountTable: 'vendors',
+        aliasPath: "'$.credits'",
+        accountUpdates: { freeQuotationCredits: 10, freeRfqDownloadCredits: 10, credits: 10 },
+      },
+      {
+        name: 'vendor credit addition',
+        accountType: 'VENDOR',
+        accountId: 'vendor-d1-addition',
+        taskType: 'Add Credits',
+        creditQuantity: 5,
+        startingBalance: 15,
+        balance: 20,
+        accountTable: 'vendors',
+        aliasPath: "'$.credits'",
+        accountUpdates: { freeQuotationCredits: 20, freeRfqDownloadCredits: 20, credits: 20 },
+      },
+    ])('approves D1 $name as one atomic batch', async (scenario) => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const batchRows = [[{ id: 'task-d1' }], [{ id: scenario.accountId }], [{ id: 'ledger-d1' }], [], [{ id: 'task-d1' }], []];
+      const { db, statements } = createD1Binding(batchRows);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      const taskReads = { count: 0 };
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('FROM internal_tasks t')) {
+          taskReads.count += 1;
+          return {
+            rows: [{
+              id: 'task-d1',
+              task_number: 'TASK-D1',
+              task_category: 'CREDIT_MANAGEMENT',
+              task_type: scenario.taskType,
+              status: taskReads.count > 1 ? 'Completed' : 'Pending Approval',
+              approval_status: taskReads.count > 1 ? 'APPROVED' : 'PENDING',
+              credit_account_type: scenario.accountType,
+              credit_account_id: scenario.accountId,
+              credit_quantity: scenario.creditQuantity,
+              attachments: '[]',
+              raw: '{}',
+            }],
+          };
+        }
+        if (sql.includes('FROM internal_task_activities')) return { rows: [] };
+        if (sql.includes('FROM buyer_accounts')) return { rows: [{ available_credits: taskReads.count > 1 ? scenario.balance : scenario.startingBalance }] };
+        if (sql.includes('FROM vendors')) return { rows: [{ credits: taskReads.count > 1 ? scenario.balance : scenario.startingBalance }] };
+        return { rows: [] };
+      });
+
+      const storeService = require('../src/services/storeService');
+      const updateAccount = scenario.accountType === 'BUYER'
+        ? jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({ id: scenario.accountId })
+        : jest.spyOn(storeService, 'updateVendor').mockReturnValue({ id: scenario.accountId });
+
+      try {
+        const result = await queries.approveCreditTask('task-d1', { id: 'admin-d1', name: 'D1 Admin' }, 'Verified');
+        expect(result.status).toBe('Completed');
+        expect(db.batch).toHaveBeenCalledTimes(1);
+        expect(statements).toHaveLength(6);
+        expect(statements[0].text).toContain('UPDATE internal_tasks');
+        expect(statements[1].text).toContain(`UPDATE ${scenario.accountTable}`);
+        expect(statements[1].text).toContain(scenario.aliasPath);
+        expect(statements[2].text).toContain('INSERT INTO');
+        expect(statements[2].text).toContain('idempotency_key');
+        expect(statements[4].text).toContain("approval_status = 'APPROVED'");
+        expect(updateAccount).toHaveBeenCalledWith(scenario.accountId, scenario.accountUpdates, { persist: false });
+      } finally {
+        updateAccount.mockRestore();
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test.each([
+      { name: 'unsupported account type', accountType: 'UNKNOWN', accountId: 'unknown-account', message: 'Unsupported credit account type' },
+      { name: 'missing account id', accountType: 'BUYER', accountId: null, message: 'Credit account is missing' },
+    ])('rejects D1 approval for $name before batching', async (scenario) => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db } = createD1Binding([]);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('FROM internal_tasks t')) return { rows: [{
+          id: 'task-invalid-credit-account', task_number: 'TASK-INVALID', task_type: 'Add Credits',
+          status: 'Pending Approval', credit_account_type: scenario.accountType, credit_account_id: scenario.accountId,
+          credit_quantity: 1, attachments: '[]', raw: '{}',
+        }] };
+        if (sql.includes('FROM internal_task_activities')) return { rows: [] };
+        if (sql.includes('FROM buyer_accounts')) return { rows: [{ available_credits: 1 }] };
+        return { rows: [] };
+      });
+
+      try {
+        await expect(queries.approveCreditTask('task-invalid-credit-account')).rejects.toThrow(scenario.message);
+        expect(db.batch).not.toHaveBeenCalled();
+      } finally {
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test.each([
+      { name: 'still pending', approved: false, shouldReject: true },
+      { name: 'already completed', approved: true, shouldReject: false },
+    ])('handles a D1 task claim race when the task is $name', async (scenario) => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const { db } = createD1Binding([[], [], [], [], [], []]);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      let taskReads = 0;
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('FROM internal_tasks t')) {
+          taskReads += 1;
+          return { rows: [{
+            id: 'task-claim-race', task_number: 'TASK-RACE', task_type: 'Add Credits',
+            status: scenario.approved && taskReads > 1 ? 'Completed' : 'Pending Approval',
+            approval_status: scenario.approved && taskReads > 1 ? 'APPROVED' : 'PENDING',
+            credit_account_type: 'BUYER', credit_account_id: 'buyer-claim-race',
+            credit_quantity: 1, attachments: '[]', raw: '{}',
+          }] };
+        }
+        if (sql.includes('FROM internal_task_activities')) return { rows: [] };
+        if (sql.includes('FROM buyer_accounts')) return { rows: [{ available_credits: 1 }] };
+        return { rows: [] };
+      });
+
+      try {
+        if (scenario.shouldReject) {
+          await expect(queries.approveCreditTask('task-claim-race')).rejects.toThrow('Credit task could not be claimed');
+        } else {
+          await expect(queries.approveCreditTask('task-claim-race')).resolves.toMatchObject({ status: 'Completed' });
+        }
+        expect(db.batch).toHaveBeenCalledTimes(1);
+      } finally {
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
+    });
+
+    test('logs and rethrows an atomic D1 approval batch failure', async () => {
+      const originalD1Env = globalThis.__CF_ENV__;
+      const failure = new Error('D1 batch unavailable');
+      const { db } = createD1Binding([]);
+      db.batch.mockRejectedValue(failure);
+      globalThis.__CF_ENV__ = { DB: db };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('FROM internal_tasks t')) return { rows: [{
+          id: 'task-fail', task_number: 'TASK-FAIL', task_type: 'Add Credits', status: 'Pending Approval',
+          credit_account_type: 'BUYER', credit_account_id: 'buyer-fail', credit_quantity: 2, attachments: '[]', raw: '{}',
+        }] };
+        if (sql.includes('FROM internal_task_activities')) return { rows: [] };
+        if (sql.includes('FROM buyer_accounts')) return { rows: [{ available_credits: 3 }] };
+        return { rows: [] };
+      });
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      try {
+        await expect(queries.approveCreditTask('task-fail')).rejects.toBe(failure);
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Atomic D1 credit approval batch failed'), expect.objectContaining({
+          taskId: 'task-fail',
+          queryCount: 6,
+        }), 'INTERNAL_TASK_CREDIT_APPROVAL');
+      } finally {
+        errorSpy.mockRestore();
+        if (originalD1Env === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalD1Env;
+      }
     });
 
     test('updateInternalTask logs activities for demo reschedule, call outcome, onboarding stage, proposal status, and new attachment', async () => {

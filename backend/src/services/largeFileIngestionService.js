@@ -118,7 +118,11 @@ async function resolveOrganizationId(sessionUser, sessionId = null) {
           return lookup.profile.organizationId;
         }
       } catch (e) {
-        // continue
+        logger.warn('Could not resolve ingestion organization from the subject identity; checking alternate identity claims', {
+          error: e,
+          lookupSource: 'subject',
+          hasSessionId: Boolean(sessionId),
+        }, LOG_CATEGORY);
       }
     }
     if (sessionUser.userId || sessionUser.id) {
@@ -128,7 +132,11 @@ async function resolveOrganizationId(sessionUser, sessionId = null) {
           return lookup.profile.organizationId;
         }
       } catch (e) {
-        // continue
+        logger.warn('Could not resolve ingestion organization from user identity claims; checking the session record', {
+          error: e,
+          lookupSource: 'user_id',
+          hasSessionId: Boolean(sessionId),
+        }, LOG_CATEGORY);
       }
     }
   }
@@ -140,7 +148,11 @@ async function resolveOrganizationId(sessionUser, sessionId = null) {
         return sess.organizationId;
       }
     } catch (e) {
-      // continue
+      logger.error('Could not resolve ingestion organization from the session record', {
+        error: e,
+        lookupSource: 'session_id',
+        hasSessionId: true,
+      }, LOG_CATEGORY);
     }
   }
 

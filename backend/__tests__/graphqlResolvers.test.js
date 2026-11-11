@@ -15,11 +15,14 @@ function contextFor(role) {
 // than failing the test. Every such assertion below therefore uses
 // `.rejects.toThrow()`.
 //
-// The unauthenticated read resolvers (vendors, vendor, buyerAccounts,
-// activeBuyerAccount, evaluations, auditLogs, catalogue, aiFeed, systemConfig)
-// are deliberately still synchronous and are called directly.
+  // Each resolver read carries the same role and ownership rules as the REST
+  // endpoints; contextFor() provides a verified session for direct unit tests.
 describe('GraphQL Resolvers Direct Unit Tests', () => {
   let seededRfq;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   beforeEach(() => {
     // A real buyer account for TEST_USERS.buyer.email, so requireRfqReadScope's
@@ -67,11 +70,41 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
   test('rfq resolver searches by id and rfqNumber or returns null', async () => {
     const context = contextFor('buyer');
+    const publicRFQ = { ...seededRfq };
+    delete publicRFQ.vendorInvitationTargets;
 
-    expect(await rootResolvers.rfq({ id: seededRfq.id }, context)).toEqual(seededRfq);
-    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, context)).toEqual(seededRfq);
+    expect(await rootResolvers.rfq({ id: seededRfq.id }, context)).toEqual(publicRFQ);
+    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, context)).toEqual(publicRFQ);
     expect(await rootResolvers.rfq({ id: 'non-existent-id' }, context)).toBeNull();
     expect(await rootResolvers.rfq({}, context)).toBeNull();
+  });
+
+  test('resolver defaults handle omitted arguments and buyers without an account', async () => {
+    const orphanBuyer = { req: { user: { role: 'buyer', email: 'orphan@buyer.test', sub: 'orphan-buyer-id' } } };
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+    jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
+    jest.spyOn(storeService, 'getVendors').mockResolvedValue([
+      { id: 'orphan-owned-vendor', email: 'private@vendor.test', buyerId: 'orphan-buyer-id' },
+    ]);
+    jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue({
+      id: 'orphan-owned-vendor',
+      email: 'private@vendor.test',
+      buyerId: 'orphan-buyer-id',
+    });
+
+    await expect(rootResolvers.rfqs(undefined, orphanBuyer)).resolves.toEqual([]);
+    await expect(rootResolvers.rfq(undefined, orphanBuyer)).resolves.toBeNull();
+    await expect(rootResolvers.vendors(undefined, orphanBuyer)).resolves.toEqual([
+      expect.objectContaining({ email: 'private@vendor.test' }),
+    ]);
+    await expect(rootResolvers.vendor(undefined, orphanBuyer)).resolves.toBeNull();
+    await expect(rootResolvers.vendor({ id: 'orphan-owned-vendor' }, orphanBuyer)).resolves.toEqual(
+      expect.objectContaining({ email: 'private@vendor.test' })
+    );
+    await expect(rootResolvers.buyerAccounts(undefined, orphanBuyer)).resolves.toEqual([]);
+    await expect(rootResolvers.evaluations(undefined, contextFor('buyer'))).resolves.toBeDefined();
+    await expect(rootResolvers.auditLogs(undefined, contextFor('admin'))).resolves.toBeDefined();
+    await expect(rootResolvers.aiFeed(undefined, contextFor('admin'))).resolves.toBeDefined();
   });
 
   // Category managers/admins are deliberately unrestricted (they need the full
@@ -167,8 +200,14 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       majorCategory: 'Engineering Spares - Electrical',
     });
 
-    expect(await rootResolvers.vendor({ id: created.id })).toEqual(created);
-    expect(await rootResolvers.vendor({ email: created.email })).toEqual(created);
+    expect(await rootResolvers.vendor({ id: created.id })).toEqual(expect.objectContaining({
+      id: created.id,
+      email: 'lXXXX@resolver-vendor.test',
+    }));
+    expect(await rootResolvers.vendor({ email: created.email })).toEqual(expect.objectContaining({
+      id: created.id,
+      email: 'lXXXX@resolver-vendor.test',
+    }));
     expect(await rootResolvers.vendor({ id: 'non-existent-vendor' })).toBeNull();
     expect(await rootResolvers.vendor({ email: 'unknown@email.com' })).toBeNull();
     expect(await rootResolvers.vendor({})).toBeNull();
@@ -201,7 +240,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       expect(pageSpy).toHaveBeenCalledWith(
         expect.objectContaining({ limit: 10, offset: 0, search: 'db', category: 'IT' })
       );
-      expect(result).toEqual([dbVendor]);
+      expect(result).toEqual([expect.objectContaining({ id: dbVendor.id, email: 'dXXXX@example.com' })]);
 
       // The `source` filter is applied client-side after the DB page load.
       const filteredOut = await rootResolvers.vendors({ source: 'buyer_manual' });
@@ -210,13 +249,14 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
     test('vendor resolver by email uses the bounded single-row DB lookup', async () => {
       const emailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB');
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
 
       // Public vendor (no buyerId/buyerAccountId) is visible to anyone.
       emailSpy.mockResolvedValueOnce({ id: 'v-db-3', email: 'public@example.com' });
-      expect(await rootResolvers.vendor({ email: 'public@example.com' })).toEqual({
+      expect(await rootResolvers.vendor({ email: 'public@example.com' })).toEqual(expect.objectContaining({
         id: 'v-db-3',
-        email: 'public@example.com',
-      });
+        email: 'pXXXX@example.com',
+      }));
 
       // A buyer-scoped vendor is only returned to a matching buyerId.
       emailSpy.mockResolvedValueOnce({ id: 'v-db-2', email: 'scoped@example.com', buyerId: 'buyer-9' });
@@ -231,27 +271,62 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
       emailSpy.mockResolvedValueOnce(null);
       expect(await rootResolvers.vendor({ email: 'not-found@example.com' })).toBeNull();
+
+      const privateVendor = { id: 'v-private-admin', email: 'private@example.com', buyerId: 'buyer-owner' };
+      emailSpy.mockResolvedValueOnce(privateVendor);
+      expect(await rootResolvers.vendor({ email: 'private@example.com' }, { req: { user: { role: 'admin' } } }))
+        .toEqual(privateVendor);
+
+      emailSpy.mockResolvedValueOnce(privateVendor);
+      const vendorContext = { req: { user: { role: 'vendor', email: 'different@vendor.test' } } };
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(privateVendor);
+      expect(await rootResolvers.vendor({ id: privateVendor.id }, vendorContext).then((value) => value.email))
+        .toBe('pXXXX@example.com');
     });
   });
 
   // The seeded companies are gone, so these start empty. An account created at
   // runtime is what they report now.
-  test('buyerAccounts and activeBuyerAccount resolvers read the runtime store', () => {
-    const beforeCount = rootResolvers.buyerAccounts().length;
+  test('buyerAccounts and activeBuyerAccount resolvers scope buyers and retain management access', async () => {
+    const adminContext = contextFor('admin');
+    const beforeCount = (await rootResolvers.buyerAccounts({}, adminContext)).length;
     const created = storeService.addBuyerAccount({
       organizationName: 'Runtime Buyer Co',
       corporateEmail: 'runtime@buyer.test',
     });
     storeService.alignActiveBuyerAccount(created.id);
 
-    expect(rootResolvers.buyerAccounts().length).toBe(beforeCount + 1);
-    expect(rootResolvers.buyerAccounts({ limit: 1 })).toHaveLength(1);
-    expect(rootResolvers.activeBuyerAccount().id).toBe(created.id);
+    expect((await rootResolvers.buyerAccounts({}, adminContext)).length).toBe(beforeCount + 1);
+    expect(await rootResolvers.buyerAccounts({ limit: 1 }, adminContext)).toHaveLength(1);
+    expect((await rootResolvers.activeBuyerAccount({}, adminContext)).id).toBe(created.id);
+
+    const buyerAccounts = await rootResolvers.buyerAccounts({}, contextFor('buyer'));
+    expect(buyerAccounts).toHaveLength(1);
+    expect(buyerAccounts[0].corporateEmail).toBe(TEST_USERS.buyer.email);
+    await expect(rootResolvers.buyerAccounts({}, contextFor('vendor'))).rejects.toThrow();
 
     storeService.deleteBuyerAccount(created.id);
   });
 
-  test('evaluations resolver filters by vendorName or returns all', () => {
+  test('buyerAccounts rejects anonymous access and scopes buyers to their own account', async () => {
+    await expect(rootResolvers.buyerAccounts({}, {})).rejects.toThrow();
+    const ownAccount = storeService.addBuyerAccount({
+      organizationName: 'Private Buyer Account',
+      corporateEmail: TEST_USERS.buyer.email,
+    });
+    const otherAccount = storeService.addBuyerAccount({
+      organizationName: 'Other Buyer Account',
+      corporateEmail: 'other-buyer@buyer.test',
+    });
+
+    const accounts = await rootResolvers.buyerAccounts({ buyerId: otherAccount.id }, contextFor('buyer'));
+    expect(accounts).toEqual([expect.objectContaining({ id: ownAccount.id })]);
+
+    storeService.deleteBuyerAccount(ownAccount.id);
+    storeService.deleteBuyerAccount(otherAccount.id);
+  });
+
+  test('evaluations resolver filters by vendorName or returns all for a signed-in buyer', async () => {
     // The single fabricated 360° audit that used to be seeded is gone, so a real
     // evaluation is recorded before the filters are asserted.
     storeService.createEvaluation({
@@ -259,19 +334,20 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       category: 'Engineering Spares - Mechanical',
     });
 
-    const all = rootResolvers.evaluations();
+    const context = contextFor('buyer');
+    const all = await rootResolvers.evaluations({}, context);
     expect(all.length).toBeGreaterThan(0);
 
-    const filtered = rootResolvers.evaluations({ vendorName: 'Resolver Evaluation' });
+    const filtered = await rootResolvers.evaluations({ vendorName: 'Resolver Evaluation' }, context);
     expect(filtered.length).toBeGreaterThan(0);
 
-    const limited = rootResolvers.evaluations({ limit: 1 });
+    const limited = await rootResolvers.evaluations({ limit: 1 }, context);
     expect(limited.length).toBeLessThanOrEqual(1);
 
-    expect(rootResolvers.evaluations({ vendorName: 'no-such-vendor' })).toEqual([]);
+    expect(await rootResolvers.evaluations({ vendorName: 'no-such-vendor' }, context)).toEqual([]);
   });
 
-  test('auditLogs resolver filters by search action or userEmail', () => {
+  test('auditLogs resolver filters by search action or userEmail for admins only', async () => {
     // The audit trail starts empty now that the seeded narrative is gone, so a
     // real entry is recorded before asserting the filters.
     storeService.addAuditLog({
@@ -279,14 +355,16 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       action: 'Registered a resolver audit fixture',
     });
 
-    const all = rootResolvers.auditLogs();
+    const context = contextFor('admin');
+    const all = await rootResolvers.auditLogs({}, context);
     expect(all.length).toBeGreaterThan(0);
 
-    const searchAction = rootResolvers.auditLogs({ search: 'Registered' });
+    const searchAction = await rootResolvers.auditLogs({ search: 'Registered' }, context);
     expect(searchAction.length).toBeGreaterThan(0);
 
-    const searchEmail = rootResolvers.auditLogs({ search: '@' });
+    const searchEmail = await rootResolvers.auditLogs({ search: '@' }, context);
     expect(searchEmail.length).toBeGreaterThan(0);
+    await expect(rootResolvers.auditLogs({}, contextFor('buyer'))).rejects.toThrow();
   });
 
   test('catalogue resolver filters by category and search (name/sku)', () => {
@@ -320,27 +398,28 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
   });
 
   test('aiFeed, systemConfig, dbHealth, optimizationMetrics, diagnoseLogErrors, auditPerformance resolvers execute', async () => {
-    const feed = await rootResolvers.aiFeed({ limit: 5 });
+    const context = contextFor('admin');
+    const feed = await rootResolvers.aiFeed({ limit: 5 }, context);
     expect(feed.length).toBeLessThanOrEqual(5);
 
-    const config = rootResolvers.systemConfig();
+    const config = await rootResolvers.systemConfig({}, context);
     expect(config).toBeDefined();
 
-    const health = await rootResolvers.dbHealth();
+    const health = await rootResolvers.dbHealth({}, context);
     expect(health).toBeDefined();
     // One connection, so one health answer covering accounts and domain records.
     expect(health).toHaveProperty('userCount');
     expect(health).toHaveProperty('vendorCount');
     expect(health).toHaveProperty('rfqCount');
 
-    const metrics = rootResolvers.optimizationMetrics();
+    const metrics = await rootResolvers.optimizationMetrics({}, context);
     expect(metrics).toBeDefined();
     expect(metrics.cache).toBeDefined();
 
-    const diag = rootResolvers.diagnoseLogErrors();
+    const diag = await rootResolvers.diagnoseLogErrors({}, context);
     expect(Array.isArray(diag)).toBe(true);
 
-    const perf = rootResolvers.auditPerformance();
+    const perf = await rootResolvers.auditPerformance({}, context);
     expect(perf.healthScore).toBeGreaterThanOrEqual(0);
   });
 
@@ -358,6 +437,12 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     // resolved server-side rather than taken from the payload.
     expect(createdRFQ.rfqNumber).toMatch(/^RFQ\d{12}$/);
     expect(createdRFQ.buyerAccountId).toBe(seededRfq.buyerAccountId);
+
+    const extractedEntitiesRFQ = await rootResolvers.createRFQ(
+      { input: { title: 'Resolver Extracted Entities RFQ', extractedEntities: [{ name: 'Valve' }] } },
+      buyerCtx
+    );
+    expect(extractedEntitiesRFQ.extractedEntities).toEqual([{ name: 'Valve' }]);
 
     const updatedRFQ = await rootResolvers.updateRFQ(
       { id: createdRFQ.id, input: { status: 'awarded' } },
@@ -386,7 +471,14 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     );
     expect(createdBuyer.organizationName).toBe('Resolver Org');
 
-    await expect(rootResolvers.clearQueryCache(undefined, buyerCtx)).resolves.toBe(true);
+    const adminCreatedVendor = await rootResolvers.createVendor(
+      { input: { name: 'Admin Resolver Vendor', email: 'admin-resolver@vendor.test', majorCategory: 'Mechanical' } },
+      adminCtx
+    );
+    expect(adminCreatedVendor.name).toBe('Admin Resolver Vendor');
+
+    await expect(rootResolvers.clearQueryCache(undefined, buyerCtx)).rejects.toThrow();
+    await expect(rootResolvers.clearQueryCache(undefined, adminCtx)).resolves.toBe(true);
 
     // purgeLogs/autoResolveLogErrors/optimizePerformance are admin-only.
     const purgeDefault = await rootResolvers.purgeLogs(undefined, adminCtx);
@@ -469,7 +561,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       expect(rfqNotAllowed).toBeNull();
     });
 
-    test('vendors and vendor queries handle buyer role and explicit buyerId args', async () => {
+    test('vendors and vendor queries do not trust explicit buyerId args', async () => {
       const buyerCtx = { req: { user: { role: 'buyer', email: TEST_USERS.buyer.email } } };
 
       // vendors with buyer context
@@ -494,9 +586,10 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       // vendor by id with explicit args.buyerId
       const vendorExplicit = await rootResolvers.vendor({ id: 'v-b-1', buyerId: 'b-explicit' }, {});
       expect(vendorExplicit.id).toBe('v-b-1');
+      expect(vendorExplicit.email).not.toBe('v1@test.com');
     });
 
-    test('vendor query by email with database storage and buyerId ownership filtering', async () => {
+    test('vendor query by email ignores caller-supplied buyerId and enforces session ownership', async () => {
       jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
 
       const scopedVendor = {
@@ -505,18 +598,43 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
         buyerId: 'b-owner-1',
       };
       jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(scopedVendor);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'b-owner-1' });
 
-      // Matches buyerId
-      const foundMatch = await rootResolvers.vendor({ email: 'scoped@test.com', buyerId: 'b-owner-1' }, {});
+      const buyerContext = { req: { user: { role: 'buyer', email: TEST_USERS.buyer.email } } };
+      const foundMatch = await rootResolvers.vendor({ email: 'scoped@test.com', buyerId: 'b-other' }, buyerContext);
       expect(foundMatch).toEqual(scopedVendor);
 
-      // Mismatched buyerId returns null
-      const foundMismatch = await rootResolvers.vendor({ email: 'scoped@test.com', buyerId: 'b-other' }, {});
-      expect(foundMismatch).toBeNull();
+      const anonymous = await rootResolvers.vendor({ email: 'scoped@test.com', buyerId: 'b-owner-1' }, {});
+      expect(anonymous).toBeNull();
+    });
 
-      // No buyerId provided on a buyer-scoped vendor returns null
-      const foundNoBuyer = await rootResolvers.vendor({ email: 'scoped@test.com' }, {});
-      expect(foundNoBuyer).toBeNull();
+    test('vendor mutations enforce buyer ownership, vendor self ownership, and management access', async () => {
+      const privateVendor = { id: 'v-private-mutation', email: 'self@vendor.test', buyerId: 'owner-account' };
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(privateVendor);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'owner-account' });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: privateVendor.id });
+
+      const buyerOwner = { req: { user: { role: 'buyer', email: 'owner@buyer.test' } } };
+      await expect(rootResolvers.updateVendor({ id: privateVendor.id, input: {} }, buyerOwner))
+        .resolves.toEqual({ id: privateVendor.id });
+
+      storeService.getBuyerAccountByEmail.mockResolvedValueOnce({ id: 'another-account' });
+      const buyerOther = { req: { user: { role: 'buyer', email: 'other@buyer.test' } } };
+      await expect(rootResolvers.updateVendor({ id: privateVendor.id, input: {} }, buyerOther)).rejects.toThrow();
+
+      const vendorOwner = { req: { user: { role: 'vendor', email: 'self@vendor.test' } } };
+      await expect(rootResolvers.updateVendor({ id: privateVendor.id, input: {} }, vendorOwner))
+        .resolves.toEqual({ id: privateVendor.id });
+      const vendorOther = { req: { user: { role: 'vendor', email: 'other@vendor.test' } } };
+      await expect(rootResolvers.updateVendor({ id: privateVendor.id, input: {} }, vendorOther)).rejects.toThrow();
+
+      storeService.getVendorByIdWithDBFallback.mockResolvedValueOnce(null);
+      storeService.updateVendorDurably.mockResolvedValueOnce(null);
+      await expect(rootResolvers.updateVendor({ id: 'missing-vendor', input: {} }, contextFor('admin')))
+        .resolves.toBeNull();
+
+      await expect(rootResolvers.updateVendor({ id: privateVendor.id, input: {} }, contextFor('admin')))
+        .resolves.toEqual({ id: privateVendor.id });
     });
 
     test('aiFeed query filters items for authenticated buyer role', async () => {

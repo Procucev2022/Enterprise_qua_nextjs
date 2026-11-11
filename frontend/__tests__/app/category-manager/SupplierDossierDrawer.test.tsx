@@ -1,5 +1,6 @@
 jest.mock('@/lib/accountDocumentsClient', () => ({
   addSellerQuoteCredits: jest.fn().mockResolvedValue({ success: true, message: 'Added credits' }),
+  createCreditApprovalIdempotencyKey: jest.fn(() => '00000000-0000-4000-8000-000000000002'),
   requestSellerQuoteCreditApproval: jest.fn().mockResolvedValue({ success: true, message: 'Request submitted' }),
   fetchAccountDocuments: jest.fn().mockResolvedValue([]),
   uploadAccountDocument: jest.fn().mockResolvedValue({ success: true }),
@@ -1594,6 +1595,26 @@ describe('SupplierDossierDrawer', () => {
     unmountQuotes();
   });
 
+test('reuses seller credit idempotency key when retrying unchanged request details', async () => {
+    const { requestSellerQuoteCreditApproval } = require('@/lib/accountDocumentsClient');
+    (requestSellerQuoteCreditApproval as jest.Mock)
+      .mockResolvedValueOnce({ success: false, error: 'Temporary persistence failure' })
+      .mockResolvedValueOnce({ success: true, message: 'Request submitted' });
+    render(
+      <SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />
+    );
+
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    const submitButton = screen.getByRole('button', { name: 'Submit for Approval' });
+    fireEvent.click(submitButton);
+    await waitFor(() => expect(requestSellerQuoteCreditApproval).toHaveBeenCalledTimes(1));
+    const firstRequestKey = (requestSellerQuoteCreditApproval as jest.Mock).mock.calls[0][1].idempotencyKey;
+
+    fireEvent.click(submitButton);
+    await waitFor(() => expect(requestSellerQuoteCreditApproval).toHaveBeenCalledTimes(2));
+    expect((requestSellerQuoteCreditApproval as jest.Mock).mock.calls[1][1].idempotencyKey).toBe(firstRequestKey);
+  });
+
 test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal works', async () => {
     const onTabChangeMock = jest.fn();
     const { unmount } = render(
@@ -1605,12 +1626,12 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
     expect(screen.getByText(/Total Documents:/i)).toBeInTheDocument();
-    
+
     // Switch tabs to trigger onTabChange
     const profileTabBtn = screen.getByRole('button', { name: /Profile/i });
     fireEvent.click(profileTabBtn);
     expect(onTabChangeMock).toHaveBeenCalledWith('profile');
-    
+
     const docsTabBtn = screen.getByRole('button', { name: /Documents/i });
     fireEvent.click(docsTabBtn);
     expect(onTabChangeMock).toHaveBeenCalledWith('documents');
@@ -1656,6 +1677,7 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
         reason: 'High priority customer RFP support',
         approverName: expect.any(String),
         initiatorName: expect.any(String),
+        idempotencyKey: expect.any(String),
       });
     });
     unmount2();

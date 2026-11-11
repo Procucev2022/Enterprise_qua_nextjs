@@ -9,17 +9,23 @@ import {
   getPaymentDuesExportUrl,
 } from '@/lib/paymentDuesClient';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 
 describe('paymentDuesClient', () => {
   const originalFetch = global.fetch;
+  const originalRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    logger.isRemoteSyncEnabled = false;
+    jest.spyOn(logger, 'error');
     jest.spyOn(authClient, 'getToken').mockReturnValue('mock-jwt-token');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    logger.isRemoteSyncEnabled = originalRemoteSyncEnabled;
+    jest.restoreAllMocks();
   });
 
   describe('fetchPaymentDuesSummary', () => {
@@ -59,6 +65,11 @@ describe('paymentDuesClient', () => {
 
       const res = await fetchPaymentDuesSummary();
       expect(res.totalLowCreditAccounts).toBe(0);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Payment dues summary fetch failed',
+        expect.objectContaining({ status: 500, errorName: 'HttpError', errorMessage: 'HTTP 500' }),
+        'PAYMENT_DUES_CLIENT'
+      );
     });
   });
 
@@ -297,6 +308,78 @@ describe('paymentDuesClient', () => {
       const history = await fetchPaymentDuesHistory('acc-1');
       expect(history).toEqual([]);
     });
+  });
+
+  it('logs failures across fallback and notification operations without logging account payloads', async () => {
+    global.fetch = jest.fn()
+      .mockRejectedValueOnce(new Error('Summary transport unavailable'))
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'Service unavailable' }),
+      })
+      .mockRejectedValueOnce('Mail transport rejected')
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Message unavailable' }) })
+      .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({ success: false, error: 'WhatsApp unavailable' }) })
+      .mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ success: false, error: 'Invalid status' }) })
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ error: 'History unavailable' }) });
+
+    await fetchPaymentDuesSummary();
+    await fetchPaymentDues();
+    await sendPaymentDuesEmail({
+      accountId: 'private-account-id',
+      accountType: 'buyer',
+      recipientEmail: 'private@example.com',
+      subject: 'Private subject',
+      message: 'Private message',
+    });
+    await sendPaymentDuesMessage({ accountId: 'private-account-id', accountType: 'buyer', message: 'Private message' });
+    await sendPaymentDuesWhatsApp({ accountId: 'private-account-id', accountType: 'seller', phone: 'private-phone', message: 'Private message' });
+    await updatePaymentDuesAcknowledgement({ accountId: 'private-account-id', accountType: 'buyer', acknowledgementStatus: 'Acknowledged' });
+    await fetchPaymentDuesHistory('private-account-id');
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues summary fetch failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Summary transport unavailable' }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues account-list fetch failed',
+      expect.objectContaining({ status: 503, responseErrorPresent: true }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues email notification failed',
+      expect.objectContaining({ method: 'POST', errorName: 'UnknownError' }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues in-app message notification failed',
+      expect.objectContaining({ status: 200, responseErrorPresent: true, errorName: 'ApiResponseError' }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues WhatsApp notification failed',
+      expect.objectContaining({ status: 502, responseErrorPresent: true }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues acknowledgement update failed',
+      expect.objectContaining({ status: 400, responseErrorPresent: true }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues communication history fetch failed',
+      expect.objectContaining({ status: 404, responseErrorPresent: false }),
+      'PAYMENT_DUES_CLIENT'
+    );
+
+    for (const [, metadata] of jest.mocked(logger.error).mock.calls) {
+      expect(metadata).not.toHaveProperty('accountId');
+      expect(metadata).not.toHaveProperty('recipientEmail');
+      expect(metadata).not.toHaveProperty('phone');
+      expect(metadata).not.toHaveProperty('message');
+    }
   });
 
   describe('getPaymentDuesExportUrl', () => {

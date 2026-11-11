@@ -4,6 +4,7 @@ import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/ve
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
+import { logger } from '@/lib/logger';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -41,6 +42,13 @@ const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
 const mockFetchBuyerProfile = buyerProfileClient.fetchBuyerProfile as jest.Mock;
 
 describe('app/buyer/vendor-summary.tsx', () => {
+  const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
+
+  afterAll(() => {
+    logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
+    logger.clearLogs();
+  });
+
   const mockOnViewEvaluation = jest.fn();
   const mockOnNavigateToWizard = jest.fn();
   const mockShowToast = jest.fn();
@@ -183,6 +191,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    logger.isRemoteSyncEnabled = false;
+    logger.clearLogs();
     (useApp as jest.Mock).mockReturnValue({
       vendorEvaluations: mockEvaluationRecords,
       currentMode: 'mode_3',
@@ -1826,6 +1836,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
         expect.stringContaining('Failed to delete selected vendors'),
         'warning'
       );
+      expect(logger.buffer).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          level: 'ERROR',
+          category: 'VENDOR_DIRECTORY',
+          message: 'Failed to bulk delete vendors',
+          metadata: expect.objectContaining({ error: expect.any(Error) }),
+        }),
+      ]));
     });
   });
 

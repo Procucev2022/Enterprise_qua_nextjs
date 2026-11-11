@@ -1,6 +1,7 @@
 const { logger } = require('../services/loggerService');
 const { logErrorResolver } = require('../services/logErrorResolver');
 const { performanceOptimizer } = require('../services/performanceOptimizer');
+const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 
 function getLogs(req, res, next) {
   try {
@@ -25,12 +26,24 @@ function getLogs(req, res, next) {
 function createLog(req, res, next) {
   try {
     const body = req.body || {};
-    if (!body.message) {
-      return res.status(400).json({ success: false, error: 'message is required for log entry.' });
+    const validation = validatePayload(VALIDATION_SCHEMAS.clientLogEntry, {
+      ...body,
+      ...(body.level ? { level: String(body.level).toUpperCase() } : {}),
+    });
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'The log entry contains invalid fields.',
+        details: validation.errors,
+      });
     }
 
-    const level = (body.level || 'INFO').toUpperCase();
-    const logEntry = logger.log(level, body.message, body.metadata || {}, body.category || 'FRONTEND');
+    const { level, message, category, metadata, stackTrace } = validation.sanitizedData;
+    const logMetadata = {
+      ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+      ...(stackTrace ? { stackTrace } : {}),
+    };
+    const logEntry = logger.log(level || 'INFO', message, logMetadata, category || 'FRONTEND');
     res.status(201).json({ success: true, data: logEntry });
   } catch (err) {
     next(err);

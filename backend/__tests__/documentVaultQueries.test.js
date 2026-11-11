@@ -238,18 +238,21 @@ describe('Document Vault Queries', () => {
       const sql = querySpy.mock.calls[0][0];
       expect(sql).toContain('category = $1');
       expect(sql).toContain('is_active = 1');
-      expect(sql).toContain('ILIKE');
+      expect(sql).toContain("LOWER(document_name) LIKE LOWER($2) ESCAPE '!'");
+      expect(querySpy.mock.calls[0][2]).toEqual({ d1: true });
       expect(docs.length).toBe(1);
       expect(docs[0].id).toBe('doc_pg_101');
       expect(docs[0].documentName).toBe('PG Enterprise Pitch');
     });
 
-    test('listDocuments falls back to in-memory store when SQL query throws', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Connection terminated'));
+    test('listDocuments reports configured storage failure instead of serving memory data', async () => {
+      const cause = new Error('Connection terminated');
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(cause);
 
-      const docs = await documentVaultQueries.listDocuments();
-      expect(Array.isArray(docs)).toBe(true);
-      expect(docs.length).toBeGreaterThan(0);
+      await expect(documentVaultQueries.listDocuments()).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+        cause,
+      });
     });
 
     test('getDocumentById fetches from database when found', async () => {
@@ -261,14 +264,17 @@ describe('Document Vault Queries', () => {
       const doc = await documentVaultQueries.getDocumentById('doc_pg_101');
       expect(doc).not.toBeNull();
       expect(doc.id).toBe('doc_pg_101');
+      expect(pool.query).toHaveBeenCalledWith(expect.any(String), ['doc_pg_101'], { d1: true });
     });
 
-    test('getDocumentById falls back to in-memory store when SQL throws', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('SQL timeout'));
+    test('getDocumentById reports configured storage failure instead of serving a sample document', async () => {
+      const cause = new Error('SQL timeout');
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(cause);
 
-      const doc = await documentVaultQueries.getDocumentById('doc_buyer_roi');
-      expect(doc).not.toBeNull();
-      expect(doc.id).toBe('doc_buyer_roi');
+      await expect(documentVaultQueries.getDocumentById('doc_buyer_roi')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+        cause,
+      });
     });
 
     test('createDocument executes SQL insert and returns mapped row', async () => {
@@ -284,20 +290,19 @@ describe('Document Vault Queries', () => {
       });
 
       expect(insertSpy).toHaveBeenCalled();
+      expect(insertSpy.mock.calls[0][2]).toEqual({ d1: true });
       expect(doc.documentName).toBe('PG Enterprise Pitch');
     });
 
-    test('createDocument falls back to in-memory creation when SQL insert throws', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('PG insert failed'));
+    test('createDocument reports configured storage failure instead of claiming a memory-only save', async () => {
+      const cause = new Error('PG insert failed');
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(cause);
 
-      const doc = await documentVaultQueries.createDocument({
+      await expect(documentVaultQueries.createDocument({
         documentName: 'Fallback Created Doc',
         fileName: 'fallback.pdf',
         category: 'templates',
-      });
-
-      expect(doc).toBeDefined();
-      expect(doc.documentName).toBe('Fallback Created Doc');
+      })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE', cause });
     });
 
     test('updateDocument executes SQL update and returns mapped row', async () => {
@@ -315,18 +320,17 @@ describe('Document Vault Queries', () => {
       });
 
       expect(updateSpy).toHaveBeenCalled();
+      expect(updateSpy.mock.calls[0][2]).toEqual({ d1: true });
       expect(doc.documentName).toBe('Renamed Pitch');
     });
 
-    test('updateDocument falls back to in-memory when SQL update throws', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('PG update error'));
+    test('updateDocument reports configured storage failure instead of claiming a memory-only update', async () => {
+      const cause = new Error('PG update error');
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(cause);
 
-      const doc = await documentVaultQueries.updateDocument('doc_buyer_roi', {
+      await expect(documentVaultQueries.updateDocument('doc_buyer_roi', {
         documentName: 'Memory Updated ROI',
-      });
-
-      expect(doc).not.toBeNull();
-      expect(doc.documentName).toBe('Memory Updated ROI');
+      })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE', cause });
     });
 
     test('deleteDocument executes SQL delete and returns true on rowCount > 0', async () => {
@@ -336,14 +340,18 @@ describe('Document Vault Queries', () => {
 
       const res = await documentVaultQueries.deleteDocument('doc_pg_101');
       expect(deleteSpy).toHaveBeenCalled();
+      expect(deleteSpy.mock.calls[0][2]).toEqual({ d1: true });
       expect(res).toBe(true);
     });
 
-    test('deleteDocument falls back to in-memory delete when SQL delete throws', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('PG delete error'));
+    test('deleteDocument reports configured storage failure instead of deleting only in memory', async () => {
+      const cause = new Error('PG delete error');
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(cause);
 
-      const res = await documentVaultQueries.deleteDocument('doc_buyer_roi');
-      expect(res).toBe(true);
+      await expect(documentVaultQueries.deleteDocument('doc_buyer_roi')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+        cause,
+      });
     });
 
     test('getDocumentById returns null when SQL returns 0 rows', async () => {
@@ -397,6 +405,8 @@ describe('Document Vault Queries', () => {
     });
 
     test('createDocument handles fallback defaults and actors', async () => {
+      // This test exercises the explicitly supported no-database mode.
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
       const docWithEmail = await documentVaultQueries.createDocument({}, { email: 'staff@example.com' });
       expect(docWithEmail.uploadedBy).toBe('staff@example.com');
       expect(docWithEmail.documentName).toBe('Untitled Document');

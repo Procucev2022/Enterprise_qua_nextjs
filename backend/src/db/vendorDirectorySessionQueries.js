@@ -8,6 +8,7 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
+const { logger } = require('../services/loggerService');
 const {
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
@@ -17,8 +18,21 @@ const {
 // In-memory fallback map for development/offline/testing without active DB connection
 const memoryDirectorySessions = new Map();
 
-function logWarn(msg, err) {
-  console.warn(`[VDIR_SESSION] ${msg}:`, err ? err.message : '');
+function logWarn(msg, err, metadata = {}) {
+  logger.warn(msg, { ...metadata, error: err }, 'VENDOR_DIRECTORY_SESSION');
+}
+
+function throwIfConfiguredStorageFailed(operation, cause) {
+  if (!pool.hasStorage()) return;
+
+  const error = new Error(`Vendor Directory session ${operation} failed because configured database persistence is unavailable.`);
+  error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.cause = cause;
+  logger.error('Vendor Directory session operation failed; refusing isolate-local fallback', {
+    operation,
+    error: cause,
+  }, 'VENDOR_DIRECTORY_SESSION');
+  throw error;
 }
 
 /**
@@ -67,11 +81,13 @@ async function ensureVendorDirectorySessionsTable() {
       await pool.query('CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user ON vendor_directory_sessions(user_uuid)', [], { d1: true });
       await pool.query('CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions(email)', [], { d1: true });
       await pool.query('CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions(status)', [], { d1: true });
-    } catch {
-      // Index creation errors can be ignored
+    } catch (indexError) {
+      logWarn('Vendor Directory session table exists but index creation failed', indexError, {
+        operation: 'ensureSessionIndexes',
+      });
     }
   } catch (ddlErr) {
-    logWarn('ensureVendorDirectorySessionsTable DDL failed', ddlErr);
+    logWarn('ensureVendorDirectorySessionsTable DDL failed', ddlErr, { operation: 'ensureSessionTable' });
   } finally {
     isEnsuringTable = false;
   }
@@ -196,10 +212,18 @@ async function createSession(params = {}) {
       try {
         await pool.query(query, values, { d1: true });
       } catch (retryErr) {
-        logWarn('createSession retry DB write failed', retryErr);
+        logWarn('createSession retry DB write failed', retryErr, { operation: 'createSession' });
+        if (pool.hasStorage()) {
+          memoryDirectorySessions.delete(id);
+          throwIfConfiguredStorageFailed('creation', retryErr);
+        }
       }
     } else {
-      logWarn('createSession DB write fallback to memory', err);
+      logWarn('createSession DB write failed', err, { operation: 'createSession' });
+      if (pool.hasStorage()) {
+        memoryDirectorySessions.delete(id);
+        throwIfConfiguredStorageFailed('creation', err);
+      }
     }
   }
 
@@ -238,13 +262,16 @@ async function findSessionById(id) {
           return session;
         }
       } catch (retryErr) {
-        logWarn('findSessionById retry DB read failed', retryErr);
+        logWarn('findSessionById retry DB read failed', retryErr, { operation: 'findSessionById' });
+        throwIfConfiguredStorageFailed('lookup', retryErr);
       }
     } else {
-      logWarn('findSessionById DB read failed, using memory fallback', err);
+      logWarn('findSessionById DB read failed', err, { operation: 'findSessionById' });
+      throwIfConfiguredStorageFailed('lookup', err);
     }
   }
 
+  if (pool.hasStorage()) return null;
   const mem = memoryDirectorySessions.get(id);
   return mem ? { ...mem } : null;
 }
@@ -281,13 +308,16 @@ async function findActiveSession(id) {
           return session;
         }
       } catch (retryErr) {
-        logWarn('findActiveSession retry DB read failed', retryErr);
+        logWarn('findActiveSession retry DB read failed', retryErr, { operation: 'findActiveSession' });
+        throwIfConfiguredStorageFailed('active lookup', retryErr);
       }
     } else {
-      logWarn('findActiveSession DB read failed, using memory fallback', err);
+      logWarn('findActiveSession DB read failed', err, { operation: 'findActiveSession' });
+      throwIfConfiguredStorageFailed('active lookup', err);
     }
   }
 
+  if (pool.hasStorage()) return null;
   const mem = memoryDirectorySessions.get(id);
   if (mem && mem.status === VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE) {
     return { ...mem };
@@ -304,6 +334,7 @@ async function updateSessionActivity(id, activityTime = new Date()) {
 
   let updatedMem = false;
   const mem = memoryDirectorySessions.get(id);
+  const previousActivity = mem?.lastActivityAt;
   if (mem) {
     if (mem.status !== VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE) return false;
     mem.lastActivityAt = isoActivity;
@@ -319,7 +350,9 @@ async function updateSessionActivity(id, activityTime = new Date()) {
     const result = await pool.query(query, [id, isoActivity, VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE], { d1: true });
     return Boolean(result?.rowCount > 0 || updatedMem);
   } catch (err) {
-    logWarn('updateSessionActivity DB write failed', err);
+    logWarn('updateSessionActivity DB write failed', err, { operation: 'updateSessionActivity' });
+    if (pool.hasStorage() && mem) mem.lastActivityAt = previousActivity;
+    throwIfConfiguredStorageFailed('activity update', err);
     return updatedMem;
   }
 }
@@ -366,7 +399,11 @@ async function closeSession(id, options = {}) {
       { d1: true }
     );
   } catch (err) {
-    logWarn('closeSession DB write failed', err);
+    logWarn('closeSession DB write failed', err, { operation: 'closeSession' });
+    if (pool.hasStorage()) {
+      memoryDirectorySessions.set(id, { ...session });
+      throwIfConfiguredStorageFailed('closure', err);
+    }
   }
 
   return { ...updatedSession };
@@ -437,7 +474,8 @@ async function listSessionHistory(filters = {}) {
       totalPages: Math.ceil(total / limit) || 1,
     };
   } catch (err) {
-    logWarn('listSessionHistory DB query failed, filtering memory store', err);
+    logWarn('listSessionHistory DB query failed', err, { operation: 'listSessionHistory' });
+    throwIfConfiguredStorageFailed('history lookup', err);
 
     let allSessions = Array.from(memoryDirectorySessions.values());
 
@@ -535,7 +573,8 @@ async function reconcileAbandonedSessions(inactivityTimeoutSeconds = VENDOR_DIRE
       }
     }
   } catch (err) {
-    logWarn('reconcileAbandonedSessions DB check failed, reconciling memory store', err);
+    logWarn('reconcileAbandonedSessions DB check failed', err, { operation: 'reconcileAbandonedSessions' });
+    throwIfConfiguredStorageFailed('abandoned-session reconciliation', err);
   }
 
   // Reconcile in-memory store

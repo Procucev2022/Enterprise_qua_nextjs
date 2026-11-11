@@ -1,4 +1,13 @@
-const request = require('supertest');
+const supertest = require('supertest');
+const request = (app) => {
+  const agent = supertest(app);
+  return {
+    get: (path) => agent.get(path).set('Authorization', 'Bearer document-vault-test-token'),
+    post: (path) => agent.post(path).set('Authorization', 'Bearer document-vault-test-token'),
+    put: (path) => agent.put(path).set('Authorization', 'Bearer document-vault-test-token'),
+    delete: (path) => agent.delete(path).set('Authorization', 'Bearer document-vault-test-token'),
+  };
+};
 const app = require('../src/app');
 const authService = require('../src/services/authService');
 const documentVaultQueries = require('../src/db/documentVaultQueries');
@@ -25,6 +34,20 @@ describe('Document Vault API Routes', () => {
     expect(Array.isArray(res.body.documents)).toBe(true);
   });
 
+  test('GET /api/document-vault rejects anonymous and non-staff callers', async () => {
+    const anonymous = await supertest(app).get('/api/document-vault');
+    expect(anonymous.status).toBe(401);
+
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValueOnce({
+      valid: true,
+      user: { sub: 'vendor-test-id', email: 'vendor@example.test', role: 'vendor' },
+    });
+    const vendor = await supertest(app)
+      .get('/api/document-vault')
+      .set('Authorization', 'Bearer vendor-token');
+    expect(vendor.status).toBe(403);
+  });
+
   test('GET /api/document-vault/summary returns metrics', async () => {
     const res = await request(app).get('/api/document-vault/summary');
     expect(res.status).toBe(200);
@@ -43,7 +66,7 @@ describe('Document Vault API Routes', () => {
   });
 
   test('POST /api/document-vault rejects unauthenticated callers with 401', async () => {
-    const res = await request(app)
+    const res = await supertest(app)
       .post('/api/document-vault')
       .send({
         documentName: 'Test Doc',
@@ -93,7 +116,7 @@ describe('Document Vault API Routes', () => {
   });
 
   test('PUT /api/document-vault/:id rejects unauthenticated and allows authorized', async () => {
-    const unauth = await request(app)
+    const unauth = await supertest(app)
       .put('/api/document-vault/doc_buyer_roi')
       .send({ documentName: 'Updated' });
     expect(unauth.status).toBe(401);
@@ -107,7 +130,7 @@ describe('Document Vault API Routes', () => {
   });
 
   test('DELETE /api/document-vault/:id rejects unauthenticated and allows authorized', async () => {
-    const unauth = await request(app).delete('/api/document-vault/doc_buyer_roi');
+    const unauth = await supertest(app).delete('/api/document-vault/doc_buyer_roi');
     expect(unauth.status).toBe(401);
 
     const auth = await request(app)

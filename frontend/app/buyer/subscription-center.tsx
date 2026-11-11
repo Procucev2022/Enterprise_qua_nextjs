@@ -4,6 +4,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
+import { FORM_SCHEMAS, validateFormData } from '@/lib/validationSchemas';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
 import { Sparkles, ShieldCheck, Check, Zap, Calendar, CheckCircle2, Building2, X, Shield, Crown, Gem } from 'lucide-react';
 
 export type BillingDuration = '6_months' | '12_months';
@@ -151,6 +154,8 @@ export default function SubscriptionCenter() {
 
   const [isEnterpriseModalOpen, setIsEnterpriseModalOpen] = useState(false);
   const [enterpriseSubmitted, setEnterpriseSubmitted] = useState(false);
+  const [enterpriseSubmitError, setEnterpriseSubmitError] = useState('');
+  const [enterpriseRequestKey, setEnterpriseRequestKey] = useState('');
   const [enterpriseForm, setEnterpriseForm] = useState({
     companyName: '',
     email: '',
@@ -189,54 +194,49 @@ export default function SubscriptionCenter() {
 
   const handleEnterpriseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!enterpriseForm.companyName.trim() || !enterpriseForm.email.trim() || !enterpriseForm.mobile.trim()) {
-      showToast('Missing Details', 'Please provide Company Name, Email ID, and Mobile Number.', 'warning');
+    const validation = validateFormData(FORM_SCHEMAS.enterpriseInquiry, enterpriseForm);
+    if (!validation.isValid) {
+      showToast(
+        'Missing Details',
+        Object.values(validation.fieldErrors)[0] || UI_STRINGS.enterpriseInquiry.submitErrorMessage,
+        'warning'
+      );
       return;
     }
     setSubmittingEnterprise(true);
-    const clientRecord = {
-      id: `ent-inq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      companyName: enterpriseForm.companyName.trim(),
-      email: enterpriseForm.email.trim(),
-      mobile: enterpriseForm.mobile.trim(),
-      buyerAccountId: activeBuyerAccount?.id || null,
-      notes: '',
-      status: 'NEW' as const,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
+    const idempotencyKey = enterpriseRequestKey || crypto.randomUUID();
+    setEnterpriseRequestKey(idempotencyKey);
     try {
       const res = await fetch('/api/enterprise-inquiries', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
           companyName: enterpriseForm.companyName.trim(),
           email: enterpriseForm.email.trim(),
           mobile: enterpriseForm.mobile.trim(),
-          buyerAccountId: activeBuyerAccount?.id || null,
         }),
       });
-      const json = await res.json().catch(() => null);
-      const recordToStore = json?.data || clientRecord;
-      try {
-        const stored = JSON.parse(localStorage.getItem('procucev_enterprise_inquiries') || '[]');
-        const updated = Array.isArray(stored)
-          ? [recordToStore, ...stored.filter((i: any) => i.id !== recordToStore.id)]
-          : [recordToStore];
-        localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify(updated));
-      } catch (_) {}
-    } catch {
-      // Local fallback
-      try {
-        const stored = JSON.parse(localStorage.getItem('procucev_enterprise_inquiries') || '[]');
-        const updated = Array.isArray(stored) ? [clientRecord, ...stored] : [clientRecord];
-        localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify(updated));
-      } catch (_) {}
+      const json = await res.json();
+      if (!res.ok || !json?.success || !json.data?.id) {
+        throw new Error('Enterprise inquiry response did not confirm a persisted record.');
+      }
+      setEnterpriseSubmitError('');
+      setEnterpriseSubmitted(true);
+      showToast(
+        UI_STRINGS.enterpriseInquiry.submitSuccessTitle,
+        UI_STRINGS.enterpriseInquiry.submitSuccessMessage,
+        'success'
+      );
+    } catch (error) {
+      setEnterpriseSubmitError(UI_STRINGS.enterpriseInquiry.submitErrorMessage);
+      showToast(
+        UI_STRINGS.enterpriseInquiry.submitErrorTitle,
+        UI_STRINGS.enterpriseInquiry.submitErrorMessage,
+        'warning'
+      );
+      logger.error('Database-backed enterprise inquiry submission failed', { error }, 'ENTERPRISE_INQUIRIES');
     } finally {
       setSubmittingEnterprise(false);
-      setEnterpriseSubmitted(true);
-      showToast('Enquiry Submitted', 'Our Enterprise Contracts team will reach out to you within 24 hours.', 'success');
     }
   };
 
@@ -611,6 +611,8 @@ export default function SubscriptionCenter() {
           data-testid="enterprise-contact-btn"
           onClick={() => {
             setEnterpriseSubmitted(false);
+            setEnterpriseSubmitError('');
+            setEnterpriseRequestKey(crypto.randomUUID());
             const { company, email, mobile } = getAutofillDetails();
             setEnterpriseForm((prev) => ({
               companyName: prev.companyName || company,
@@ -683,6 +685,12 @@ export default function SubscriptionCenter() {
                   Please share your details and our team will get in touch with customized enterprise contract terms.
                 </p>
 
+                {enterpriseSubmitError && (
+                  <p role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs text-rose-900 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-100">
+                    {enterpriseSubmitError}
+                  </p>
+                )}
+
                 <div className="space-y-1.5">
                   <label
                     htmlFor="enterprise-company-name"
@@ -753,9 +761,10 @@ export default function SubscriptionCenter() {
                   </button>
                   <button
                     type="submit"
+                    disabled={submittingEnterprise}
                     className="btn btn-primary text-xs px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center gap-1.5 shadow-sm"
                   >
-                    <span>Submit Enquiry</span>
+                    <span>{submittingEnterprise ? 'Submitting...' : 'Submit Enquiry'}</span>
                   </button>
                 </div>
               </form>

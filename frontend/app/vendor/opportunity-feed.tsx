@@ -6,6 +6,7 @@ import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl } from '@/lib/rfqClient';
+import { logger } from '@/lib/logger';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
 import { hasUnlimitedAccess, VENDOR_PLAN_RFQ_QUOTA } from '@/lib/constants';
@@ -76,7 +77,17 @@ export default function OpportunityFeed({
     setMyAddedByBuyerCompany('');
     setMyBuyerId('');
     fetch(`/api/vendors/${encodeURIComponent(email)}`)
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (!res.ok) {
+          logger.error(
+            'Vendor profile lookup failed for opportunity category matching',
+            { operation: 'load_vendor_profile', status: res.status },
+            'VENDOR_OPPORTUNITY_FEED'
+          );
+          return null;
+        }
+        return res.json();
+      })
       .then((data) => {
         if (cancelled || !data?.success || !data.data) return;
         setMyMajorCategory(data.data.majorCategory || '');
@@ -88,7 +99,16 @@ export default function OpportunityFeed({
           isBuyerAdded ? 'buyer' : data.data.source === 'self_registration' ? 'self' : null
         );
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        logger.error(
+          'Vendor profile lookup could not complete for opportunity category matching',
+          {
+            operation: 'load_vendor_profile',
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          },
+          'VENDOR_OPPORTUNITY_FEED'
+        );
+      });
     return () => {
       cancelled = true;
     };

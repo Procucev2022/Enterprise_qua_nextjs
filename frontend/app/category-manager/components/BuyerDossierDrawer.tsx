@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   X,
   Building2,
@@ -61,15 +61,15 @@ import {
   CREDIT_APPROVAL_INITIATORS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
 import {
   fetchBuyerCreditHistory,
-  addBuyerCredit,
   updateBuyerCategories,
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
 } from '@/lib/buyerProfileClient';
-import { requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
+import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
 interface BuyerDossierDrawerProps {
@@ -78,7 +78,6 @@ interface BuyerDossierDrawerProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   buyerRfqs?: RFQItem[];
   initialCommunications?: BuyerCommunicationItem[];
-  initialPayments?: BuyerPaymentTransaction[];
   initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
   onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => void;
 }
@@ -102,7 +101,6 @@ export default function BuyerDossierDrawer({
   onSelectRFQ,
   buyerRfqs = [],
   initialCommunications = [],
-  initialPayments = [],
   initialTab = 'profile',
   onTabChange,
 }: BuyerDossierDrawerProps) {
@@ -318,6 +316,7 @@ export default function BuyerDossierDrawer({
   // ---------------------------------------------------------------------------
   const [creditSummary, setCreditSummary] = useState<BuyerCreditSummary | null>(null);
   const [creditTransactions, setCreditTransactions] = useState<BuyerCreditTransaction[]>([]);
+  const [creditHistoryAvailable, setCreditHistoryAvailable] = useState<boolean | null>(null);
   const [loadingCredit, setLoadingCredit] = useState<boolean>(false);
   const [creditSearch, setCreditSearch] = useState<string>('');
   const [creditTypeFilter, setCreditTypeFilter] = useState<string>('all');
@@ -332,6 +331,8 @@ export default function BuyerDossierDrawer({
   const [addCreditAmount, setAddCreditAmount] = useState<number>(5);
   const [addCreditReason, setAddCreditReason] = useState<string>('');
   const [isSubmittingCredit, setIsSubmittingCredit] = useState<boolean>(false);
+  const creditApprovalRequestKey = useRef<string>('');
+  const creditApprovalRequestFingerprint = useRef<string>('');
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
@@ -340,6 +341,7 @@ export default function BuyerDossierDrawer({
       if (res.success) {
         setCreditSummary(res.summary || null);
         setCreditTransactions(res.transactions || []);
+        setCreditHistoryAvailable(res.historyAvailable ?? (res.transactions || []).length > 0);
       }
     } catch {
       // Fallback baseline
@@ -358,14 +360,29 @@ export default function BuyerDossierDrawer({
     e.preventDefault();
     if (addCreditAmount <= 0) return;
     setIsSubmittingCredit(true);
+    const requestFingerprint = JSON.stringify([
+      buyer.id,
+      buyer.organizationName,
+      addCreditAmount,
+      addCreditReason,
+      creditApprover,
+      creditInitiator,
+    ]);
+    if (creditApprovalRequestFingerprint.current !== requestFingerprint || !creditApprovalRequestKey.current) {
+      creditApprovalRequestFingerprint.current = requestFingerprint;
+      creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
+    }
     try {
       const res = await requestBuyerCreditApproval(buyer.id, {
         amount: addCreditAmount,
         reason: addCreditReason || 'Enterprise sourcing credit allocation request',
         approverName: creditApprover,
         initiatorName: creditInitiator,
+        idempotencyKey: creditApprovalRequestKey.current,
       });
       if (res.success) {
+        creditApprovalRequestKey.current = '';
+        creditApprovalRequestFingerprint.current = '';
         showToast(
           res.message ||
             formatString(strings.creditApproval?.toastSuccess || strings.creditApproval?.successToast || 'Credit request submitted for approval to {approverName}. Status: Pending Approval.', {
@@ -520,8 +537,8 @@ export default function BuyerDossierDrawer({
   // 5. PAYMENTS TAB (Tab 5: Payments)
   // ---------------------------------------------------------------------------
   const [paymentSummary, setPaymentSummary] = useState<BuyerPaymentSummary | null>(null);
-  const [payments, setPayments] = useState<BuyerPaymentTransaction[]>(initialPayments);
-
+  const [payments, setPayments] = useState<BuyerPaymentTransaction[]>([]);
+  const [paymentHistoryError, setPaymentHistoryError] = useState<string | null>(null);
 
   const [loadingPayments, setLoadingPayments] = useState<boolean>(false);
   const [paymentSearch, setPaymentSearch] = useState<string>('');
@@ -533,18 +550,28 @@ export default function BuyerDossierDrawer({
 
   const loadPayments = useCallback(async () => {
     setLoadingPayments(true);
+    setPaymentSummary(null);
+    setPayments([]);
+    setPaymentHistoryError(null);
     try {
       const res = await fetchBuyerPaymentHistory(buyer.id);
       if (res.success) {
         setPaymentSummary(res.summary || null);
         setPayments(res.payments || []);
+      } else {
+        logger.error('Buyer payment history API returned an unsuccessful response', {
+          buyerId: buyer.id,
+          error: res.error,
+        }, 'BUYER_DOSSIER');
+        setPaymentHistoryError(res.error || strings.payments.loadFailure);
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      logger.error('Buyer payment history request failed', { buyerId: buyer.id, error }, 'BUYER_DOSSIER');
+      setPaymentHistoryError(strings.payments.loadFailure);
     } finally {
       setLoadingPayments(false);
     }
-  }, [buyer.id]);
+  }, [buyer.id, strings.payments.loadFailure]);
 
   useEffect(() => {
     if (dossierTab === 'payments') {
@@ -1009,6 +1036,12 @@ export default function BuyerDossierDrawer({
                 </div>
               </div>
 
+              {creditHistoryAvailable === false && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200" role="status">
+                  {strings.credit.historyUnavailable}
+                </div>
+              )}
+
               {/* Toolbar & Filters */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-1 min-w-[200px]">
@@ -1378,9 +1411,20 @@ export default function BuyerDossierDrawer({
                   <Loader2 className="animate-spin text-indigo-500" size={24} />
                   <span className="text-xs">Loading complete payment history...</span>
                 </div>
+              ) : paymentHistoryError ? (
+                <div className="flex flex-col items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 p-6 text-center text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200" role="alert">
+                  <p className="text-xs">{paymentHistoryError}</p>
+                  <button
+                    type="button"
+                    onClick={() => { void loadPayments(); }}
+                    className="rounded-lg bg-rose-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-800"
+                  >
+                    {strings.payments.retry}
+                  </button>
+                </div>
               ) : paginatedPayments.length === 0 ? (
                 <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                  <p className="text-xs">No payment records found.</p>
+                  <p className="text-xs">{strings.payments.noRecords}</p>
                 </div>
               ) : (
                 <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">

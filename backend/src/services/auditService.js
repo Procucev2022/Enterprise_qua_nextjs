@@ -27,23 +27,25 @@ function buildSignaturePayload({ id, timestamp, userEmail, action, rfqNumber, pr
   return `${id}|${timestamp}|${userEmail}|${action}|${rfqNumber || ''}|${previousHash || ''}`;
 }
 
+function sealAuditEntry(entry, previousHash = '') {
+  const sealedEntry = { ...entry, previousHash: previousHash || '' };
+  sealedEntry.shaSignature = generateShaHash(buildSignaturePayload(sealedEntry));
+  return sealedEntry;
+}
+
 function createAuditEntry({ userEmail, action, rfqNumber = null, ipAddress = '10.0.4.12 (Azure Private VNet)', previousHash = '' }) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
   const id = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const resolvedUserEmail = userEmail || 'system@procucev.ai';
-  const shaSignature = generateShaHash(buildSignaturePayload({ id, timestamp, userEmail: resolvedUserEmail, action, rfqNumber, previousHash }));
-
-  return {
+  return sealAuditEntry({
     id,
     timestamp,
     userEmail: resolvedUserEmail,
     action,
     rfqNumber,
-    previousHash,
-    shaSignature,
     status: 'TAMPER_CHECK_OK',
     ipAddress,
-  };
+  }, previousHash);
 }
 
 /**
@@ -56,42 +58,72 @@ function createAuditEntry({ userEmail, action, rfqNumber = null, ipAddress = '10
  *   stored by storeService.addAuditLog's `unshift`)
  * @returns {object} - Verification report
  */
-function verifyAuditTrail(auditLogs = []) {
-  if (!Array.isArray(auditLogs) || auditLogs.length === 0) {
-    return { valid: true, verifiedCount: 0, compromisedEntries: [] };
-  }
-
+function verifyAuditTrail(auditLogs = [], anchors = {}) {
+  const logs = Array.isArray(auditLogs) ? auditLogs : [];
   const compromisedEntries = [];
-  auditLogs.forEach((entry, idx) => {
-    if (!entry.shaSignature || entry.shaSignature.length !== 64) {
+  logs.forEach((rawEntry, idx) => {
+    const entry = rawEntry && typeof rawEntry === 'object' ? rawEntry : {};
+    const requiredStringFields = ['id', 'timestamp', 'userEmail', 'action'];
+    if (requiredStringFields.some((field) => typeof entry[field] !== 'string')) {
+      compromisedEntries.push({ id: typeof entry.id === 'string' ? entry.id : null, index: idx, reason: 'Audit entry is missing required signed fields' });
+      return;
+    }
+    if (typeof entry.shaSignature !== 'string' || !/^[a-f0-9]{64}$/i.test(entry.shaSignature)) {
       compromisedEntries.push({ id: entry.id, index: idx, reason: 'Invalid or missing SHA-256 hash' });
       return;
     }
 
     // Recompute: does the stored hash actually match this entry's content?
-    // Entries created before `previousHash` was persisted on the record
-    // (older sessions) won't carry it — fall back to chain-derived linkage
-    // below rather than false-flagging them.
-    if (entry.previousHash !== undefined) {
-      const recomputed = generateShaHash(buildSignaturePayload(entry));
-      if (recomputed !== entry.shaSignature) {
-        compromisedEntries.push({ id: entry.id, index: idx, reason: 'Hash does not match entry content (tampered or forged)' });
-        return;
-      }
+    // A valid chain must persist its link, including the empty genesis link.
+    // Missing links cannot be treated as verified because neither content nor
+    // adjacency can then be independently checked.
+    if (typeof entry.previousHash !== 'string') {
+      compromisedEntries.push({ id: entry.id, index: idx, reason: 'Missing previousHash link; entry cannot be verified' });
+      return;
+    }
+
+    const recomputed = generateShaHash(buildSignaturePayload(entry));
+    if (recomputed !== entry.shaSignature) {
+      compromisedEntries.push({ id: entry.id, index: idx, reason: 'Hash does not match entry content (tampered or forged)' });
+      return;
     }
 
     // Chain linkage: this entry's previousHash must equal the next (older)
     // entry's own hash, since addAuditLog seals each entry with the hash of
     // whatever was most recent at the time it was written.
-    const olderEntry = auditLogs[idx + 1];
-    if (olderEntry && entry.previousHash && entry.previousHash !== olderEntry.shaSignature) {
+    const olderEntry = logs[idx + 1];
+    if (olderEntry && entry.previousHash !== olderEntry.shaSignature) {
       compromisedEntries.push({ id: entry.id, index: idx, reason: 'previousHash does not match the prior entry (chain broken)' });
     }
   });
 
+  const newestHash = logs[0]?.shaSignature || '';
+  const oldestHash = logs[logs.length - 1]?.shaSignature || '';
+  if (anchors.expectedHeadHash !== undefined && newestHash !== anchors.expectedHeadHash) {
+    compromisedEntries.push({
+      id: logs[0]?.id || null,
+      index: 0,
+      reason: 'Newest audit entry does not match the persisted chain head',
+    });
+  }
+  if (anchors.expectedRootHash !== undefined && oldestHash !== anchors.expectedRootHash) {
+    compromisedEntries.push({
+      id: logs[logs.length - 1]?.id || null,
+      index: Math.max(logs.length - 1, 0),
+      reason: 'Oldest audit entry does not match the persisted chain root',
+    });
+  }
+  if (anchors.expectedEntryCount !== undefined && logs.length !== Number(anchors.expectedEntryCount)) {
+    compromisedEntries.push({
+      id: null,
+      index: logs.length,
+      reason: 'Persisted audit entry count does not match the verified records',
+    });
+  }
+
   return {
     valid: compromisedEntries.length === 0,
-    verifiedCount: auditLogs.length,
+    verifiedCount: logs.length,
     compromisedEntries,
     timestamp: new Date().toISOString(),
   };
@@ -99,6 +131,7 @@ function verifyAuditTrail(auditLogs = []) {
 
 module.exports = {
   generateShaHash,
+  sealAuditEntry,
   createAuditEntry,
   verifyAuditTrail,
 };

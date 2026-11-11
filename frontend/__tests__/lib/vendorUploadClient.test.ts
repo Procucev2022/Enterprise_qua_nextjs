@@ -5,6 +5,7 @@ import {
   isAllowedVendorUploadFile,
   MAX_VENDOR_UPLOAD_FILE_BYTES,
   parseVendorUploadFile,
+  sendBulkVendorInvitations,
 } from '@/lib/vendorUploadClient';
 import { authClient } from '@/lib/authClient';
 import type { VendorUploadRow } from '@/lib/types';
@@ -370,6 +371,7 @@ describe('vendorUploadClient', () => {
         duplicates: 0,
         failed: 0,
         onboardingFailed: 0,
+        onboardingSkipped: 0,
         results: [{ rowNumber: 1, status: 'imported' }, { rowNumber: 2, status: 'imported' }],
       });
       expect(onProgress).toHaveBeenCalledTimes(1);
@@ -415,6 +417,7 @@ describe('vendorUploadClient', () => {
               missingEmail: 1,
               duplicates: 0,
               failed: 0,
+              onboardingSkipped: 1,
               results: [
                 { rowNumber: 1, status: 'imported', missingEmail: true },
                 { rowNumber: 2, status: 'imported' },
@@ -428,6 +431,7 @@ describe('vendorUploadClient', () => {
 
       expect(result.sessionId).toBe('session-abc');
       expect(result.missingEmail).toBe(1);
+      expect(result.onboardingSkipped).toBe(1);
       const [, options] = (global.fetch as jest.Mock).mock.calls[0];
       const sentBody = JSON.parse(options.body);
       expect(sentBody.sessionId).toBeUndefined();
@@ -474,9 +478,88 @@ describe('vendorUploadClient', () => {
         duplicates: 0,
         failed: 0,
         onboardingFailed: 0,
+        onboardingSkipped: 0,
         results: [],
       });
       expect(global.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('sendBulkVendorInvitations', () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+      authClient.setSession(null, null);
+      jest.restoreAllMocks();
+    });
+
+    test('uses bounded authenticated chunks and aggregates sent, queued, and failed results', async () => {
+      authClient.setSession(
+        { id: 'u1', email: 'cm@procucev.com', name: 'CM', role: 'category_manager', orgId: 'o1', orgName: 'Org' },
+        'invite-token'
+      );
+      global.fetch = jest.fn().mockImplementation(async (_url, options) => {
+        const vendorIds: string[] = JSON.parse(options.body).vendorIds;
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              sentCount: 0,
+              queuedCount: 0,
+              failedCount: 0,
+              results: vendorIds.map((vendorId) => ({
+                vendorId,
+                status: vendorId === 'v-1' ? 'sent' : vendorId === 'v-16' ? 'failed' : 'queued',
+              })),
+            },
+          }),
+        };
+      });
+      const ids = Array.from({ length: 16 }, (_item, index) => `v-${index + 1}`);
+      const onProgress = jest.fn();
+
+      const result = await sendBulkVendorInvitations(ids, onProgress);
+
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ sentCount: 1, queuedCount: 14, failedCount: 1 });
+      expect(result.results).toHaveLength(16);
+      expect(onProgress).toHaveBeenNthCalledWith(1, 15, 16);
+      expect(onProgress).toHaveBeenNthCalledWith(2, 16, 16);
+      const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(url).toBe('/api/vendors/bulk-import/invitations');
+      expect(options.headers.Authorization).toBe('Bearer invite-token');
+      expect(JSON.parse(options.body).vendorIds).toHaveLength(15);
+    });
+
+    test('deduplicates vendor IDs and reports network failures per vendor', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const result = await sendBulkVendorInvitations(['v-1', 'v-1', 'v-2']);
+
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ sentCount: 0, queuedCount: 0, failedCount: 2 });
+      expect(result.results.map((item) => item.vendorId)).toEqual(['v-1', 'v-2']);
+      expect(result.results.every((item) => item.status === 'failed')).toBe(true);
+    });
+
+    test('marks missing server results and non-ok responses as failed', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => ({ success: false }),
+      });
+      const result = await sendBulkVendorInvitations(['v-1']);
+      expect(result.failedCount).toBe(1);
+      expect(result.results).toEqual([{ vendorId: 'v-1', status: 'failed' }]);
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: { results: [] } }),
+      });
+      const incompleteResult = await sendBulkVendorInvitations(['v-2']);
+      expect(incompleteResult.results).toEqual([{ vendorId: 'v-2', status: 'failed' }]);
     });
   });
 });

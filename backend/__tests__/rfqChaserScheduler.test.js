@@ -20,7 +20,10 @@ const whatsAppService = require('../src/services/whatsAppService');
 const smsService = require('../src/services/smsService');
 const mailerService = require('../src/services/mailerService');
 const domainQueries = require('../src/db/domainQueries');
+const rfqComparisonQueueQueries = require('../src/db/rfqComparisonQueueQueries');
 const scheduler = require('../src/services/rfqChaserScheduler');
+const { logger } = require('../src/services/loggerService');
+const { RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT } = require('../src/config/constants');
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -49,6 +52,9 @@ beforeEach(() => {
   jest.useFakeTimers();
   // Clear timer registry between tests
   scheduler.pendingTimers.clear();
+  scheduler.pendingComparisonTimers.forEach((handle) => clearTimeout(handle));
+  scheduler.pendingComparisonTimers.clear();
+  scheduler.completedMemoryComparisonJobs.clear();
   // Reset throttle caches so tests don't interfere with each other
   whatsAppService.clearWhatsAppThrottleCache();
   smsService.clearSmsThrottleCache();
@@ -56,11 +62,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  jest.useRealTimers();
-  jest.restoreAllMocks();
+  jest.clearAllTimers();
   // Cancel any timers left in the registry so they don't leak into other suites
   scheduler.pendingTimers.forEach((_, rfqNumber) => scheduler.clearScheduledChasers(rfqNumber));
   scheduler.pendingTimers.clear();
+  scheduler.pendingComparisonTimers.forEach((handle) => clearTimeout(handle));
+  scheduler.pendingComparisonTimers.clear();
+  scheduler.completedMemoryComparisonJobs.clear();
+  jest.useRealTimers();
+  jest.restoreAllMocks();
 });
 
 // ── scheduleVendorChaser ─────────────────────────────────────────────────────
@@ -114,6 +124,36 @@ describe('scheduleVendorChaser', () => {
       rfqNumber: RFQ.rfqNumber,
     }));
     process.env.NODE_ENV = origEnv;
+  });
+
+  test('dispatches persisted Node chasers through the durable claim path', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const dueJob = {
+      id: 'chaser-RFQ-TEST-001-v-001-sms',
+      rfq_number: RFQ.rfqNumber,
+      rfq_id: 'rfq-001',
+      vendor_id: VENDOR.id,
+      vendor_name: VENDOR.name,
+      vendor_phone: VENDOR.phone,
+      vendor_email: VENDOR.email,
+      channel: 'sms',
+      attempts: 1,
+    };
+    jest.spyOn(domainQueries, 'insertChaserJobInDB').mockResolvedValue({ id: dueJob.id });
+    const claimSpy = jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue([dueJob]);
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue(RFQ);
+    jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+    const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true });
+
+    try {
+      scheduler.scheduleVendorChaser(RFQ, VENDOR);
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(claimSpy).toHaveBeenCalled();
+      expect(smsSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 
   test('fires Call reminder after 6 hours', async () => {
@@ -224,6 +264,398 @@ describe('dispatchDueChaserJobs', () => {
       expect(domainQueries.markChaserJobFiredInDB).toHaveBeenCalledWith(emailJob.id);
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+});
+
+describe('durable buyer comparison notifications', () => {
+  test('builds a stable comparison job intent and rejects incomplete RFQ identity', () => {
+    expect(scheduler.buildBuyerComparisonJobIntent(null)).toBeNull();
+    expect(scheduler.buildBuyerComparisonJobIntent({ id: 'rfq-no-number' })).toBeNull();
+    const intent = scheduler.buildBuyerComparisonJobIntent({ id: 'rfq/with spaces', rfqNumber: 'RFQ-INTENT' }, 1000);
+
+    expect(intent).toMatchObject({
+      id: 'comparison-rfq_with_spaces',
+      rfqId: 'rfq/with spaces',
+      rfqNumber: 'RFQ-INTENT',
+    });
+    expect(new Date(intent.fireAt).getTime()).toBe(Date.now() + 1000);
+  });
+
+  test('persists Worker comparisons for Cron without creating an isolate timer', async () => {
+    const previousEnv = globalThis.__CF_ENV__;
+    const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+    const waitUntil = jest.fn();
+    const persistSpy = jest.spyOn(rfqComparisonQueueQueries, 'insertRFQComparisonJobInDB').mockResolvedValue(true);
+    globalThis.__CF_ENV__ = { DB: {} };
+    globalThis.__CF_WAIT_UNTIL__ = waitUntil;
+
+    try {
+      const jobId = scheduler.scheduleBuyerComparison({ ...RFQ, id: 'rfq-compare-1' }, 300000);
+      expect(jobId).toBe('comparison-rfq-compare-1');
+      expect(persistSpy).toHaveBeenCalledWith(expect.objectContaining({
+        id: jobId,
+        rfqId: 'rfq-compare-1',
+        rfqNumber: RFQ.rfqNumber,
+      }));
+      expect(scheduler.pendingComparisonTimers.size).toBe(0);
+      expect(waitUntil).toHaveBeenCalledTimes(1);
+      await Promise.all(waitUntil.mock.calls.map(([promise]) => promise));
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+      if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+      else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+    }
+  });
+
+  test('registers an atomically persisted comparison without issuing a duplicate insert', () => {
+    const previousEnv = globalThis.__CF_ENV__;
+    globalThis.__CF_ENV__ = { DB: {} };
+    const insertSpy = jest.spyOn(rfqComparisonQueueQueries, 'insertRFQComparisonJobInDB');
+    const intent = {
+      id: 'comparison-rfq-atomic',
+      rfqId: 'rfq-atomic',
+      rfqNumber: 'RFQ-ATOMIC',
+      fireAt: new Date(Date.now() + 60000).toISOString(),
+    };
+
+    try {
+      expect(scheduler.schedulePersistedBuyerComparison({ id: 'rfq-atomic', rfqNumber: 'RFQ-ATOMIC' }, intent))
+        .toBe(intent.id);
+      expect(scheduler.pendingComparisonTimers.size).toBe(0);
+      expect(insertSpy).not.toHaveBeenCalled();
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+    }
+  });
+
+  test('handles missing identifiers, completed duplicate IDs, and Worker persistence without waitUntil', async () => {
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    const previousEnv = globalThis.__CF_ENV__;
+    const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+    const persistSpy = jest.spyOn(rfqComparisonQueueQueries, 'insertRFQComparisonJobInDB').mockResolvedValue(true);
+    delete globalThis.__CF_WAIT_UNTIL__;
+    globalThis.__CF_ENV__ = { DB: {} };
+
+    try {
+      expect(scheduler.scheduleBuyerComparison(null)).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Skipped RFQ comparison scheduling because RFQ identifiers are incomplete',
+        expect.any(Object),
+        'RFQ_COMPARISON_QUEUE'
+      );
+      scheduler.completedMemoryComparisonJobs.add('comparison-rfq-done');
+      expect(scheduler.scheduleBuyerComparison({ id: 'rfq-done', rfqNumber: 'RFQ-DONE' })).toBe('comparison-rfq-done');
+      expect(scheduler.pendingComparisonTimers.size).toBe(0);
+
+      scheduler.scheduleBuyerComparison({ id: 'rfq-worker-no-context', rfqNumber: 'RFQ-WORKER-NO-CONTEXT' });
+      await Promise.resolve();
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+      expect(scheduler.pendingComparisonTimers.size).toBe(0);
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+      if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+      else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+    }
+  });
+
+  test('rejects partial RFQ identifiers and uses the RFQ number as the durable ID fallback', async () => {
+    const previousEnv = globalThis.__CF_ENV__;
+    const persistSpy = jest.spyOn(rfqComparisonQueueQueries, 'insertRFQComparisonJobInDB').mockResolvedValue(true);
+    globalThis.__CF_ENV__ = { DB: {} };
+
+    try {
+      expect(scheduler.scheduleBuyerComparison({ id: 'rfq-only-id' })).toBeNull();
+      expect(scheduler.scheduleBuyerComparison({ rfqNumber: 'RFQ-ONLY-NUMBER' }, 0))
+        .toBe('comparison-RFQ-ONLY-NUMBER');
+      await Promise.resolve();
+      expect(persistSpy).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'comparison-RFQ-ONLY-NUMBER',
+        rfqId: 'RFQ-ONLY-NUMBER',
+      }));
+      expect(scheduler.pendingComparisonTimers.size).toBe(0);
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+    }
+  });
+
+  test('dispatches a persisted Node job through the queue claim path', async () => {
+    const previousEnv = globalThis.__CF_ENV__;
+    delete globalThis.__CF_ENV__;
+    jest.spyOn(rfqComparisonQueueQueries, 'insertRFQComparisonJobInDB').mockResolvedValue({ id: 'persisted-job' });
+    const claimSpy = jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockResolvedValue([]);
+    try {
+      scheduler.scheduleBuyerComparison({ id: 'rfq-persisted', rfqNumber: 'RFQ-PERSISTED' }, 0);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(claimSpy).toHaveBeenCalledWith(expect.any(String), expect.any(String), 1, 'comparison-rfq-persisted');
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+    }
+  });
+
+  test('claims due jobs, reloads the RFQ, dispatches, and marks the job complete', async () => {
+    const storeService = require('../src/services/storeService');
+    const job = {
+      id: 'comparison-rfq-1',
+      rfq_id: 'rfq-1',
+      rfq_number: 'RFQ-1',
+      attempts: 1,
+    };
+    jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockResolvedValue([job]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
+    const dispatchSpy = jest.spyOn(storeService, 'dispatchBuyerComparisonNotification').mockResolvedValue({
+      emailCompleted: true,
+      smsCompleted: true,
+    });
+    const completeSpy = jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonJobCompleteInDB').mockResolvedValue(undefined);
+    const channelSpy = jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonChannelCompleteInDB').mockResolvedValue(undefined);
+
+    await expect(scheduler.dispatchDueRFQComparisonJobs()).resolves.toEqual({ claimed: 1, sent: 1, failed: 0 });
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      { id: 'rfq-1', rfqNumber: 'RFQ-1' },
+      { emailCompleted: false, smsCompleted: false }
+    );
+    expect(completeSpy).toHaveBeenCalledWith(job.id);
+    expect(channelSpy).toHaveBeenCalledWith(job.id, 'email');
+    expect(channelSpy).toHaveBeenCalledWith(job.id, 'sms');
+  });
+
+  test('dispatches camel-case IDs through RFQ-number lookup and skips completed channels', async () => {
+    const storeService = require('../src/services/storeService');
+    const job = {
+      id: 'comparison-camel-case',
+      rfqId: 'rfq-camel',
+      rfqNumber: 'RFQ-CAMEL',
+      email_completed_at: '2026-11-01T00:00:00.000Z',
+      attempts: 2,
+    };
+    jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockResolvedValue([job]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(null);
+    const numberLookup = jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue({ id: 'rfq-camel', rfqNumber: 'RFQ-CAMEL' });
+    const dispatchSpy = jest.spyOn(storeService, 'dispatchBuyerComparisonNotification').mockResolvedValue({
+      emailCompleted: true,
+      smsCompleted: true,
+    });
+    const channelSpy = jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonChannelCompleteInDB').mockResolvedValue(undefined);
+    const completeSpy = jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonJobCompleteInDB').mockResolvedValue(undefined);
+
+    await expect(scheduler.dispatchDueRFQComparisonJobs(500)).resolves.toEqual({ claimed: 1, sent: 1, failed: 0 });
+    expect(numberLookup).toHaveBeenCalledWith('RFQ-CAMEL');
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      { id: 'rfq-camel', rfqNumber: 'RFQ-CAMEL' },
+      { emailCompleted: true, smsCompleted: false }
+    );
+    expect(channelSpy).toHaveBeenCalledTimes(2);
+    expect(completeSpy).toHaveBeenCalledWith(job.id);
+  });
+
+  test('retries only incomplete channels and tolerates an empty due queue', async () => {
+    const storeService = require('../src/services/storeService');
+    const job = { id: 'comparison-partial', rfq_id: 'rfq-partial', rfq_number: 'RFQ-PARTIAL', attempts: 1 };
+    const claimSpy = jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB')
+      .mockResolvedValueOnce([job])
+      .mockResolvedValueOnce([]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({ id: job.rfq_id, rfqNumber: job.rfq_number });
+    jest.spyOn(storeService, 'dispatchBuyerComparisonNotification').mockResolvedValue({
+      emailCompleted: true,
+      smsCompleted: false,
+    });
+    const channelSpy = jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonChannelCompleteInDB').mockResolvedValue(undefined);
+    const failedSpy = jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonJobFailedInDB').mockResolvedValue(undefined);
+
+    await expect(scheduler.dispatchDueRFQComparisonJobs()).resolves.toEqual({ claimed: 1, sent: 0, failed: 1 });
+    expect(channelSpy).toHaveBeenCalledTimes(1);
+    expect(channelSpy).toHaveBeenCalledWith(job.id, 'email');
+    expect(failedSpy).toHaveBeenCalledWith(job.id, expect.stringContaining('sms'));
+    await expect(scheduler.dispatchDueRFQComparisonJobs()).resolves.toEqual({ claimed: 0, sent: 0, failed: 0 });
+    expect(claimSpy).toHaveBeenCalledTimes(2);
+  });
+
+  test('marks a job failed when the RFQ cannot be reloaded', async () => {
+    const job = { id: 'comparison-missing-rfq', rfq_number: 'RFQ-MISSING', attempts: 1 };
+    jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockResolvedValue([job]);
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue(null);
+    const failedSpy = jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonJobFailedInDB').mockResolvedValue(undefined);
+
+    await expect(scheduler.dispatchDueRFQComparisonJobs()).resolves.toEqual({ claimed: 1, sent: 0, failed: 1 });
+    expect(failedSpy).toHaveBeenCalledWith(job.id, expect.stringContaining('was not found'));
+  });
+
+  test('records delivery failures and logs a failed durable state update', async () => {
+    const error = new Error('mail delivery unavailable');
+    const stateError = new Error('database write unavailable');
+    jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockResolvedValue([{
+      id: 'comparison-rfq-2',
+      rfq_id: 'rfq-2',
+      rfq_number: 'RFQ-2',
+      attempts: 2,
+    }]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({ id: 'rfq-2', rfqNumber: 'RFQ-2' });
+    jest.spyOn(require('../src/services/storeService'), 'dispatchBuyerComparisonNotification').mockRejectedValue(error);
+    jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonJobFailedInDB').mockRejectedValue(stateError);
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(scheduler.dispatchDueRFQComparisonJobs()).resolves.toEqual({ claimed: 1, sent: 0, failed: 1 });
+    expect(errorSpy).toHaveBeenCalledWith('Durable RFQ comparison notification dispatch failed', expect.objectContaining({ error }), 'RFQ_COMPARISON_QUEUE');
+    expect(errorSpy).toHaveBeenCalledWith('Failed to update durable RFQ comparison job after dispatch failure', expect.objectContaining({ error: stateError }), 'RFQ_COMPARISON_QUEUE');
+  });
+
+  test('uses the Node timer fallback when no database storage is configured', async () => {
+    const storeService = require('../src/services/storeService');
+    const dispatchSpy = jest.spyOn(storeService, 'dispatchBuyerComparisonNotification').mockResolvedValue({
+      emailCompleted: true,
+      smsCompleted: true,
+    });
+    const rfq = { ...RFQ, id: 'rfq-node-1' };
+    for (let index = 0; index < RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT; index++) {
+      scheduler.completedMemoryComparisonJobs.add(`completed-${index}`);
+    }
+    scheduler.scheduleBuyerComparison(rfq, 10);
+
+    await jest.advanceTimersByTimeAsync(10);
+    expect(dispatchSpy).toHaveBeenCalledWith(rfq, { emailCompleted: false, smsCompleted: false });
+    expect(scheduler.pendingComparisonTimers.size).toBe(0);
+    expect(scheduler.completedMemoryComparisonJobs.size).toBe(RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT);
+    expect(scheduler.completedMemoryComparisonJobs.has('completed-0')).toBe(false);
+    expect(scheduler.completedMemoryComparisonJobs.has('comparison-rfq-node-1')).toBe(true);
+    expect(scheduler.scheduleBuyerComparison(rfq, 10)).toBe('comparison-rfq-node-1');
+    expect(scheduler.pendingComparisonTimers.size).toBe(0);
+  });
+
+  test('keeps the bounded memory dedupe set at capacity when its oldest entry is empty', async () => {
+    const dispatchSpy = jest.spyOn(require('../src/services/storeService'), 'dispatchBuyerComparisonNotification')
+      .mockResolvedValue({ emailCompleted: true, smsCompleted: true });
+    scheduler.completedMemoryComparisonJobs.add('');
+    for (let index = 1; index < RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT; index++) {
+      scheduler.completedMemoryComparisonJobs.add(`completed-${index}`);
+    }
+    scheduler.scheduleBuyerComparison({ ...RFQ, id: 'rfq-empty-oldest' }, 10);
+
+    await jest.advanceTimersByTimeAsync(10);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(scheduler.completedMemoryComparisonJobs.size).toBe(RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT);
+    expect(scheduler.completedMemoryComparisonJobs.has('')).toBe(false);
+  });
+
+  test('recovers persisted Node comparison jobs after boot', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const job = {
+      id: 'comparison-recovered-rfq',
+      rfq_id: 'rfq-recovered',
+      rfq_number: 'RFQ-RECOVERED',
+      fire_at: new Date(Date.now() + 25).toISOString(),
+    };
+    jest.spyOn(rfqComparisonQueueQueries, 'getPendingRFQComparisonJobsFromDB').mockResolvedValue([job]);
+    jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockResolvedValue([job]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({ id: job.rfq_id, rfqNumber: job.rfq_number });
+    jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonChannelCompleteInDB').mockResolvedValue(undefined);
+    jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonJobCompleteInDB').mockResolvedValue(undefined);
+    const dispatchSpy = jest.spyOn(require('../src/services/storeService'), 'dispatchBuyerComparisonNotification')
+      .mockResolvedValue({ emailCompleted: true, smsCompleted: true });
+
+    try {
+      await scheduler.recoverRFQComparisonJobsOnBoot();
+      expect(scheduler.pendingComparisonTimers.has(job.id)).toBe(true);
+      await scheduler.recoverRFQComparisonJobsOnBoot();
+      expect(scheduler.pendingComparisonTimers.size).toBe(1);
+      await jest.advanceTimersByTimeAsync(50);
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        { id: job.rfq_id, rfqNumber: job.rfq_number },
+        { emailCompleted: false, smsCompleted: false }
+      );
+      expect(scheduler.pendingComparisonTimers.has(job.id)).toBe(false);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  test('recovers camel-case rows, applies the fallback timer path, and logs database claim errors', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const row = {
+      id: 'comparison-camel-recovery',
+      rfqId: 'rfq-camel-recovery',
+      rfqNumber: 'RFQ-CAMEL-RECOVERY',
+      fireAt: new Date(Date.now() + 10).toISOString(),
+    };
+    jest.spyOn(rfqComparisonQueueQueries, 'getPendingRFQComparisonJobsFromDB').mockResolvedValue([row]);
+    jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockRejectedValue(new Error('queue read failed'));
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    try {
+      await scheduler.recoverRFQComparisonJobsOnBoot();
+      await jest.advanceTimersByTimeAsync(10);
+      expect(errorSpy).toHaveBeenCalledWith('Node RFQ comparison notification timer failed', expect.objectContaining({
+        jobId: row.id,
+        rfqId: row.rfqId,
+        rfqNumber: row.rfqNumber,
+      }), 'RFQ_COMPARISON_QUEUE');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  test('uses default queue limits, resolves jobs without an RFQ ID, and skips Node recovery for an empty queue', async () => {
+    const claimSpy = jest.spyOn(rfqComparisonQueueQueries, 'claimDueRFQComparisonJobsFromDB').mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { id: 'comparison-number-only', rfq_number: 'RFQ-NUMBER-ONLY' },
+    ]);
+    const idLookup = jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(null);
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue({ rfqNumber: 'RFQ-NUMBER-ONLY' });
+    const storeService = require('../src/services/storeService');
+    jest.spyOn(storeService, 'dispatchBuyerComparisonNotification').mockResolvedValue({
+      emailCompleted: true,
+      smsCompleted: true,
+    });
+    jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonChannelCompleteInDB').mockResolvedValue(undefined);
+    jest.spyOn(rfqComparisonQueueQueries, 'markRFQComparisonJobCompleteInDB').mockResolvedValue(undefined);
+
+    await expect(scheduler.dispatchDueRFQComparisonJobs(0)).resolves.toEqual({ claimed: 0, sent: 0, failed: 0 });
+    expect(claimSpy).toHaveBeenNthCalledWith(1, expect.any(String), expect.any(String), 25, null);
+    await expect(scheduler.dispatchDueRFQComparisonJobs(5)).resolves.toEqual({ claimed: 1, sent: 1, failed: 0 });
+    expect(idLookup).not.toHaveBeenCalled();
+    expect(domainQueries.getRFQByNumberFromDB).toHaveBeenCalledWith('RFQ-NUMBER-ONLY');
+
+    const pendingSpy = jest.spyOn(rfqComparisonQueueQueries, 'getPendingRFQComparisonJobsFromDB').mockResolvedValue([]);
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await scheduler.recoverRFQComparisonJobsOnBoot();
+      expect(pendingSpy).toHaveBeenCalledWith(1000);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  test('does not query recovery jobs in Workers, and logs Node recovery query failures', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const previousEnv = globalThis.__CF_ENV__;
+    const lookupSpy = jest.spyOn(rfqComparisonQueueQueries, 'getPendingRFQComparisonJobsFromDB').mockRejectedValue(new Error('database down'));
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    process.env.NODE_ENV = 'production';
+    try {
+      globalThis.__CF_ENV__ = { DB: {} };
+      await scheduler.recoverRFQComparisonJobsOnBoot();
+      expect(lookupSpy).not.toHaveBeenCalled();
+
+      delete globalThis.__CF_ENV__;
+      await scheduler.recoverRFQComparisonJobsOnBoot();
+      expect(lookupSpy).toHaveBeenCalledWith(1000);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Failed to recover Node RFQ comparison notification jobs',
+        expect.objectContaining({ error: expect.any(Error) }),
+        'RFQ_COMPARISON_QUEUE'
+      );
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
     }
   });
 });
@@ -351,6 +783,21 @@ describe('_dispatchSms', () => {
     jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-ok' });
     const result = await scheduler._dispatchSms(RFQ, VENDOR);
     expect(result.success).toBe(true);
+  });
+
+  test('logs a chaser state-write failure after a successful delivery', async () => {
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-ok' });
+    jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockRejectedValue(new Error('state update failed'));
+
+    const result = await scheduler._dispatchSms(RFQ, VENDOR, 'job-state-fail');
+
+    expect(result.success).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Best-effort chaser job persistence failed',
+      expect.objectContaining({ error: expect.any(Error) }),
+      'RFQ_CHASER'
+    );
   });
 
   test('passes rfqNumber and mobile to sendRFQChaserSms', async () => {
@@ -586,6 +1033,14 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
     ];
 
     jest.spyOn(domainQueries, 'getPendingChaserJobsFromDB').mockResolvedValue(fakeJobs);
+    const claimedIds = new Set();
+    jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockImplementation(async (now) => fakeJobs
+      .filter((job) => new Date(job.fire_at).getTime() <= new Date(now).getTime() && !claimedIds.has(job.id))
+      .map((job) => {
+        claimedIds.add(job.id);
+        return { ...job, attempts: 1 };
+      }));
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue(RFQ);
     jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
     const waSpy = jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true });
     const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true });
@@ -594,8 +1049,7 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
     await scheduler.recoverChasersOnBoot();
 
     // Advance timers so scheduled callbacks run
-    jest.advanceTimersByTime(5000);
-    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(5000);
 
     expect(waSpy).toHaveBeenCalled();
     expect(smsSpy).toHaveBeenCalled();
@@ -611,8 +1065,8 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
 
   test('dispatchDueChaserJobs handles missing RFQ and unsupported channel', async () => {
     const jobs = [
-      { id: 'j-miss', rfq_number: 'RFQ-MISSING', channel: 'email', vendor_id: 'v-1' },
-      { id: 'j-bad', rfq_number: 'RFQ-OK', channel: 'telegram', vendor_id: 'v-1' },
+      { id: 'j-miss', rfq_number: 'RFQ-MISSING', channel: 'email', vendor_id: 'v-1', attempts: 1 },
+      { id: 'j-bad', rfq_number: 'RFQ-OK', channel: 'telegram', vendor_id: 'v-1', attempts: 1 },
     ];
     jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue(jobs);
     jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockImplementation(async (rfqNum) => {
@@ -623,15 +1077,15 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
 
     const res = await scheduler.dispatchDueChaserJobs(10);
     expect(res.failed).toBe(2);
-    expect(failSpy).toHaveBeenCalledWith('j-miss', expect.stringContaining('was not found'));
-    expect(failSpy).toHaveBeenCalledWith('j-bad', expect.stringContaining('Unsupported chaser channel'));
+    expect(failSpy).toHaveBeenCalledWith('j-miss', expect.stringContaining('was not found'), 1);
+    expect(failSpy).toHaveBeenCalledWith('j-bad', expect.stringContaining('Unsupported chaser channel'), 1);
   });
 
   test('dispatchDueChaserJobs handles whatsapp, sms, call, and failure outcomes', async () => {
     const jobs = [
-      { id: 'j-wa', rfq_number: 'RFQ-1', channel: 'whatsapp', vendor_id: 'v-1', vendor_phone: '9876543210' },
-      { id: 'j-sms', rfq_number: 'RFQ-1', channel: 'sms', vendor_id: 'v-1', vendor_phone: '9876543210' },
-      { id: 'j-call', rfq_number: 'RFQ-1', channel: 'call', vendor_id: 'v-1', vendor_phone: '9876543210' },
+      { id: 'j-wa', rfq_number: 'RFQ-1', channel: 'whatsapp', vendor_id: 'v-1', vendor_phone: '9876543210', attempts: 1 },
+      { id: 'j-sms', rfq_number: 'RFQ-1', channel: 'sms', vendor_id: 'v-1', vendor_phone: '9876543210', attempts: 1 },
+      { id: 'j-call', rfq_number: 'RFQ-1', channel: 'call', vendor_id: 'v-1', vendor_phone: '9876543210', attempts: 1 },
     ];
     jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue(jobs);
     jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue({ rfqNumber: 'RFQ-1', title: 'Test RFQ' });
@@ -646,6 +1100,54 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
     expect(res.failed).toBe(1); // whatsapp failed
     expect(res.sent).toBe(1); // sms sent
     expect(res.skipped).toBe(1); // call skipped in production
+  });
+
+  test('dispatchDueChaserJobs persists follow-up updates once per RFQ after a channel batch', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const rfq = {
+        rfqNumber: 'RFQ-BATCH-1',
+        title: 'Batch RFQ',
+        followUpData: {
+          emailStats: { total: 2, delivered: 0, sent24h: 0, opened: 0 },
+          smsStats: { total: 2, delivered: 0, clicked: 0 },
+          vendors: [
+            { vendorId: 'vendor-email', vendorName: 'Email Vendor' },
+            { vendorId: 'vendor-sms', vendorName: 'SMS Vendor' },
+          ],
+        },
+      };
+      const jobs = [
+        {
+          id: 'job-email', rfq_number: rfq.rfqNumber, channel: 'email', attempts: 1,
+          vendor_id: 'vendor-email', vendor_name: 'Email Vendor', vendor_email: 'email@example.com',
+        },
+        {
+          id: 'job-sms', rfq_number: rfq.rfqNumber, channel: 'sms', attempts: 1,
+          vendor_id: 'vendor-sms', vendor_name: 'SMS Vendor', vendor_phone: '9876543210',
+        },
+      ];
+      jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue(jobs);
+      jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue(rfq);
+      jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValue(rfq);
+      jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-batch' });
+
+      const result = await scheduler.dispatchDueChaserJobs(10);
+
+      expect(result).toEqual({ claimed: 2, sent: 2, failed: 0, skipped: 0 });
+      expect(domainQueries.getRFQByNumberFromDB).toHaveBeenCalledTimes(1);
+      expect(upsertSpy).toHaveBeenCalledTimes(1);
+      expect(upsertSpy).toHaveBeenCalledWith(rfq);
+      expect(rfq.followUpData.emailStats.delivered).toBe(1);
+      expect(rfq.followUpData.smsStats.delivered).toBe(1);
+      expect(rfq.followUpData.vendors[0].emailSent).toBe(true);
+      expect(rfq.followUpData.vendors[1].sms.status).toBe('delivered');
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 
   test('scheduleVendorChaser handles _persistChaserJob failure gracefully', async () => {
@@ -676,32 +1178,32 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
     // SMS failure with jobId and custom error
     jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: false, error: 'SMS gateway reject' });
     await scheduler._dispatchSms(RFQ, { id: 'v-fail', name: 'Fail Vendor', phone: '9876543210' }, 'job-sms-fail');
-    expect(failSpy).toHaveBeenCalledWith('job-sms-fail', 'SMS gateway reject');
+    expect(failSpy).toHaveBeenCalledWith('job-sms-fail', 'SMS gateway reject', 1);
 
     // SMS failure with jobId and default error message
     jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: false });
     await scheduler._dispatchSms(RFQ, { id: 'v-fail2', name: 'Fail Vendor', phone: '9876543210' }, 'job-sms-fail2');
-    expect(failSpy).toHaveBeenCalledWith('job-sms-fail2', 'gateway error');
+    expect(failSpy).toHaveBeenCalledWith('job-sms-fail2', 'gateway error', 1);
 
     // Email failure with jobId and custom reason
     jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false, reason: 'quota exceeded' });
     await scheduler._dispatchReminderEmail(RFQ, { id: 'v-em-fail', name: 'Email Fail', email: 'fail@v.com' }, {}, 'job-em-fail');
-    expect(failSpy).toHaveBeenCalledWith('job-em-fail', 'quota exceeded');
+    expect(failSpy).toHaveBeenCalledWith('job-em-fail', 'quota exceeded', 1);
 
     // Email failure with jobId and default reason
     jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false });
     await scheduler._dispatchReminderEmail(RFQ, { id: 'v-em-fail2', name: 'Email Fail', email: 'fail@v.com' }, {}, 'job-em-fail2');
-    expect(failSpy).toHaveBeenCalledWith('job-em-fail2', 'email delivery failed');
+    expect(failSpy).toHaveBeenCalledWith('job-em-fail2', 'email delivery failed', 1);
 
     // WhatsApp failure with jobId and custom error
     jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: false, error: 'invalid template' });
     await scheduler._dispatchWhatsApp(RFQ, { id: 'v-wa-fail', name: 'Fail WA', phone: '9876543210' }, 'job-wa-fail');
-    expect(failSpy).toHaveBeenCalledWith('job-wa-fail', 'invalid template');
+    expect(failSpy).toHaveBeenCalledWith('job-wa-fail', 'invalid template', 1);
 
     // WhatsApp failure with jobId and default error
     jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: false });
     await scheduler._dispatchWhatsApp(RFQ, { id: 'v-wa-fail2', name: 'Fail WA', phone: '9876543210' }, 'job-wa-fail2');
-    expect(failSpy).toHaveBeenCalledWith('job-wa-fail2', 'gateway error');
+    expect(failSpy).toHaveBeenCalledWith('job-wa-fail2', 'gateway error', 1);
 
     // WhatsApp success with jobId
     const firedSpy = jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
@@ -718,8 +1220,14 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
     getVendorSpy.mockReturnValueOnce(null);
     await scheduler._dispatchSms(RFQ, { id: 'v-null-store', name: 'Null Store' });
 
+    jest.spyOn(logger, 'warn').mockImplementation(() => {});
     getVendorSpy.mockImplementationOnce(() => { throw new Error('store error'); });
     await scheduler._dispatchSms(RFQ, { id: 'v-err-store', name: 'Err Store' });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Could not load vendor contact for SMS chaser; continuing with supplied contact fields',
+      expect.objectContaining({ vendorId: 'v-err-store' }),
+      'RFQ_CHASER'
+    );
   });
 
   test('covers scheduleRFQChasers with non-function creditInfo and defaults', () => {
@@ -763,6 +1271,13 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
 // ── Deduplication & Duplicate Prevention ──────────────────────────────────────
 
 describe('Deduplication & Duplicate Prevention', () => {
+  test('handles missing vendor identity and filters empty vendor entries', () => {
+    expect(scheduler._vendorKey(null)).toBe('unknown');
+    expect(scheduler._vendorKey({})).toBe('unknown');
+    scheduler.scheduleRFQChasers(RFQ, [null, {}]);
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
+  });
+
   test('scheduleRFQChasers deduplicates identical vendor stubs in the array', () => {
     // Array contains same vendor twice
     scheduler.scheduleRFQChasers(RFQ, [VENDOR, VENDOR]);
@@ -815,7 +1330,35 @@ describe('Deduplication & Duplicate Prevention', () => {
 
     process.env.NODE_ENV = origEnv;
   });
-  describe('_updateLiveFollowUpStats coverage', () => {
+
+  test('dispatch helpers continue without job IDs when delivery fails or contact data is absent', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockRejectedValue(new Error('WhatsApp unavailable'));
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockRejectedValue(new Error('SMS unavailable'));
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockRejectedValue(new Error('Email unavailable'));
+    const firedSpy = jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+    const failedSpy = jest.spyOn(domainQueries, 'markChaserJobFailedInDB').mockResolvedValue(true);
+    const storeService = require('../src/services/storeService');
+    const vendorLookup = jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+
+    try {
+      await scheduler._dispatchWhatsApp(RFQ, { id: 'vendor-no-job', name: 'Vendor', phone: VENDOR.phone });
+      await scheduler._dispatchSms(RFQ, { id: 'vendor-no-job', name: 'Vendor', phone: VENDOR.phone });
+      await scheduler._dispatchSms(RFQ, { id: 'vendor-no-job-phone', name: 'Vendor' });
+      await scheduler._dispatchReminderEmail(RFQ, { id: 'vendor-no-job', name: 'Vendor', email: VENDOR.email });
+      await scheduler._dispatchReminderEmail(RFQ, { id: 'vendor-no-email', name: 'Vendor' });
+      await scheduler._dispatchWhatsApp(RFQ, { id: 'vendor-no-phone', name: 'Vendor' });
+      await scheduler._dispatchCall(RFQ, { id: 'vendor-no-job', name: 'Vendor', phone: VENDOR.phone });
+      expect(vendorLookup).toHaveBeenCalled();
+      expect(firedSpy).not.toHaveBeenCalled();
+      expect(failedSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+describe('_updateLiveFollowUpStats coverage', () => {
     test('updates follow-up stats for whatsapp, sms, and email', () => {
       const storeService = require('../src/services/storeService');
       const mockRfq = {

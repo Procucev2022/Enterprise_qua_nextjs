@@ -84,9 +84,17 @@ jest.mock('@/lib/authClient', () => ({
   },
 }));
 
-const todayStr = new Date().toISOString().slice(0, 10);
-const futureDate = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
-const pastDate = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+function getLocalDateString(dayOffset = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + dayOffset);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+const todayStr = getLocalDateString();
+const futureDate = getLocalDateString(5);
+const pastDate = getLocalDateString(-3);
 
 const mockTasks: internalTaskClient.InternalTask[] = [
   {
@@ -765,7 +773,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
   });
 
-  
+
   test('switches across Action Center sub-navigation tabs (tickets, approvals, scorecard, buyers, sellers, registrations, tasks)', async () => {
     render(<InternalTasksDashboard />);
 
@@ -1106,7 +1114,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
         title: 'Credit Task',
         priority: 'Medium',
         status: 'In Progress',
-        due_date: new Date().toISOString().slice(0, 10), // test Due Today (diffDays === 0)
+        due_date: todayStr, // test Due Today (diffDays === 0)
         related_entity_type: 'CREDIT',
         notes: 'Important credit notes for audit',
         created_at: '2026-10-25T10:00:00Z',
@@ -1157,6 +1165,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
       expect(screen.getByText('Vendor Task')).toBeInTheDocument();
       expect(screen.getByText('Credit Task')).toBeInTheDocument();
       expect(screen.getAllByText('No Due Date').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Due Today')).toBeInTheDocument();
     });
 
     // Open drawer for Credit task to verify notes and entity label fallback
@@ -2943,12 +2952,26 @@ describe('Action Center & Internal Tasks Redesign', () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('toolbar-export-csv-btn')).toBeInTheDocument();
+      expect(screen.getAllByTestId('toolbar-export-csv-btn')).toHaveLength(1);
     });
 
     const exportBtn = screen.getByTestId('toolbar-export-csv-btn');
     expect(exportBtn).toHaveAttribute('download', 'internal_tasks.csv');
     expect(exportBtn.getAttribute('href')).toContain('data:text/csv;charset=utf-8');
+  });
+
+  test('uses the filtered export endpoint when there are no client rows to export', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({ tasks: [], total: 0 });
+    (internalTaskClient.getExportTasksUrl as jest.Mock).mockReturnValue('/api/internal-tasks/export?status=all');
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('toolbar-export-csv-btn')).toHaveAttribute(
+        'href',
+        '/api/internal-tasks/export?status=all'
+      );
+    });
   });
 
 

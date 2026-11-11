@@ -1,5 +1,6 @@
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
+const { sanitizePublicVendor } = require('./vendorController');
 const { isRetryableD1Error } = require('../db/d1Bridge');
 
 async function getBootstrap(req, res, next) {
@@ -7,64 +8,101 @@ async function getBootstrap(req, res, next) {
     logger.info('Fetching application bootstrap data payload', {}, 'BOOTSTRAP_CONTROLLER');
     const user = req.user;
     let buyerId = null;
+    let resolvedBuyerAccount = null;
     const candidateBuyerIds = [];
+
     if (user && user.role === 'buyer') {
-      let buyerAccount = null;
       try {
-        buyerAccount = await storeService.ensureBuyerAccountForUser(user);
-      } catch (err) {
-        logger.warn('Failed to ensure buyer account during bootstrap (degraded fallback)', { error: err.message }, 'BOOTSTRAP_CONTROLLER');
+        resolvedBuyerAccount = await storeService.ensureBuyerAccountForUser(user);
+      } catch (error) {
+        logger.warn('Buyer account resolution failed during bootstrap; continuing with available identity claims', {
+          error,
+          userId: user.sub || user.id || null,
+        }, 'BOOTSTRAP_CONTROLLER');
       }
-      if (buyerAccount) {
-        if (buyerAccount.id) candidateBuyerIds.push(buyerAccount.id);
-        if (buyerAccount.corporateEmail) candidateBuyerIds.push(buyerAccount.corporateEmail);
-        if (buyerAccount.organizationId) candidateBuyerIds.push(buyerAccount.organizationId);
+      if (resolvedBuyerAccount) {
+        if (resolvedBuyerAccount.id) candidateBuyerIds.push(resolvedBuyerAccount.id);
+        if (resolvedBuyerAccount.corporateEmail) candidateBuyerIds.push(resolvedBuyerAccount.corporateEmail);
+        if (resolvedBuyerAccount.organizationId) candidateBuyerIds.push(resolvedBuyerAccount.organizationId);
       }
       if (user.sub) candidateBuyerIds.push(user.sub);
       if (user.id) candidateBuyerIds.push(user.id);
       if (user.email) candidateBuyerIds.push(user.email);
       if (user.orgId) candidateBuyerIds.push(user.orgId);
-      buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+      buyerId = resolvedBuyerAccount ? resolvedBuyerAccount.id : user.sub || user.email;
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
       candidateBuyerIds.push(buyerId);
     }
+
     if (req.query && req.query.refresh === 'true') {
-      await storeService.hydrateFromDB().catch((err) => {
-        logger.warn('Bootstrap forced refresh hydration failed; continuing with current store', { error: err.message }, 'BOOTSTRAP_CONTROLLER');
+      await storeService.hydrateFromDB().catch((error) => {
+        logger.warn('Bootstrap forced refresh hydration failed; continuing with current store', { error }, 'BOOTSTRAP_CONTROLLER');
       });
     }
+
     const scopedBuyerArg = candidateBuyerIds.length > 0 ? candidateBuyerIds : buyerId;
     let data;
     try {
       data = await storeService.getBootstrapData(scopedBuyerArg, user && user.email);
-    } catch (err) {
-      if (isRetryableD1Error(err)) {
-        logger.warn('D1 overloaded during bootstrap; serving in-memory degraded bootstrap payload', { error: err.message }, 'BOOTSTRAP_CONTROLLER');
-        data = {
-          buyerAccounts: (storeService.buyerAccounts || []).slice(0, 500),
-          activeBuyerAccount: storeService.activeBuyerAccount,
-          vendors: (storeService.vendors || []).slice(0, 500),
-          vendorsTotal: (storeService.vendors || []).length,
-          evaluations: (storeService.evaluations || []).slice(0, 50),
-          auditLogs: (storeService.auditLogs || []).slice(0, 50),
-          aiFeed: [],
-          systemConfig: storeService.systemConfig,
-          azureHealth: storeService.azureHealth,
-          vendorCatalogue: [],
-        };
-      } else {
-        throw err;
-      }
+    } catch (error) {
+      if (!isRetryableD1Error(error)) throw error;
+      logger.warn('D1 unavailable during bootstrap; serving a capped in-memory fallback payload', {
+        error,
+        buyerId,
+      }, 'BOOTSTRAP_CONTROLLER');
+      data = {
+        buyerAccounts: (storeService.buyerAccounts || []).slice(0, 500),
+        activeBuyerAccount: storeService.activeBuyerAccount,
+        vendors: (storeService.vendors || []).slice(0, 500),
+        vendorsTotal: (storeService.vendors || []).length,
+        evaluations: (storeService.evaluations || []).slice(0, 50),
+        auditLogs: (storeService.auditLogs || []).slice(0, 50),
+        aiFeed: [],
+        systemConfig: storeService.systemConfig,
+        azureHealth: storeService.azureHealth,
+        vendorCatalogue: [],
+      };
     }
+
+    const isManagementUser = Boolean(user && (user.role === 'admin' || user.role === 'category_manager'));
+    const isBuyer = Boolean(user && user.role === 'buyer');
+    const sessionEmail = user && String(user.email || '').toLowerCase();
+    const evaluations = Array.isArray(data.evaluations) ? data.evaluations : [];
+    const vendorEvaluations = user && user.role === 'vendor' && sessionEmail
+      ? evaluations.filter((evaluation) => String(evaluation.email || '').toLowerCase() === sessionEmail)
+      : [];
+    const buyerIdentityValues = [buyerId, ...candidateBuyerIds]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    const vendors = (data.vendors || []).map((vendor) => {
+      const isOwnVendor = sessionEmail && String(vendor.email || '').toLowerCase() === sessionEmail;
+      const vendorOwnerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      const isBuyerOwnedVendor = isBuyer && vendorOwnerValues.some((value) => buyerIdentityValues.includes(value));
+      return isManagementUser || isOwnVendor || isBuyerOwnedVendor ? vendor : sanitizePublicVendor(vendor);
+    }).filter(Boolean);
+
+    const scopedData = {
+      ...data,
+      buyerAccounts: isManagementUser ? data.buyerAccounts : (isBuyer && resolvedBuyerAccount ? [resolvedBuyerAccount] : []),
+      activeBuyerAccount: isManagementUser ? data.activeBuyerAccount : (isBuyer ? resolvedBuyerAccount : null),
+      vendors,
+      evaluations: isManagementUser || isBuyer ? evaluations : vendorEvaluations,
+      auditLogs: isManagementUser ? data.auditLogs : [],
+      systemConfig: isManagementUser ? data.systemConfig : null,
+      azureHealth: isManagementUser ? data.azureHealth : [],
+    };
+
     res.json({
       success: true,
       source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
-      data,
+      data: scopedData,
     });
-  } catch (err) {
-    logger.error('Error fetching bootstrap data', err, 'BOOTSTRAP_CONTROLLER');
-    next(err);
+  } catch (error) {
+    logger.error('Error fetching bootstrap data', error, 'BOOTSTRAP_CONTROLLER');
+    next(error);
   }
 }
 

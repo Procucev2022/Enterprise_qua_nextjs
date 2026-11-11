@@ -85,6 +85,7 @@ describe('VendorRatingRevisionModal', () => {
     fireEvent.click(copyBtn);
 
     expect(navigator.clipboard.writeText).toHaveBeenCalled();
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('SHA-256 RECORD DIGEST:'));
     expect(mockShowToast).toHaveBeenCalledWith('Copied to Clipboard', expect.any(String), 'success');
 
     act(() => {
