@@ -404,13 +404,8 @@ async function countPublicVendorsMatchingCategories(signals) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
       d1OrGroups.push(`(
-        (raw LIKE ('%' || lower($${pExact}) || '%') OR major_category = $${pExact} COLLATE NOCASE) AND (
-          major_category = $${pExact} COLLATE NOCASE
-          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${pExact})
-          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
-          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
-          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
-        )
+        major_category = $${pExact} COLLATE NOCASE
+        OR raw LIKE $${pJson}
       )`);
     } else {
       params.push(`%${sig}%`);
@@ -422,13 +417,8 @@ async function countPublicVendorsMatchingCategories(signals) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
       d1OrGroups.push(`(
-        (raw LIKE $${p} OR major_category LIKE $${p}) AND (
-          major_category LIKE $${p}
-          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE $${p}
-          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-        )
+        major_category LIKE $${p}
+        OR raw LIKE $${p}
       )`);
     }
   }
@@ -491,13 +481,8 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
       d1OrGroups.push(`(
-        (raw LIKE ('%' || lower($${pExact}) || '%') OR major_category = $${pExact} COLLATE NOCASE) AND (
-          major_category = $${pExact} COLLATE NOCASE
-          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${pExact})
-          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
-          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
-          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
-        )
+        major_category = $${pExact} COLLATE NOCASE
+        OR raw LIKE $${pJson}
       )`);
     } else {
       params.push(`%${sig}%`);
@@ -509,13 +494,8 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
       d1OrGroups.push(`(
-        (raw LIKE $${p} OR major_category LIKE $${p}) AND (
-          major_category LIKE $${p}
-          OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE $${p}
-          OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-          OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-          OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-        )
+        major_category LIKE $${p}
+        OR raw LIKE $${p}
       )`);
     }
   }

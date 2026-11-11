@@ -1793,6 +1793,8 @@ interface ActivePipelineModalProps {
   onNavigateToMatrix: (rfq: RFQItem) => void;
 }
 
+const isEmailRfqSource = (src?: string | null) => Boolean(src && (src === 'email_gateway' || src === 'email_upload'));
+
 export function ActivePipelineModal({
   isOpen,
   onClose,
@@ -1818,8 +1820,8 @@ export function ActivePipelineModal({
       if (rfq.status !== 'Quotes Received' && qCount === 0) return false;
     }
 
-    if (sourceFilter === 'email_gateway' && rfq.source !== 'email_gateway' && rfq.source !== 'email_upload') return false;
-    if (sourceFilter === 'web_portal' && rfq.source !== 'web_portal' && rfq.source !== 'ai_extraction' && rfq.source && rfq.source !== 'manual_entry') return false;
+    if (sourceFilter === 'email_gateway' && !isEmailRfqSource(rfq.source)) return false;
+    if (sourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.source === 'manual_entry')) return false;
     if (sourceFilter === 'manual_entry' && rfq.source !== 'manual_entry') return false;
 
     if (!searchTerm) return true;
@@ -1849,7 +1851,7 @@ export function ActivePipelineModal({
   if (!isOpen) return null;
 
   const getSourceBadge = (source?: string) => {
-    if (source === 'email_gateway' || source === 'email_upload') {
+    if (isEmailRfqSource(source)) {
       return (
         <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
           <span>via Email Upload</span>
@@ -2225,8 +2227,8 @@ export function IntakeSourcesModal({
   const [searchTerm, setSearchTerm] = useState('');
 
   const totalActiveRFQs = rfqs.length;
-  const emailGatewayRFQs = rfqs.filter((r) => r.source === 'email_gateway' || r.source === 'email_upload');
-  const webPortalRFQs = rfqs.filter((r) => r.source !== 'email_gateway' && r.source !== 'email_upload' && r.source !== 'manual_entry');
+  const emailGatewayRFQs = rfqs.filter((r) => isEmailRfqSource(r.source));
+  const webPortalRFQs = rfqs.filter((r) => !isEmailRfqSource(r.source) && r.source !== 'manual_entry');
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
   const filteredRfqs = rfqs.filter((rfq) => {
@@ -2235,9 +2237,9 @@ export function IntakeSourcesModal({
       selectedSourceTab === 'all'
         ? true
         : selectedSourceTab === 'web_portal'
-        ? rfq.source !== 'email_gateway' && rfq.source !== 'email_upload' && rfq.source !== 'manual_entry'
+        ? !isEmailRfqSource(rfq.source) && rfq.source !== 'manual_entry'
         : selectedSourceTab === 'email_gateway'
-        ? rfq.source === 'email_gateway' || rfq.source === 'email_upload'
+        ? isEmailRfqSource(rfq.source)
         : rfq.source === selectedSourceTab;
 
     if (!matchesTab) return false;

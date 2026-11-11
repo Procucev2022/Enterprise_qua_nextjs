@@ -128,9 +128,10 @@ function withStoredValue(options: string[], value: string): string[] {
 type ConfirmationVendor = string | {
   id?: string;
   name?: string;
-  source?: string;
+  source?: string | null;
   addedByBuyerCompany?: boolean;
   vendorCategory?: string;
+  [key: string]: any;
 };
 
 interface ConfirmationRFQ {
@@ -1153,6 +1154,7 @@ export default function IngestionWizard({
         /** Non-identifying fields the details view may show for a Procucev vendor. */
         majorCategory?: string | null;
         minorCategories?: string[] | null;
+        source?: string | null;
         location?: string | null;
         matchScore?: number | null;
       };

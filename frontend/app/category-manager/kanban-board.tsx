@@ -449,7 +449,6 @@ export default function KanbanBoard({
                   const followUp = rfq.followUpData;
                   const totalVendors = Math.max(
                     rfq.assignedVendors?.length || 0,
-                    rfq.procucevVendorCount || 0,
                     followUp?.totalInvited || 0,
                     followUp?.smsStats?.total || 0,
                     followUp?.whatsappStats?.total || 0,

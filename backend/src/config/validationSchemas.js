@@ -279,6 +279,7 @@ const VALIDATION_SCHEMAS = {
     },
     sharedBuyerAccountIds: { type: 'array', required: false },
     sharedBuyerEmails: { type: 'array', required: false },
+    assignedVendors: { type: 'array', required: false },
   },
 
   // Edit of an existing RFQ (PUT /api/rfqs/:id).

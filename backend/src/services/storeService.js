@@ -80,6 +80,26 @@ function resolveCanonicalCategory(cat) {
   return trimmed;
 }
 
+function extractCategories(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val.map((s) => String(s || '').trim()).filter(Boolean);
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          return parsed.map((s) => String(s || '').trim()).filter(Boolean);
+        }
+      } catch {
+        // fall through
+      }
+    }
+    return trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 const SEEDED_INQUIRIES = [
   {
     id: 'ent-inq-1792066342226-1vkew',
@@ -2830,16 +2850,18 @@ class StoreService {
       const mismatched = [];
 
       for (const v of newRFQ.assignedVendors) {
-        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        const full = (v.id ? this.getVendorById(v.id, 'all') : null);
+        const resolved = full ? { ...v, ...full } : v;
         const hasCategory = Boolean(
           resolved.majorCategory ||
-          (Array.isArray(resolved.minorCategories) && resolved.minorCategories.length > 0) ||
-          (Array.isArray(resolved.vendorSelectedCategories) && resolved.vendorSelectedCategories.length > 0) ||
-          (Array.isArray(resolved.clientMappedCategories) && resolved.clientMappedCategories.length > 0)
+          extractCategories(resolved.minorCategories).length > 0 ||
+          extractCategories(resolved.vendorSelectedCategories).length > 0 ||
+          extractCategories(resolved.clientMappedCategories).length > 0 ||
+          extractCategories(resolved.categories).length > 0
         );
         const isMatch = !hasCategory || rfqCategorySignals.some((sig) => this.vendorCoversCategory(resolved, sig));
         if (isMatch) {
-          shortlisted.push(v);
+          shortlisted.push(resolved);
         } else {
           mismatched.push(resolved);
         }
@@ -2847,7 +2869,7 @@ class StoreService {
 
       // Limit client vendors to MAX_CLIENT_PER_CATEGORY per unique minor category (with major fallback)
       if (shortlisted.length > 0) {
-        newRFQ.assignedVendors = this.selectVendorsForRFQ(
+        const selected = this.selectVendorsForRFQ(
           shortlisted,
           newRFQ,
           maxClientPerCat,
@@ -2856,6 +2878,7 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
+        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? selected : shortlisted;
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -3925,9 +3948,10 @@ class StoreService {
 
     const pools = [
       vendor.majorCategory,
-      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
-      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
-      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+      ...extractCategories(vendor.minorCategories),
+      ...extractCategories(vendor.vendorSelectedCategories),
+      ...extractCategories(vendor.clientMappedCategories),
+      ...extractCategories(vendor.categories),
     ];
 
     return pools.some((c) => {
@@ -4104,9 +4128,11 @@ class StoreService {
     }
 
     const pools = [
-      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
-      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
-      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+      ...extractCategories(vendor.minorCategories),
+      ...extractCategories(vendor.vendorSelectedCategories),
+      ...extractCategories(vendor.clientMappedCategories),
+      ...extractCategories(vendor.categories),
+      ...extractCategories(vendor.category),
     ];
 
     return pools.some((c) => {
@@ -4308,7 +4334,8 @@ class StoreService {
       if (minorCategory) {
         // Step 1: Minor category matching strictly
         const minorCandidates = candidatePool.filter((candidate) => {
-          const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
+          const full = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null);
+          const v = full ? { ...candidate, ...full } : candidate;
           return this.vendorCoversMinorCategory(v, minorCategory);
         });
 
@@ -4326,12 +4353,14 @@ class StoreService {
       } else if (majorCategory) {
         // Pure major category matching (used only when no minor category is present)
         const majorCandidates = candidatePool.filter((candidate) => {
-          const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
+          const full = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null);
+          const v = full ? { ...candidate, ...full } : candidate;
           const hasCategory = Boolean(
             v.majorCategory ||
-            (Array.isArray(v.minorCategories) && v.minorCategories.length > 0) ||
-            (Array.isArray(v.vendorSelectedCategories) && v.vendorSelectedCategories.length > 0) ||
-            (Array.isArray(v.clientMappedCategories) && v.clientMappedCategories.length > 0)
+            extractCategories(v.minorCategories).length > 0 ||
+            extractCategories(v.vendorSelectedCategories).length > 0 ||
+            extractCategories(v.clientMappedCategories).length > 0 ||
+            extractCategories(v.categories).length > 0
           );
           return !hasCategory || this.vendorCoversCategory(v, majorCategory);
         });
@@ -4850,12 +4879,15 @@ class StoreService {
       location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
     const candidatePool = dbMatches.filter((v) => this.isProcucevVendor(v));
-    const sorted = this.selectVendorsForRFQ(
+    let sorted = this.selectVendorsForRFQ(
       candidatePool,
       rfq,
       maxProcucevPerCat,
       targetLocation
     ) || [];
+    if (!sorted || sorted.length === 0) {
+      sorted = candidatePool.slice(0, limit);
+    }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const existingKeys = new Set(

@@ -613,6 +613,10 @@ export interface RFQAssignedVendor {
   vendorCategory?: 'Client List' | 'Procucev Network';
   /** Sourcing category — shown for a Procucev entry, which carries no contact. */
   majorCategory?: string | null;
+  /** Minor categories the vendor covers. */
+  minorCategories?: string[] | null;
+  /** Origin source of the vendor entry (e.g. 'buyer_uploaded', 'procucev_network'). */
+  source?: string | null;
   /** Delivery/service location — shown for a Procucev entry. */
   location?: string | null;
   /** 360° match score (0–100) — shown for a Procucev entry. */
