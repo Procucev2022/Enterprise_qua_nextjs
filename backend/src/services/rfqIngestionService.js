@@ -302,6 +302,7 @@ function matchByKeyword(text, options = {}) {
 function defaultMinorForMajor(major) {
   if (!major) return '';
   const key = taxonomyKey(major);
+  const compactKey = key.replace(/[^a-z0-9]/g, '');
   const defaults = {
     'it': 'Hardware',
     'engineeringspareselectrical': 'Other Electrical Items',
@@ -317,7 +318,9 @@ function defaultMinorForMajor(major) {
     'othersnewproduct': 'Office & security Cabins',
     'othersnewservice': 'Warehousing',
   };
-  return defaults[key] || '';
+  if (defaults[compactKey]) return defaults[compactKey];
+  const minors = getMinorsForMajor(major);
+  return (minors && minors.length > 0) ? minors[0] : '';
 }
 
 /**
@@ -328,7 +331,7 @@ function defaultMinorForMajor(major) {
  * @returns {{majorCategory: string, minorCategory: string, category: string,
  *   categoryConfidence: number, classificationStatus: string}}
  */
-function classifyLineItem(item, payloadCategory) {
+function classifyLineItem(item, payloadCategory, payloadMinorCategory) {
   // 1. An explicit, meaningful category on the item itself wins outright if valid.
   const explicitMinor = item.minorCategory || item.category;
   if (!isGenericCategory(explicitMinor)) {
@@ -386,8 +389,21 @@ function classifyLineItem(item, payloadCategory) {
     }
   }
 
-  // 4. A category stated once for the whole payload applies as a fallback when the item itself has no match.
-  if (!isGenericCategory(payloadCategory)) {
+  // 4. A category or minorCategory stated once for the whole payload applies as a fallback when the item itself has no match.
+  const candidatePayloadCategory = payloadMinorCategory || payloadCategory;
+  if (!isGenericCategory(candidatePayloadCategory)) {
+    const resolved = resolveStatedCategory(candidatePayloadCategory, item.majorCategory);
+    if (resolved) {
+      return {
+        majorCategory: resolved.major,
+        minorCategory: resolved.minor,
+        category: resolved.minor,
+        categoryConfidence: CONFIDENCE.EXPLICIT,
+        classificationStatus: STATUS.EXPLICIT,
+      };
+    }
+  }
+  if (payloadMinorCategory && payloadCategory && !isGenericCategory(payloadCategory)) {
     const resolved = resolveStatedCategory(payloadCategory, item.majorCategory);
     if (resolved) {
       return {
@@ -650,7 +666,7 @@ function normalizeLineItems(rawItems, options = {}) {
     }
     seen.add(key);
 
-    const classification = classifyLineItem({ ...raw, ...normalized }, options.category);
+    const classification = classifyLineItem({ ...raw, ...normalized }, options.category, options.minorCategory);
     entities.push({
       ...normalized,
       ...classification,
@@ -707,6 +723,8 @@ async function buildRFQDraft(payload = {}, options = {}) {
 
   const { entities, duplicatesRemoved, lineValues } = normalizeLineItems(payload.lineItems, {
     category: payload.category,
+    majorCategory: payload.majorCategory,
+    minorCategory: payload.minorCategory,
     requireValidQuantity: Boolean(payload.requireValidQuantity),
     ensureFutureDate: Boolean(payload.ensureFutureDate || options.ensureFutureDate),
     allowEmptyDeliveryDate,
@@ -719,7 +737,14 @@ async function buildRFQDraft(payload = {}, options = {}) {
   // conflicts with it are kept as classified but flagged for review.
   // A declared minor (the model may return either level) resolves to its own major.
   const declaredMajor =
-    canonicalMajor(payload.category) || taxonomyPairForMinor(payload.category)?.major || '';
+    canonicalMajor(payload.majorCategory || payload.category) ||
+    taxonomyPairForMinor(payload.minorCategory || payload.category)?.major ||
+    '';
+  const declaredMinor =
+    (payload.minorCategory && taxonomyPairForMinor(payload.minorCategory)?.minor) ||
+    (payload.category && taxonomyPairForMinor(payload.category)?.minor) ||
+    (payload.minorCategory && declaredMajor && isMinorUnderMajor(declaredMajor, payload.minorCategory) ? payload.minorCategory : '') ||
+    '';
   if (declaredMajor) {
     entities.forEach((entity) => {
       if (!entity.majorCategory) {
@@ -728,13 +753,10 @@ async function buildRFQDraft(payload = {}, options = {}) {
         entity.categoryMismatch = true;
       }
       if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
-        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        entity.minorCategory = (declaredMinor && isMinorUnderMajor(entity.majorCategory, declaredMinor))
+          ? declaredMinor
+          : defaultMinorForMajor(entity.majorCategory);
         entity.category = entity.minorCategory;
-        if (entity.classificationStatus === STATUS.DEFAULT) {
-          entity.classificationStatus = STATUS.KEYWORD;
-          entity.categoryConfidence = CONFIDENCE.KEYWORD;
-          entity.confidence = 85;
-        }
       }
     });
   }
@@ -770,19 +792,30 @@ async function buildRFQDraft(payload = {}, options = {}) {
         entity.majorCategory = headerCategory;
       }
       if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
-        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        entity.minorCategory = (declaredMinor && isMinorUnderMajor(entity.majorCategory, declaredMinor))
+          ? declaredMinor
+          : defaultMinorForMajor(entity.majorCategory);
         entity.category = entity.minorCategory;
-        if (entity.classificationStatus === STATUS.DEFAULT) {
-          entity.classificationStatus = STATUS.KEYWORD;
-          entity.categoryConfidence = CONFIDENCE.KEYWORD;
-          entity.confidence = 85;
-        }
       }
     });
   }
 
+  // Derive header minor category
+  const minorCounts = entities.reduce((acc, e) => {
+    if (!e.minorCategory || e.minorCategory === e.majorCategory) return acc;
+    acc[e.minorCategory] = (acc[e.minorCategory] || 0) + 1;
+    return acc;
+  }, {});
+  const dominantMinor = Object.keys(minorCounts).sort((a, b) => minorCounts[b] - minorCounts[a])[0] || '';
+
+  const headerMinor = (declaredMinor && (!headerCategory || isMinorUnderMajor(headerCategory, declaredMinor)))
+    ? declaredMinor
+    : (dominantMinor && (!headerCategory || isMinorUnderMajor(headerCategory, dominantMinor))
+        ? dominantMinor
+        : defaultMinorForMajor(headerCategory));
+
   const needsReview = entities.filter(
-    (e) => !e.majorCategory || !e.minorCategory || e.categoryMismatch || e.minorCategory === e.majorCategory
+    (e) => !e.majorCategory || !e.minorCategory || e.categoryMismatch || e.minorCategory === e.majorCategory || e.classificationStatus === STATUS.DEFAULT || e.majorCategory === 'Others – New Product'
   ).length;
   const estimatedBudget = deriveEstimatedBudget(payload.estimatedBudget, lineValues);
 
@@ -795,6 +828,8 @@ async function buildRFQDraft(payload = {}, options = {}) {
   const draft = {
     title,
     category: headerCategory,
+    majorCategory: headerCategory,
+    minorCategory: headerMinor,
     targetDeliveryDate: (options.ensureFutureDate || payload.ensureFutureDate)
       ? (resolvedDate
           ? ensureFutureDeliveryDate(resolvedDate, DELIVERY_DATE_OFFSET_DAYS)

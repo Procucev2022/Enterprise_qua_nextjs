@@ -648,6 +648,34 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect((await ingestion.buildRFQDraft()).classification.accepted).toBe(0);
     });
 
+    test('populates mandatory majorCategory and minorCategory at draft root and for each entity', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [
+          { itemName: 'Centrifugal Pump 500 GPM', quantity: 12 },
+          { itemName: 'Gate Valve 2 inch', quantity: 5 },
+        ],
+      });
+      expect(draft.majorCategory).toBeTruthy();
+      expect(draft.minorCategory).toBeTruthy();
+      expect(typeof draft.majorCategory).toBe('string');
+      expect(typeof draft.minorCategory).toBe('string');
+      expect(draft.extractedEntities.every((e) => e.majorCategory && e.minorCategory)).toBe(true);
+    });
+
+    test('honors payload.minorCategory and applies it to line items when valid', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        majorCategory: 'Civil Works',
+        minorCategory: 'Plumbing',
+        lineItems: [
+          { itemName: 'Unlisted construction supply item', quantity: 10 },
+        ],
+      });
+      expect(draft.majorCategory).toBe('Civil Works');
+      expect(draft.minorCategory).toBe('Plumbing');
+      expect(draft.extractedEntities[0].majorCategory).toBe('Civil Works');
+      expect(draft.extractedEntities[0].minorCategory).toBe('Plumbing');
+    });
+
     test('derives the estimated budget by summing the priced lines', async () => {
       const { draft } = await ingestion.buildRFQDraft({
         lineItems: [
@@ -1400,8 +1428,28 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       // 8. Past textual date string
       expect(ingestion.ensureFutureDeliveryDate('January 1, 2020', 5)).toBe(fallbackIso);
 
-      // 9. Substring minor match in isMinorUnderMajor (line 137)
-      expect(typeof ingestion.isMinorUnderMajor).toBe('function');
+      // 9. Excel Julian serial numbers (future and past)
+      expect(ingestion.ensureFutureDeliveryDate('46351', 5)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(ingestion.ensureFutureDeliveryDate('20000', 5)).toBe(fallbackIso);
+
+      // 10. Substring minor match in isMinorUnderMajor (line 137)
+      expect(ingestion.isMinorUnderMajor('Civil Works', 'Plumb')).toBe(true);
+
+      // 11. defaultMinorForMajor fallback to getMinorsForMajor (line 322-323)
+      ingestion.primeTaxonomyIndex([
+        { majorCategory: 'Custom Division', minorCategories: ['Custom Subcategory A', 'Custom Subcategory B'] },
+      ]);
+      expect(ingestion.defaultMinorForMajor('Custom Division')).toBe('Custom Subcategory A');
+      ingestion.primeTaxonomyIndex(taxonomy);
+
+      // 12. classifyLineItem with payloadMinorCategory and payloadCategory (lines 407-409)
+      const resPayloadBoth = ingestion.classifyLineItem(
+        { itemName: 'Unknown widget 123' },
+        'Civil Works',
+        'Plumbing'
+      );
+      expect(resPayloadBoth.majorCategory).toBe('Civil Works');
+      expect(resPayloadBoth.minorCategory).toBe('Plumbing');
     });
   });
 });

@@ -5108,3 +5108,42 @@ Why this login error? for what purpose, session storage is needed in login?
 ```text
 Why are we storing cloudlfare env variables in wrangler file, or in codebase, it should be fetched from cloudflare env variables in dashboard?
 ```
+
+
+---
+
+### Prompt 129
+
+**Timestamp**: 2026-11-11T09:50:57+05:30
+
+```text
+In AI RFQ creation, in in Gemini extraction process minor category extraction is also mandatory. please check & fix it. Minor category extraction is also mandatory for AI extraction.
+```
+
+
+---
+
+### Prompt 130
+
+**Timestamp**: 2026-11-11T11:14:28+05:30
+
+```text
+Create RFQ failed, Can you please check logs, why it failed?
+```
+
+
+---
+
+### Prompt 131
+
+**Timestamp**: 2026-11-11T11:28:14+05:30
+
+```text
+Why postgres configuration are checked, remove postgres configuration from entire database. We use only cloudflare D1 database, 
+
+Also how to get these tables migrated? in prod, staging or dev deployment?
+
+Also why error message was not proper, in entire codebase error message should be proper.
+```
+
+

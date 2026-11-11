@@ -933,17 +933,24 @@ export default function IngestionWizard({
         const derivedPincode = result.data.deliveryPincode || '';
         const derivedDate = result.data.targetDeliveryDate || extracted.find((e) => e.targetDate)?.targetDate || '';
         const extractedCategory = result.data.category || '';
+        const extractedMajor =
+          result.data.majorCategory ||
+          (hasMajorCategory(extractedCategory) ? extractedCategory : '') ||
+          (hasMajorCategory(derivedMajor) ? derivedMajor : '') ||
+          dominantMajorCategory(extracted) ||
+          '';
+        const extractedMinor =
+          result.data.minorCategory ||
+          (hasMinorCategory(extractedMajor, extractedCategory) ? extractedCategory : '') ||
+          (extracted.length > 0 && extracted[0].minorCategory ? extracted[0].minorCategory : '') ||
+          '';
 
         setForm((prev) => ({
           ...prev,
           title: prev.title || derivedTitle,
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
-          majorCategory:
-            prev.majorCategory ||
-            (hasMajorCategory(extractedCategory) ? extractedCategory : '') ||
-            (hasMajorCategory(derivedMajor) ? derivedMajor : '') ||
-            dominantMajorCategory(extracted) ||
-            '',
+          majorCategory: prev.majorCategory || extractedMajor,
+          minorCategory: prev.minorCategory || extractedMinor,
           deliveryLocation: prev.deliveryLocation || derivedLocation,
           deliveryPincode: prev.deliveryPincode || derivedPincode,
           targetDeliveryDate: prev.targetDeliveryDate || derivedDate,

@@ -665,7 +665,7 @@ async function requestVendorCategoryUpdate(req, res, next) {
     if (!vendor && vendorEmail) {
       vendor = await storeService.getVendorByIdWithDBFallback(vendorEmail, 'all', { fresh: true });
     }
-    const targetEmail = String(vendor ? vendor.email : vendorEmail || '').trim();
+    const targetEmail = String((vendor && vendor.email) || vendorEmail || '').trim();
     if (!targetEmail) {
       return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId is required.' });
     }
@@ -1436,6 +1436,8 @@ async function extractRFQFromDocument(req, res, next) {
       lineItems: extraction.lineItems,
       title: draftTitle,
       category: extraction.category,
+      majorCategory: extraction.majorCategory,
+      minorCategory: extraction.minorCategory,
       estimatedBudget: extraction.estimatedBudget,
       targetDeliveryDate: derivedDeliveryDate,
       source: 'ai_extraction',
@@ -1468,7 +1470,12 @@ async function extractRFQFromDocument(req, res, next) {
       success: true,
       data: draft,
       classification,
-      extraction: { model: extraction.model, deliveryDate: extraction.deliveryDate },
+      extraction: {
+        model: extraction.model,
+        deliveryDate: extraction.deliveryDate,
+        majorCategory: draft.majorCategory,
+        minorCategory: draft.minorCategory,
+      },
     });
   } catch (err) {
     // An expected extraction failure is already reported above as a 422 with a

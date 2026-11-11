@@ -1429,10 +1429,10 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   const storeService = require('../services/storeService');
   const domainQueries = require('./domainQueries');
 
-  const d1Binding = getD1Binding();
-  if (d1Binding) {
+  const d1 = getD1Binding() || getD1HttpClient();
+  if (d1) {
     return approveCreditTaskInD1(
-      d1Binding,
+      d1,
       task,
       actorId,
       actorName,
@@ -1442,16 +1442,6 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       accountType,
       accountId
     );
-  }
-
-  if (getD1HttpClient()) {
-    const error = new Error('Credit approvals require a Workers D1 binding with atomic batch support.');
-    logger.error('Credit approval rejected because the D1 HTTP adapter cannot guarantee atomicity', {
-      error,
-      operation: 'approveCreditTask',
-      taskId: task.id,
-    }, 'INTERNAL_TASK_CREDIT_APPROVAL');
-    throw error;
   }
 
   let updatedBuyerInfo = null;

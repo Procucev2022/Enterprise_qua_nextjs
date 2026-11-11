@@ -220,12 +220,12 @@ describe('D1 migration SQL handling', () => {
     );
     const statements = splitStatements(fs.readFileSync(migrationPath, 'utf8'));
 
-    expect(statements).toHaveLength(3);
-    expect(statements[0]).toMatch(/DROP TRIGGER IF EXISTS payment_dues_communications_queue_delivery_outbox/i);
-    expect(statements[1]).toMatch(/CREATE TRIGGER payment_dues_communications_queue_delivery_outbox/i);
-    expect(statements[1]).toContain("lower(NEW.channel) IN ('email', 'sms', 'both')");
-    expect(statements[2]).toContain("lower(channel) IN ('email', 'sms', 'both')");
-    expect(statements[2]).toContain('INSERT OR IGNORE INTO event_outbox');
+    expect(statements).toHaveLength(10);
+    expect(statements[7]).toMatch(/DROP TRIGGER IF EXISTS payment_dues_communications_queue_delivery_outbox/i);
+    expect(statements[8]).toMatch(/CREATE TRIGGER payment_dues_communications_queue_delivery_outbox/i);
+    expect(statements[8]).toContain("lower(NEW.channel) IN ('email', 'sms', 'both')");
+    expect(statements[9]).toContain("lower(channel) IN ('email', 'sms', 'both')");
+    expect(statements[9]).toContain('INSERT OR IGNORE INTO event_outbox');
   });
 
   test('atomically queues explicitly requested buyer RFQ acknowledgements in D1', () => {

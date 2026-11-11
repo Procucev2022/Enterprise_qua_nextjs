@@ -388,6 +388,53 @@ describe('d1Bridge', () => {
       expect(batchRes).toHaveLength(1);
       expect(batchRes[0]).toEqual({ rows: [{ ok: 1 }], rowCount: 1, meta: { changes: 1 } });
     });
+
+    it('handles batchHttp empty array, non-JSON, and API errors', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      const { getD1HttpClient, resetD1HttpClientCache } = require('../src/db/d1Bridge');
+      resetD1HttpClientCache();
+      const client = getD1HttpClient();
+
+      expect(await client._batchHttp([])).toEqual([]);
+      expect(await client._batchHttp(null)).toEqual([]);
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Error HTML Body'),
+      });
+      await expect(client._batchHttp([{ sql: 'select 1', params: [] }]))
+        .rejects.toThrow('D1 HTTP API returned non-JSON (500): Error HTML Body');
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({ success: false, errors: [{ message: 'Batch syntax error' }] })),
+      });
+      await expect(client._batchHttp([{ sql: 'bad sql', params: [] }]))
+        .rejects.toThrow('D1 HTTP batch failed (200): Batch syntax error');
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: () => Promise.resolve(JSON.stringify({ success: false })),
+      });
+      await expect(client._batchHttp([{ sql: 'bad sql', params: [] }]))
+        .rejects.toThrow('D1 HTTP batch failed (400)');
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({
+          success: true,
+          result: { rows: [{ ok: 2 }], rowCount: 1, meta: { changes: 1 } },
+        })),
+      });
+      const singleRes = await client._batchHttp([{ sql: 'select 2', params: [] }]);
+      expect(singleRes).toEqual([{ rows: [{ ok: 2 }], rowCount: 1, meta: { changes: 1 } }]);
+    });
   });
 
   describe('batchD1', () => {
@@ -476,28 +523,32 @@ it('retries batch on D1 DB overloaded error and succeeds on subsequent attempt',
       expect(results).toEqual([{ rows: [{ id: 10 }], rowCount: 1 }]);
     });
 
-    it('rejects multi-statement use of the non-atomic D1 HTTP adapter before requests are sent', async () => {
-      const batchMock = jest.fn();
+    it('executes multi-statement batches with the atomic D1 HTTP adapter', async () => {
+      const batchMock = jest.fn().mockResolvedValue([
+        { rows: [], rowCount: 1, meta: { changes: 1 } },
+        { rows: [{ id: 1 }], rowCount: 1, meta: { changes: 1 } },
+      ]);
+      const bindMock = jest.fn().mockReturnValue({});
+      const prepareMock = jest.fn().mockImplementation(() => ({
+        bind: bindMock,
+      }));
       const db = {
         _isHttpClient: true,
-        prepare: jest.fn(),
+        prepare: prepareMock,
         batch: batchMock,
       };
       const { batchD1 } = require('../src/db/d1Bridge');
-      const { logger } = require('../src/services/loggerService');
-      const logSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
-      await expect(batchD1(db, [
+      const results = await batchD1(db, [
         { text: 'delete from t where id = $1', params: [1] },
         { text: 'insert into t (id) values ($1)', params: [1] },
-      ])).rejects.toThrow('cannot guarantee atomicity');
-      expect(db.prepare).not.toHaveBeenCalled();
-      expect(batchMock).not.toHaveBeenCalled();
-      expect(logSpy).toHaveBeenCalledWith(
-        'Multi-statement D1 batch rejected by the non-atomic HTTP adapter',
-        expect.objectContaining({ operation: 'batchD1', statementCount: 2 }),
-        'DATABASE_D1_BATCH'
-      );
+      ]);
+      expect(db.prepare).toHaveBeenCalledTimes(2);
+      expect(batchMock).toHaveBeenCalledTimes(1);
+      expect(results).toEqual([
+        { rows: [], rowCount: 1, meta: { changes: 1 } },
+        { rows: [{ id: 1 }], rowCount: 1, meta: { changes: 1 } },
+      ]);
     });
   });
 

@@ -326,16 +326,31 @@ describe('atomic buyer RFQ creation and free-credit accounting', () => {
       .rejects.toThrow('did not produce a durable row');
   });
 
-  test('fails closed for non-atomic D1 HTTP and preserves database batch errors', async () => {
+  test('executes D1 atomic batch with D1 HTTP client and preserves database batch errors', async () => {
     pool.pool = {};
+    const httpClientMock = { _isHttpClient: true };
     jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
-    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue({ _isHttpClient: true });
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(httpClientMock);
+    const batchMock = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue(d1Results({
+      updatedAccount: { ...buyer, remainingFreeRFQs: 4 },
+      insertedLedger: transaction,
+      insertedRfq: savedRfq,
+    }));
     await expect(buyerRfqCreationQueries.createRFQWithCreditInDB({ rfq, buyerId: buyer.id }))
-      .rejects.toMatchObject({ statusCode: 503, code: 'ATOMIC_PERSISTENCE_REQUIRED' });
+      .resolves.toMatchObject({ success: true, replayed: false, credit: { consumed: true } });
+    expect(batchMock).toHaveBeenCalledWith(httpClientMock, expect.any(Array));
 
-    const { batch } = configureD1([]);
     const failure = new Error('D1 unavailable');
-    batch.mockRejectedValueOnce(failure);
+    batchMock.mockRejectedValueOnce(failure);
     await expect(buyerRfqCreationQueries.createRFQWithCreditInDB({ rfq, buyerId: buyer.id })).rejects.toBe(failure);
+  });
+
+  test('fails closed with 503 DATABASE_UNAVAILABLE when storage exists but no database client is available', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    pool.pool = null;
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+    await expect(buyerRfqCreationQueries.createRFQWithCreditInDB({ rfq, buyerId: buyer.id }))
+      .rejects.toMatchObject({ statusCode: 503, code: 'DATABASE_UNAVAILABLE' });
   });
 });

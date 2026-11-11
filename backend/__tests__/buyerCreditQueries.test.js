@@ -301,12 +301,20 @@ describe('buyer credit database mutations', () => {
       .rejects.toBe(batchError);
   });
 
-  test('rejects multi-statement adjustments through the D1 HTTP adapter', async () => {
+  test('executes multi-statement adjustments through the atomic D1 HTTP adapter', async () => {
     pool.pool = {};
+    const httpClientMock = { _isHttpClient: true };
     jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
-    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue({ _isHttpClient: true });
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(httpClientMock);
+    const batchMock = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
+      { rows: [{ raw: JSON.stringify({ ...account, remainingFreeRFQs: 9 }) }] },
+      { rows: [{ ...ledgerRow }] },
+      { rows: [{ ...ledgerRow }] },
+      { rows: [{ raw: JSON.stringify({ ...account, remainingFreeRFQs: 9 }) }] },
+    ]);
 
-    await expect(buyerCreditQueries.addBuyerCreditsInDB({ buyerId: account.id, amount: 5, transaction }))
-      .rejects.toThrow('cannot guarantee atomicity');
+    const result = await buyerCreditQueries.addBuyerCreditsInDB({ buyerId: account.id, amount: 5, transaction });
+    expect(batchMock).toHaveBeenCalledWith(httpClientMock, expect.any(Array));
+    expect(result).toMatchObject({ updatedBalance: 9 });
   });
 });

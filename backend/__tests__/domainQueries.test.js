@@ -1421,13 +1421,23 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       ]));
     });
 
-    test('deleteBuyerAccountAndPromoteActiveInDB rejects a non-atomic D1 HTTP batch', async () => {
+    test('deleteBuyerAccountAndPromoteActiveInDB runs an atomic D1 HTTP batch', async () => {
       pool.pool = {};
+      const httpClientMock = { _isHttpClient: true };
       jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
-      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue({ _isHttpClient: true });
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(httpClientMock);
+      const batchSpy = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
+        { rows: [{ id: 'buyer-delete' }] },
+        { rows: [] },
+        { rows: [{ raw: JSON.stringify({ id: 'buyer-remaining', is_active: true }) }] },
+      ]);
 
-      await expect(domainQueries.deleteBuyerAccountAndPromoteActiveInDB('buyer-delete'))
-        .rejects.toThrow('cannot guarantee atomicity');
+      const result = await domainQueries.deleteBuyerAccountAndPromoteActiveInDB('buyer-delete');
+      expect(batchSpy).toHaveBeenCalledWith(httpClientMock, expect.any(Array));
+      expect(result).toEqual({
+        deleted: true,
+        activeAccount: { id: 'buyer-remaining', is_active: true },
+      });
     });
 
     test('upsertBuyerAccountInDB parses a string raw column (D1)', async () => {

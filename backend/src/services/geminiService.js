@@ -27,6 +27,8 @@ const {
   taxonomyPairForMinor,
   matchByKeyword,
   isGenericCategory,
+  defaultMinorForMajor,
+  isMinorUnderMajor,
 } = require('./rfqIngestionService');
 
 /** Machine-readable outcomes the route maps onto responses. */
@@ -79,6 +81,8 @@ Return a SINGLE JSON object with this shape and no surrounding prose or markdown
 {
   "documentTitle": "Optional string, short title for overall requirement if stated",
   "category": "String, MANDATORY: Choose the single best-fitting category copied exactly from the CATEGORY LIST. If not explicitly stated in the document, you MUST infer the single best-fitting category from the line items and descriptions. MUST NEVER be null.",
+  "majorCategory": "String, MANDATORY: Choose the single best-fitting major category copied exactly from the Major categories in the CATEGORY LIST. MUST NEVER be null.",
+  "minorCategory": "String, MANDATORY: Choose the single best-fitting minor category copied exactly from the Minor categories in the CATEGORY LIST that belongs to the majorCategory. MUST NEVER be null or empty.",
   "deliveryDate": "Optional string in YYYY-MM-DD for the BUYER's target or required delivery date (from Target Delivery Date, Required Delivery Date, or RFQ header). DO NOT use a vendor's quoted delivery date.",
   "deliveryLocation": "Optional destination string if stated",
   "deliveryCity": "Optional destination city if stated",
@@ -86,13 +90,13 @@ Return a SINGLE JSON object with this shape and no surrounding prose or markdown
   "deliveryPincode": "Optional postal code if stated",
   "estimatedBudget": 500000,
   "items": [
-    ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
+    ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice, "minorCategory"]
   ]
 }
 
 CRITICAL COMPACT ROW ARRAY SPECIFICATION (MANDATORY FOR SPEED & TOKEN CONSERVATION):
 - Each item in "items" MUST be formatted as a compact array of values instead of an object with repeated field names:
-  ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
+  ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice, "minorCategory"]
 - Field positions in each item array:
   1. itemDescription (String, REQUIRED): Product or material name including size, dimension, bore or model token.
   2. quantity (Number or null): Stated purchase quantity as a plain number. Never guess or default to 1. Return null if unstated.
@@ -100,7 +104,8 @@ CRITICAL COMPACT ROW ARRAY SPECIFICATION (MANDATORY FOR SPEED & TOKEN CONSERVATI
   4. specification (String or null): Technical specifications, material grade, standard, rating or details if stated.
   5. unitPrice (Number or null): Stated unit price as a plain number if stated.
   6. totalPrice (Number or null): Stated line total price as a plain number if stated.
-- Optional trailing elements if stated in document: [..., brand, category, targetDate, deliveryLocation].
+  7. minorCategory (String, MANDATORY): Choose the single best-fitting minor category for this line item copied exactly from the Minor categories in the CATEGORY LIST.
+- Optional trailing elements if stated in document: [..., brand, targetDate, deliveryLocation].
 - Trailing nulls at the end of the item array may be omitted to save tokens (e.g. ["Hex bolt M8x250", 25, "PCS"]).
 - This array format eliminates thousands of repetitive boilerplate tokens and dramatically accelerates extraction.
 
@@ -353,15 +358,43 @@ function toRawLineItems(parsed) {
   return items
     .map((item) => {
       if (Array.isArray(item)) {
-        const [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, rawBrand, rawCat, rawDate, rawLoc] = item;
+        const [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, p6, p7, p8, p9] = item;
         const itemName = typeof rawDesc === 'string' ? rawDesc.trim() : (rawDesc !== null && rawDesc !== undefined ? String(rawDesc).trim() : '');
         if (!itemName) return null;
+
+        let rawBrand = '';
+        let rawCat = '';
+        let rawDate = '';
+        let rawLoc = '';
+
+        if (p6 !== undefined && p6 !== null) {
+          const str6 = String(p6).trim();
+          if (taxonomyPairForMinor(str6) || canonicalMajor(str6)) {
+            rawCat = str6;
+            if (p7) rawDate = String(p7).trim();
+            if (p8) rawLoc = String(p8).trim();
+          } else {
+            rawBrand = str6;
+            if (p7 !== undefined && p7 !== null) {
+              const str7 = String(p7).trim();
+              if (taxonomyPairForMinor(str7) || canonicalMajor(str7)) {
+                rawCat = str7;
+                if (p8) rawDate = String(p8).trim();
+                if (p9) rawLoc = String(p9).trim();
+              } else {
+                rawDate = str7;
+                if (p8) rawLoc = String(p8).trim();
+              }
+            }
+          }
+        }
+
         const row = {
           itemName,
           quantity: typeof rawQty === 'number' && Number.isFinite(rawQty) ? rawQty : parseValidQuantity(rawQty),
           unit: typeof rawUnit === 'string' ? rawUnit.trim() : '',
           technicalSpecs: typeof rawSpec === 'string' ? rawSpec.trim() : '',
-          category: typeof rawCat === 'string' ? rawCat.trim() : '',
+          category: rawCat,
           targetDate: typeof rawDate === 'string' && rawDate.trim() ? rawDate.trim() : docDate,
           unitPrice: normalizeAmount(rawUnitPrice),
           totalPrice: normalizeAmount(rawTotalPrice),
@@ -375,15 +408,22 @@ function toRawLineItems(parsed) {
       }
 
       const row = {
-        itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : '',
+        itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : (typeof item?.itemName === 'string' ? item.itemName.trim() : ''),
         quantity: item?.quantity,
         unit: typeof item?.unit === 'string' ? item.unit.trim() : '',
-        technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : '',
-        category: typeof item?.category === 'string' ? item.category.trim() : '',
+        technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : (typeof item?.technicalSpecs === 'string' ? item.technicalSpecs.trim() : ''),
+        category: typeof item?.category === 'string' ? item.category.trim() : (typeof item?.minorCategory === 'string' ? item.minorCategory.trim() : ''),
         targetDate: typeof item?.targetDate === 'string' ? item.targetDate.trim() : docDate,
         unitPrice: normalizeAmount(item?.unitPrice),
         totalPrice: normalizeAmount(item?.totalPrice),
       };
+
+      if (typeof item?.minorCategory === 'string' && item.minorCategory.trim()) {
+        row.minorCategory = item.minorCategory.trim();
+      }
+      if (typeof item?.majorCategory === 'string' && item.majorCategory.trim()) {
+        row.majorCategory = item.majorCategory.trim();
+      }
 
       if (item?.brand) row.brand = String(item.brand).trim();
       if (item?.deliveryCity || parsed?.deliveryCity) {
@@ -644,12 +684,14 @@ function extractSpreadsheetLineItems(text) {
       const rawUnit = unitIdx !== undefined ? cells[unitIdx] : '';
       const unit = rawUnit ? rawUnit.trim() : 'Nos';
 
+      const rawCatVal = (catIdx !== undefined && cells[catIdx]) ? cells[catIdx].trim() : (sheet.sheetName || '');
       const row = {
         itemName: cleanItemName,
         quantity: validQty,
         unit,
         technicalSpecs: spec,
-        category: (catIdx !== undefined && cells[catIdx]) ? cells[catIdx].trim() : (sheet.sheetName || ''),
+        category: rawCatVal,
+        minorCategory: rawCatVal,
         targetDate: (dateIdx !== undefined && cells[dateIdx]) ? parseSpreadsheetDate(cells[dateIdx].trim()) : (sheetDeliveryDate || ''),
         unitPrice: unitPriceIdx !== undefined ? normalizeAmount(cells[unitPriceIdx]) : null,
         totalPrice: totalPriceIdx !== undefined ? normalizeAmount(cells[totalPriceIdx]) : null,
@@ -679,10 +721,13 @@ function categoryPromptBlock() {
   return `
 
 CATEGORY LIST
-Category generation is MANDATORY. You MUST choose and set "category" to the single best-fitting category copied exactly from the CATEGORY LIST.
-- If the document explicitly states a procurement category (for example "Category: Civil Works"), use it.
-- If the document does not explicitly state a category header, you MUST infer the best-fitting category from the line items, materials, equipment, or service descriptions in the document.
-- The "category" field MUST NEVER be null. Always choose the closest matching major category or minor category from this list. Never invent a category or use a name outside this list.
+Category extraction is MANDATORY. Both majorCategory and minorCategory MUST be determined from the CATEGORY LIST.
+- "minorCategory" extraction is MANDATORY and MUST NEVER be null or empty. Choose the single best-fitting minor category copied exactly from the Minor categories list below that best characterizes the procurement requirement or items.
+- "majorCategory" is MANDATORY and MUST NEVER be null or empty. Choose the corresponding major category copied exactly from the Major categories list below.
+- "category" MUST also be set (to the chosen minorCategory or majorCategory).
+- If the document explicitly states a procurement category (for example "Category: Civil Works" or "Pumps"), map it to the corresponding major and minor categories from this list.
+- If the document does not explicitly state a category, you MUST infer both majorCategory and minorCategory from the line items, materials, equipment, or service descriptions.
+- Never invent a category or use any name outside this list.
 Major categories: ${majors.join(' | ')}
 Minor categories: ${minors.join(' | ')}`;
 }
@@ -696,7 +741,7 @@ function inferCategoryFromLineItems(lineItems = []) {
   const majorCounts = {};
 
   for (const item of lineItems) {
-    const rawCat = (item.category || '').trim();
+    const rawCat = (item.minorCategory || item.category || '').trim();
     if (rawCat && !isGenericCategory(rawCat)) {
       const pair = taxonomyPairForMinor(rawCat);
       const major = canonicalMajor(rawCat) || (pair ? pair.major : null);
@@ -715,6 +760,42 @@ function inferCategoryFromLineItems(lineItems = []) {
     return sorted[0][0];
   }
   return 'Others – New Product';
+}
+
+/**
+ * Infer the best-fitting minor category from line items when the model returned null or unclassified.
+ * Minor category extraction is mandatory in AI extraction flows and should never be null.
+ */
+function inferMinorCategoryFromLineItems(lineItems = [], resolvedMajor = null) {
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    return resolvedMajor ? defaultMinorForMajor(resolvedMajor) : defaultMinorForMajor('Others – New Product');
+  }
+  const minorCounts = {};
+
+  for (const item of lineItems) {
+    const rawMinor = (item.minorCategory || item.category || '').trim();
+    if (rawMinor && !isGenericCategory(rawMinor)) {
+      const pair = taxonomyPairForMinor(rawMinor);
+      if (pair && pair.minor) {
+        if (!resolvedMajor || isMinorUnderMajor(resolvedMajor, pair.minor)) {
+          minorCounts[pair.minor] = (minorCounts[pair.minor] || 0) + 3;
+        }
+      }
+    }
+    const match = matchByKeyword(`${item.itemName || ''} ${item.technicalSpecs || ''}`);
+    if (match && match.minor) {
+      if (!resolvedMajor || isMinorUnderMajor(resolvedMajor, match.minor)) {
+        minorCounts[match.minor] = (minorCounts[match.minor] || 0) + 2;
+      }
+    }
+  }
+
+  const sorted = Object.entries(minorCounts).sort((a, b) => b[1] - a[1]);
+  if (sorted.length > 0 && sorted[0][0]) {
+    return sorted[0][0];
+  }
+
+  return resolvedMajor ? defaultMinorForMajor(resolvedMajor) : defaultMinorForMajor('Others – New Product');
 }
 
 /**
@@ -1476,6 +1557,8 @@ async function extractLineItems(input = {}) {
             deliveryState: item.deliveryState || tab.deliveryState || '',
             deliveryPincode: item.deliveryPincode || tab.deliveryPincode || '',
             category: item.category || tab.category || '',
+            minorCategory: item.minorCategory || tab.minorCategory || item.category || tab.category || '',
+            majorCategory: item.majorCategory || tab.majorCategory || '',
           };
         });
       }
@@ -1493,6 +1576,8 @@ async function extractLineItems(input = {}) {
           itemCount: lineItems.length,
           documentTitle: parsed.documentTitle || null,
           category: parsed.category || null,
+          majorCategory: parsed.majorCategory || null,
+          minorCategory: parsed.minorCategory || null,
           estimatedBudget: normalizeAmount(parsed.estimatedBudget),
         },
         'GEMINI'
@@ -1505,24 +1590,66 @@ async function extractLineItems(input = {}) {
       }
       activeModelIndex = modelIdx;
 
-      let category = typeof parsed.category === 'string' && parsed.category.trim() ? parsed.category.trim() : null;
-      if (category) {
-        const resolvedMajor = canonicalMajor(category) || taxonomyPairForMinor(category)?.major;
-        if (resolvedMajor) {
-          category = resolvedMajor;
+      let rawMajor = typeof parsed.majorCategory === 'string' && parsed.majorCategory.trim() ? parsed.majorCategory.trim() : null;
+      let rawMinor = typeof parsed.minorCategory === 'string' && parsed.minorCategory.trim() ? parsed.minorCategory.trim() : null;
+      let rawCat = typeof parsed.category === 'string' && parsed.category.trim() ? parsed.category.trim() : null;
+
+      if (rawCat) {
+        const pair = taxonomyPairForMinor(rawCat);
+        if (pair) {
+          if (!rawMinor) rawMinor = pair.minor;
+          if (!rawMajor) rawMajor = pair.major;
+        } else {
+          const canonical = canonicalMajor(rawCat);
+          if (canonical && !rawMajor) rawMajor = canonical;
         }
       }
 
-      if (!category && lineItems.length > 0) {
-        category = inferCategoryFromLineItems(lineItems);
+      if (rawMinor) {
+        const pair = taxonomyPairForMinor(rawMinor);
+        if (pair) {
+          rawMinor = pair.minor;
+          if (!rawMajor) rawMajor = pair.major;
+        }
       }
+
+      let resolvedMajor = rawMajor ? canonicalMajor(rawMajor) : null;
+      if (!resolvedMajor && lineItems.length > 0) {
+        resolvedMajor = inferCategoryFromLineItems(lineItems);
+      }
+      if (!resolvedMajor) {
+        resolvedMajor = 'Others – New Product';
+      }
+
+      let resolvedMinor = null;
+      if (rawMinor && isMinorUnderMajor(resolvedMajor, rawMinor)) {
+        resolvedMinor = rawMinor;
+      } else if (rawMinor && taxonomyPairForMinor(rawMinor)?.major === resolvedMajor) {
+        resolvedMinor = taxonomyPairForMinor(rawMinor).minor;
+      }
+
+      if (!resolvedMinor && lineItems.length > 0) {
+        resolvedMinor = inferMinorCategoryFromLineItems(lineItems, resolvedMajor);
+      }
+
+      if (!resolvedMinor) {
+        resolvedMinor = defaultMinorForMajor(resolvedMajor);
+      }
+
+      lineItems.forEach((it) => {
+        if (!it.minorCategory && it.category) {
+          it.minorCategory = it.category;
+        }
+      });
 
       return {
         status: EXTRACTION_STATUS.SUCCESS,
         lineItems,
         model,
         documentTitle: typeof parsed.documentTitle === 'string' ? parsed.documentTitle : null,
-        category,
+        category: resolvedMajor,
+        majorCategory: resolvedMajor,
+        minorCategory: resolvedMinor,
         deliveryDate: (typeof parsed.deliveryDate === 'string' && parsed.deliveryDate.trim())
           ? parseSpreadsheetDate(parsed.deliveryDate.trim())
           : (lineItems.find((it) => it && it.targetDate)?.targetDate || (tabularItems.length > 0 ? tabularItems.find((it) => it && it.targetDate)?.targetDate : null) || null),
@@ -2086,6 +2213,7 @@ module.exports = {
   isLocationUnsupportedError,
   repairTruncatedJson,
   inferCategoryFromLineItems,
+  inferMinorCategoryFromLineItems,
   getBackoffMs,
   parseSpreadsheetDate,
 };
