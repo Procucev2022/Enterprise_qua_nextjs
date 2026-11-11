@@ -42,8 +42,6 @@ const REPORTED_TABLES = [
   'vendor_catalogue',
   'buyer_accounts',
   'ai_feed',
-  'audit_logs',
-  'audit_chain_state',
   'event_outbox',
   'notifications',
   'vendor_ingestion_sessions',
@@ -54,7 +52,6 @@ const REPORTED_TABLES = [
   'vendor_category_dispatches',
   'vendor_email_dispatch_log',
   'vendor_ingestion_audit',
-  'ai_classification_logs',
   'vendor_directory_sessions',
   'vendor_presence',
   'payment_dues_communications',
@@ -75,7 +72,6 @@ const REPORTED_TABLES = [
   'buyer_credit_transactions',
   'document_vault',
   'account_documents',
-  'user_login_logs',
 ];
 
 function checksum(content) {

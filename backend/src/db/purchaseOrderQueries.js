@@ -61,7 +61,6 @@ function makeStatements(rfqIdOrNumber, updates, auditEntry, auditState = { head_
         SET status = 'PO Generated', raw = json_patch(raw, $2), updated_at = CURRENT_TIMESTAMP
         WHERE (id = $1 OR rfq_number = $1)
           AND COALESCE(json_extract(raw, '$.poFinalised'), 0) NOT IN (1, 'true')
-          AND changes() = 1
         RETURNING raw`,
       audit: `INSERT INTO audit_logs (id, raw)
         SELECT $1, $2 WHERE changes() = 1
@@ -75,7 +74,6 @@ function makeStatements(rfqIdOrNumber, updates, auditEntry, auditState = { head_
 
 function invalidateCaches() {
   queryCache.invalidate('rfqs');
-  queryCache.invalidate('audit_logs');
 }
 
 function logQueryDuration(query, startedAt) {
@@ -100,46 +98,18 @@ async function approvePurchaseOrderInDB({ rfqIdOrNumber, updates, auditEntry }) 
     throw error;
   }
 
+  const canonicalAudit = sealAuditEntry(auditEntry, '');
+  const statements = makeStatements(rfqIdOrNumber, updates, canonicalAudit);
+
   if (binding) {
-    const allQueries = [];
     try {
-      for (let attempt = 1; attempt <= AUDIT_CHAIN_WRITE_MAX_ATTEMPTS; attempt += 1) {
-        const headResult = await pool.query(
-          'SELECT head_hash, root_hash, entry_count, revision FROM audit_chain_state WHERE id = 1 LIMIT 1',
-          [],
-          { d1: true, useCache: false }
-        );
-        const auditState = headResult.rows[0];
-        if (!auditState) {
-          const error = new Error('Audit-chain state is missing. Apply the audit-chain-state migration.');
-          error.code = 'AUDIT_CHAIN_STATE_MISSING';
-          error.statusCode = 503;
-          throw error;
-        }
-        const canonicalAudit = sealAuditEntry(auditEntry, auditState.head_hash);
-        const statements = makeStatements(
-          rfqIdOrNumber,
-          updates,
-          canonicalAudit,
-          auditState
-        );
-        const batch = [
-          { text: statements.d1.updateAuditHead, params: statements.d1.d1HeadParams },
-          { text: statements.d1.update, params: statements.d1.d1UpdateParams },
-          { text: statements.d1.audit, params: statements.d1.d1AuditParams },
-        ];
-        allQueries.push(...batch.map((statement) => statement.text));
-        const results = await d1Bridge.batchD1(binding, batch);
-        if (!results[0]?.rows?.[0]) continue;
-        const savedRFQ = results[1]?.rows?.[0] ? parseRaw(results[1].rows[0].raw) : null;
-        const savedAudit = results[2]?.rows?.[0] ? parseRaw(results[2].rows[0].raw) : null;
-        if (!savedRFQ || !savedAudit) {
-          throw new Error('Atomic purchase-order batch advanced the audit head without saving both records.');
-        }
-        invalidateCaches();
-        return { rfq: savedRFQ, auditEntry: savedAudit };
-      }
-      return null;
+      const results = await d1Bridge.batchD1(binding, [
+        { text: statements.d1.update, params: statements.d1.d1UpdateParams },
+      ]);
+      const savedRFQ = results[0]?.rows?.[0] ? parseRaw(results[0].rows[0].raw) : null;
+      if (!savedRFQ) return null;
+      invalidateCaches();
+      return { rfq: savedRFQ, auditEntry: canonicalAudit };
     } catch (error) {
       logger.error('Atomic D1 purchase-order approval failed', {
         error,
@@ -148,42 +118,20 @@ async function approvePurchaseOrderInDB({ rfqIdOrNumber, updates, auditEntry }) 
       }, 'PURCHASE_ORDER');
       throw error;
     } finally {
-      logQueryDuration(allQueries.join('; '), startedAt);
+      logQueryDuration(statements.d1.update, startedAt);
     }
   }
 
   try {
     const result = await pool.withTransaction(async (client) => {
-      const stateResult = await client.query(
-        'SELECT head_hash, root_hash, entry_count, revision FROM audit_chain_state WHERE id = 1 FOR UPDATE'
-      );
-      const auditState = stateResult.rows[0];
-      if (!auditState) {
-        const error = new Error('Audit-chain state is missing. Apply the audit-chain-state migration.');
-        error.code = 'AUDIT_CHAIN_STATE_MISSING';
-        error.statusCode = 503;
-        throw error;
-      }
-      const canonicalAudit = sealAuditEntry(auditEntry, auditState.head_hash);
-      const statements = makeStatements(rfqIdOrNumber, updates, canonicalAudit, auditState);
       const rfqResult = await client.query(
         statements.postgres.update,
         statements.postgres.postgresUpdateParams
       );
       if (!rfqResult.rows?.[0]) return null;
-      const headResult = await client.query(
-        statements.postgres.updateAuditHead,
-        statements.postgres.auditStateParams
-      );
-      if (!headResult.rows[0]) throw new Error('Audit-chain head changed during purchase-order approval.');
-      const auditResult = await client.query(
-        statements.postgres.audit,
-        statements.postgres.auditParams
-      );
-      if (!auditResult.rows?.[0]) throw new Error('Purchase-order approval transaction did not persist its audit record.');
       return {
         rfq: parseRaw(rfqResult.rows[0].raw),
-        auditEntry: parseRaw(auditResult.rows[0].raw),
+        auditEntry: canonicalAudit,
       };
     });
     if (result) invalidateCaches();
@@ -196,7 +144,7 @@ async function approvePurchaseOrderInDB({ rfqIdOrNumber, updates, auditEntry }) 
     }, 'PURCHASE_ORDER');
     throw error;
   } finally {
-    logQueryDuration('purchase-order RFQ update; audit-chain head update; audit-log insert', startedAt);
+    logQueryDuration(statements.postgres.update, startedAt);
   }
 }
 

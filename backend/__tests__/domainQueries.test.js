@@ -1523,23 +1523,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
   });
 
   describe('audit logs', () => {
-    test('getAuditLogsFromDB maps rows to their raw objects, in sequence order', async () => {
-      const entry = { id: 'log-1', action: 'Created vendor' };
-      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: entry }] }) };
-
-      await expect(domainQueries.getAuditLogsFromDB()).resolves.toEqual([entry]);
-      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
+    test('getAuditLogsFromDB returns an empty array without querying dropped database table', async () => {
+      await expect(domainQueries.getAuditLogsFromDB()).resolves.toEqual([]);
     });
 
-    test('getAuditLogsFromDB applies limit clause when limit is specified', async () => {
-      const entry = { id: 'log-top' };
-      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: entry }] }) };
-
+    test('getAuditLogsFromDB returns empty array when limit is specified', async () => {
       const res = await domainQueries.getAuditLogsFromDB(50);
-      expect(res).toEqual([entry]);
-      const [sql, params] = pool.pool.query.mock.calls[0];
-      expect(sql).toContain('LIMIT $1');
-      expect(params).toEqual([50]);
+      expect(res).toEqual([]);
     });
 
     test('legacy audit upsert delegates to the chain-safe append', async () => {
@@ -1549,15 +1539,6 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       await expect(domainQueries.upsertAuditLogInDB(entry)).resolves.toEqual(persisted);
       expect(appendSpy).toHaveBeenCalledWith(entry);
-    });
-
-    // audit_logs has been ported to D1 (see d1Bridge.js), which has no JSON
-    // column type — raw comes back as a TEXT string there.
-    test('getAuditLogsFromDB parses a string raw column (D1)', async () => {
-      const entry = { id: 'log-1', action: 'LOGIN' };
-      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(entry) }] }) };
-
-      await expect(domainQueries.getAuditLogsFromDB()).resolves.toEqual([entry]);
     });
 
     test('legacy audit upsert preserves chain-safe D1 results', async () => {
@@ -2138,8 +2119,8 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const originalNow = Date.now;
       Date.now = jest.fn(() => Date.parse('2026-11-05T00:00:00.000Z'));
       const { logger } = require('../src/services/loggerService');
-      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
-      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => { });
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => { });
       pool.pool = {
         query: jest.fn()
           .mockResolvedValueOnce({ rows: [{ id: 'job-1', status: 'pending', attempts: 1, fire_at: 'retry-at' }] })
@@ -2592,7 +2573,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       };
       jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
       jest.spyOn(d1Bridge, 'batchD1').mockRejectedValue(error);
-      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => { });
 
       await domainQueries.upsertVendorInDB(vendor);
       await new Promise((resolve) => setImmediate(resolve));
@@ -2694,7 +2675,7 @@ describe('D1 vendor search index readiness', () => {
     await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'IT' });
 
     expect(query.mock.calls.some(([sql]) => sql.includes('sqlite_master'))).toBe(false);
-    expect(query.mock.calls.every(([,, options]) => !options?.d1Text?.includes('vendors_search_fts'))).toBe(true);
+    expect(query.mock.calls.every(([, , options]) => !options?.d1Text?.includes('vendors_search_fts'))).toBe(true);
   });
 
   test('narrows public D1 directory searches while preserving their exact filters', async () => {

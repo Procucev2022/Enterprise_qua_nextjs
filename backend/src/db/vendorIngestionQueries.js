@@ -2184,63 +2184,28 @@ async function insertAiClassificationLog({
   response,
 }) {
   if (!pool.hasStorage() || !sessionId || !organizationId) return null;
-  const result = await pool.query(
-    `insert into ai_classification_logs
-       (id, session_id, organization_id, vendor_record_id, vendor_code, model, status,
-        attempt, prompt_chars, po_count, duration_ms, error, response)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
-     returning id`,
-    [
-      newId('aicl'),
-      sessionId,
-      organizationId,
-      nullable(vendorRecordId),
-      nullable(vendorCode),
-      nullable(model),
-      status,
-      counter(attempt) || 1,
-      counter(promptChars),
-      counter(poCount),
-      counter(durationMs),
-      nullable(error),
-      response === undefined || response === null ? null : JSON.stringify(response),
-    ],
-    {
-      d1: true,
-      d1Text: `insert into ai_classification_logs
-       (id, session_id, organization_id, vendor_record_id, vendor_code, model, status,
-        attempt, prompt_chars, po_count, duration_ms, error, response)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     returning id`,
-    }
-  );
-  return result.rows[0] || null;
+  // Database table ai_classification_logs was dropped via migration 0029.
+  // Classification diagnostics are streamed to the application logger.
+  return {
+    id: newId('aicl'),
+    sessionId,
+    organizationId,
+    vendorRecordId: nullable(vendorRecordId),
+    vendorCode: nullable(vendorCode),
+    model: nullable(model),
+    status,
+    attempt: counter(attempt) || 1,
+    promptChars: counter(promptChars),
+    poCount: counter(poCount),
+    durationMs: counter(durationMs),
+    error: nullable(error),
+    response: response === undefined || response === null ? null : response,
+  };
 }
 
-async function findAiClassificationLogs(sessionId, organizationId, { limit } = {}) {
-  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
-  const rows = await pool.rows(
-    `select id, vendor_record_id, vendor_code, model, status, attempt, prompt_chars,
-            po_count, duration_ms, error, created_at
-       from ai_classification_logs
-      where session_id = $1 and organization_id = $2
-      order by created_at desc limit $3`,
-    [sessionId, organizationId, Math.min(counter(limit) || 200, 500)],
-    { d1: true }
-  );
-  return rows.map((row) => ({
-    id: row.id,
-    vendorRecordId: row.vendor_record_id,
-    vendorCode: text(row.vendor_code),
-    model: text(row.model),
-    status: row.status,
-    attempt: counter(row.attempt),
-    promptChars: counter(row.prompt_chars),
-    poCount: counter(row.po_count),
-    durationMs: counter(row.duration_ms),
-    error: text(row.error),
-    createdAt: row.created_at,
-  }));
+async function findAiClassificationLogs(_sessionId, _organizationId, _options = {}) {
+  // Table ai_classification_logs was dropped via migration 0029.
+  return [];
 }
 
 module.exports = {

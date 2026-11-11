@@ -30,7 +30,6 @@ const KNOWN_POSTGRES_TABLES = [
   'category_division',
   'org_division_category',
   'ai_feed',
-  'audit_logs',
   'management_approvals',
   'management_approval_events',
   'client_registration_events',
@@ -1027,7 +1026,7 @@ function getViewerHtml() {
       document.getElementById('kpiEvaluations').innerText = globalData.evaluations?.count ?? 0;
       document.getElementById('kpiCatalogue').innerText = globalData.vendor_catalogue?.count ?? 0;
       document.getElementById('kpiBuyers').innerText = globalData.buyer_accounts?.count ?? 0;
-      const feedCount = (globalData.ai_feed?.count ?? 0) + (globalData.audit_logs?.count ?? 0);
+      const feedCount = (globalData.ai_feed?.count ?? 0);
       document.getElementById('kpiFeed').innerText = feedCount;
     }
 

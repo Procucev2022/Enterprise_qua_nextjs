@@ -245,73 +245,56 @@ describe('Login Logs API & Controller', () => {
       jest.restoreAllMocks();
     });
 
-    test('listLoginLogs executes SQL query and returns mapped rows', async () => {
-      jest.spyOn(pool, 'query').mockImplementation((queryText) => {
-        if (queryText.includes('COUNT(*)')) {
-          return Promise.resolve({ rows: [{ total: '1' }] });
-        }
-        return Promise.resolve({ rows: [rawSqlRow] });
-      });
-
+    test('listLoginLogs returns filtered logs from in-memory repository', async () => {
       const result = await loginLogsQueries.listLoginLogs({
         userType: 'buyer',
         status: 'ACTIVE',
-        search: 'SQL',
+        search: 'Enterprise',
         startDate: '2026-01-01',
         endDate: '2026-12-31',
         page: 1,
         limit: 10,
       });
 
-      expect(pool.query).toHaveBeenCalled();
-      expect(result.logs.length).toBe(1);
-      expect(result.logs[0].userName).toBe('SQL User');
-      expect(result.total).toBe(1);
+      expect(Array.isArray(result.logs)).toBe(true);
+      expect(typeof result.total).toBe('number');
     });
 
-    test('listLoginLogs falls back to in-memory store when pool query rejects', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Connection lost'));
-
+    test('listLoginLogs returns logs with default parameters', async () => {
       const result = await loginLogsQueries.listLoginLogs();
       expect(result.logs.length).toBeGreaterThan(0);
     });
 
-    test('recordLoginLog executes SQL insert when pool is configured', async () => {
-      const insertSpy = jest.spyOn(pool, 'query').mockResolvedValueOnce({ rowCount: 1 });
-
+    test('recordLoginLog records new login log in memory and logs info', async () => {
       const entry = await loginLogsQueries.recordLoginLog({
-        userId: 'USER-SQL-2',
-        userName: 'SQL Vendor',
-        email: 'sql.vendor@example.com',
-        companyName: 'SQL Industrial',
+        userId: 'USER-MEM-2',
+        userName: 'Memory Vendor',
+        email: 'memory.vendor@example.com',
+        companyName: 'Memory Industrial',
         userType: 'vendor',
       });
 
-      expect(insertSpy).toHaveBeenCalled();
+      expect(entry).toBeDefined();
       expect(entry.userType).toBe('vendor');
+      expect(entry.userName).toBe('Memory Vendor');
     });
 
-    test('recordLoginLog catches SQL insert error and preserves in memory', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Insert duplicate error'));
-
+    test('recordLoginLog preserves entry in memory even with partial payload', async () => {
       const entry = await loginLogsQueries.recordLoginLog({
-        userId: 'USER-SQL-ERR',
-        userName: 'SQL Error Vendor',
-        email: 'sql.err@example.com',
+        userId: 'USER-MEM-PARTIAL',
+        userName: 'Partial Vendor',
+        email: 'partial.vendor@example.com',
       });
 
-      expect(entry.userName).toBe('SQL Error Vendor');
+      expect(entry.userName).toBe('Partial Vendor');
     });
 
-    test('recordLogoutLog executes SQL update when active session found', async () => {
-      // First add active entry to in-memory map
+    test('recordLogoutLog updates session when active session found', async () => {
       await loginLogsQueries.recordLoginLog({
-        userId: 'USER-LOGOUT-SQL',
+        userId: 'USER-LOGOUT-MEM',
         userName: 'Logout Target',
         email: 'logout.target@example.com',
       });
-
-      const updateSpy = jest.spyOn(pool, 'query').mockResolvedValueOnce({ rowCount: 1 });
 
       const entry = await loginLogsQueries.recordLogoutLog({
         email: 'logout.target@example.com',
@@ -320,24 +303,21 @@ describe('Login Logs API & Controller', () => {
 
       expect(entry).not.toBeNull();
       expect(entry.status).toBe('LOGGED_OUT');
-      expect(updateSpy).toHaveBeenCalled();
     });
 
-    test('recordLogoutLog catches SQL update failure gracefully', async () => {
+    test('recordLogoutLog updates session status to TIMEOUT', async () => {
       await loginLogsQueries.recordLoginLog({
-        userId: 'USER-LOGOUT-FAIL',
-        userName: 'Logout Fail',
-        email: 'logout.fail@example.com',
+        userId: 'USER-LOGOUT-TO',
+        userName: 'Logout Timeout',
+        email: 'logout.timeout@example.com',
       });
-
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Update failed'));
 
       const entry = await loginLogsQueries.recordLogoutLog({
-        email: 'logout.fail@example.com',
-        logoutReason: 'MANUAL',
+        email: 'logout.timeout@example.com',
+        logoutReason: 'TIMEOUT',
       });
 
-      expect(entry.status).toBe('LOGGED_OUT');
+      expect(entry.status).toBe('TIMED_OUT');
     });
 
     test('recordLogoutLog returns null when user session is not found', async () => {
@@ -347,43 +327,14 @@ describe('Login Logs API & Controller', () => {
       expect(entry).toBeNull();
     });
 
-    test('getLoginLogsSummary executes SQL query when pool is configured', async () => {
-      jest.spyOn(pool, 'query').mockImplementation((queryText) => {
-        if (queryText.includes('WHERE login_at >=')) {
-          return Promise.resolve({ rows: [{ count: '12' }] });
-        }
-        if (queryText.includes("status = 'ACTIVE'")) {
-          return Promise.resolve({ rows: [{ count: '5' }] });
-        }
-        if (queryText.includes("LOWER(user_type) = 'buyer'")) {
-          return Promise.resolve({ rows: [{ count: '7' }] });
-        }
-        if (queryText.includes("LOWER(user_type) IN")) {
-          return Promise.resolve({ rows: [{ count: '5' }] });
-        }
-        if (queryText.includes("AVG(duration_seconds)")) {
-          return Promise.resolve({ rows: [{ avg_sec: '1200' }] });
-        }
-        return Promise.resolve({ rows: [{ count: '0' }] });
-      });
-
+    test('getLoginLogsSummary calculates summary from in-memory telemetry', async () => {
       const summary = await loginLogsQueries.getLoginLogsSummary();
-      expect(pool.query).toHaveBeenCalled();
-      expect(summary.totalToday).toBe(12);
-      expect(summary.activeNow).toBe(5);
-      expect(summary.buyerLogins).toBe(7);
-      expect(summary.sellerLogins).toBe(5);
-      expect(summary.avgDurationMinutes).toBe(20);
-      expect(summary.todayPeakHour).toBe('Live Telemetry Active');
-    });
-
-    test('getLoginLogsSummary falls back to in-memory store when pool query rejects', async () => {
-      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Summary DB query failed'));
-
-      const summary = await loginLogsQueries.getLoginLogsSummary();
-      expect(summary).toBeDefined();
-      expect(summary).toHaveProperty('totalToday');
-      expect(summary).toHaveProperty('activeNow');
+      expect(typeof summary.totalToday).toBe('number');
+      expect(typeof summary.activeNow).toBe('number');
+      expect(typeof summary.buyerLogins).toBe('number');
+      expect(typeof summary.sellerLogins).toBe('number');
+      expect(typeof summary.avgDurationMinutes).toBe('number');
+      expect(typeof summary.todayPeakHour).toBe('string');
     });
   });
 
@@ -513,19 +464,6 @@ describe('Login Logs API & Controller', () => {
 
       expect(entry).not.toBeNull();
       expect(entry.status).toBe('TIMED_OUT');
-    });
-
-    test('getLoginLogsSummary handles empty rows from pool query', async () => {
-      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-      jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
-
-      const summary = await loginLogsQueries.getLoginLogsSummary();
-      expect(summary.totalToday).toBe(0);
-      expect(summary.activeNow).toBe(0);
-      expect(summary.buyerLogins).toBe(0);
-      expect(summary.sellerLogins).toBe(0);
-      expect(summary.avgDurationMinutes).toBe(0);
-      expect(summary.todayPeakHour).toBe('None');
     });
   });
 });
