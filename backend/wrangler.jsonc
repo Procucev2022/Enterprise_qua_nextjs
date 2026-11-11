@@ -120,6 +120,7 @@
       "vars": {
         "NODE_ENV": "development",
         "DAILY_RFQ_REPORT_EMAILS": "veerababu.v@procucev.com",
+        "AUTH_SECRET": "CceiP6vrShsPkGi3HVvDow/8S2d79yP5VEzvXXwMlm0=",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
         "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash",
