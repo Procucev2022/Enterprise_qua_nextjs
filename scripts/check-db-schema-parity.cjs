@@ -187,6 +187,13 @@ function parseSchemaFiles(files) {
         addColumns(tables, tableName, [columnName]);
       }
     }
+
+    const dropTablePattern = /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:"([^"]+)"|`([^`]+)`|([a-z_][a-z0-9_]*))/gi;
+    let dropTableMatch;
+    while ((dropTableMatch = dropTablePattern.exec(source))) {
+      const tableName = (dropTableMatch[1] || dropTableMatch[2] || dropTableMatch[3]).toLowerCase();
+      tables.delete(tableName);
+    }
   }
   return tables;
 }

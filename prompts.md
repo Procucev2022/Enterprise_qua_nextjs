@@ -5231,3 +5231,25 @@ This is our vendor’s profile. The vendor has not yet signed in to the portal, 
 Can you please check & fix this.
 ```
 
+---
+
+### Prompt 139
+
+**Timestamp**: 2026-11-11T19:06:58+05:30
+
+```text
+Currently for any small change in antigravity, it is taking too much time in quality checks, any way to speed it up.
+```
+
+---
+
+### Prompt 140
+
+**Timestamp**: 2026-11-11T19:32:02+05:30
+
+```text
+Seems like logs are getting stored in database, in localhost running it should be stored in file system otherwise it should be properly logs in cloudflare, no need to save in database, delete any table if exists in any of the deployment for this. make such kind of database migration changes.
+```
+
+
+

@@ -69,7 +69,6 @@ const REPORTED_TABLES = [
   'internal_tasks',
   'internal_task_activities',
   'approvals',
-  'system_error_logs',
   'vendor_categories_indexed',
   'rfq_unlocks',
   'vendor_credit_transactions',
