@@ -718,8 +718,12 @@ async function buildRFQDraft(payload = {}, options = {}) {
   // Items with no major of their own take it; items whose own classification
   // conflicts with it are kept as classified but flagged for review.
   // A declared minor (the model may return either level) resolves to its own major.
+  const declaredStatedPair = resolveStatedCategory(payload.category);
   const declaredMajor =
-    canonicalMajor(payload.category) || taxonomyPairForMinor(payload.category)?.major || '';
+    canonicalMajor(payload.category) ||
+    declaredStatedPair?.major ||
+    taxonomyPairForMinor(payload.category)?.major ||
+    '';
   if (declaredMajor) {
     entities.forEach((entity) => {
       if (!entity.majorCategory) {
@@ -728,7 +732,9 @@ async function buildRFQDraft(payload = {}, options = {}) {
         entity.categoryMismatch = true;
       }
       if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
-        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        entity.minorCategory = (declaredStatedPair?.minor && isMinorUnderMajor(entity.majorCategory, declaredStatedPair.minor))
+          ? declaredStatedPair.minor
+          : defaultMinorForMajor(entity.majorCategory);
         entity.category = entity.minorCategory;
         if (entity.classificationStatus === STATUS.DEFAULT) {
           entity.classificationStatus = STATUS.KEYWORD;
@@ -770,7 +776,10 @@ async function buildRFQDraft(payload = {}, options = {}) {
         entity.majorCategory = headerCategory;
       }
       if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
-        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        const fallbackMinor = (declaredStatedPair?.minor && isMinorUnderMajor(entity.majorCategory, declaredStatedPair.minor))
+          ? declaredStatedPair.minor
+          : defaultMinorForMajor(entity.majorCategory);
+        entity.minorCategory = fallbackMinor;
         entity.category = entity.minorCategory;
         if (entity.classificationStatus === STATUS.DEFAULT) {
           entity.classificationStatus = STATUS.KEYWORD;

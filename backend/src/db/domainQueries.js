@@ -416,7 +416,7 @@ async function countPublicVendorsMatchingCategories(signals) {
       params.push(`%${sig}%`);
       const p = params.length;
       orGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
+        lower(coalesce(major_category, raw->>'majorCategory', raw->>'category', '')) LIKE $${p}
         OR lower((raw->'minorCategories')::text) LIKE $${p}
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
@@ -503,7 +503,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
       params.push(`%${sig}%`);
       const p = params.length;
       orGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
+        lower(coalesce(major_category, raw->>'majorCategory', raw->>'category', '')) LIKE $${p}
         OR lower((raw->'minorCategories')::text) LIKE $${p}
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
