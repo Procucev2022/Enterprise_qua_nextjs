@@ -5097,3 +5097,14 @@ Can we remove these gemini model configuration from env variables, this gemini m
 ```text
 Why this login error? for what purpose, session storage is needed in login?
 ```
+
+
+---
+
+### Prompt 128
+
+**Timestamp**: 2026-11-11T09:32:03+05:30
+
+```text
+Why are we storing cloudlfare env variables in wrangler file, or in codebase, it should be fetched from cloudflare env variables in dashboard?
+```
