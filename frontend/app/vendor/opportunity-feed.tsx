@@ -425,7 +425,16 @@ export default function OpportunityFeed({
   // Connect/Select advertise real $ prices, so — same as vendor-subscription.tsx
   // — they go through the dummy payment gateway rather than flipping the plan
   // for free on click. This modal previously bypassed that gate entirely.
-  const [pendingPayment, setPendingPayment] = React.useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
+  const [pendingPayment, setPendingPayment] = React.useState<{
+    planId: 'connect' | 'select';
+    planName: string;
+    price: string;
+    billingDurationLabel?: string;
+    breakdown?: {
+      basePrice: string;
+      gstAmount: string;
+    };
+  } | null>(null);
 
   const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     const plan = e.currentTarget.getAttribute('data-plan') || 'premium';
@@ -433,9 +442,18 @@ export default function OpportunityFeed({
       handleUpgradePlan(plan);
       return;
     }
-    const planName = plan === 'connect' ? 'Connect Model (50 RFQs / 3 Months)' : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
-    const price = plan === 'connect' ? '₹2' : '₹5';
-    setPendingPayment({ planId: plan as 'connect' | 'select', planName, price });
+    const isConnect = plan === 'connect';
+    const planName = isConnect ? 'Connect Model (50 RFQs / 3 Months)' : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+    const price = isConnect ? '₹8,849' : '₹17,699';
+    const basePrice = isConnect ? '₹7,499' : '₹14,999';
+    const gstAmount = isConnect ? '+ ₹1,350 (18% GST)' : '+ ₹2,700 (18% GST)';
+    setPendingPayment({
+      planId: plan as 'connect' | 'select',
+      planName,
+      price,
+      billingDurationLabel: '12 Months (Recommended)',
+      breakdown: { basePrice, gstAmount },
+    });
   };
 
   return (
@@ -1029,7 +1047,7 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Connect Model (₹2 / 3 mo)
+                    Connect Model (₹7,499 + 18% GST / yr)
                   </h4>
                   <p className="text-[10px] text-slate-400 mt-0.5">Download up to 50 RFQs in 3 months from Marketplace.</p>
                 </div>
@@ -1052,7 +1070,7 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Select Model (₹5 / 3 mo)
+                    Select Model (₹14,999 + 18% GST / yr)
                   </h4>
                   <p className="text-[10px] text-slate-400 mt-0.5">Item Catalogue (100 products) + 100 RFQs / 3 months.</p>
                 </div>
@@ -1088,6 +1106,8 @@ export default function OpportunityFeed({
         planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
+        billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+        breakdown={pendingPayment?.breakdown}
         createPaymentLink={createVendorPaymentLink}
       />
     </div>

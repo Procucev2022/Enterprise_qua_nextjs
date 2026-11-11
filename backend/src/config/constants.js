@@ -1426,24 +1426,14 @@ const ZOHO_WEBHOOK_MESSAGES = Object.freeze({
 });
 
 function getSellerSubscriptionPricing() {
-  const gstRate = (zohoConfigOverrides.GST_RATE !== undefined)
-    ? zohoConfigOverrides.GST_RATE
-    : getSubscriptionGstRate();
+  const connect12Base = Number(process.env.SELLER_V1_12M_PRICE || 7499);
+  const connect6Base = Number(process.env.SELLER_V1_6M_PRICE || 4125);
 
-  const connect12Inclusive = Number(process.env.SELLER_V1_12M_PRICE || 7499);
-  const connect6Inclusive = Number(process.env.SELLER_V1_6M_PRICE || 4125);
-  const connect12Base = Math.round((connect12Inclusive / (1 + gstRate)) * 100) / 100;
-  const connect6Base = Math.round((connect6Inclusive / (1 + gstRate)) * 100) / 100;
+  const select12Base = Number(process.env.SELLER_V2_12M_PRICE || 14999);
+  const select6Base = Number(process.env.SELLER_V2_6M_PRICE || 8250);
 
-  const select12Inclusive = Number(process.env.SELLER_V2_12M_PRICE || 14999);
-  const select6Inclusive = Number(process.env.SELLER_V2_6M_PRICE || 8250);
-  const select12Base = Math.round((select12Inclusive / (1 + gstRate)) * 100) / 100;
-  const select6Base = Math.round((select6Inclusive / (1 + gstRate)) * 100) / 100;
-
-  const v312Inclusive = Number(process.env.SELLER_V3_12M_PRICE || 19999);
-  const v36Inclusive = Number(process.env.SELLER_V3_6M_PRICE || 11000);
-  const v312Base = Math.round((v312Inclusive / (1 + gstRate)) * 100) / 100;
-  const v36Base = Math.round((v36Inclusive / (1 + gstRate)) * 100) / 100;
+  const v312Base = Number(process.env.SELLER_V3_12M_PRICE || 19999);
+  const v36Base = Number(process.env.SELLER_V3_6M_PRICE || 11000);
 
   return {
     connect: { '12_months': connect12Base, '6_months': connect6Base },

@@ -164,16 +164,16 @@ function serveRFQs(fixtures: RFQFixture[]) {
       json: async () =>
         /\/api\/rfqs(\?|$)/.test(String(url))
           ? {
-              success: true,
-              data: fixtures.map((fixture) => ({
-                category: 'Engineering Spares - Mechanical',
-                status: 'Quotes Pending',
-                createdAt: '2026-09-04T10:00:00.000Z',
-                quotes: [],
-                extractedEntities: [],
-                ...fixture,
-              })),
-            }
+            success: true,
+            data: fixtures.map((fixture) => ({
+              category: 'Engineering Spares - Mechanical',
+              status: 'Quotes Pending',
+              createdAt: '2026-09-04T10:00:00.000Z',
+              quotes: [],
+              extractedEntities: [],
+              ...fixture,
+            })),
+          }
           : /\/api\/bootstrap/.test(String(url))
             ? { success: true, data: { vendors: [SELF_VENDOR_RECORD] } }
             : { success: true, data: {} },
@@ -848,7 +848,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     // Connect is the first actionable row while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Pay ₹2/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Pay ₹8,849/i }));
       await Promise.resolve();
     });
     expect(global.fetch).toHaveBeenCalledWith(
@@ -862,7 +862,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[1]);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Pay ₹5/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Pay ₹17,699/i }));
       await Promise.resolve();
     });
     expect(global.fetch).toHaveBeenCalledWith(
@@ -940,7 +940,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     fireEvent.click(connectBtn); // Connect plan — opens the real Zoho checkout modal
     expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
 
-    const payBtn = screen.getByRole('button', { name: /Pay ₹2/i });
+    const payBtn = screen.getByRole('button', { name: /Pay ₹8,849/i });
     await act(async () => {
       fireEvent.click(payBtn);
       await Promise.resolve();

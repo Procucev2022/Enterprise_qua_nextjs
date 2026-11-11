@@ -5196,3 +5196,13 @@ On the left - It is showing Quotes - 1 and the one with arrow marked showing 0/0
 
 
 
+
+---
+
+### Prompt 136
+
+**Timestamp**: 2026-11-11T16:45:01+05:30
+
+```text
+Vendor-side Zoho payment is not working, and 18% GST is not being added to the subscription amount. Buyer-side payment is working correctly with 18% GST.
+```

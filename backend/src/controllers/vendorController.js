@@ -780,7 +780,13 @@ async function updateSubscription(req, res, next) {
   try {
     const { id } = req.params;
     const { plan } = req.body;
-    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
+    let existing = storeService.getVendorById(id, 'all');
+    if (!existing) {
+      existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    }
+    if (!existing && id === 'me' && req.user?.email) {
+      existing = storeService.getVendorById(req.user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(req.user.email, 'all'));
+    }
     if (!existing) {
       logger.warn(`Vendor not found for subscription update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -811,7 +817,13 @@ async function createSubscriptionPaymentLink(req, res, next) {
     const { id } = req.params;
     const { plan, billingDuration = '12_months', duration } = req.body || {};
     const normalizedDuration = (billingDuration || duration) === '6_months' ? '6_months' : '12_months';
-    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
+    let existing = storeService.getVendorById(id, 'all');
+    if (!existing) {
+      existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    }
+    if (!existing && id === 'me' && req.user?.email) {
+      existing = storeService.getVendorById(req.user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(req.user.email, 'all'));
+    }
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -821,6 +833,30 @@ async function createSubscriptionPaymentLink(req, res, next) {
     }
     if (!existing.email) {
       return res.status(400).json({ success: false, error: 'Vendor has no email on file to create a payment link for.' });
+    }
+
+    let phone = existing.phone || '';
+    if (!phone) {
+      let identityUser = null;
+      try {
+        identityUser = await identityQueries.findUserByEmail(existing.email);
+      } catch (identityLookupError) {
+        logger.error(
+          'Identity profile lookup failed while resolving vendor payment contact phone; using the missing-phone fallback',
+          identityLookupError,
+          'VENDOR_CONTROLLER'
+        );
+      }
+      phone = (identityUser && identityUser.mobile) || '';
+    }
+    if (!phone && req.user?.mobile) {
+      phone = req.user.mobile;
+    }
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        error: 'No mobile number on file for this account. Please update your profile with a mobile number before subscribing.',
+      });
     }
 
     const amount = computeZohoPlanAmount(plan, normalizedDuration);
@@ -837,12 +873,13 @@ async function createSubscriptionPaymentLink(req, res, next) {
     const returnBase = String(ZOHO_CONFIG.RETURN_URL_BASE || '').replace(/\/+$/, '');
     const returnUrl = `${returnBase}/vendor/vendor-subscription?linkId=${linkId}`;
 
+    const normalizedPhone = normalizePhone(phone) || phone;
     const result = await zohoPaymentService.createPaymentLink({
       planId: plan,
       planLabel,
       amountInr: amount,
       email: existing.email,
-      phone: normalizePhone(existing.phone),
+      phone: normalizedPhone,
       returnUrl,
     });
 
@@ -887,7 +924,13 @@ function getSubscriptionPricing(req, res) {
 async function getPaymentLinks(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
+    let existing = storeService.getVendorById(id, 'all');
+    if (!existing) {
+      existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    }
+    if (!existing && id === 'me' && req.user?.email) {
+      existing = storeService.getVendorById(req.user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(req.user.email, 'all'));
+    }
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -911,7 +954,13 @@ async function getPaymentLinks(req, res, next) {
 async function downloadInvoice(req, res, next) {
   try {
     const { id, linkId } = req.params;
-    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
+    let existing = storeService.getVendorById(id, 'all');
+    if (!existing) {
+      existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    }
+    if (!existing && id === 'me' && req.user?.email) {
+      existing = storeService.getVendorById(req.user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(req.user.email, 'all'));
+    }
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }

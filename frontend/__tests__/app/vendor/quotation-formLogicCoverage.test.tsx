@@ -409,8 +409,8 @@ describe('upgrade plan selection', () => {
   });
 
   test.each([
-    ['connect', 'Connect Model (Marketplace Access)', '₹2 / 3 months'],
-    ['select', 'Select Model (Catalogue + Scale)', '₹5 / 3 months'],
+    ['connect', 'Connect Model (Marketplace Access)', '₹8,849'],
+    ['select', 'Select Model (Catalogue + Scale)', '₹17,699'],
   ] as const)(
     'opens checkout for the %s plan with its name and price and pays with that plan id',
     async (plan, planName, price) => {

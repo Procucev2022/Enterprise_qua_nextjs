@@ -232,6 +232,7 @@ function generateSessionToken(user, options = {}) {
       role: user.role,
       orgId: user.orgId,
       orgName: user.orgName,
+      ...(user.mobile ? { mobile: user.mobile } : {}),
       passwordChangeRequired: user.resetPasswordRequired === true,
       onboardingRequired:
         user.onboardingRequired === true ||

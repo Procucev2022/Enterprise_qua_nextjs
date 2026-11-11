@@ -72,11 +72,32 @@ export default function VendorSubscriptionCenter() {
     })();
   }, [buyerVendors, currentUserSession?.email, checkVendorPaymentLinkStatus, refreshFromDB, showToast]);
 
-  const [pendingPayment, setPendingPayment] = useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
+  const [pendingPayment, setPendingPayment] = useState<{
+    planId: 'connect' | 'select';
+    planName: string;
+    price: string;
+    billingDurationLabel?: string;
+    breakdown?: {
+      basePrice: string;
+      gstAmount: string;
+    };
+  } | null>(null);
   const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);
   const [vendorPricing, setVendorPricing] = useState({
-    connect: { price: '₹7,499', chargeAmount: '₹7,499' },
-    select: { price: '₹14,999', chargeAmount: '₹14,999' },
+    connect: {
+      price: '₹7,499',
+      basePrice: '₹7,499',
+      gstAmount: '+ ₹1,350 (18% GST)',
+      totalWithGst: '₹8,849',
+      chargeAmount: '₹8,849',
+    },
+    select: {
+      price: '₹14,999',
+      basePrice: '₹14,999',
+      gstAmount: '+ ₹2,700 (18% GST)',
+      totalWithGst: '₹17,699',
+      chargeAmount: '₹17,699',
+    },
   });
 
   useEffect(() => {
@@ -86,15 +107,36 @@ export default function VendorSubscriptionCenter() {
       const formatINR = (val: number) => `₹${Math.round(val).toLocaleString('en-IN')}`;
       const connectData = config.seller.connect?.['12_months'] || config.seller.connect?.['6_months'];
       const selectData = config.seller.select?.['12_months'] || config.seller.select?.['6_months'];
-      setVendorPricing({
-        connect: {
-          price: connectData ? formatINR(connectData.totalWithGst) : '₹7,499',
-          chargeAmount: connectData ? formatINR(connectData.totalWithGst) : '₹7,499',
-        },
-        select: {
-          price: selectData ? formatINR(selectData.totalWithGst) : '₹14,999',
-          chargeAmount: selectData ? formatINR(selectData.totalWithGst) : '₹14,999',
-        },
+      const gstRate = config.gstRate ?? 0.18;
+      const gstPercent = config.gstPercent ?? 18;
+
+      setVendorPricing((prev) => {
+        const nextPricing = { ...prev };
+        if (connectData) {
+          const base = connectData.baseDurationPrice || 7499;
+          const gst = connectData.gstAmount || Math.round(base * gstRate * 100) / 100;
+          const total = connectData.totalWithGst || (base + gst);
+          nextPricing.connect = {
+            price: formatINR(base),
+            basePrice: formatINR(base),
+            gstAmount: `+ ${formatINR(gst)} (${gstPercent}% GST)`,
+            totalWithGst: formatINR(total),
+            chargeAmount: formatINR(total),
+          };
+        }
+        if (selectData) {
+          const base = selectData.baseDurationPrice || 14999;
+          const gst = selectData.gstAmount || Math.round(base * gstRate * 100) / 100;
+          const total = selectData.totalWithGst || (base + gst);
+          nextPricing.select = {
+            price: formatINR(base),
+            basePrice: formatINR(base),
+            gstAmount: `+ ${formatINR(gst)} (${gstPercent}% GST)`,
+            totalWithGst: formatINR(total),
+            chargeAmount: formatINR(total),
+          };
+        }
+        return nextPricing;
       });
     });
     return () => {
@@ -106,8 +148,8 @@ export default function VendorSubscriptionCenter() {
     plan === 'premium'
       ? 'Premium Model (Client Uploaded Vendor)'
       : plan === 'connect'
-      ? 'Connect Model (50 RFQs / 3 Months)'
-      : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+        ? 'Connect Model (50 RFQs / 3 Months)'
+        : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
 
   const handleSubscribe = async (plan: 'premium' | 'connect' | 'select') => {
     if (isUpdatingPlan) return;
@@ -132,12 +174,22 @@ export default function VendorSubscriptionCenter() {
   // Premium is free (granted on buyer roster upload) so it switches instantly;
   // Connect/Select advertise real $ prices, so they go through the dummy
   // payment gateway first rather than flipping the plan for free on click.
-  const handlePlanButtonClick = (plan: 'premium' | 'connect' | 'select', price: string) => {
+  const handlePlanButtonClick = (plan: 'premium' | 'connect' | 'select') => {
     if (plan === 'premium') {
       handleSubscribe(plan);
       return;
     }
-    setPendingPayment({ planId: plan, planName: planLabel(plan), price });
+    const pricing = vendorPricing[plan];
+    setPendingPayment({
+      planId: plan,
+      planName: planLabel(plan),
+      price: pricing.totalWithGst,
+      billingDurationLabel: '12 Months (Recommended)',
+      breakdown: {
+        basePrice: pricing.basePrice,
+        gstAmount: pricing.gstAmount,
+      },
+    });
   };
 
   const getMaxQuota = () => {
@@ -233,25 +285,23 @@ export default function VendorSubscriptionCenter() {
       {/* Active Subscription Status Banner */}
       <div className="p-4 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className={`p-2.5 rounded-xl shrink-0 ${
-            vendorSubscription === 'select'
+          <div className={`p-2.5 rounded-xl shrink-0 ${vendorSubscription === 'select'
               ? 'bg-purple-100 dark:bg-purple-950 text-purple-600 dark:text-purple-300'
               : vendorSubscription === 'connect'
-              ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300'
-              : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300'
-          }`}>
+                ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300'
+                : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300'
+            }`}>
             <ShieldCheck size={20} />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400 uppercase font-extrabold tracking-wider">Active Plan</span>
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${
-                vendorSubscription === 'select'
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${vendorSubscription === 'select'
                   ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-300'
                   : vendorSubscription === 'connect'
-                  ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300'
-                  : 'bg-slate-200 dark:bg-gray-800 text-slate-700 dark:text-gray-300 border border-slate-300'
-              }`}>
+                    ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300'
+                    : 'bg-slate-200 dark:bg-gray-800 text-slate-700 dark:text-gray-300 border border-slate-300'
+                }`}>
                 {vendorSubscription === 'select' ? 'Select Model' : vendorSubscription === 'connect' ? 'Connect Model' : 'Premium Model (Client Uploaded)'}
               </span>
             </div>
@@ -276,13 +326,12 @@ export default function VendorSubscriptionCenter() {
             </div>
             <div className="w-full bg-slate-200 dark:bg-gray-800 h-2 rounded-full overflow-hidden">
               <div
-                className={`h-full transition-all ${
-                  vendorRfqDownloadsUsed >= maxQuota
+                className={`h-full transition-all ${vendorRfqDownloadsUsed >= maxQuota
                     ? 'bg-rose-500'
                     : vendorSubscription === 'select'
-                    ? 'bg-purple-600'
-                    : 'bg-indigo-600'
-                }`}
+                      ? 'bg-purple-600'
+                      : 'bg-indigo-600'
+                  }`}
                 style={{ width: `${Math.min(100, (vendorRfqDownloadsUsed / maxQuota) * 100)}%` }}
               />
             </div>
@@ -310,11 +359,10 @@ export default function VendorSubscriptionCenter() {
           return (
             <div
               key={p.id}
-              className={`rounded-3xl border bg-white dark:bg-gray-900 flex flex-col justify-between overflow-hidden transition-all shadow-md relative ${
-                isActive
+              className={`rounded-3xl border bg-white dark:bg-gray-900 flex flex-col justify-between overflow-hidden transition-all shadow-md relative ${isActive
                   ? 'border-emerald-500 ring-2 ring-emerald-500/20 scale-[1.01]'
                   : 'border-slate-200 dark:border-gray-800 hover:border-slate-400 dark:hover:border-gray-700'
-              }`}
+                }`}
             >
               {/* Highlight Ribbon */}
               {isActive && (
@@ -334,14 +382,21 @@ export default function VendorSubscriptionCenter() {
                   </h3>
                 </div>
 
-                <div className="flex items-baseline gap-1.5 flex-wrap">
-                  {p.originalPrice && (
-                    <span className="text-sm font-semibold text-slate-400 dark:text-gray-500 line-through">
-                      {p.originalPrice}
+                <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    {p.originalPrice && (
+                      <span className="text-sm font-semibold text-slate-400 dark:text-gray-500 line-through">
+                        {p.originalPrice}
+                      </span>
+                    )}
+                    <span className="text-3xl font-black text-slate-900 dark:text-white">{p.price}</span>
+                    <span className="text-[11px] text-slate-400 dark:text-gray-500 font-medium">{p.billing}</span>
+                  </div>
+                  {p.id !== 'premium' && (
+                    <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 shrink-0">
+                      + 18% GST
                     </span>
                   )}
-                  <span className="text-3xl font-black text-slate-900 dark:text-white">{p.price}</span>
-                  <span className="text-[11px] text-slate-400 dark:text-gray-500 font-medium">{p.billing}</span>
                   {p.originalPrice && (
                     <span className="text-[9px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400 w-full">
                       #Annual Billing Only
@@ -390,17 +445,16 @@ export default function VendorSubscriptionCenter() {
               {/* Card Footer Button */}
               <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
-                  onClick={() => handlePlanButtonClick(p.id, p.chargeAmount)}
+                  onClick={() => handlePlanButtonClick(p.id)}
                   disabled={isActive || isUpdatingPlan}
-                  className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${
-                    isActive
+                  className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'
                       : p.id === 'select'
-                      ? 'btn-primary bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border-none text-white'
-                      : p.id === 'connect'
-                      ? 'btn-primary bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 border-none text-white'
-                      : 'btn-secondary'
-                  }`}
+                        ? 'btn-primary bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border-none text-white'
+                        : p.id === 'connect'
+                          ? 'btn-primary bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 border-none text-white'
+                          : 'btn-secondary'
+                    }`}
                 >
                   {isActive ? <ShieldCheck size={13} /> : <Zap size={13} />}
                   {isActive ? 'Active Plan' : `Switch to ${p.name}`}
@@ -417,6 +471,8 @@ export default function VendorSubscriptionCenter() {
         planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
+        billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+        breakdown={pendingPayment?.breakdown}
         createPaymentLink={createVendorPaymentLink}
       />
     </div>

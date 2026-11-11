@@ -216,7 +216,7 @@ describe('ZOHO_CONFIG', () => {
 
   test('plan amounts add GST and return null for unpayable plans', () => {
     const { computeZohoPlanAmount, computeZohoBuyerPlanAmount } = loadConstants();
-    expect(computeZohoPlanAmount('connect')).toBe(7498.99);
+    expect(computeZohoPlanAmount('connect')).toBe(8848.82);
     expect(computeZohoBuyerPlanAmount('version_1')).toBe(70785.84);
     expect(computeZohoBuyerPlanAmount('version_1', '12_months')).toBe(70785.84);
     expect(computeZohoBuyerPlanAmount('version_1', '6_months')).toBe(38932.92);
