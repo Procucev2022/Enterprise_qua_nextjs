@@ -382,7 +382,7 @@
         {
           "binding": "DB",
           "database_name": "enterprise-qua-d1-prod-clone",
-          "database_id": "63e7bf79b-c24d-406d-9d66-b42d56e4c5ad"
+          "database_id": "3e7bf79b-c24d-406d-9d66-b42d56e4c5ad"
         }
       ],
       "r2_buckets": [
