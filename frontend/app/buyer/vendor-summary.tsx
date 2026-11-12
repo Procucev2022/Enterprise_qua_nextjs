@@ -171,6 +171,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [deliveryScore, setDeliveryScore] = useState<number | string>('');
   const [remarks, setRemarks] = useState('');
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
+  const isSubmittingRevisionRef = useRef(false);
   const [isRequestingEvaluation, setIsRequestingEvaluation] = useState(false);
   const [evaluationRequestDispatched, setEvaluationRequestDispatched] = useState(false);
 
@@ -746,7 +747,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   const handleSaveRatingRevision = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedVendorForRevision || isSubmittingRevision) return;
+    if (!selectedVendorForRevision || isSubmittingRevision || isSubmittingRevisionRef.current) return;
 
     const isEnteredScore = (value: number | string) =>
       value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 100;
@@ -760,19 +761,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return;
     }
 
+    isSubmittingRevisionRef.current = true;
     setIsSubmittingRevision(true);
-    const saved = await reviseVendorRating(
-      selectedVendorForRevision.id,
-      Number(qualityScore),
-      Number(costScore),
-      Number(deliveryScore),
-      remarks
-    );
-    setIsSubmittingRevision(false);
-
-    if (!saved) return;
-
-    setSelectedVendorForRevision(null);
+    try {
+      const saved = await reviseVendorRating(
+        selectedVendorForRevision.id,
+        Number(qualityScore),
+        Number(costScore),
+        Number(deliveryScore),
+        remarks
+      );
+      if (saved) {
+        setSelectedVendorForRevision(null);
+        setRemarks('');
+      }
+    } finally {
+      isSubmittingRevisionRef.current = false;
+      setIsSubmittingRevision(false);
+    }
   };
 
   // Merge evaluations in store onto a vendor list, shared by both tabs.
@@ -2713,14 +2719,23 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           const previousRating: number | null =
             typeof vendor.rating === 'number' ? vendor.rating : previousScore !== null ? Number((previousScore / 20).toFixed(1)) : null;
           const scoresEntered = [qualityScore, costScore, deliveryScore].every((s) => s !== '');
-          const buyerAverage = scoresEntered ? Math.round((Number(qualityScore) + Number(costScore) + Number(deliveryScore)) / 3) : null;
-          const newCompositeScore = previousScore !== null && buyerAverage !== null ? Math.round((previousScore + buyerAverage) / 2) : null;
-          const newRating = newCompositeScore !== null ? Number((newCompositeScore / 20).toFixed(1)) : null;
+          const buyerAverage = scoresEntered
+            ? parseFloat(((Number(qualityScore) + Number(costScore) + Number(deliveryScore)) / 3).toFixed(2))
+            : null;
+          const baselineScore = previousScore ?? buyerAverage;
+          const newCompositeScore =
+            baselineScore !== null && buyerAverage !== null
+              ? parseFloat((baselineScore * 0.6 + buyerAverage * 0.4).toFixed(2))
+              : null;
+          const newRating =
+            newCompositeScore !== null
+              ? parseFloat((Math.min(5.0, (newCompositeScore / 100) * 5)).toFixed(1))
+              : null;
           const previousScoreText = previousScore !== null ? `${previousScore}%` : '—';
           const previousRatingText = previousRating !== null ? `${previousRating} ★` : '—';
           const buyerAverageText = buyerAverage !== null ? `${buyerAverage}%` : '—';
           const newRatingText = newRating !== null ? `${newRating} ★` : '—';
-          const newCompositeText = newCompositeScore !== null ? `${newCompositeScore}% Score` : '—';
+          const newCompositeText = newCompositeScore !== null ? `${Math.round(newCompositeScore)}% Score` : '—';
           const buyerCompany = activeBuyerAccount?.organizationName || '—';
 
           return (
@@ -2897,7 +2912,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <div className="p-3.5 rounded-xl bg-gradient-to-r from-slate-50 to-indigo-50/50 dark:from-gray-950 dark:to-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 space-y-2 text-[11px]">
                     <div className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center justify-between">
                       <span>2. Rating Calculation Preview:</span>
-                      <span className="font-mono text-[10px]">Avg(Q,C,D) → Avg(Prev, BuyerAvg)</span>
+                      <span className="font-mono text-[10px]">
+                        {previousScore !== null ? '60% Historical + 40% Buyer Avg' : 'Buyer Average Baseline'}
+                      </span>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-center">
                       <div className="p-2 rounded bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
@@ -2970,10 +2987,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </button>
                     <button
                       type="submit"
-                      className="btn btn-amber btn-sm font-bold flex items-center gap-1.5 shadow-md"
+                      className="btn btn-amber btn-sm font-bold flex items-center gap-1.5 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                       disabled={isSubmittingRevision}
                     >
-                      <Send size={13} /> {isSubmittingRevision ? 'Submitting...' : 'Submit Revision & Dispatch Email'}
+                      <Send size={13} /> {isSubmittingRevision ? 'Submitting & Dispatching...' : 'Submit Revision & Dispatch Email'}
                     </button>
                   </div>
                 </form>

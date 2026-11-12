@@ -5599,3 +5599,11 @@ In the Buyer flow, Major Category Field: Rename "Major Category" to "Division". 
 In the Buyer flow, Deleted Vendor Reappearing: When a buyer deletes a vendor from the Vendor Upload page, the deleted vendor sometimes appears again in the vendor list. Expected Behaviour/Solution: Once a vendor is deleted, remove the vendor permanently from the buyer's vendor list and ensure the deleted vendor does not reappear after refreshing the page, logging out and logging in, or reopening the Vendor Upload page. Please fix the issue
 ```
 ---
+
+
+### Prompt 183
+**Timestamp**: 2026-11-12T20:20:46+05:30
+```text
+In the Buyer flow, Vendor Rating Update Issue: After the buyer submits a revised supplier performance rating, the updated rating is also changing on the Vendor Portal. The rating update should follow the intended rating visibility and calculation rules. Expected Behaviour/Solution: Verify that the revised rating is saved and displayed correctly. Also, after clicking "Submit Revision & Dispatch Email", successfully submit the rating, dispatch the email, and automatically close the popup. Prevent duplicate submissions and display a success confirmation. Please fix the issue
+```
+---

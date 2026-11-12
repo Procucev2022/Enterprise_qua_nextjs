@@ -1821,28 +1821,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })
     );
 
-    // Update in vendorEvaluations list as well
-    setVendorEvaluations((prev) =>
-      prev.map((e) => {
-        if (e.vendorId === vendorId || e.vendorName === targetVendor?.name) {
-          // Module scores are changed only where the evaluation already has them. None are invented.
-          if (!e.moduleScores) return { ...e, overallScore: revisionRecord.newCompositeScore };
-          const modScores = e.moduleScores;
-          return {
-            ...e,
-            overallScore: revisionRecord.newCompositeScore,
-            moduleScores: {
-              ...modScores,
-              quality: { ...modScores.quality, score: Number((qualityScore / 20).toFixed(1)), remarks: `Buyer Score: ${qualityScore}/100` },
-              commercial: { ...modScores.commercial, score: Number((costScore / 20).toFixed(1)), remarks: `Buyer Score: ${costScore}/100` },
-              delivery: { ...modScores.delivery, score: Number((deliveryScore / 20).toFixed(1)), remarks: `Buyer Score: ${deliveryScore}/100` },
-            },
-          };
-        }
-        return e;
-      })
-    );
-
     // The feed and audit lines describe the saved revision only. The server queues the vendor notification
     // separately, and `emailDispatched` there is not a provider result, so no delivery is claimed here.
     void addFeedItem(
@@ -1858,7 +1836,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       `Buyer Rating Revision for ${revisionRecord.vendorName}: Q=${qualityScore}, C=${costScore}, D=${deliveryScore} (Buyer Avg: ${revisionRecord.buyerAverage}%). Previous: ${revisionRecord.previousScore}% (${revisionRecord.previousRating}★) -> New Composite: ${revisionRecord.newCompositeScore}% (${revisionRecord.newRating}★). Remarks: "${revisionRecord.remarks}".`
     );
 
-    // Set email payload and open preview modal
+    // Set email payload for review via "View Dispatched Email Notice" in the vendor table
     setSelectedRatingRevisionEmail({
       vendorName: revisionRecord.vendorName,
       vendorEmail: targetVendor?.email ?? '',
@@ -1866,7 +1844,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       buyerCompany,
       buyerContactName: buyerName,
       buyerContactEmail: buyerEmail,
-      dispatchedAt: '',
+      dispatchedAt: revisionRecord.timestamp || '',
       qualityScore,
       costScore,
       deliveryScore,
@@ -1877,7 +1855,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       remarks: revisionRecord.remarks,
       shaSignature: revisionRecord.shaSignature,
     });
-    setRatingRevisionEmailModalOpen(true);
 
     showToast(
       STORE_MESSAGES.ratingRevisionSavedTitle,
