@@ -3202,6 +3202,11 @@ sellerDirectory: {
     requestDispatchedBadge: 'Evaluation Request Dispatched to Vendor',
   },
 
+  addVendorModal: {
+    heading: 'Add Vendor',
+    description: 'Add a vendor you deal with directly to your vendor directory only.',
+  },
+
   /** Shared modals in app/components/Modals.tsx. Each value comes from the server, or it shows one of the placeholders above. */
   modals: {
     purchaseOrder: {

@@ -1393,7 +1393,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white">Add Vendor</h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
-                    Add a vendor you deal with directly — added to your vendor directory only.
+                    {UI_STRINGS.addVendorModal.description}
                   </p>
                 </div>
               </div>

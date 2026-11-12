@@ -616,6 +616,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
       expect(screen.getByRole('heading', { name: 'Add Vendor' })).toBeInTheDocument();
+      expect(screen.getByText('Add a vendor you deal with directly to your vendor directory only.')).toBeInTheDocument();
 
       // Submitting with required fields blank (whitespace passes HTML5
       // `required` but fails the handler's own .trim() check) shows a

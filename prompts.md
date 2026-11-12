@@ -5567,3 +5567,11 @@ In the Buyer flow, PAN Number – No Dummy Data: Do not automatically generate o
 In the Buyer flow, Remove the "Auto-Generate with AI" button and replace it with "Request Vendor Evaluation". Expected Behaviour/Solution: When the buyer clicks "Request Vendor Evaluation", send an evaluation request to the respective vendor and notify them to submit their performance evaluation details. Please fix the issue
 ```
 ---
+
+
+### Prompt 179
+**Timestamp**: 2026-11-12T20:13:21+05:30
+```text
+In the Buyer flow, Add Vendor Description: Change the text "Add a vendor you deal with directly — added to your vendor directory only" to "Add a vendor you deal with directly to your vendor directory only." Expected Behaviour/Solution: Display the updated description below the Add Vendor heading. Please fix the issue
+```
+---
