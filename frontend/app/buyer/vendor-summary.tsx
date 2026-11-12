@@ -819,9 +819,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           {/* Left: Vendor Brand & Info */}
           <div className="space-y-1.5 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
-              {vendor.id}
-            </span>
             <span className="text-xs text-slate-500 font-semibold">{vendor.majorCategory}</span>
             <span className="text-slate-400">•</span>
 
@@ -1575,9 +1572,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     Edit Vendor Profile
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-normal">
-                      {selectedVendorForCrud.id}
-                    </span>
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
                     Update supplier corporate details, categories, contact information, and compliance records.
@@ -1950,9 +1944,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     {selectedVendorForCrud.name}
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-normal">
-                      {selectedVendorForCrud.id}
-                    </span>
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
                     Comprehensive supplier registration, compliance, and taxonomy profile.

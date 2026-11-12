@@ -285,6 +285,59 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
+
+    // Verify internal vendor codes such as "v-1", "v-2", etc. are NOT displayed in vendor directory cards
+    expect(screen.queryByText('v-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('v-2')).not.toBeInTheDocument();
+    expect(screen.queryByText('v-3')).not.toBeInTheDocument();
+  });
+
+  it('displays relevant vendor information without showing internal vendor codes such as v-1792579884052-6in9', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: mockEvaluationRecords,
+      currentMode: 'mode_3',
+      rfqs: mockRFQs,
+      showToast: mockShowToast,
+      buyerVendors: [
+        {
+          id: 'v-1792579884052-6in9',
+          name: 'Rigor Industrial Spares Pvt Ltd',
+          contactPerson: 'Ismail Khan',
+          email: 'ismail@rigor.co.in',
+          phone: '+91 98112 33445',
+          location: 'Bengaluru, Karnataka',
+          majorCategory: 'Engineering Spares - Mechanical',
+          source: 'buyer_uploaded',
+          rating: 4.5,
+          score: 90,
+        },
+      ],
+      addBuyerVendor: mockAddBuyerVendor,
+      updateBuyerVendor: mockUpdateBuyerVendor,
+      deleteBuyerVendor: mockDeleteBuyerVendor,
+      deleteMultipleBuyerVendors: mockDeleteMultipleBuyerVendors,
+      categoryTaxonomy: [{ majorCategory: 'Engineering Spares - Mechanical', minorCategories: ['Valves', 'Pumps'] }],
+      reviseVendorRating: mockReviseVendorRating,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+    });
+
+    render(
+      <VendorSummary
+        onViewEvaluation={mockOnViewEvaluation}
+        onNavigateToWizard={mockOnNavigateToWizard}
+      />
+    );
+
+    // Verify relevant vendor information is displayed
+    expect(screen.getByText('Rigor Industrial Spares Pvt Ltd')).toBeInTheDocument();
+    expect(screen.getAllByText('Engineering Spares - Mechanical').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Ismail Khan/i)).toBeInTheDocument();
+    expect(screen.getByText(/ismail@rigor\.co\.in/i)).toBeInTheDocument();
+    expect(screen.getByText(/\+91 98112 33445/i)).toBeInTheDocument();
+
+    // Verify internal vendor code is NOT displayed
+    expect(screen.queryByText('v-1792579884052-6in9')).not.toBeInTheDocument();
   });
 
   it('handles multi-select and select all vendor checkboxes', () => {
@@ -1195,11 +1248,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       await waitFor(() => expect(mockFetchBuyerProfile).toHaveBeenCalled());
 
-      const badges = await waitFor(() => {
-        const els = [screen.getByText('v-1'), screen.getByText('v-2')];
+      const vendorHeadings = await waitFor(() => {
+        const els = [
+          screen.getByRole('heading', { name: /Apex Supplies Ltd\./i }),
+          screen.getByRole('heading', { name: /Global Valves Ltd/i }),
+        ];
         return els;
       });
-      const position = badges[0].compareDocumentPosition(badges[1]);
+      const position = vendorHeadings[0].compareDocumentPosition(vendorHeadings[1]);
       // v-2 (the pincode match) must come before v-1 in document order.
       expect(position & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     });
