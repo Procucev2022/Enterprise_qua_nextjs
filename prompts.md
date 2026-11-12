@@ -5543,3 +5543,11 @@ In the Buyer flow, Compact Table Layout: Convert the current vendor cards into a
 In the Buyer flow, Popup for Long Data: When vendor details such as company name, email, address, or category are too long to fit in the table, truncate the visible text & show "...." Expected Behaviour/Solution: Show the complete information in a tooltip or popup when the user hovers the cursor over the truncated field. Please fix the issue
 ```
 ---
+
+
+### Prompt 176
+**Timestamp**: 2026-11-12T20:09:05+05:30
+```text
+In the Buyer flow, Edit Vendor Profile – Third Section: Add the Edit option to the third section (Statutory & Commercial Identifiers) so users can update the details when required. Expected Behaviour/Solution: Allow users to edit and save the third-section details independently without affecting the other sections. Please fix the issue
+```
+---

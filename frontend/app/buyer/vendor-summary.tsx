@@ -232,6 +232,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formPan, setFormPan] = useState('');
   const [formMsme, setFormMsme] = useState('');
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
+  const [isEditingStatutorySection, setIsEditingStatutorySection] = useState(false);
   // Null until the user enters a rating (1.0 - 5.0). No default rating is assumed.
   const [formRating, setFormRating] = useState<number | null>(null);
 
@@ -415,6 +416,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormMsme(vendor.msme || '');
     setFormAnnualTurnover(vendor.annualTurnover || '');
     setFormRating(typeof vendor.rating === 'number' ? vendor.rating : null);
+    setIsEditingStatutorySection(false);
     setEditModalOpen(true);
   };
 
@@ -490,6 +492,30 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     updateBuyerVendor(selectedVendorForCrud.id, updates);
     setEditModalOpen(false);
     setSelectedVendorForCrud(null);
+  };
+
+  // Save Section 3 (Statutory & Commercial Identifiers) independently
+  const handleSaveStatutorySectionIndependently = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    if (!selectedVendorForCrud) return;
+
+    const cleanGst = formGst.trim().toUpperCase();
+    const cleanPan = formPan.trim().toUpperCase();
+    const cleanMsme = formMsme.trim();
+    const cleanTurnover = formAnnualTurnover.trim();
+
+    const statutoryUpdates: Partial<VendorEntry> = {
+      gst: cleanGst,
+      gstin: cleanGst,
+      pan: cleanPan,
+      msme: cleanMsme,
+      annualTurnover: cleanTurnover,
+    };
+
+    updateBuyerVendor(selectedVendorForCrud.id, statutoryUpdates);
+    setSelectedVendorForCrud((prev: any) => (prev ? { ...prev, ...statutoryUpdates } : prev));
+    setIsEditingStatutorySection(false);
+    showToast('Statutory Details Saved', 'Statutory & commercial identifiers have been updated independently.', 'success');
   };
 
   // Confirm Delete Vendor
@@ -1917,56 +1943,126 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
               {/* Section 3: Statutory & Commercial Identifiers */}
               <div className="space-y-3 p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block flex items-center gap-1.5">
-                  <FileText size={13} className="text-indigo-600" /> 3. Statutory &amp; Commercial Identifiers
-                </span>
+                <div className="flex items-center justify-between pb-1 border-b border-slate-200 dark:border-gray-800">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <FileText size={13} className="text-indigo-600 dark:text-indigo-400" /> 3. Statutory &amp; Commercial Identifiers
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {!isEditingStatutorySection ? (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingStatutorySection(true)}
+                        className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 text-[11px] hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
+                        title="Edit statutory and commercial identifiers independently"
+                        data-testid="edit-statutory-section-button"
+                      >
+                        <Pencil size={11} /> Edit
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedVendorForCrud) {
+                              setFormGst(selectedVendorForCrud.gst || selectedVendorForCrud.gstin || '');
+                              setFormPan(selectedVendorForCrud.pan || '');
+                              setFormMsme(selectedVendorForCrud.msme || '');
+                              setFormAnnualTurnover(selectedVendorForCrud.annualTurnover || '');
+                            }
+                            setIsEditingStatutorySection(false);
+                          }}
+                          data-testid="cancel-statutory-section-button"
+                          className="btn btn-ghost btn-xs text-[10px] text-slate-500 hover:text-slate-700 dark:text-gray-400"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveStatutorySectionIndependently}
+                          data-testid="save-statutory-section-button"
+                          className="btn btn-primary btn-xs font-bold flex items-center gap-1 text-[10px] shadow-xs"
+                        >
+                          <Check size={11} /> Save Section
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-gst" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       GSTIN Number
                     </label>
                     <input
+                      id="edit-vendor-gst"
+                      data-testid="edit-vendor-gst-input"
                       type="text"
                       value={formGst}
                       onChange={(e) => setFormGst(e.target.value)}
-                      className="w-full text-xs p-2 font-mono uppercase rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 font-mono uppercase rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-pan" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       PAN Card Number
                     </label>
                     <input
+                      id="edit-vendor-pan"
+                      data-testid="edit-vendor-pan-input"
                       type="text"
                       value={formPan}
                       onChange={(e) => setFormPan(e.target.value)}
-                      className="w-full text-xs p-2 font-mono uppercase rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 font-mono uppercase rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-msme" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       MSME / UDYAM Reg. Number
                     </label>
                     <input
+                      id="edit-vendor-msme"
+                      data-testid="edit-vendor-msme-input"
                       type="text"
                       value={formMsme}
                       onChange={(e) => setFormMsme(e.target.value)}
-                      className="w-full text-xs p-2 font-mono rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 font-mono rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-turnover" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       Annual Turnover
                     </label>
                     <input
+                      id="edit-vendor-turnover"
+                      data-testid="edit-vendor-turnover-input"
                       type="text"
                       value={formAnnualTurnover}
                       onChange={(e) => setFormAnnualTurnover(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                 </div>
@@ -2136,9 +2232,27 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
               {/* Statutory & Financial Compliance */}
               <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block flex items-center gap-1.5">
-                  <FileCheck size={13} className="text-indigo-600" /> Statutory &amp; Financial Registration
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <FileCheck size={13} className="text-indigo-600 dark:text-indigo-400" /> Statutory &amp; Financial Registration
+                  </span>
+                  {isBuyerUploaded(selectedVendorForCrud) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const vendor = selectedVendorForCrud;
+                        setViewModalOpen(false);
+                        handleOpenEditModal(vendor);
+                        setIsEditingStatutorySection(true);
+                      }}
+                      className="btn btn-ghost btn-xs text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                      title="Edit statutory details"
+                      data-testid="view-modal-edit-statutory-button"
+                    >
+                      <Pencil size={10} /> Edit Statutory
+                    </button>
+                  )}
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-700 dark:text-gray-300 font-mono text-[11px]">
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">GSTIN:</span>

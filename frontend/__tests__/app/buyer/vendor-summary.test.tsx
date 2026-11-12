@@ -758,6 +758,112 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
     });
 
+    it('handles Section 3 (Statutory & Commercial Identifiers) independent edit and save', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Open Edit modal for first vendor
+      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
+      fireEvent.click(editBtns[0]);
+      expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
+
+      // Find the Section 3 Edit button
+      const editStatutoryBtn = screen.getByTestId('edit-statutory-section-button');
+      expect(editStatutoryBtn).toBeInTheDocument();
+      fireEvent.click(editStatutoryBtn);
+
+      // Now inputs should be editable, and Cancel / Save Section buttons should appear
+      const saveSectionBtn = screen.getByTestId('save-statutory-section-button');
+      expect(saveSectionBtn).toBeInTheDocument();
+
+      // Find Section 3 inputs (GSTIN, PAN, MSME, Turnover)
+      const gstInput = screen.getByTestId('edit-vendor-gst-input');
+      const panInput = screen.getByTestId('edit-vendor-pan-input');
+      const msmeInput = screen.getByTestId('edit-vendor-msme-input');
+      const turnoverInput = screen.getByTestId('edit-vendor-turnover-input');
+
+      fireEvent.change(gstInput, { target: { value: '29ABCDE1234F1Z5' } });
+      fireEvent.change(panInput, { target: { value: 'ABCDE1234F' } });
+      fireEvent.change(msmeInput, { target: { value: 'UDYAM-KR-03-0012345' } });
+      fireEvent.change(turnoverInput, { target: { value: '₹10 Cr - ₹50 Cr' } });
+
+      // Click Save Section
+      fireEvent.click(saveSectionBtn);
+
+      expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
+        'v-1',
+        expect.objectContaining({
+          gst: '29ABCDE1234F1Z5',
+          gstin: '29ABCDE1234F1Z5',
+          pan: 'ABCDE1234F',
+          msme: 'UDYAM-KR-03-0012345',
+          annualTurnover: '₹10 Cr - ₹50 Cr',
+        })
+      );
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Statutory Details Saved',
+        expect.stringContaining('Statutory & commercial identifiers have been updated independently'),
+        'success'
+      );
+      expect(screen.getByTestId('edit-statutory-section-button')).toBeInTheDocument();
+    });
+
+    it('handles Section 3 independent edit cancellation and reverts values', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Open Edit modal for first vendor
+      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
+      fireEvent.click(editBtns[0]);
+
+      // Click Edit on Section 3
+      const editStatutoryBtn = screen.getByTestId('edit-statutory-section-button');
+      fireEvent.click(editStatutoryBtn);
+
+      const gstInput = screen.getByTestId('edit-vendor-gst-input');
+      fireEvent.change(gstInput, { target: { value: 'TEMPORARY_CHANGED_VALUE' } });
+      expect(gstInput).toHaveValue('TEMPORARY_CHANGED_VALUE');
+
+      // Click Cancel in Section 3
+      const cancelSectionBtn = screen.getByTestId('cancel-statutory-section-button');
+      fireEvent.click(cancelSectionBtn);
+
+      // Value should revert to original vendor gst/gstin
+      expect(screen.queryByTestId('save-statutory-section-button')).not.toBeInTheDocument();
+      expect(screen.getByTestId('edit-statutory-section-button')).toBeInTheDocument();
+    });
+
+    it('opens Edit Vendor Profile with Section 3 unlocked from View Profile modal shortcut', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Click View Profile on first buyer vendor
+      const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      fireEvent.click(viewBtns[0]);
+
+      expect(screen.getByText(/Comprehensive supplier registration, compliance, and taxonomy profile/i)).toBeInTheDocument();
+      const editStatutoryShortcut = screen.getByTestId('view-modal-edit-statutory-button');
+      expect(editStatutoryShortcut).toBeInTheDocument();
+
+      fireEvent.click(editStatutoryShortcut);
+
+      // View modal closed, edit modal open with Section 3 in edit mode
+      expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
+      expect(screen.getByTestId('save-statutory-section-button')).toBeInTheDocument();
+    });
+
     it('handles Delete Vendor modal workflow (open, confirm deletion)', () => {
       render(
         <VendorSummary
