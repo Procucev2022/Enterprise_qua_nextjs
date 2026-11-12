@@ -5384,3 +5384,9 @@ In the Buyer flow, Vendor contact details visibility – Vendor contact names an
 
 
 
+### Prompt 155
+**Timestamp**: 2026-11-12T17:52:00+05:30
+```text
+In the Buyer flow, Buyer-uploaded vendor PO data – PO data is optional but currently treated as mandatory Expected Behaviour/Solution: Validate PO data as mandatory during vendor upload and prevent submission when required PO data is missing. Please fix the issue
+```
+---

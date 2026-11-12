@@ -3148,5 +3148,133 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Line 1778: Plural 'Records'
     expect(screen.getByText(/2 Supplier Records Missing Required Fields/i)).toBeInTheDocument();
   });
+
+  it('validates PO data as mandatory during vendor upload and prevents submission when required PO data is missing', async () => {
+    jest.useFakeTimers();
+    mockProcessHistoricalPurchaseData.mockResolvedValue(1);
+
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Upload valid vendor master
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [vFile] } });
+    }
+
+    // Try navigating to Step 4 without PO Dump
+    fireEvent.click(screen.getByText('4. AI Category Join'));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'PO Dump Required',
+      expect.stringContaining('Historical PO Dump is required'),
+      'warning'
+    );
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // Try navigating to Step 5 without PO Dump
+    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'PO Dump Required',
+      expect.stringContaining('Historical PO Dump is required'),
+      'warning'
+    );
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // Upload valid PO dump
+    const poFile = createValidPoDumpFile();
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [poFile] } });
+    }
+
+    // Now Run AI Category Cross-Match to enter Step 4
+    const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+    fireEvent.click(runJoinBtn);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+
+    // Proceed to Step 5
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+
+    // Confirm final ingestion with valid PO data
+    const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await Promise.resolve();
+    });
+
+    expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Setup Complete',
+      expect.stringContaining('Dual-file vendor master and PO data ingested successfully'),
+      'success'
+    );
+
+    jest.useRealTimers();
+  });
+
+  it('prevents navigation and submission when PO dump is reset or cleared', async () => {
+    jest.useFakeTimers();
+    mockProcessHistoricalPurchaseData.mockResolvedValue(1);
+
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2 & upload Vendor Master
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
+
+    // Step 3: Upload valid PO dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    // Run AI Cross Match to enter Step 4
+    const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+    fireEvent.click(runJoinBtn);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+
+    // Proceed to Step 5
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+
+    // Now go back to Step 3 and reset PO dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    fireEvent.click(screen.getByText('Reset Template'));
+
+    // Attempting to jump to Step 5 without PO Dump is blocked
+    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'PO Dump Required',
+      expect.stringContaining('Historical PO Dump is required'),
+      'warning'
+    );
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // Attempting to jump to Step 4 without PO Dump is also blocked
+    fireEvent.click(screen.getByText('4. AI Category Join'));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'PO Dump Required',
+      expect.stringContaining('Historical PO Dump is required'),
+      'warning'
+    );
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
 });
 

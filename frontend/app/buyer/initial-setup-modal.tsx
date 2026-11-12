@@ -298,12 +298,6 @@ export default function InitialSetupModal() {
       return true;
     }
 
-    // If ingestion was completed, allow viewing Step 5 summary
-    if (targetStep === 5 && (completionSummary || lastIngestionSummary)) {
-      setStep(5);
-      return true;
-    }
-
     // Moving forward to Step 3, 4, 5 requires at least 1 vendor in Vendor Master
     if (storedVendors.length === 0) {
       const msg = 'Vendor Master is required. Please upload your Vendor Master spreadsheet or add vendor records before proceeding.';
@@ -323,12 +317,18 @@ export default function InitialSetupModal() {
     }
 
     // Moving forward to Step 4 or 5 requires PO Dump data
-    if (targetStep >= 4 && poLineItems.length === 0) {
+    if (targetStep >= 4 && (!poDataUploaded || poLineItems.length === 0)) {
       const msg = 'Historical PO Dump is required. Please upload your PO purchase dump spreadsheet before running AI Category Cross-Match.';
       setPoUploadError(msg);
       showToast('PO Dump Required', msg, 'warning');
       setStep(3);
       return false;
+    }
+
+    // If ingestion was completed in the current session, allow viewing Step 5 summary
+    if (targetStep === 5 && (completionSummary || (lastIngestionSummary && poDataUploaded && poLineItems.length > 0))) {
+      setStep(5);
+      return true;
     }
 
     setVendorUploadError(null);
@@ -1326,7 +1326,7 @@ export default function InitialSetupModal() {
       setStep(2);
       return;
     }
-    if (poLineItems.length === 0) {
+    if (!poDataUploaded || poLineItems.length === 0) {
       const msg = 'Historical PO Dump is required. Please upload your PO purchase dump spreadsheet before running AI Category Cross-Match.';
       setPoUploadError(msg);
       showToast('PO Dump Required', msg, 'warning');
@@ -1375,6 +1375,15 @@ export default function InitialSetupModal() {
     setSubmissionError(null);
     setIsConfirmingIngestion(true);
     try {
+      if (!poDataUploaded || poLineItems.length === 0) {
+        const msg = 'PO purchase data is mandatory. Please upload your PO purchase dump spreadsheet before completing vendor ingestion.';
+        setSubmissionError(msg);
+        setPoUploadError(msg);
+        showToast('PO Dump Required', msg, 'warning');
+        setStep(3);
+        setIsConfirmingIngestion(false);
+        return;
+      }
       if (joinedVendors.length === 0) {
         const msg = 'No vendor records found to ingest. Please upload a valid Vendor Master file first.';
         setSubmissionError(msg);
