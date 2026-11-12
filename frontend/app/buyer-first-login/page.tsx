@@ -182,9 +182,6 @@ function BuyerFirstLoginContent() {
   const handleGstinChange = (raw: string) => {
     const upper = raw.toUpperCase().slice(0, 15);
     setGstin(upper);
-    if (upper.length === 15) {
-      setPan(upper.slice(2, 12));
-    }
   };
 
   const handleSendEmailOtp = async () => {
@@ -316,7 +313,7 @@ function BuyerFirstLoginContent() {
       return;
     }
 
-    const derivedPan = cleanGstin.length === 15 ? cleanGstin.slice(2, 12) : (pan.trim() || undefined);
+    const cleanPan = pan.trim() || undefined;
 
     setSaving(true);
     try {
@@ -333,7 +330,7 @@ function BuyerFirstLoginContent() {
         pincode: cleanPincode,
         address: address.trim() || undefined,
         gstin: cleanGstin,
-        pan: derivedPan,
+        pan: cleanPan,
       });
 
       if (!result.success || !result.user || !result.token) {

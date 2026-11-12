@@ -1001,7 +1001,7 @@ describe('Authentication against the account records (/api/auth)', () => {
           state: 'Maharashtra',
           pincode: '411001',
           gstin: '27AAAAA0000A1Z5',
-          pan: 'AAAAA0000A',
+          pan: '',
         })
       );
     });

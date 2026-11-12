@@ -5551,3 +5551,11 @@ In the Buyer flow, Popup for Long Data: When vendor details such as company name
 In the Buyer flow, Edit Vendor Profile – Third Section: Add the Edit option to the third section (Statutory & Commercial Identifiers) so users can update the details when required. Expected Behaviour/Solution: Allow users to edit and save the third-section details independently without affecting the other sections. Please fix the issue
 ```
 ---
+
+
+### Prompt 177
+**Timestamp**: 2026-11-12T20:10:03+05:30
+```text
+In the Buyer flow, PAN Number – No Dummy Data: Do not automatically generate or insert dummy PAN numbers when the PAN field is empty. Expected Behaviour/Solution: Keep the PAN field blank if the user has not provided a PAN number. Save only the actual PAN details entered by the user. Please fix the issue
+```
+---

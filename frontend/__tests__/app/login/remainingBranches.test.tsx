@@ -254,7 +254,7 @@ describe('registration validation and OTP retry boundaries', () => {
     change('reg-email-otp', '123456');
     change('reg-mobile-otp', '654321');
     await act(async () => { submit(container); });
-    expect(authClient.register).toHaveBeenCalledWith(expect.objectContaining({ pan: 'AAAAA0000A', gstin: '27AAAAA0000A1Z5' }));
+    expect(authClient.register).toHaveBeenCalledWith(expect.objectContaining({ pan: '', gstin: '27AAAAA0000A1Z5' }));
     expect(setCurrentUserSession).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith(UI_STRINGS.auth.registrationFailedTitle, UI_STRINGS.auth.serverErrorFallback, 'warning');
   });

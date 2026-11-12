@@ -630,11 +630,12 @@ describe('BuyerFirstLoginPage', () => {
       );
     });
 
-    it('updates GSTIN to uppercase and automatically derives PAN when 15 characters are entered', () => {
+    it('updates GSTIN to uppercase and does not auto-derive PAN when 15 characters are entered', () => {
       render(<BuyerFirstLoginPage />);
       const gstinInput = screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.gstinPlaceholder);
       fireEvent.change(gstinInput, { target: { value: '27aaaaa0000a1z5' } });
       expect(gstinInput).toHaveValue('27AAAAA0000A1Z5');
+      expect(screen.queryByDisplayValue('AAAAA0000A')).not.toBeInTheDocument();
     });
 
     it('clears pincode error when value is less than 6 digits', () => {
@@ -736,7 +737,7 @@ describe('BuyerFirstLoginPage', () => {
           pincode: '411001',
           address: 'Plot 42, MIDC Hinjewadi',
           gstin: '27AAAAA0000A1Z5',
-          pan: 'AAAAA0000A',
+          pan: undefined,
         });
         expect(mockSetCurrentUserSession).toHaveBeenCalledWith(updatedUser);
         expect(mockSetIsLoggedIn).toHaveBeenCalledWith(true);

@@ -233,7 +233,7 @@ export default function BuyerDetailsModal({
     liveProfile?.pan ||
     account?.panNumber ||
     account?.pan ||
-    (displayGstin && displayGstin.length === 15 ? displayGstin.slice(2, 12) : null);
+    null;
 
   const displayCin =
     liveProfile?.cinNumber ||

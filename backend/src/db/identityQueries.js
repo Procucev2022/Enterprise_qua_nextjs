@@ -378,7 +378,7 @@ async function insertBuyerAccount({
   const addressCountry = (country || 'India').trim();
   const streetAddress = (street || address || (addressCity && addressState ? `${addressCity}, ${addressState}` : addressCity || '')).trim();
   const taxGstin = (gstin || '').trim().toUpperCase();
-  const taxPan = (pan || (taxGstin.length === 15 ? taxGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const taxPan = (pan || '').trim().toUpperCase();
 
   const existing = (await findUserByEmail(normalizedEmail)) || (await findUserByEmailAndPhone(normalizedEmail, normalizedPhone));
   if (existing) {

@@ -255,7 +255,7 @@ export default function BuyerProfilePage() {
       profile.panNumber ||
       activeAcc?.panNumber ||
       activeAcc?.pan ||
-      (resolvedGst.length === 15 ? resolvedGst.slice(2, 12).toUpperCase() : '');
+      '';
 
     setCompanyName(profile.companyName || activeAcc?.organizationName || '');
     setBrandName(profile.brandName || activeAcc?.brandName || '');
@@ -313,8 +313,8 @@ export default function BuyerProfilePage() {
     if (!country && activeBuyerAccount.country) setCountry(activeBuyerAccount.country);
     if (!gstNumber && activeBuyerAccount.gstin) setGstNumber(activeBuyerAccount.gstin);
     if (!panNumber) {
-      const derivedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || (activeBuyerAccount.gstin && activeBuyerAccount.gstin.length === 15 ? activeBuyerAccount.gstin.slice(2, 12).toUpperCase() : '');
-      if (derivedPan) setPanNumber(derivedPan);
+      const savedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || '';
+      if (savedPan) setPanNumber(savedPan);
     }
     if (!street) {
       const fallbackStreet = activeBuyerAccount.street || activeBuyerAccount.address1 || (activeBuyerAccount.city && activeBuyerAccount.state ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}` : activeBuyerAccount.city || '');

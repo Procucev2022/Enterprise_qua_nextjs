@@ -1167,7 +1167,7 @@ async function registerUser(payload, ipAddress) {
   const normalizedCountry = (country || 'India').trim();
   const streetAddress = (street || address || (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')).trim();
   const normalizedGstin = (gstin || '').trim().toUpperCase();
-  const normalizedPan = (pan || (normalizedGstin.length === 15 ? normalizedGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const normalizedPan = (pan || '').trim().toUpperCase();
 
   // If OTP codes were provided with registration, verify both email and mobile OTPs
   const submittedEmailOtp = emailOtp || code;
@@ -1417,7 +1417,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   } = payload || {};
 
   const effectiveGstin = (gstin || gstNumber || '').trim().toUpperCase();
-  const effectivePan = (pan || panNumber || (effectiveGstin.length === 15 ? effectiveGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const effectivePan = (pan || panNumber || '').trim().toUpperCase();
   const effectiveAddress = (address || street || '').trim();
 
   const normalizedEmail = (user.email || '').trim().toLowerCase();

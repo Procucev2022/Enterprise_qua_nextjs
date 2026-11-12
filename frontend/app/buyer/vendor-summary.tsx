@@ -2260,12 +2260,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">PAN:</span>
-                    <strong>
-                      {selectedVendorForCrud.pan ||
-                        ((selectedVendorForCrud.gst || selectedVendorForCrud.gstin || '').length === 15
-                          ? (selectedVendorForCrud.gst || selectedVendorForCrud.gstin).slice(2, 12).toUpperCase()
-                          : 'Not Provided')}
-                    </strong>
+                    <strong>{selectedVendorForCrud.pan || 'Not Provided'}</strong>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">MSME / UDYAM:</span>

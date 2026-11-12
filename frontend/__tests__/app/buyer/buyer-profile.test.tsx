@@ -862,7 +862,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Backfilled Org Name')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Backfilled Brand')).toBeInTheDocument();
     expect(screen.getByDisplayValue('27AAACL1234F1Z5')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('AAACL1234F')).toBeInTheDocument(); // Derived PAN from GSTIN
+    expect(screen.queryByDisplayValue('AAACL1234F')).not.toBeInTheDocument(); // Does not auto-derive dummy PAN from GSTIN
     expect(screen.getByDisplayValue('Pune')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });

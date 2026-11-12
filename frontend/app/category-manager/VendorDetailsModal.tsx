@@ -180,7 +180,7 @@ export default function VendorDetailsModal({
   const displayPan =
     (matchedVendor as any)?.panNumber ||
     (matchedVendor as any)?.pan ||
-    (displayGstin && displayGstin.length === 15 ? displayGstin.slice(2, 12) : null);
+    null;
 
   const isEmpanelled = Boolean(
     matchedVendor?.status === 'PREFERRED ENTERPRISE SUPPLIER' ||

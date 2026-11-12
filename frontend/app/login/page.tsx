@@ -532,7 +532,7 @@ function LoginPageContent() {
     try {
       const email = regEmail.trim().toLowerCase();
       const cleanGstin = regGstin.trim().toUpperCase();
-      const derivedPan = cleanGstin.length === 15 ? cleanGstin.slice(2, 12) : '';
+      const derivedPan = '';
       const cleanCity = regCity.trim();
       const cleanState = regState.trim();
       const cleanPincode = regPincode.trim();
