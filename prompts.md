@@ -5398,3 +5398,11 @@ In the Buyer flow, Buyer-uploaded vendor PO data – PO data is optional but cur
 In the Buyer flow, RFQ dashboard filter – Selecting AI Extraction RFQ also displays Email RFQs. Expected Behaviour/Solution: When AI Extraction RFQ is selected, display only AI Extraction RFQs. Other RFQ sources should be excluded Please fix the issue
 ```
 ---
+
+
+### Prompt 157
+**Timestamp**: 2026-11-12T17:56:46+05:30
+```text
+In the Buyer flow, Buyer-uploaded vendor – Four vendors are selected for upload, but only two vendors are successfully uploaded. The remaining two vendors are not uploaded despite having complete details. Expected Behaviour/Solution: All four selected vendors should be uploaded successfully. Display accurate upload counts and show clear error messages for any failed vendor records. Please fix the issue
+```
+---

@@ -690,6 +690,59 @@ describe('Store Service & Business Operations', () => {
       expect(results.find((r) => r.rowNumber === 2)).toMatchObject({ status: 'duplicate', reason: expect.stringContaining('within the uploaded file') });
     });
 
+    test('all four selected vendors upload successfully in buyer flow even when pre-existing or in network', async () => {
+      // Vendor 1 & 2 are pre-existing network/directory vendors
+      const v1 = storeService.addVendor({ name: 'Existing Network Vendor 1', email: 'v1-exist@example.com', majorCategory: 'Mechanical', source: 'procucev_network' });
+      const v2 = storeService.addVendor({ name: 'Existing Network Vendor 2', email: 'v2-exist@example.com', majorCategory: 'Electrical', source: 'procucev_network' });
+
+      // Buyer uploads 4 vendors with complete details (v1, v2 pre-existing, v3, v4 brand new)
+      const buyerId = 'buyer-upload-org-123';
+      const addedByBuyerCompany = 'Apex Enterprises';
+
+      const uploadRows = [
+        row({ rowNumber: 1, email: v1.email, name: 'Existing Network Vendor 1 Updated', buyerId, addedByBuyerCompany }),
+        row({ rowNumber: 2, email: v2.email, name: 'Existing Network Vendor 2 Updated', buyerId, addedByBuyerCompany }),
+        row({ rowNumber: 3, email: 'v3-new@example.com', name: 'Brand New Vendor 3', buyerId, addedByBuyerCompany }),
+        row({ rowNumber: 4, email: 'v4-new@example.com', name: 'Brand New Vendor 4', buyerId, addedByBuyerCompany }),
+      ];
+
+      const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors(uploadRows);
+
+      expect(importedCount).toBe(4);
+      expect(duplicateCount).toBe(0);
+      expect(results).toHaveLength(4);
+      expect(results.every((r) => r.status === 'imported')).toBe(true);
+
+      const allVendors = await storeService.getVendors(buyerId);
+      const importedV1 = allVendors.find((v) => v.email === v1.email);
+      expect(importedV1).toBeDefined();
+      expect(importedV1.buyerId).toBe(buyerId);
+      expect(importedV1.addedByBuyerCompany).toBe(addedByBuyerCompany);
+    });
+
+    test('reports clear error message and failed status when vendor is private to another buyer organization', async () => {
+      const otherBuyerId = 'other-buyer-999';
+      const existingOther = storeService.addVendor({
+        name: 'Other Buyer Vendor',
+        email: 'other-buyer-vendor@example.com',
+        majorCategory: 'Civil Works',
+        buyerId: otherBuyerId,
+        buyerAccountId: otherBuyerId,
+        addedByBuyerCompany: 'Other Corp',
+      });
+
+      const currentBuyerId = 'current-buyer-111';
+      const { results, importedCount } = await storeService.bulkAddVendors([
+        row({ rowNumber: 1, email: existingOther.email, name: 'Attempted Claim', buyerId: currentBuyerId }),
+      ]);
+
+      expect(importedCount).toBe(0);
+      expect(results[0].status).toBe('failed');
+      expect(results[0].reason).toContain('already registered to another buyer organization');
+      expect(results[0].errors).toBeDefined();
+      expect(results[0].errors[0]).toContain('already registered to another buyer organization');
+    });
+
     test('an empty batch imports nothing without touching the store', async () => {
       const before = (await storeService.getVendors()).length;
       const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([]);

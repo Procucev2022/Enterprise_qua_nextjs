@@ -1397,10 +1397,23 @@ export default function InitialSetupModal() {
         showToast('Ingestion Error', actualError, 'warning');
         return;
       }
+      const summary = lastIngestionSummary;
+      if (summary) {
+        setCompletionSummary(summary);
+      }
+      if (summary && ((summary.skippedCount && summary.skippedCount > 0) || (summary.failedEmailCount && summary.failedEmailCount > 0))) {
+        setStep(5);
+        showToast(
+          'Ingestion Completed with Warnings',
+          `${imported} vendor(s) uploaded successfully, but ${summary.skippedCount || 0} record(s) failed or were skipped. Review details below.`,
+          'warning'
+        );
+        return;
+      }
       setInitialSetupModalOpen(false);
       showToast(
         'Setup Complete',
-        `Dual-file vendor master and PO data ingested successfully for ${selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'} (${joinedVendors.length} suppliers processed).`,
+        `Dual-file vendor master and PO data ingested successfully for ${selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'} (${imported} suppliers processed).`,
         'success'
       );
     } catch (err: any) {
@@ -2591,6 +2604,54 @@ export default function InitialSetupModal() {
               </div>
             </div>
 
+            {/* Completion Summary & Skipped Vendors Audit */}
+            {completionSummary && (
+              <div className="space-y-3 pt-2" data-testid="step5-completion-summary">
+                {completionSummary.skipped && completionSummary.skipped.length > 0 ? (
+                  <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/30 space-y-2" data-testid="step5-skipped-vendors-list">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-rose-800 dark:text-rose-300 uppercase tracking-wide flex items-center gap-1.5">
+                        <AlertCircle size={14} className="text-rose-600 dark:text-rose-400" />
+                        Failed / Skipped Vendor Records ({completionSummary.skipped.length})
+                      </span>
+                      <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                        {completionSummary.importedCount} of {completionSummary.totalProcessed} Successfully Ingested
+                      </span>
+                    </div>
+                    <div className="border border-rose-200 dark:border-rose-900/60 rounded-lg overflow-x-auto max-h-48 overflow-y-auto">
+                      <table className="w-full text-[11px] text-left">
+                        <thead className="sticky top-0 bg-rose-100/90 dark:bg-rose-900/60 text-rose-900 dark:text-rose-200 font-bold border-b border-rose-200 dark:border-rose-800">
+                          <tr>
+                            <th className="p-2">Row</th>
+                            <th className="p-2">Vendor Name</th>
+                            <th className="p-2">Email</th>
+                            <th className="p-2">Error Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40 bg-white dark:bg-gray-900">
+                          {completionSummary.skipped.map((sk: any, idx: number) => (
+                            <tr key={idx}>
+                              <td className="p-2 font-mono font-bold text-slate-700 dark:text-gray-300">{sk.row || idx + 1}</td>
+                              <td className="p-2 font-semibold text-slate-800 dark:text-gray-200">{sk.vendorName || joinedVendors[sk.row ? sk.row - 1 : idx]?.companyName || '—'}</td>
+                              <td className="p-2 font-mono text-slate-600 dark:text-gray-400">{sk.email || joinedVendors[sk.row ? sk.row - 1 : idx]?.email || '—'}</td>
+                              <td className="p-2 text-rose-600 dark:text-rose-400 font-medium">{sk.reason || 'Record could not be ingested.'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/70 dark:bg-emerald-950/30 flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-200 font-semibold">
+                    <span className="flex items-center gap-1.5">
+                      <CheckCircle2 size={15} className="text-emerald-600 dark:text-emerald-400" />
+                      All {completionSummary.importedCount} vendors uploaded and empanelled successfully with 0 errors.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Submission Error Banner */}
             {submissionError && (
               <div
@@ -2629,15 +2690,26 @@ export default function InitialSetupModal() {
               >
                 Back to Category Join
               </button>
-              <button
-                type="button"
-                onClick={handleConfirmFinalIngestion}
-                disabled={isConfirmingIngestion}
-                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
-              >
-                <CheckCircle2 size={16} />{' '}
-                {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
-              </button>
+              <div className="flex items-center gap-2">
+                {completionSummary && (
+                  <button
+                    type="button"
+                    onClick={() => setInitialSetupModalOpen(false)}
+                    className="btn btn-secondary font-bold text-xs py-3 px-4 flex items-center gap-1.5"
+                  >
+                    Dismiss &amp; Close Setup
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleConfirmFinalIngestion}
+                  disabled={isConfirmingIngestion}
+                  className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
+                >
+                  <CheckCircle2 size={16} />{' '}
+                  {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
+                </button>
+              </div>
             </div>
           </div>
         )}

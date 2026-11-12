@@ -1138,6 +1138,8 @@ async function bulkImportVendors(req, res, next) {
     });
     const issuesCount = allResults.filter((r) => r.hasIssues).length;
 
+    const failedCount = allResults.filter((r) => r.status === 'failed').length;
+
     const updatedSession = await domainQueries.incrementBulkImportSessionInDB(sessionId, {
       processed: rows.length,
       imported: importedCount,
@@ -1155,7 +1157,7 @@ async function bulkImportVendors(req, res, next) {
         missingEmail: missingEmailCount,
         duplicates: duplicateCount,
         issues: issuesCount,
-        failed: 0,
+        failed: failedCount,
         onboardingFailed: allResults.filter((r) => r.onboardingEmailStatus === 'failed').length,
         onboardingSkipped: allResults.filter((r) => r.onboardingEmailStatus === 'skipped').length,
         results: publicResults,

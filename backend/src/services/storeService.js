@@ -1985,6 +1985,7 @@ class StoreService {
             status: 'duplicate',
             email: row.email,
             reason: `Duplicate Vendor Code "${row.vendorCode}" within the uploaded file.`,
+            errors: [`Duplicate Vendor Code "${row.vendorCode}" within the uploaded file.`],
           });
           return;
         }
@@ -1993,13 +1994,25 @@ class StoreService {
 
       if (email) {
         if (existingEmails.has(email)) {
-          const duplicate = { rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' };
+          const duplicate = {
+            rowNumber: row.rowNumber,
+            status: 'duplicate',
+            email: row.email,
+            reason: 'A vendor with this email already exists.',
+            errors: ['A vendor with this email already exists.'],
+          };
           results.push(duplicate);
           claimCandidates.push({ result: duplicate, vendor: this._buildBulkVendor(row, idx) });
           return;
         }
         if (seenInBatch.has(email)) {
-          results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'Duplicate email within the uploaded file.' });
+          results.push({
+            rowNumber: row.rowNumber,
+            status: 'duplicate',
+            email: row.email,
+            reason: 'Duplicate email within the uploaded file.',
+            errors: ['Duplicate email within the uploaded file.'],
+          });
           return;
         }
         seenInBatch.add(email);
@@ -2096,20 +2109,70 @@ class StoreService {
     for (const { result, vendor } of claimCandidates) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        const claimed = await this.claimMigratedVendorProfile(vendor.email, vendor, vendor.buyerId || null, 'vendor-bulk-import');
+        let claimed = await this.claimMigratedVendorProfile(vendor.email, vendor, vendor.buyerId || null, 'vendor-bulk-import');
+
+        if (!claimed && vendor.buyerId && vendor.email) {
+          const normalized = String(vendor.email).trim().toLowerCase();
+          let existing = this.vendors.find((v) => (v.email || '').toLowerCase() === normalized);
+          if (!existing && pool.hasStorage()) {
+            // eslint-disable-next-line no-await-in-loop
+            existing = await domainQueries.getVendorByEmailFromDB(normalized, { fresh: true });
+          }
+          if (existing) {
+            const isOwnedByOtherBuyer = existing.buyerId && existing.buyerId !== vendor.buyerId;
+            if (!isOwnedByOtherBuyer) {
+              const updates = {
+                ...existing,
+                name: vendor.name || existing.name,
+                companyName: vendor.name || existing.companyName || existing.name,
+                phone: vendor.phone || existing.phone,
+                contactPhone: vendor.phone || existing.contactPhone || existing.phone,
+                contactPerson: vendor.contactPerson || existing.contactPerson,
+                majorCategory: vendor.majorCategory || existing.majorCategory,
+                minorCategories: Array.isArray(vendor.minorCategories) && vendor.minorCategories.length > 0 ? vendor.minorCategories : existing.minorCategories,
+                city: vendor.city || existing.city,
+                state: vendor.state || existing.state,
+                pincode: vendor.pincode || existing.pincode,
+                gstin: vendor.gstin || existing.gstin,
+                buyerId: vendor.buyerId,
+                buyerAccountId: vendor.buyerId,
+                addedByBuyerCompany: vendor.addedByBuyerCompany || existing.addedByBuyerCompany,
+                source: existing.source === 'procucev_network' ? 'procucev_network' : 'buyer_excel',
+                isCategoryAligned: true,
+                onboardingEmailStatus: existing.onboardingEmailStatus || 'account_exists',
+              };
+              // eslint-disable-next-line no-await-in-loop
+              claimed = await this.updateVendorDurably(existing.id, updates);
+              if (claimed) {
+                const memIdx = this.vendors.findIndex((v) => v.id === existing.id);
+                if (memIdx !== -1) {
+                  this.vendors[memIdx] = { ...this.vendors[memIdx], ...claimed };
+                } else {
+                  this.vendors.unshift(claimed);
+                }
+              }
+            } else {
+              result.status = 'failed';
+              result.reason = `A vendor with the email "${vendor.email}" is already registered to another buyer organization.`;
+              result.errors = [result.reason];
+            }
+          }
+        }
+
         if (claimed) {
           delete result.reason;
+          delete result.errors;
           Object.assign(result, {
             status: 'imported',
             missingEmail: false,
             hasIssues: claimed.hasIssues,
             issues: claimed.issues,
             vendor: claimed,
-            onboardingEmailStatus: 'account_exists',
+            onboardingEmailStatus: claimed.onboardingEmailStatus || 'account_exists',
           });
         }
       } catch (err) {
-        logger.error(`Failed to link migrated vendor ${vendor.email} during bulk import`, err, 'STORE_SERVICE');
+        logger.error(`Failed to link vendor ${vendor.email} during bulk import`, err, 'STORE_SERVICE');
       }
     }
 
@@ -9211,6 +9274,31 @@ class StoreService {
       try {
         await this.confirmVendorPersisted(vendor);
       } catch (err) {
+        if (err && err.statusCode === 409 && pool.hasStorage()) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const existingInDB = await domainQueries.getVendorByEmailFromDB(vendor.email, { fresh: true });
+            if (existingInDB) {
+              const updated = {
+                ...existingInDB,
+                buyerId: buyerId || existingInDB.buyerId,
+                buyerAccountId: buyerAccountId || existingInDB.buyerAccountId,
+                buyerEmail: buyerEmail || existingInDB.buyerEmail,
+                addedByBuyerCompany: buyerAccount?.organizationName || existingInDB.addedByBuyerCompany,
+                minorCategories: vendor.minorCategories?.length ? vendor.minorCategories : existingInDB.minorCategories,
+                majorCategory: vendor.majorCategory || existingInDB.majorCategory,
+              };
+              // eslint-disable-next-line no-await-in-loop
+              await domainQueries.upsertVendorInDB(updated);
+              const memIdx = this.vendors.findIndex((v) => v.id === existingInDB.id);
+              if (memIdx !== -1) this.vendors[memIdx] = { ...this.vendors[memIdx], ...updated };
+              else this.vendors.push(updated);
+              continue;
+            }
+          } catch (linkErr) {
+            logger.error('Failed to link existing vendor on 409 conflict', linkErr, 'STORE_SERVICE');
+          }
+        }
         this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
         importedCount--;
         if (isMapped) mappedCount--; else unmappedCount--;

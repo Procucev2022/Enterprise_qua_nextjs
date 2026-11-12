@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import * as XLSX from 'xlsx';
 import InitialSetupModal, { IngestionProgressCard } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
@@ -3273,6 +3273,92 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       'warning'
     );
     expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
+
+  it('displays clear error messages and skipped list on Step 5 when vendor records fail or are skipped during ingestion', async () => {
+    jest.useFakeTimers();
+    mockProcessHistoricalPurchaseData.mockResolvedValue(2);
+
+    const skippedSummary = {
+      importedCount: 2,
+      totalProcessed: 4,
+      mappedCount: 2,
+      mappedEmailsSent: 2,
+      mappedEmailsQueued: 0,
+      unmappedCount: 0,
+      unmappedEmailsSent: 0,
+      unmappedEmailsQueued: 0,
+      failedEmailCount: 0,
+      failedEmails: [],
+      skippedCount: 2,
+      skipped: [
+        { row: 3, vendorName: 'Failed Vendor Co', email: 'failed@vendor.com', reason: 'A vendor with the email failed@vendor.com already exists.' },
+        { row: 4, vendorName: 'Unsaved Vendor Co', email: 'unsaved@vendor.com', reason: 'Could not save this vendor. Retry after database connectivity is restored.' },
+      ],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+      lastIngestionSummary: skippedSummary,
+    });
+
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2 & upload Vendor Master
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
+
+    // Step 3: Upload valid PO dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    // Run AI Cross Match to enter Step 4
+    const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+    fireEvent.click(runJoinBtn);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // Proceed to Step 5
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+
+    // Confirm final ingestion
+    const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await Promise.resolve();
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Ingestion Completed with Warnings',
+      expect.stringContaining('2 record(s) failed or were skipped'),
+      'warning'
+    );
+
+    const skippedList = screen.getByTestId('step5-skipped-vendors-list');
+    expect(skippedList).toBeInTheDocument();
+    expect(within(skippedList).getByText('Failed Vendor Co')).toBeInTheDocument();
+    expect(within(skippedList).getByText('A vendor with the email failed@vendor.com already exists.')).toBeInTheDocument();
+    expect(within(skippedList).getByText('Unsaved Vendor Co')).toBeInTheDocument();
+
+    // User can click Dismiss & Close Setup
+    const dismissBtn = screen.getByRole('button', { name: /Dismiss & Close Setup/i });
+    fireEvent.click(dismissBtn);
+    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
 
     jest.useRealTimers();
   });

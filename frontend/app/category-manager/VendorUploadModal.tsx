@@ -708,8 +708,65 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
               )}
               </div>
 
+              {(() => {
+                const failedOrDuplicateRows = (importResult.results || []).filter(
+                  (r) => r.status !== 'imported'
+                );
+                if (failedOrDuplicateRows.length === 0) return null;
+                return (
+                  <div className="space-y-2 mt-2" data-testid="vendor-upload-error-list">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wide">
+                        Failed &amp; Duplicate Records ({failedOrDuplicateRows.length})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={downloadFailedRowsReport}
+                        className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1"
+                      >
+                        <Download size={12} /> Download Error CSV
+                      </button>
+                    </div>
+                    <div className="border border-rose-200 dark:border-rose-900/60 rounded-lg overflow-x-auto max-h-48 overflow-y-auto">
+                      <table className="w-full text-[11px] text-left">
+                        <thead className="sticky top-0 bg-rose-50 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 font-bold border-b border-rose-200 dark:border-rose-900/60">
+                          <tr>
+                            <th className="p-2">Row</th>
+                            <th className="p-2">Company Name</th>
+                            <th className="p-2">Email</th>
+                            <th className="p-2">Status</th>
+                            <th className="p-2">Error Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40">
+                          {failedOrDuplicateRows.map((r) => {
+                            const originalRow = rows.find((row) => row.rowNumber === r.rowNumber);
+                            const name = originalRow?.vendor.name || '—';
+                            const reason = (r.errors && r.errors.length > 0 ? r.errors.join('; ') : r.reason) || 'Could not be uploaded.';
+                            return (
+                              <tr key={r.rowNumber} className="bg-white dark:bg-gray-900">
+                                <td className="p-2 font-mono font-bold text-slate-700 dark:text-gray-300">{r.rowNumber}</td>
+                                <td className="p-2 font-semibold text-slate-800 dark:text-gray-200">{name}</td>
+                                <td className="p-2 font-mono text-slate-600 dark:text-gray-400">{r.email || '—'}</td>
+                                <td className="p-2">
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300">
+                                    {r.status}
+                                  </span>
+                                </td>
+                                <td className="p-2 text-rose-600 dark:text-rose-400 font-medium">{reason}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {(importResult.failed > 0 || importResult.duplicates > 0) && (
                 <button
+                  type="button"
                   onClick={downloadFailedRowsReport}
                   className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5"
                 >
