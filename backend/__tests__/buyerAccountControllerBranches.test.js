@@ -17,6 +17,7 @@ const zohoReconciliationService = require('../src/services/zohoReconciliationSer
 const { logger } = require('../src/services/loggerService');
 const {
   CREDIT_APPROVAL_APPROVERS,
+  PERSISTENCE_MESSAGES,
   ZOHO_CONFIG,
   computeZohoBuyerPlanAmount,
 } = require('../src/config/constants');
@@ -433,6 +434,71 @@ describe('buyerAccountController branches', () => {
           })],
         })
       );
+    });
+
+    test('answers 503 with the database message when the approval cannot be stored', async () => {
+      jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval').mockRejectedValue(
+        Object.assign(new Error('storage down'), { code: 'PERSISTENCE_UNAVAILABLE' })
+      );
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = mockRes();
+      const next = jest.fn();
+
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL, name: 'Staff Admin' },
+        params: { id: 'ba-1' },
+        body: { amount: 100, approverName: APPROVER_NAME },
+      }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+        code: 'PERSISTENCE_UNAVAILABLE',
+        retryable: true,
+      });
+      expect(next).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith('Error requesting credit approval for buyer', expect.any(Error), 'BUYER_ACCOUNT_CONTROLLER');
+    });
+
+    test('answers 503 from the real task write when no database is configured', async () => {
+      jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = mockRes();
+      const next = jest.fn();
+
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL, name: 'Staff Admin' },
+        params: { id: 'ba-1' },
+        body: { amount: 100, approverName: APPROVER_NAME },
+      }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'PERSISTENCE_UNAVAILABLE',
+        retryable: true,
+        error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+      }));
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    test('passes other failures to next unchanged', async () => {
+      const conflict = Object.assign(new Error('This idempotency key was already used for a different credit approval request.'), {
+        code: 'IDEMPOTENCY_CONFLICT',
+        statusCode: 409,
+      });
+      jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval').mockRejectedValue(conflict);
+      jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = mockRes();
+      const next = jest.fn();
+
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL, name: 'Staff Admin' },
+        params: { id: 'ba-1' },
+        body: { amount: 100, approverName: APPROVER_NAME },
+      }, res, next);
+
+      expect(next).toHaveBeenCalledWith(conflict);
+      expect(res.status).not.toHaveBeenCalled();
     });
   });
 

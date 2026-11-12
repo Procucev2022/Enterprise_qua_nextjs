@@ -159,3 +159,26 @@ test('handles a thrown value without an error message and closes the add-vendor 
   fireEvent.click(within(screen.getByTestId('add-vendor-modal')).getAllByRole('button')[0]);
   expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
 });
+
+test('shows the category load message when the taxonomy request reports a failure', async () => {
+  (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: false, error: 'Category master offline.' });
+  render(<InviteVendorsModal isOpen rfq={rfq} onClose={onClose} />);
+  expect(await screen.findByText(s.categoryOptionsLoadFailed)).toBeInTheDocument();
+});
+
+test('shows the category load message when the taxonomy request rejects', async () => {
+  (fetchCategoryTaxonomy as jest.Mock).mockRejectedValue(new Error('Taxonomy unavailable'));
+  render(<InviteVendorsModal isOpen rfq={rfq} onClose={onClose} />);
+  expect(await screen.findByText(s.categoryOptionsLoadFailed)).toBeInTheDocument();
+});
+
+test('does not add or select a created vendor when the saved record comes back without an id', async () => {
+  await openAll();
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 201, json: async () => ({ success: true, data: { name: 'Unsaved supplier' } }) });
+  const form = fillNewVendor();
+  await act(async () => { fireEvent.submit(form); });
+  expect(await screen.findByText(s.createdVendorIdMissing)).toBeInTheDocument();
+  expect(screen.getByTestId('add-vendor-modal')).toBeInTheDocument();
+  expect(screen.queryByText('Unsaved supplier')).not.toBeInTheDocument();
+  expect(showToast).toHaveBeenCalledWith('Vendor Creation Failed', s.createdVendorIdMissing, 'warning');
+});

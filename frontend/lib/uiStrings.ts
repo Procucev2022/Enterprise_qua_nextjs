@@ -97,6 +97,8 @@ export const UI_STRINGS = {
       consoleTitle: 'Category Manager Operations Console',
       editCategories: 'Edit',
       supportedMajorCategories: 'Supported Major Categories',
+      // Shown in the vault section of the dossier when the vault document list cannot be read.
+      vaultLoadFailed: 'The Document Vault could not be loaded, so its documents cannot be attached here. Check your connection, then reopen this dossier to try again. A local file can still be attached.',
       corporateContact: 'Corporate Contact',
       statutoryGovernance: 'Statutory & Governance',
       saveCategories: 'Save Categories',
@@ -767,12 +769,16 @@ sellerDirectory: {
     extractingAction: 'Reading…',
     removeAttachmentAria: 'Remove {fileName}',
 
-    quotaExhaustedTitle: 'Free RFQ Limit Reached for Mode 1, Mode 2 & Mode 3 (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Limit Reached for Mode 1, Mode 2 & Mode 3 (0 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free credits for Mode 1, Mode 2, and Mode 3. You can still create multiple free RFQs using Mode 0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
+      'You have used your free RFQ credits for Mode 1, Mode 2, and Mode 3. You can still create free RFQs using Mode 0 (Procucev Network Vendors), or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
     useV0Action: 'Switch to Mode 0 (Free)',
     v0FreeBadge: '⚡ Unlimited Free RFQs with Mode 0',
+    shortlistAdjustedTitle: 'Shortlist Adjusted',
+    shortlistMismatchNotice:
+      '{count} vendor(s) have a category mismatch and were left out of this RFQ shortlist. Use the category update request on each of them to ask them to update their categories.',
+    itemsCount: '{count} items',
 
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',
@@ -781,9 +787,9 @@ sellerDirectory: {
   },
 
   rfqExtraction: {
-    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for Mode 1, Mode 2 & Mode 3 (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for Mode 1, Mode 2 & Mode 3 (0 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free credits for Mode 1, Mode 2, and Mode 3. You can still create multiple free RFQs using Mode 0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
+      'You have used your free RFQ credits for Mode 1, Mode 2, and Mode 3. You can still create free RFQs using Mode 0 (Procucev Network Vendors), or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
     useV0Action: 'Switch to Mode 0 (Free)',
     v0FreeBadge: '⚡ Unlimited Free RFQs with Mode 0',
@@ -1125,6 +1131,20 @@ sellerDirectory: {
     alreadyExtendedTooltip: 'A one-time extension of {hours} hours has already been applied to this RFQ.',
     revisedDeadlineNote: 'One-time extension applied',
     oneTimeExtensionAvailable: 'One-time extension (+24h / +48h) available',
+
+    // Vendor clarifications and buyer replies. A message counts as sent only after the server confirms it.
+    clarificationSentTitle: 'Clarification Sent',
+    clarificationSentToBuyer: 'Your query has been dispatched to the procurement officer.',
+    clarificationDispatchedTemplate: 'Clarification dispatched to {vendorName}.',
+    clarificationAnsweredTitle: 'Clarification Answered',
+    replyDispatchedTemplate: 'Response sent to {vendorName}.',
+    sendFailedTitle: 'Dispatch Failed',
+    sendFailedMessage: 'The clarification was not sent. Check your connection and send it again. Your text is still in the composer.',
+    replyFailedTitle: 'Reply Failed',
+    replyFailedMessage: 'The reply was not sent. Check your connection and send it again. Your reply is still in the dialog.',
+    sessionIdentityMissingTitle: 'Sign In Again',
+    sessionIdentityMissingMessage: 'Your session has no name or email, so this message cannot be attributed to you. Sign out, sign in again, and retry.',
+    nameNotRecorded: 'Name not recorded',
   },
 
   rfqSummary: {
@@ -1295,6 +1315,18 @@ sellerDirectory: {
     limitReachedNotice: 'Maximum 20 vendors limit reached. Remove some to select others.',
     duplicateIgnored: 'Vendor already invited',
     noMatchingVendors: 'No vendors match the selected filters.',
+    // Placeholder hints for the Add New Vendor form. None of them is a sample record.
+    companyNamePlaceholder: 'Company legal name',
+    contactPersonPlaceholder: 'Contact person full name',
+    contactNumberPlaceholder: 'Phone number with country code',
+    emailPlaceholder: 'name@company.com',
+    minorCategoryPlaceholder: 'Minor category',
+    cityPlaceholder: 'City',
+    statePlaceholder: 'State',
+    pincodePlaceholder: 'PIN code',
+    // The vendor was saved, but the response had no id, so it cannot be selected safely.
+    createdVendorIdMissing: 'The vendor was saved, but the server did not return its ID, so it was not added to the selection. Reload the candidate list and check before adding the vendor again.',
+    categoryOptionsLoadFailed: 'The category list could not be loaded from the server, so the category options may be incomplete. Reload to try again.',
   },
 
   notifications: {
@@ -2629,6 +2661,15 @@ sellerDirectory: {
       assignedToUser: 'Assigned to {user}',
       customAssignee: '+ Add Custom Assignee',
       chooseExistingMember: 'Choose Existing Member',
+      // Placeholder hints for the create-task form. None of them is a sample record.
+      customTypeNamePlaceholder: 'Name of the new task type',
+      taskTitlePlaceholder: 'Task title',
+      creditAccountNamePlaceholder: 'Legal name of the account',
+      creditReasonPlaceholder: 'Reason for the credit request',
+      customAssigneePlaceholder: 'Assignee full name',
+      // The full task record could not be read. The list row stays on screen.
+      taskDetailsLoadFailed: 'The full task record could not be loaded, so the details shown are the summary from the task list. Reopen the task to try again.',
+      taskStatusUpdateFailed: 'The task status could not be updated. Check your connection and try again.',
       completeTaskModalTitle: 'Complete Internal Task',
       resolutionRemarksLabel: 'Resolution Remarks / Internal Notes',
       resolutionRemarksPlaceholder: 'Record handover remarks, resolution outcome, or follow-up notes...',
@@ -3055,6 +3096,110 @@ sellerDirectory: {
   recordPlaceholders: {
     notRecorded: 'Not recorded',
     notAvailable: 'Not available',
+    notEvaluated: 'Not evaluated',
+    notDispatched: 'Not dispatched',
+  },
+
+  /** Buyer evaluation summary (Screen 2.3). Scores, remarks and contact values come only from the evaluation record or the supplier record. */
+  vendorEvaluationSummary: {
+    noEvaluationTitle: 'No evaluation record selected.',
+    noEvaluationBody: 'Your account does not have any approved internal suppliers uploaded or evaluated yet. Once you onboard suppliers to your roster, their 6-pillar 360° scorecard will be displayed here.',
+    backAction: 'Back',
+    loadFailedTitle: 'Supplier evaluations could not be loaded',
+    loadFailedBody: 'The server did not return the supplier and evaluation records, so this screen cannot tell which suppliers are evaluated. Retry to load them again.',
+    loadFailedStale: 'The evaluation records could not be refreshed. The figures below were loaded earlier and may be out of date.',
+    retryAction: 'Retry',
+    pickerLabel: 'Evaluating Supplier Company',
+    pickerHelp: 'Select any supplier to view its 6-pillar scorecard and compliance matrix',
+    pickerAriaLabel: 'Select Company / Vendor',
+    pickerHeading: 'Buyer Approved Suppliers',
+    searchPlaceholder: 'Search approved suppliers by name, category...',
+    foundOne: '{count} supplier found',
+    foundMany: '{count} suppliers found',
+    clickToInspect: 'Click to inspect evaluation',
+    noSearchMatch: 'No suppliers match "{query}"',
+    noSuppliers: 'No buyer suppliers available',
+    tagBuyerUploaded: 'Uploaded by Buyer',
+    tagProcucevVendor: 'Procucev Vendor',
+    optionTagBuyer: 'Buyer Upload',
+    optionTagProcucev: 'Procucev',
+    companySelectedTitle: 'Company Selected',
+    companySelectedMessage: 'Loaded 360° evaluation summary for {name}.',
+    scoreLabel: '360° AI Rating Score',
+    gateLabel: 'Gate Pass Status:',
+    gateUnlocked: '≥ {score}% Unlocked',
+    gateLocked: 'Below {score}% Locked',
+    contactLabel: 'Contact:',
+    submittedLabel: 'Submitted:',
+    executionLabel: 'Automated Execution:',
+    pillarsHeading: '6-Pillar Subtotal Summary & Auditor Remarks',
+    pillarPoints: '{score} / {weight} pts',
+    pillarRemarksTitle: 'Pillar {pillarId} Auditor Remarks:',
+    noCriteriaOnRecord: 'No criteria on record',
+    noAttachmentOnRecord: 'No attachment on record',
+    attachmentsUploaded: '{uploaded}/{total} Uploaded',
+    attachmentsVerified: '{verified}/{uploaded} verified',
+    attachmentsAllVerified: 'All attachments verified',
+    attachmentsSummaryTotal: '{verified}/{total} Attachments Verified',
+    matrixTitle: '360-Degree Evaluation Matrix',
+    matrixCount: '({count} Items)',
+    matrixSubtitle: 'Individual question scores, mandatory verified attachments, and AI auditor justification remarks.',
+    matrixNoScores: 'No criterion scores are on record. Each pillar is listed with its weight, and its scores show as not evaluated.',
+    filterAll: 'All criteria',
+    colRef: 'Ref ID',
+    colCriteria: 'Evaluation Criteria',
+    colAttachment: 'Required Mandatory Attachment',
+    colScore: 'Score (1-5)',
+    colWeighted: 'Weighted %',
+    colRemarks: 'AI / Auditor Justification Remarks',
+    scoreOutOfFive: '{score} / 5.0',
+    weightedPercent: '+{value}%',
+    pillarCriteriaName: '{name} ({weight}%)',
+    attachmentVerifiedBadge: '✓ Verified',
+    attachmentPendingReview: 'Pending Review',
+    documentsHeading: 'Mandatory File Attachments Audit Status ({count} Files)',
+    documentsBadgeVerified: '{verified}/{total} Verified',
+    documentsEmptyTitle: 'No attachments on record',
+    documentsEmptyBody: 'No compliance attachment is recorded for this supplier.',
+    docColTitle: 'Document File Title',
+    docColType: 'Criteria Type',
+    docColUploaded: 'Uploaded On',
+    docColStatus: 'Audit Status',
+    docStatusVerified: '✓ Verified',
+    docMoreCount: '+ {count} more attachment(s) on record.',
+  },
+
+  /** Shared modals in app/components/Modals.tsx. Each value comes from the server, or it shows one of the placeholders above. */
+  modals: {
+    purchaseOrder: {
+      notIssuedYet: 'Not issued yet',
+      sealedBadge: 'SHA-256 sealed',
+      finalisedToast: 'PPO {poNumber} successfully created and awarded to {vendorName}.',
+      finalisedWithoutNumberToast: 'Pre-Purchase Order successfully created and awarded to {vendorName}.',
+    },
+    chaser: {
+      urgentTemplateLabel: 'Urgent RFQ Reminder',
+      urgentReminderWithLink:
+        'Hello {vendorName}, this is Procucev Enterprise QUA AI. We require your line-item quotation for {rfqNumber} to include in the comparative matrix. Click here to submit instantly: {quotationLink}',
+      urgentReminderWithoutLink:
+        'Hello {vendorName}, this is Procucev Enterprise QUA AI. We require your line-item quotation for {rfqNumber} to include in the comparative matrix.',
+      technicalRequestTemplate:
+        'Action Required: Procucev Buyer has prioritized {rfqNumber}. Please upload your technical compliance sheet and unit prices immediately.',
+      callScript:
+        '"Hello, this is Procucev Autonomous Voice Bot calling on behalf of the Enterprise Buyer regarding {rfqNumber}. We noticed your quote submission is pending. Can you confirm when you will submit your quotation?"',
+    },
+    followUp: {
+      escalationQueued: 'Follow-up escalation queue',
+    },
+    subscriptionPayment: {
+      gstLabel: 'GST',
+      gstLabelWithRate: 'GST ({gstPercent}%)',
+    },
+    evaluation: {
+      scoreWithMax: '{score} / {maxScore} pts',
+      scoreOnly: '{score} pts',
+      documentsHeading: 'Statutory PDFs & Certifications',
+    },
   },
 
   /** Admin infrastructure and system configuration screen. Each value comes from the server or is marked not available. */

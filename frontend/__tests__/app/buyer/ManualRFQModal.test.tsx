@@ -973,7 +973,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           source: 'historical_purchase_dump',
           majorCategory: categoriesData[0].majorCategory,
         },
-        // No name/email/phone/contactPerson: exercises every fallback.
+        // No name/email/phone/contactPerson: the payload carries an empty name, never an invented one.
         { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory },
         // Not buyer-uploaded: must be excluded from both the preview and the payload.
         { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory },
@@ -1005,7 +1005,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       },
       {
         id: 'v-hist-2',
-        name: 'Enterprise Vendor',
+        name: '',
         email: null,
         contactPerson: null,
         phone: null,
@@ -2181,7 +2181,9 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Switch to Mode 3
       const mode3Card = screen.getByTestId('manual-mode-mode_3');
       fireEvent.click(mode3Card);
-      expect(screen.getByText('General Industrial')).toBeInTheDocument();
+      // The vendor with no category shows the not-recorded placeholder, not an invented category.
+      expect(screen.queryByText('General Industrial')).not.toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThanOrEqual(1);
       unmount();
 
       // Mode 2 when no category signals on RFQ (categoryFetchSignals.length === 0)

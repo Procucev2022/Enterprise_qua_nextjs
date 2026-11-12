@@ -25,6 +25,7 @@ function storageUnavailableError(operation, cause = null) {
   logger.error('Internal task storage is unavailable', { operation, error: cause }, 'INTERNAL_TASKS');
   const error = new Error('Internal task storage is temporarily unavailable. No operation completed. Please retry shortly.');
   error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.statusCode = 503;
   error.cause = cause;
   return error;
 }

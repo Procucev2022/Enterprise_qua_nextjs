@@ -299,17 +299,17 @@ async function listAccountDocuments(filters = {}) {
     }, 'ACCOUNT_DOCUMENT_QUERIES');
   }
 
-  // De-duplicate documents by file name and category, and by id
+  // De-duplicate by document id only. Records that share a file name or category are separate
+  // documents. A document without an id has nothing to match on, so it is kept.
   const combined = [];
-  const seenKeys = new Set();
+  const seenIds = new Set();
 
   [...persistedDocs, ...workflowDocs].forEach((d) => {
-    const key = `${String(d.fileName || '').toLowerCase()}_${String(d.category || '').toLowerCase()}`;
-    if (!seenKeys.has(key) && !seenKeys.has(d.id)) {
-      seenKeys.add(key);
-      seenKeys.add(d.id);
-      combined.push(d);
+    if (d.id) {
+      if (seenIds.has(d.id)) return;
+      seenIds.add(d.id);
     }
+    combined.push(d);
   });
 
   // Filter by category

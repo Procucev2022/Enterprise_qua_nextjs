@@ -1238,7 +1238,7 @@ export default function InitialSetupModal() {
 
   const handleAddVendorRow = () => {
     const newVendor: VendorMasterUploadRecord = {
-      id: `vm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: globalThis.crypto.randomUUID(),
       vendorCode: '',
       companyName: '',
       contactPerson: '',

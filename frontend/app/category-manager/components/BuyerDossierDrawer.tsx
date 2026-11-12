@@ -126,6 +126,8 @@ export default function BuyerDossierDrawer({
   const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
   const [composeScenarioId, setComposeScenarioId] = useState<string>('');
   const [availableVaultDocs, setAvailableVaultDocs] = useState<DocumentVaultItem[]>([]);
+  // Why the vault document list could not be read. Null when it loaded, or while it is loading.
+  const [vaultLoadError, setVaultLoadError] = useState<string | null>(null);
   const [composeAttachments, setComposeAttachments] = useState<ActionCenterAttachment[]>([]);
   const [isVaultDropdownOpen, setIsVaultDropdownOpen] = useState<boolean>(false);
 
@@ -133,9 +135,18 @@ export default function BuyerDossierDrawer({
     let isSubscribed = true;
     fetchDocuments({ activeOnly: true })
       .then((docs: DocumentVaultItem[]) => {
-        if (isSubscribed) setAvailableVaultDocs(docs);
+        if (!isSubscribed) return;
+        setAvailableVaultDocs(docs);
+        setVaultLoadError(null);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (!isSubscribed) return;
+        setVaultLoadError(
+          err instanceof Error && err.message
+            ? err.message
+            : formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.documentVault })
+        );
+      });
     return () => {
       isSubscribed = false;
     };
@@ -2318,6 +2329,16 @@ export default function BuyerDossierDrawer({
                         />
                       </label>
                     </div>
+
+                    {vaultLoadError && (
+                      <div role="alert" className="flex items-start gap-1.5 p-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-[11px] text-amber-800 dark:text-amber-300">
+                        <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <p>{strings.vaultLoadFailed}</p>
+                          <p className="font-mono text-[10px] opacity-80">{vaultLoadError}</p>
+                        </div>
+                      </div>
+                    )}
 
                     {composeAttachments.length > 0 && (
                       <div className="flex flex-wrap gap-1 pt-1">

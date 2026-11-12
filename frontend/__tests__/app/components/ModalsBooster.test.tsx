@@ -100,7 +100,7 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
       expect(screen.getByText(/Technical Compliance & Specification Clarification/i)).toBeInTheDocument();
 
       fireEvent.change(templateSelect, { target: { value: 'urgent_reminder' } });
-      expect(screen.getByText(/Urgent RFQ Deadline Reminder/i)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.modals.chaser.urgentTemplateLabel)).toBeInTheDocument();
 
       // Broadcast SMS
       const broadcastSmsBtn = screen.getByText(/Broadcast SMS Alert/i);
@@ -227,8 +227,9 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
         />
       );
 
-      // Click "Total Active Requisitions" card
-      fireEvent.click(screen.getByText('100% On Schedule'));
+      // Click "Total Active Requisitions" card. It has no invented schedule line beneath the count.
+      expect(screen.queryByText('100% On Schedule')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText('Total Active Requisitions'));
 
       // Click "Quotes Received" card
       fireEvent.click(screen.getByText('Across All Modes'));
@@ -245,6 +246,74 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
 
       // Source filter: All
       fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    });
+  });
+
+  describe('ActivePipelineModal receipts and placeholders', () => {
+    const staleRfq = {
+      id: 'rfq-stale',
+      rfqNumber: 'RFQ-STALE-1',
+      title: 'Old Seals',
+      category: 'Seals',
+      status: 'Quotes Pending',
+      source: 'manual_entry',
+      createdAt: '2020-01-01T00:00:00.000Z',
+      quotesCount: 0,
+      assignedVendors: [
+        { id: 'av-1', name: 'Seal Co A', contactPerson: '', phone: '' },
+        { id: 'av-2', name: 'Seal Co B', contactPerson: '', phone: '' },
+      ],
+    } as unknown as RFQItem;
+
+    it('counts reads and deliveries only from recorded receipts, however old the RFQ is', () => {
+      render(
+        <ActivePipelineModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={[staleRfq]}
+          onNavigateToMatrix={jest.fn()}
+          onOpenDeepDive={jest.fn()}
+        />
+      );
+
+      // No receipt is recorded, so elapsed time does not turn into a read or a delivery.
+      expect(screen.getByText('WA 0/2')).toBeInTheDocument();
+      expect(screen.getByText('SMS 0/2')).toBeInTheDocument();
+      expect(screen.getByText(/Target Delivery:/)).toHaveTextContent(UI_STRINGS.recordPlaceholders.notRecorded);
+      expect(screen.queryByText('100% On Schedule')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('IntakeSourcesModal placeholders', () => {
+    it('shows not-recorded for a web portal intake with no file name or extracted items, never a substitute', () => {
+      const bareWebRfqs = [
+        {
+          id: 'bare-web',
+          rfqNumber: 'RFQ-BARE-1',
+          title: 'Bare Web Requisition',
+          category: 'Spares',
+          status: 'Draft',
+          source: 'web_portal',
+          quotesCount: 0,
+          quotes: [],
+        },
+      ] as unknown as RFQItem[];
+
+      render(
+        <IntakeSourcesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={bareWebRfqs}
+          onOpenDeepDive={jest.fn()}
+          onNavigateToMatrix={jest.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getByText('AI RFQ Create'));
+      expect(screen.getByText(`Document: ${UI_STRINGS.recordPlaceholders.notRecorded}`)).toBeInTheDocument();
+      expect(screen.queryByText('Uploaded BOQ Document')).not.toBeInTheDocument();
+      expect(screen.getByText(/Extracted Items:/)).toHaveTextContent(UI_STRINGS.recordPlaceholders.notRecorded);
+      expect(screen.getByText(/Extracted Items:/)).not.toHaveTextContent('1 items');
     });
   });
 

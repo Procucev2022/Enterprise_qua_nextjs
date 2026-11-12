@@ -875,6 +875,14 @@ async function requestCreditApproval(req, res, next) {
     });
   } catch (err) {
     logger.error('Error requesting credit approval for buyer', err, 'BUYER_ACCOUNT_CONTROLLER');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
+      return res.status(503).json({
+        success: false,
+        error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+        code: 'PERSISTENCE_UNAVAILABLE',
+        retryable: true,
+      });
+    }
     next(err);
   }
 }

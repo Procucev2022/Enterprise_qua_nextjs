@@ -752,6 +752,25 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
   });
 
+  it('gives a manually added vendor row a crypto.randomUUID id and does not draw one from Math.random', () => {
+    const randomUUID = jest.spyOn(globalThis.crypto, 'randomUUID');
+    const mathRandom = jest.spyOn(Math, 'random');
+    try {
+      render(<InitialSetupModal />);
+      fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+      const randomCallsBefore = mathRandom.mock.calls.length;
+
+      fireEvent.click(screen.getByText(/Add Vendor Manually/i));
+
+      expect(randomUUID).toHaveBeenCalledTimes(1);
+      expect(mathRandom.mock.calls.length).toBe(randomCallsBefore);
+      expect(screen.getByText(/Editing Vendor Master Records \(1 Suppliers\)/i)).toBeInTheDocument();
+    } finally {
+      randomUUID.mockRestore();
+      mathRandom.mockRestore();
+    }
+  });
+
   it('clicks the empty-state Browse File button to trigger the hidden file input', () => {
     const { container } = render(<InitialSetupModal />);
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));

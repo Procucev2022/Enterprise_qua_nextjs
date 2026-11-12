@@ -111,7 +111,7 @@ export interface RFQQuoteAttachment {
 export type FollowUpChannel = 'call' | 'whatsapp' | 'sms';
 
 export interface VendorChannelCall {
-  status: 'completed' | 'connected' | 'in_progress' | 'voicemail' | 'failed' | 'scheduled';
+  status: 'completed' | 'connected' | 'in_progress' | 'voicemail' | 'failed' | 'scheduled' | 'not_dispatched';
   lastAttempt: string;
   duration?: string;
   summary?: string;
@@ -120,14 +120,14 @@ export interface VendorChannelCall {
 }
 
 export interface VendorChannelWhatsApp {
-  status: 'read' | 'delivered' | 'replied' | 'pending' | 'failed';
+  status: 'read' | 'delivered' | 'replied' | 'pending' | 'failed' | 'not_dispatched';
   lastAttempt: string;
   messagePreview?: string;
   linkClicked?: boolean;
 }
 
 export interface VendorChannelSMS {
-  status: 'delivered' | 'sent' | 'clicked' | 'failed' | 'pending';
+  status: 'delivered' | 'sent' | 'clicked' | 'failed' | 'pending' | 'not_dispatched';
   lastAttempt: string;
   deliveryReport?: string;
 }
@@ -152,7 +152,8 @@ export interface VendorFollowUpRecord {
   emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
   lastInteraction: string;
-  attemptsCount: number;
+  /** Undefined when the server holds no outreach record for the vendor. It is never a substitute zero. */
+  attemptsCount?: number;
   bidStatus: 'Submitted' | 'In Progress' | 'Pending' | 'Declined';
 }
 
@@ -829,6 +830,55 @@ export interface QuestionEvaluationItem {
   score: number;
   weightedScore: number;
   remarks: string;
+}
+
+/** Pillar code on a supplier evaluation: M1 to M6, as on QuestionEvaluationItem.pillarId. */
+export type VendorEvaluationPillarId = QuestionEvaluationItem['pillarId'];
+
+/** One qualification pillar as the buyer evaluation summary shows it. A null value means the evaluation holds none. */
+export interface VendorEvaluationPillarView {
+  pillarId: VendorEvaluationPillarId;
+  name: string;
+  weight: number;
+  weightedScore: number | null;
+  remarks: string | null;
+}
+
+/** The supplier evaluation the buyer summary screen renders. Each null field is shown as not recorded. */
+export interface VendorEvaluationSummaryView {
+  isBuyerUploaded: boolean;
+  vendorId: string | null;
+  vendorName: string | null;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  category: string | null;
+  submissionDate: string | null;
+  status: VendorEvaluationRecord['status'] | null;
+  overallScore: number | null;
+  systemAction: string | null;
+  pillars: VendorEvaluationPillarView[];
+  questions: QuestionEvaluationItem[];
+  documents: VendorEvaluationDocument[];
+}
+
+/** One supplier in the buyer summary's supplier picker. Null fields are not on record for that supplier. */
+export interface VendorEvaluationSelectOption {
+  id: string;
+  name: string | null;
+  category: string | null;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  isBuyerUploaded: boolean;
+  overallScore: number | null;
+}
+
+/** Props of the buyer evaluation summary screen. */
+export interface VendorEvaluationSummaryProps {
+  evaluationRecord?: VendorEvaluationRecord | null;
+  vendorEvaluation?: VendorEvaluationRecord | null;
+  onBack?: () => void;
 }
 
 export interface VendorEvaluationRecord {

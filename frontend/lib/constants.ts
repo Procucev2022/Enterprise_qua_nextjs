@@ -292,6 +292,98 @@ export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, sele
 export const VENDOR_FREE_CREDITS_LIMIT = 5;
 
 /**
+ * The six qualification pillars a supplier is scored on. Names and weights match the vendor qualification form
+ * (app/vendor/qualification-form.tsx). `moduleKey` names the matching field of VendorEvaluationRecord.moduleScores.
+ * `accent` holds the colour classes each pillar uses on the buyer evaluation summary.
+ */
+export const VENDOR_EVALUATION_PILLARS = [
+  {
+    id: 'M1',
+    name: 'Commercial Terms',
+    weight: 25,
+    moduleKey: 'commercial',
+    accent: {
+      badge: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300',
+      score: 'text-indigo-600 dark:text-indigo-400',
+      bar: 'bg-indigo-600',
+      remarksBox: 'bg-indigo-50/70 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 text-indigo-900 dark:text-indigo-200',
+      remarksTitle: 'text-indigo-700 dark:text-indigo-300',
+    },
+  },
+  {
+    id: 'M2',
+    name: 'Technical Capabilities',
+    weight: 15,
+    moduleKey: 'technical',
+    accent: {
+      badge: 'bg-sky-100 dark:bg-cyan-950 text-sky-700 dark:text-cyan-300',
+      score: 'text-sky-600 dark:text-cyan-400',
+      bar: 'bg-sky-600',
+      remarksBox: 'bg-sky-50/70 dark:bg-cyan-950/50 border border-sky-100 dark:border-cyan-800/60 text-sky-900 dark:text-cyan-200',
+      remarksTitle: 'text-sky-700 dark:text-cyan-300',
+    },
+  },
+  {
+    id: 'M3',
+    name: 'Quality & Warranty',
+    weight: 20,
+    moduleKey: 'quality',
+    accent: {
+      badge: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300',
+      score: 'text-emerald-600 dark:text-emerald-400',
+      bar: 'bg-emerald-600',
+      remarksBox: 'bg-emerald-50/70 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/60 text-emerald-900 dark:text-emerald-200',
+      remarksTitle: 'text-emerald-700 dark:text-emerald-300',
+    },
+  },
+  {
+    id: 'M4',
+    name: 'Operational Delivery',
+    weight: 20,
+    moduleKey: 'delivery',
+    accent: {
+      badge: 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300',
+      score: 'text-purple-600 dark:text-purple-400',
+      bar: 'bg-purple-600',
+      remarksBox: 'bg-purple-50/70 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-800/60 text-purple-900 dark:text-purple-200',
+      remarksTitle: 'text-purple-700 dark:text-purple-300',
+    },
+  },
+  {
+    id: 'M5',
+    name: 'Financial Stability',
+    weight: 10,
+    moduleKey: 'financial',
+    accent: {
+      badge: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300',
+      score: 'text-amber-600 dark:text-amber-400',
+      bar: 'bg-amber-600',
+      remarksBox: 'bg-amber-50/70 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-800/60 text-amber-900 dark:text-amber-200',
+      remarksTitle: 'text-amber-700 dark:text-amber-300',
+    },
+  },
+  {
+    id: 'M6',
+    name: 'Governance & ESG',
+    weight: 10,
+    moduleKey: 'governance',
+    accent: {
+      badge: 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300',
+      score: 'text-rose-600 dark:text-rose-400',
+      bar: 'bg-rose-600',
+      remarksBox: 'bg-rose-50/70 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-800/60 text-rose-900 dark:text-rose-200',
+      remarksTitle: 'text-rose-700 dark:text-rose-300',
+    },
+  },
+] as const;
+
+/** Overall score at or above which a supplier passes the buyer gate. Shown on the evaluation summary. */
+export const VENDOR_EVALUATION_GATE_SCORE = 80;
+
+/** Attachment rows listed on the buyer evaluation summary before the rest are counted in a note. */
+export const VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT = 12;
+
+/**
  * A vendor's displayable credit balance, or null when the record does not hold the number needed to compute it.
  * A Connect/Select subscriber's balance is the plan quota less downloads used, so it needs `rfqDownloadsUsed`.
  * Otherwise the balance is the stored free-tier count. No default is substituted for a missing count.
@@ -676,6 +768,9 @@ export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
 
 /** Path of the sign-in screen. */
 export const LOGIN_ROUTE = '/login';
+
+/** Vendor quotation form. Chaser messages link to it with the RFQ number in the `rfq` query parameter. */
+export const VENDOR_QUOTATION_ROUTE = '/vendor/quotation-form';
 
 /**
  * Email OTP shape, mirroring IDENTITY_OTP_CONFIG on the backend. Both trace back

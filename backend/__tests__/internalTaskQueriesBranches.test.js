@@ -466,3 +466,26 @@ describe('approveCreditTask fallbacks and deductions on the D1 path', () => {
     }
   });
 });
+
+describe('storage outage errors carry a 503 status', () => {
+  test('refuses a task read with a 503 when no database is configured and runs no query', async () => {
+    pool.hasStorage.mockReturnValue(false);
+
+    await expect(internalTaskQueries.getTaskTypes()).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+      statusCode: 503,
+    });
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  test('keeps the 503 status and the original cause when a task query fails', async () => {
+    const cause = new Error('D1 overloaded');
+    pool.query.mockRejectedValueOnce(cause);
+
+    await expect(internalTaskQueries.getTaskTypes()).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+      statusCode: 503,
+      cause,
+    });
+  });
+});

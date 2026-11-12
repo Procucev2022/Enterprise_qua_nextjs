@@ -333,6 +333,12 @@ describe('internalTaskQueries', () => {
       await expect(queries.getInternalTaskById('tsk_1')).rejects.toMatchObject(UNAVAILABLE);
     });
 
+    test('answers with a 503 status when storage is not configured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+
+      await expect(queries.getInternalTaskById('tsk_1')).rejects.toMatchObject({ ...UNAVAILABLE, statusCode: 503 });
+    });
+
     test('enriches a credit task with the live vendor balance', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(pool, 'query').mockImplementation((sql) => {

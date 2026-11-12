@@ -674,7 +674,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
     // ─── If Vendor View: Strictly ONLY show this vendor's direct conversation with the buyer ───
     if (isVendor) {
-      const vName = currentUserSession?.name || 'Vendor Partner';
+      // The vendor's own name from the session. Empty when the session has none, so no inquiry is matched by a made-up name.
+      const vName = currentUserSession?.name || '';
       const vEmail = currentUserSession?.email || null;
       const vId = currentUserSession?.id || null;
 
@@ -683,7 +684,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         (inq) =>
           (vEmail && inq.vendorEmail && inq.vendorEmail.toLowerCase() === vEmail.toLowerCase()) ||
           (vId && inq.vendorId && inq.vendorId === vId) ||
-          (inq.vendorName && inq.vendorName.toLowerCase() === vName.toLowerCase())
+          (vName && inq.vendorName && inq.vendorName.toLowerCase() === vName.toLowerCase())
       );
 
       const msgs: Array<{
@@ -703,7 +704,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             msgs.push({
               id: `msg-${inq.id}-v`,
               senderRole: 'vendor',
-              senderName: inq.vendorName || vName,
+              senderName: inq.vendorName || vName || DETAILS.nameNotRecorded,
               senderEmail: inq.vendorEmail,
               message: inq.message,
               timestamp: inq.createdAt || new Date().toISOString(),
@@ -713,7 +714,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             msgs.push({
               id: `msg-${inq.id}-b`,
               senderRole: 'buyer',
-              senderName: inq.repliedBy || 'Buyer Procurement Team',
+              senderName: inq.repliedBy || DETAILS.nameNotRecorded,
               message: inq.reply,
               timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
             });
@@ -777,7 +778,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   {
                     id: `msg-${inq.id}-buyer`,
                     senderRole: 'buyer' as const,
-                    senderName: inq.repliedBy || 'Procurement Team',
+                    senderName: inq.repliedBy || DETAILS.nameNotRecorded,
                     message: inq.reply,
                     timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
                   },
@@ -807,7 +808,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     const assigned = Array.isArray(activeRfq.assignedVendors) ? activeRfq.assignedVendors : [];
     assigned.forEach((v: any) => {
       const vId = typeof v === 'string' ? v : v.id || v.email || v.name;
-      const vName = typeof v === 'string' ? v : v.name || 'Assigned Vendor';
+      const vName = typeof v === 'string' ? v : v.name || DETAILS.nameNotRecorded;
       const vEmail = typeof v === 'string' ? null : v.email;
       const vContact = typeof v === 'string' ? null : v.contactPerson;
       const vPhone = typeof v === 'string' ? null : v.phone;
@@ -951,129 +952,53 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     setIsSendingChatMessage(true);
     try {
       if (isVendor) {
-        // Vendor submitting question / clarification to Buyer
-        const vendorName = currentUserSession?.name || 'Vendor Partner';
-        const vendorEmail = currentUserSession?.email || null;
-
+        // Vendor submitting question / clarification to Buyer. The thread changes only
+        // after the server returns the stored inquiry, so a failed send adds nothing.
         const res = await submitRFQInquiry(activeRfq.id || activeRfq.rfqNumber, {
           message: textToSend,
-          vendorName,
-          vendorEmail,
+          vendorName: currentUserSession?.name || undefined,
+          vendorEmail: currentUserSession?.email || null,
         });
-
-        if (res.success && res.rfq) {
+        if (!res.success) {
+          showToast(DETAILS.sendFailedTitle, res.error || DETAILS.sendFailedMessage, 'warning');
+          return;
+        }
+        if (res.rfq) {
           setLocalRfq(res.rfq);
           if (onUpdate) onUpdate(res.rfq);
-        } else {
-          const newMsg = {
-            id: `msg-${Date.now()}`,
-            senderRole: 'vendor' as const,
-            senderName: vendorName,
-            senderEmail: vendorEmail,
-            message: textToSend,
-            timestamp: new Date().toISOString(),
-          };
-          const existingInqs = Array.isArray(activeRfq.inquiries) ? activeRfq.inquiries : [];
-          const updatedInqs = [...existingInqs];
-          if (activeChannel?.inquiryId) {
-            const idx = updatedInqs.findIndex((i) => i.id === activeChannel.inquiryId);
-            if (idx !== -1) {
-              updatedInqs[idx] = {
-                ...updatedInqs[idx],
-                message: textToSend,
-                status: 'open',
-                messages: [...(updatedInqs[idx].messages || []), newMsg],
-              };
-            }
-          } else {
-            updatedInqs.push({
-              id: `inq-${Date.now()}`,
-              rfqNumber: activeRfq.rfqNumber,
-              rfqId: activeRfq.id,
-              vendorName,
-              vendorEmail,
-              message: textToSend,
-              createdAt: new Date().toISOString(),
-              status: 'open',
-              messages: [newMsg],
-            });
-          }
-          const updatedRfq = { ...activeRfq, inquiries: updatedInqs };
-          setLocalRfq(updatedRfq);
-          if (onUpdate) onUpdate(updatedRfq);
         }
 
         setChatInputText('');
         await refreshFromDB();
-        showToast('Clarification Sent', 'Your query has been dispatched to the procurement officer.', 'success');
+        showToast(DETAILS.clarificationSentTitle, DETAILS.clarificationSentToBuyer, 'success');
       } else {
         // Buyer replying to Vendor
-        const senderName = currentUserSession?.name || 'Procurement Team';
-        const senderEmail = currentUserSession?.email || 'buyer@enterprise.internal';
-
         if (!activeChannel) return;
 
         if (activeChannel.inquiryId) {
           const res = await replyToRFQInquiry(activeRfq.id || activeRfq.rfqNumber, activeChannel.inquiryId, {
             reply: textToSend,
-            repliedBy: senderName,
+            repliedBy: currentUserSession?.name,
           });
-          if (res.success && res.rfq) {
+          if (!res.success) {
+            showToast(DETAILS.sendFailedTitle, res.error || DETAILS.sendFailedMessage, 'warning');
+            return;
+          }
+          if (res.rfq) {
             setLocalRfq(res.rfq);
             if (onUpdate) onUpdate(res.rfq);
-          } else {
-            const updatedInquiries = (activeRfq.inquiries || []).map((inq) => {
-              if (inq.id === activeChannel.inquiryId) {
-                const prevMsgs = Array.isArray(inq.messages) && inq.messages.length > 0
-                  ? inq.messages
-                  : [
-                      {
-                        id: `msg-${inq.id}-orig`,
-                        senderRole: 'vendor' as const,
-                        senderName: inq.vendorName,
-                        senderEmail: inq.vendorEmail,
-                        message: inq.message,
-                        timestamp: inq.createdAt || new Date().toISOString(),
-                      },
-                    ];
-                const newMsg = {
-                  id: `msg-${Date.now()}`,
-                  senderRole: 'buyer' as const,
-                  senderName,
-                  // senderEmail intentionally omitted: buyer email must not be
-                  // exposed to vendor-side views via the inquiry message thread.
-                  message: textToSend,
-                  timestamp: new Date().toISOString(),
-                };
-                return {
-                  ...inq,
-                  reply: textToSend,
-                  repliedAt: new Date().toISOString(),
-                  repliedBy: senderName,
-                  status: 'answered' as const,
-                  messages: [...prevMsgs, newMsg],
-                };
-              }
-              return inq;
-            });
-            const updatedRfq = { ...activeRfq, inquiries: updatedInquiries };
-            setLocalRfq(updatedRfq);
-            if (onUpdate) onUpdate(updatedRfq);
           }
         } else {
-          const newInquiryId = `inq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          // A new thread stores the sender's name, so a session without one cannot send it.
+          const senderName = currentUserSession?.name || currentUserSession?.email || null;
+          if (!senderName) {
+            showToast(DETAILS.sessionIdentityMissingTitle, DETAILS.sessionIdentityMissingMessage, 'warning');
+            return;
+          }
+          // The stored inquiry id is the server's. Only the request payload carries these random ids.
           const timestamp = new Date().toISOString();
-          const newMsg = {
-            id: `msg-${Date.now()}`,
-            senderRole: 'buyer' as const,
-            senderName,
-            // senderEmail intentionally omitted: buyer email must not be
-            // exposed to vendor-side views via the inquiry message thread.
-            message: textToSend,
-            timestamp,
-          };
           const newInquiry: RFQInquiry = {
-            id: newInquiryId,
+            id: globalThis.crypto.randomUUID(),
             rfqNumber: activeRfq.rfqNumber,
             rfqId: activeRfq.id,
             vendorId: activeChannel.vendorId,
@@ -1085,26 +1010,38 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             repliedAt: timestamp,
             repliedBy: senderName,
             status: 'answered',
-            messages: [newMsg],
+            messages: [
+              {
+                id: globalThis.crypto.randomUUID(),
+                senderRole: 'buyer',
+                senderName,
+                // senderEmail intentionally omitted: buyer email must not be
+                // exposed to vendor-side views via the inquiry message thread.
+                message: textToSend,
+                timestamp,
+              },
+            ],
           };
           const updatedInquiries = [...(activeRfq.inquiries || []), newInquiry];
-          const updatedRfq = { ...activeRfq, inquiries: updatedInquiries };
           const res = await updateRFQ(activeRfq.id, { inquiries: updatedInquiries });
-          if (res.success && res.rfq) {
-            setLocalRfq(res.rfq);
-            if (onUpdate) onUpdate(res.rfq);
-          } else {
-            setLocalRfq(updatedRfq);
-            if (onUpdate) onUpdate(updatedRfq);
+          if (!res.success) {
+            showToast(DETAILS.sendFailedTitle, res.error || DETAILS.sendFailedMessage, 'warning');
+            return;
           }
+          setLocalRfq(res.rfq);
+          if (onUpdate) onUpdate(res.rfq);
         }
 
         setChatInputText('');
         await refreshFromDB();
-        showToast('Clarification Sent', `Clarification dispatched to ${activeChannel.vendorName}.`, 'success');
+        showToast(
+          DETAILS.clarificationSentTitle,
+          formatString(DETAILS.clarificationDispatchedTemplate, { vendorName: activeChannel.vendorName }),
+          'success'
+        );
       }
-    } catch (err: any) {
-      showToast('Dispatch Failed', err?.message || 'Could not send message.', 'warning');
+    } catch (err: unknown) {
+      showToast(DETAILS.sendFailedTitle, err instanceof Error && err.message ? err.message : DETAILS.sendFailedMessage, 'warning');
     } finally {
       setIsSendingChatMessage(false);
     }
@@ -1116,33 +1053,27 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     try {
       const res = await replyToRFQInquiry(activeRfq.id || activeRfq.rfqNumber, replyModalInquiry.id, {
         reply: replyMessage.trim(),
-        repliedBy: currentUserSession?.name || 'Procurement Officer',
+        repliedBy: currentUserSession?.name,
       });
-      if (res.success && res.rfq) {
+      if (!res.success) {
+        // The dialog stays open with the reply text so the buyer can send it again.
+        showToast(DETAILS.replyFailedTitle, res.error || DETAILS.replyFailedMessage, 'warning');
+        return;
+      }
+      if (res.rfq) {
         setLocalRfq(res.rfq);
         if (onUpdate) onUpdate(res.rfq);
-      } else {
-        const updatedInquiries = (activeRfq.inquiries || []).map((inq) =>
-          inq.id === replyModalInquiry.id
-            ? {
-                ...inq,
-                reply: replyMessage.trim(),
-                repliedAt: new Date().toISOString(),
-                status: 'answered' as const,
-                repliedBy: currentUserSession?.name || 'Procurement Officer',
-              }
-            : inq
-        );
-        const updatedRfq = { ...activeRfq, inquiries: updatedInquiries };
-        setLocalRfq(updatedRfq);
-        if (onUpdate) onUpdate(updatedRfq);
       }
       await refreshFromDB();
       setReplyModalInquiry(null);
       setReplyMessage('');
-      showToast('Clarification Answered', `Response sent to ${replyModalInquiry.vendorName}.`, 'success');
-    } catch (err: any) {
-      showToast('Reply Failed', err?.message || 'Failed to dispatch reply.', 'warning');
+      showToast(
+        DETAILS.clarificationAnsweredTitle,
+        formatString(DETAILS.replyDispatchedTemplate, { vendorName: replyModalInquiry.vendorName }),
+        'success'
+      );
+    } catch (err: unknown) {
+      showToast(DETAILS.replyFailedTitle, err instanceof Error && err.message ? err.message : DETAILS.replyFailedMessage, 'warning');
     } finally {
       setIsSubmittingReply(false);
     }
@@ -1937,7 +1868,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
           return {
             id: v.id || `vendor-${idx}`,
-            name: v.name || found?.name || v.contactPerson || v.email || 'Enterprise Supplier',
+            name: v.name || found?.name || v.contactPerson || v.email || DETAILS.nameNotRecorded,
             contactPerson: v.contactPerson || found?.contactPerson || null,
             email: v.email || found?.email || null,
             phone: v.phone || found?.phone || null,
@@ -1960,7 +1891,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         // the buyer's own vendors everywhere, and for ALL vendors in the
         // category-manager view (an internal oversight role, no double-blind).
         const renderFullCard = (v: any) => {
-          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : 'Enterprise Supplier';
+          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : DETAILS.nameNotRecorded;
           return (
             <div
               key={v.id}
@@ -2035,7 +1966,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         // Confidential double-blind card (name + category + location + score, no
         // contact). Used for Procucev vendors in the BUYER view only.
         const renderConfidentialCard = (v: any) => {
-          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : 'Enterprise Supplier';
+          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : DETAILS.nameNotRecorded;
           return (
             <div
               key={v.id}
@@ -2603,7 +2534,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                       >
                         <div className="flex items-center gap-1.5 text-[10px] text-slate-400 px-1">
                           <span className="font-bold text-slate-600 dark:text-gray-300 inline-flex items-center gap-1">
-                            {isMyMessage ? `${msg.senderName || 'You'} (Supplier)` : `${msg.senderName || activeRfq.buyerAccountName || 'Buyer Procurement Team'} (Buyer)`}
+                            {isMyMessage ? `${msg.senderName || 'You'} (Supplier)` : `${msg.senderName || activeRfq.buyerAccountName || DETAILS.nameNotRecorded} (Buyer)`}
                             {isMyMessage && activeChannel?.isProcucev && (
                               <span className="px-1.5 py-0.2 rounded-full text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-0.5 shadow-xs">
                                 <ShieldCheck size={9} className="text-emerald-600 dark:text-emerald-400" />

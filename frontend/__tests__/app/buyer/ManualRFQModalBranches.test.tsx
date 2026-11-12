@@ -308,13 +308,13 @@ describe.each(['mode_1', 'mode_2'] as const)('ManualRFQModal %s roster branches'
     fireEvent.click(pendingRequests[1]);
     expect(requestVendorCategoryUpdateEmail).toHaveBeenCalledTimes(1);
 
-    // An id but no name, contact or email: the message falls back to generic wording.
+    // An id but no name, contact or email: the name shows the not-recorded placeholder, not an invented name.
     fireEvent.click(pendingRequests[2]);
     await waitFor(() => expect(requestVendorCategoryUpdateEmail).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(showToast).toHaveBeenLastCalledWith(
         VENDOR_UPDATE.sentTitle,
-        formatString(VENDOR_UPDATE.sentMessage, { vendorName: 'Vendor', vendorEmail: '' }),
+        formatString(VENDOR_UPDATE.sentMessage, { vendorName: UI_STRINGS.recordPlaceholders.notRecorded, vendorEmail: '' }),
         'success'
       )
     );

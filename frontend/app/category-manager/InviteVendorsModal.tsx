@@ -87,6 +87,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [stateFilter, setStateFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
   const [categoryOptions, setCategoryOptions] = useState<string[]>(() => getMajorCategories());
+  const [categoryLoadError, setCategoryLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
 
@@ -122,6 +123,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     setAllVendors(null);
     setAllVendorsError(null);
     setAllVendorsPagination(null);
+    setCategoryLoadError(null);
     knownVendorsRef.current.clear();
 
     void fetchVendorCandidates(rfq.id).then((result) => {
@@ -136,17 +138,21 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       setLoading(false);
     });
 
+    // A failed category load keeps the options already known and says so, instead of hiding the failure.
     void fetchCategoryTaxonomy()
       .then((result) => {
-        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
-          const fetched = result.data.map((c) => c.majorCategory).filter(Boolean);
-          if (fetched.length > 0) {
-            setCategoryOptions(fetched);
-          }
+        const fetched = result.success && Array.isArray(result.data)
+          ? result.data.map((c) => c.majorCategory).filter(Boolean)
+          : [];
+        if (fetched.length > 0) {
+          setCategoryOptions(fetched);
+          setCategoryLoadError(null);
+        } else {
+          setCategoryLoadError(UI_STRINGS.inviteVendors.categoryOptionsLoadFailed);
         }
       })
       .catch(() => {
-        // Fall back gracefully to standard major categories
+        setCategoryLoadError(UI_STRINGS.inviteVendors.categoryOptionsLoadFailed);
       });
   }, [isOpen, rfq]);
 
@@ -526,7 +532,13 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       }
 
       const created = data.vendor || data.data;
-      const candidateId = created?.id || (created?._id ? String(created._id) : `cand-created-${Date.now()}`);
+      const candidateId: string = created?.id || (created?._id ? String(created._id) : '');
+      if (!candidateId) {
+        // The vendor exists on the server, but without its id it cannot be invited safely. Nothing is added here.
+        setAddVendorError(UI_STRINGS.inviteVendors.createdVendorIdMissing);
+        showToast('Vendor Creation Failed', UI_STRINGS.inviteVendors.createdVendorIdMissing, 'warning');
+        return;
+      }
       const newCandidate: RFQVendorCandidate = {
         id: candidateId,
         name: created?.name || name,
@@ -718,6 +730,11 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                   </option>
                 ))}
               </select>
+              {categoryLoadError && (
+                <p role="alert" className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+                  {categoryLoadError}
+                </p>
+              )}
             </div>
 
             {/* State Filter */}
@@ -1076,7 +1093,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                   required
                   value={newVendorName}
                   onChange={(e) => setNewVendorName(e.target.value)}
-                  placeholder="e.g. Apex Industrial Supplies Pvt Ltd"
+                  placeholder={UI_STRINGS.inviteVendors.companyNamePlaceholder}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
@@ -1091,7 +1108,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     required
                     value={newVendorContactPerson}
                     onChange={(e) => setNewVendorContactPerson(e.target.value)}
-                    placeholder="e.g. Rajesh Kumar"
+                    placeholder={UI_STRINGS.inviteVendors.contactPersonPlaceholder}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
@@ -1104,7 +1121,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     required
                     value={newVendorPhone}
                     onChange={(e) => setNewVendorPhone(e.target.value)}
-                    placeholder="e.g. +91 98765 43210"
+                    placeholder={UI_STRINGS.inviteVendors.contactNumberPlaceholder}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
@@ -1119,7 +1136,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                   required
                   value={newVendorEmail}
                   onChange={(e) => setNewVendorEmail(e.target.value)}
-                  placeholder="e.g. sales@apexindustrial.com"
+                  placeholder={UI_STRINGS.inviteVendors.emailPlaceholder}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
@@ -1149,7 +1166,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorMinorCategory}
                     onChange={(e) => setNewVendorMinorCategory(e.target.value)}
-                    placeholder="e.g. Valves & Pipes"
+                    placeholder={UI_STRINGS.inviteVendors.minorCategoryPlaceholder}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
@@ -1162,7 +1179,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorCity}
                     onChange={(e) => setNewVendorCity(e.target.value)}
-                    placeholder="e.g. Mumbai"
+                    placeholder={UI_STRINGS.inviteVendors.cityPlaceholder}
                     className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white"
                   />
                 </div>
@@ -1172,7 +1189,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorState}
                     onChange={(e) => setNewVendorState(e.target.value)}
-                    placeholder="e.g. Maharashtra"
+                    placeholder={UI_STRINGS.inviteVendors.statePlaceholder}
                     className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white"
                   />
                 </div>
@@ -1182,7 +1199,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorPincode}
                     onChange={(e) => setNewVendorPincode(e.target.value)}
-                    placeholder="e.g. 400001"
+                    placeholder={UI_STRINGS.inviteVendors.pincodePlaceholder}
                     className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white"
                   />
                 </div>

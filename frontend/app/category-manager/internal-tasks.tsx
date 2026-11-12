@@ -812,20 +812,23 @@ export default function InternalTasksDashboard() {
     setRescheduleTime(task.demo_time || '');
     setSelectedProposalStatus(task.proposal_status || 'Draft');
     if (task.id) {
+      // fetchTaskById resolves to null when the record cannot be read. The list row stays open and the user is told.
       Promise.resolve(fetchTaskById(task.id))
         .then((full) => {
-          if (full) {
-            setSelectedTaskDetails(full);
-            if (full.call_outcome) setSelectedCallOutcome(full.call_outcome);
-            if (full.demo_status) setDemoStatusVal(full.demo_status);
-            if (full.demo_date) setRescheduleDate(full.demo_date);
-            if (full.demo_time) setRescheduleTime(full.demo_time);
-            if (full.proposal_status) setSelectedProposalStatus(full.proposal_status);
+          if (!full) {
+            showToast(UI_STRINGS.actionCenter.tasks.taskDetailsLoadFailed);
+            return;
           }
+          setSelectedTaskDetails(full);
+          if (full.call_outcome) setSelectedCallOutcome(full.call_outcome);
+          if (full.demo_status) setDemoStatusVal(full.demo_status);
+          if (full.demo_date) setRescheduleDate(full.demo_date);
+          if (full.demo_time) setRescheduleTime(full.demo_time);
+          if (full.proposal_status) setSelectedProposalStatus(full.proposal_status);
         })
-        .catch(() => {});
+        .catch(() => showToast(UI_STRINGS.actionCenter.tasks.taskDetailsLoadFailed));
     }
-  }, []);
+  }, [showToast]);
 
   // Log Call Outcome handler
   const handleLogCallOutcome = async () => {
@@ -1052,6 +1055,8 @@ export default function InternalTasksDashboard() {
           ? formatString(UI_STRINGS.actionCenter.tasks.taskMarkedCompleted, { taskNumber: task.task_number || task.id })
           : formatString(UI_STRINGS.actionCenter.tasks.taskReopened, { taskNumber: task.task_number || task.id });
       showToast(msg);
+    } else {
+      showToast(UI_STRINGS.actionCenter.tasks.taskStatusUpdateFailed);
     }
   };
 
@@ -2225,7 +2230,7 @@ export default function InternalTasksDashboard() {
                           type="text"
                           value={customTypeName}
                           onChange={(e) => setCustomTypeName(e.target.value)}
-                          placeholder="e.g. GST Exemption Verification"
+                          placeholder={UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder}
                           className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs"
                         />
                       </div>
@@ -2258,7 +2263,7 @@ export default function InternalTasksDashboard() {
                       type="text"
                       value={newTitle}
                       onChange={(e) => setNewTitle(e.target.value)}
-                      placeholder="e.g. Verify mechanical spare specifications"
+                      placeholder={UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder}
                       className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     />
                   </div>
@@ -2321,7 +2326,7 @@ export default function InternalTasksDashboard() {
                           type="text"
                           value={newCreditAccountName}
                           onChange={(e) => setNewCreditAccountName(e.target.value)}
-                          placeholder="e.g. Apex Infra Ltd"
+                          placeholder={UI_STRINGS.actionCenter.tasks.creditAccountNamePlaceholder}
                           className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs"
                           data-testid="create-credit-account-name-input"
                         />
@@ -2334,7 +2339,7 @@ export default function InternalTasksDashboard() {
                           type="text"
                           value={newCreditReason}
                           onChange={(e) => setNewCreditReason(e.target.value)}
-                          placeholder="e.g. Promotional onboarding grant approved by CM"
+                          placeholder={UI_STRINGS.actionCenter.tasks.creditReasonPlaceholder}
                           className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs"
                           data-testid="create-credit-reason-input"
                         />
@@ -2440,7 +2445,7 @@ export default function InternalTasksDashboard() {
                             setNewAssignedToName(e.target.value);
                             setNewAssignedToUserId('');
                           }}
-                          placeholder="e.g. Sudheer Kangala"
+                          placeholder={UI_STRINGS.actionCenter.tasks.customAssigneePlaceholder}
                           className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
                           data-testid="custom-assignee-input"
                         />

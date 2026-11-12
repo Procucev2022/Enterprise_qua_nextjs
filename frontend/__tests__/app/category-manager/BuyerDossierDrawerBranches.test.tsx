@@ -513,6 +513,42 @@ describe('BuyerDossierDrawer branch coverage', () => {
       expect(await within(dialog).findByText('Enterprise SLA Contract')).toBeInTheDocument();
     });
 
+    it('shows a vault load failure in the attachments section and keeps the dialog usable', async () => {
+      (documentVaultClient.fetchDocuments as jest.Mock).mockRejectedValueOnce(new Error('Vault service unavailable'));
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="communications" />);
+      const dialog = await openComposeDialog();
+
+      expect(await within(dialog).findByText(UI_STRINGS.buyerDirectory.dossier.vaultLoadFailed)).toBeInTheDocument();
+      expect(within(dialog).getByText('Vault service unavailable')).toBeInTheDocument();
+
+      // The rest of the dialog still works, and a local file can still be attached.
+      fireEvent.change(subjectFieldOf(dialog), { target: { value: 'Still usable' } });
+      expect(subjectFieldOf(dialog).value).toBe('Still usable');
+      expect(within(dialog).getByText('Attach Local File')).toBeInTheDocument();
+    });
+
+    it('uses the built-in network message when the vault failure carries no reason', async () => {
+      (documentVaultClient.fetchDocuments as jest.Mock).mockRejectedValueOnce('offline');
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="communications" />);
+      const dialog = await openComposeDialog();
+
+      expect(await within(dialog).findByText(UI_STRINGS.buyerDirectory.dossier.vaultLoadFailed)).toBeInTheDocument();
+      expect(
+        within(dialog).getByText(
+          UI_STRINGS.dataLoad.networkFailed.replace('{resource}', UI_STRINGS.dataLoad.resources.documentVault)
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('does not show a vault failure when the document list loads', async () => {
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="communications" />);
+      const dialog = await openComposeDialog();
+
+      await waitFor(() => expect(documentVaultClient.fetchDocuments).toHaveBeenCalled());
+      await act(async () => {});
+      expect(within(dialog).queryByText(UI_STRINGS.buyerDirectory.dossier.vaultLoadFailed)).not.toBeInTheDocument();
+    });
+
     it('ignores an empty file selection and saves a local file with no MIME type as octet-stream', async () => {
       const randomUUID = jest
         .spyOn(globalThis.crypto, 'randomUUID')
