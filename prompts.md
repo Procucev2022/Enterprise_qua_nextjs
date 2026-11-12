@@ -5442,3 +5442,10 @@ In the Buyer flow, GSTIN Validation: Implement proper GSTIN validation during bu
 In the Buyer flow, Login Page – Remove Unnecessary Text: Remove the sentence “Sign in with your Procucev account. Credentials are verified against the enterprise user directory” displayed below the “Welcome back” heading Expected Behaviour/Solution: Keep the login page clean and simple by displaying only the “Welcome back” heading without the additional description. Please fix the issue
 ```
 ---
+
+### Prompt 163
+**Timestamp**: 2026-11-12T19:05:32+05:30
+```text
+In the Buyer flow, Mobile Number Validation: The Registered Mobile Number field should accept only 10 digits. Expected Behaviour/Solution: Allow only numeric input with a maximum of 10 digits. Prevent users from entering more than 10 digits and validate that exactly 10 digits are entered before login Please fix the issue
+```
+---

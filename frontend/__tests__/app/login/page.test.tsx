@@ -326,7 +326,7 @@ describe('LoginPage', () => {
       expect(authClient.loginWithPassword).not.toHaveBeenCalled();
     });
 
-    it('accepts a +91 prefixed mobile number and forwards it untouched', async () => {
+    it('accepts a +91 prefixed mobile number, sanitizes it to 10 digits, and logs in', async () => {
       (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
         success: true,
         user: BUYER_SESSION,
@@ -343,9 +343,46 @@ describe('LoginPage', () => {
         expect(authClient.loginWithPassword).toHaveBeenCalledWith(
           BUYER_SESSION.email,
           'Pass@123',
-          `+91${LOGIN_MOBILE}`
+          LOGIN_MOBILE
         );
       });
+    });
+
+    it('sanitizes Registered Mobile Number field to allow only numeric input up to 10 digits', () => {
+      render(<LoginPage />);
+      const mobileInput = screen.getByLabelText(/Registered Mobile Number/i);
+
+      // Typing non-numeric characters strips them
+      fireEvent.change(mobileInput, { target: { value: '987abc654xyz' } });
+      expect(mobileInput).toHaveValue('987654');
+
+      // More than 10 digits are limited to 10 digits
+      fireEvent.change(mobileInput, { target: { value: '98765432109999' } });
+      expect(mobileInput).toHaveValue('9876543210');
+    });
+
+    it('prevents login when registered mobile has fewer than 10 digits', () => {
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, '987654321'); // 9 digits
+      typeInto(/^Password$/i, 'Pass@123');
+
+      submitForm(/Sign In/i);
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.signInFailedTitle, AUTH.mobileInvalid, 'warning');
+      expect(authClient.loginWithPassword).not.toHaveBeenCalled();
+    });
+
+    it('prevents login when registered mobile has 10 digits starting with an invalid digit', () => {
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, '1234567890'); // 10 digits starting with 1
+      typeInto(/^Password$/i, 'Pass@123');
+
+      submitForm(/Sign In/i);
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.signInFailedTitle, AUTH.mobileInvalid, 'warning');
+      expect(authClient.loginWithPassword).not.toHaveBeenCalled();
     });
 
     // Both sign-in methods resolve the account by email + mobile, so the field

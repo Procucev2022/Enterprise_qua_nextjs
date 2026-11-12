@@ -292,10 +292,16 @@ function LoginPageContent() {
     e.preventDefault();
 
     const email = loginEmail.trim();
-    const mobile = loginMobile.trim();
+    const rawMobile = loginMobile.trim();
+    const mobile = rawMobile.replace(/\D/g, '');
 
     if (!email || !mobile || !loginPassword) {
       showToast(AUTH.missingFieldsTitle, AUTH.loginFieldsRequired, 'warning');
+      return;
+    }
+
+    if (mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
+      showToast(AUTH.signInFailedTitle, AUTH.mobileInvalid, 'warning');
       return;
     }
 
@@ -330,13 +336,13 @@ function LoginPageContent() {
     e.preventDefault();
 
     const rawMobile = loginMobile.trim();
-    const mobile = rawMobile.replace(/[\s\-()]/g, '');
+    const mobile = rawMobile.replace(/\D/g, '');
 
     if (!loginEmail.trim() || !mobile) {
       showToast(AUTH.missingFieldsTitle, AUTH.emailAndMobileRequired, 'warning');
       return;
     }
-    if (!INDIAN_MOBILE_PATTERN.test(mobile)) {
+    if (mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.otpRequestFailedTitle, AUTH.mobileInvalid, 'warning');
       return;
     }
@@ -365,8 +371,8 @@ function LoginPageContent() {
   const handleResendLoginOtp = async () => {
     if (submitting) return;
     const email = loginEmail.trim().toLowerCase();
-    const mobile = loginMobile.trim().replace(/[\s\-()]/g, '');
-    if (!email || !mobile) {
+    const mobile = loginMobile.trim().replace(/\D/g, '');
+    if (!email || !mobile || mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.missingFieldsTitle, AUTH.emailAndMobileRequired, 'warning');
       return;
     }
@@ -816,9 +822,10 @@ function LoginPageContent() {
                             type="tel"
                             inputMode="numeric"
                             autoComplete="tel"
+                            maxLength={10}
                             placeholder={AUTH.fieldPlaceholders.mobileNumber}
                             value={loginMobile}
-                            onChange={(e) => setLoginMobile(e.target.value)}
+                            onChange={(e) => setLoginMobile(sanitize10DigitMobile(e.target.value))}
                             className={fieldInput}
                             required
                           />
@@ -870,9 +877,10 @@ function LoginPageContent() {
                             type="tel"
                             inputMode="numeric"
                             autoComplete="tel"
+                            maxLength={10}
                             placeholder={AUTH.fieldPlaceholders.mobileNumber}
                             value={loginMobile}
-                            onChange={(e) => setLoginMobile(e.target.value)}
+                            onChange={(e) => setLoginMobile(sanitize10DigitMobile(e.target.value))}
                             className={fieldInput}
                             required
                           />
