@@ -206,6 +206,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
     const { container } = render(<InitialSetupModal />);
 
+    // Header displays clean title without Dual-File ERP Setup badge
+    expect(screen.getByRole('heading', { level: 2, name: /Buyer Initial Setup: Vendor Master & PO Data Ingestion/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Dual-File ERP Setup/i)).not.toBeInTheDocument();
+
     // STEP 1: Select Period
     expect(screen.getByText(/Step 1: Choose Historical Purchase Period/i)).toBeInTheDocument();
     fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));

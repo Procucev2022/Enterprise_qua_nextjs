@@ -1466,9 +1466,6 @@ export default function InitialSetupModal() {
                 <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
                   Buyer Initial Setup: Vendor Master & PO Data Ingestion
                 </h2>
-                <span className="badge badge-amber font-mono font-bold text-[10px] uppercase">
-                  Dual-File ERP Setup
-                </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 leading-relaxed">
                 {activeBuyerAccount?.organizationName ? <>Organization: <strong>{activeBuyerAccount.organizationName}</strong> · </> : null}Upload Vendor Master and PO purchase dump separately for AI category cross-mapping.

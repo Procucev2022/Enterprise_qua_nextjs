@@ -5449,3 +5449,10 @@ In the Buyer flow, Login Page – Remove Unnecessary Text: Remove the sentence �
 In the Buyer flow, Mobile Number Validation: The Registered Mobile Number field should accept only 10 digits. Expected Behaviour/Solution: Allow only numeric input with a maximum of 10 digits. Prevent users from entering more than 10 digits and validate that exactly 10 digits are entered before login Please fix the issue
 ```
 ---
+
+### Prompt 164
+**Timestamp**: 2026-11-12T19:07:07+05:30
+```text
+In the Buyer flow, Remove Dual-File ERP Setup Label: Remove the “DUAL-FILE ERP SETUP” label displayed in the Buyer Initial Setup popup. Expected Behaviour/Solution: Remove the label and maintain a clean, professional header without affecting the existing setup functionality. Please fix the issue
+```
+---
