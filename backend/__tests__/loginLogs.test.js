@@ -382,8 +382,19 @@ describe('Login Logs API & Controller', () => {
     });
 
     test('getLoginLogsSummary calculates summary from in-memory telemetry', async () => {
+      await loginLogsQueries.recordLoginLog({
+        userUuid: 'user-summary-today-1',
+        userType: 'buyer',
+        userName: 'Today Buyer',
+        email: 'today.buyer@example.com',
+        company: 'Today Corp',
+        status: 'ACTIVE',
+        durationSeconds: 120,
+        loginAt: new Date().toISOString(),
+      });
       const summary = await loginLogsQueries.getLoginLogsSummary();
       expect(typeof summary.totalToday).toBe('number');
+      expect(summary.totalToday).toBeGreaterThan(0);
       expect(typeof summary.activeNow).toBe('number');
       expect(typeof summary.buyerLogins).toBe('number');
       expect(typeof summary.sellerLogins).toBe('number');

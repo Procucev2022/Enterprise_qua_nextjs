@@ -44,6 +44,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
 interface VendorSummaryProps {
@@ -93,6 +94,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     deleteMultipleBuyerVendors,
     categoryTaxonomy,
     reviseVendorRating,
+    requestVendorEvaluation,
     openRatingRevisionEmailModal,
     activeBuyerAccount,
     isLoadingVendors,
@@ -162,6 +164,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [deliveryScore, setDeliveryScore] = useState<number | string>('');
   const [remarks, setRemarks] = useState('');
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
+  const [isRequestingEvaluation, setIsRequestingEvaluation] = useState(false);
+  const [evaluationRequestDispatched, setEvaluationRequestDispatched] = useState(false);
 
   // CRUD Form State
   const [formName, setFormName] = useState('');
@@ -656,6 +660,29 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setCostScore(vendor.latestRatingRevision?.costScore ?? '');
     setDeliveryScore(vendor.latestRatingRevision?.deliveryScore ?? '');
     setRemarks(vendor.latestRatingRevision?.remarks ?? '');
+    setEvaluationRequestDispatched(Boolean(vendor.evaluationRequested));
+  };
+
+  const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
+    const targetVendor = vendorToRequest || selectedVendorForRevision;
+    if (!targetVendor) return;
+    if (!targetVendor.email) {
+      showToast('Evaluation Request Failed', UI_STRINGS.vendorEvaluationRequest.noEmailError, 'warning');
+      return;
+    }
+
+    setIsRequestingEvaluation(true);
+    try {
+      const res = await requestVendorEvaluation(targetVendor.id);
+      if (res.success) {
+        setEvaluationRequestDispatched(true);
+      }
+    } catch (err: any) {
+      logger.log('ERROR', 'Failed to request vendor evaluation', { error: err }, 'VENDOR_SUMMARY');
+      showToast('Evaluation Request Failed', err?.message || 'Could not send evaluation request.', 'warning');
+    } finally {
+      setIsRequestingEvaluation(false);
+    }
   };
 
   const handleSaveRatingRevision = async (e: React.FormEvent) => {
@@ -1089,7 +1116,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               type="button"
               onClick={() => openRevisionModal(vendor)}
               className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
-              title="Rate supplier manually or generate AI rating based on performance & quotation parameters"
+              title="Rate supplier manually or request vendor evaluation"
             >
               <Star size={11} className="fill-current" /> Revise Rating
             </button>
@@ -2303,16 +2330,32 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
-              <button
-                type="button"
-                onClick={() => {
-                  setViewModalOpen(false);
-                  handleOpenEditModal(selectedVendorForCrud);
-                }}
-                className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
-              >
-                <Pencil size={13} /> Edit Profile
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewModalOpen(false);
+                    handleOpenEditModal(selectedVendorForCrud);
+                  }}
+                  className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
+                >
+                  <Pencil size={13} /> Edit Profile
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
+                  disabled={isRequestingEvaluation}
+                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs"
+                  title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
+                >
+                  {isRequestingEvaluation ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Send size={13} />
+                  )}
+                  {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -2562,7 +2605,33 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
                         1. Rate Performance (Manual)
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRequestVendorEvaluation(vendor)}
+                        disabled={isRequestingEvaluation}
+                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all"
+                        title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
+                      >
+                        {isRequestingEvaluation ? (
+                          <Loader2 size={11} className="animate-spin" />
+                        ) : (
+                          <Send size={11} />
+                        )}
+                        {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                      </button>
                     </div>
+
+                    {(evaluationRequestDispatched || vendor.evaluationRequested) && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-700 dark:text-emerald-300 font-medium">
+                        <Check size={12} className="text-emerald-600 dark:text-emerald-400" />
+                        <span>{UI_STRINGS.vendorEvaluationRequest.requestDispatchedBadge}</span>
+                        {vendor.evaluationRequestedAt && (
+                          <span className="text-slate-400 text-[10px]">
+                            ({new Date(vendor.evaluationRequestedAt).toLocaleDateString()})
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Quality Score */}
                     <div className="space-y-1.5">

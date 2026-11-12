@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
 const storeService = require('../src/services/storeService');
+const vendorController = require('../src/controllers/vendorController');
 const { authHeader, TEST_USERS } = require('./testHelpers');
 
 function customAuthHeader(user) {
@@ -410,6 +411,70 @@ describe('API Route Endpoints', () => {
     test('POST /api/vendors/:id/rating-revision returns 400 if scores missing', async () => {
       const res = await request(app).post(`/api/vendors/${testVendorId}/rating-revision`).set(authHeader('buyer')).send({});
       expect(res.statusCode).toBe(400);
+    });
+
+    test('POST /api/vendors/:id/request-evaluation sends evaluation request and returns 200', async () => {
+      const res = await request(app).post(`/api/vendors/${testVendorId}/request-evaluation`).set(authHeader('buyer')).send({
+        notes: 'Please submit latest ISO certs and performance scorecard',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toHaveProperty('evaluationRequested', true);
+      expect(res.body.data).toHaveProperty('vendorEmail');
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 403 for vendor role', async () => {
+      const res = await request(app).post(`/api/vendors/${testVendorId}/request-evaluation`).set(authHeader('vendor')).send({});
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 401 when unauthenticated', async () => {
+      const res = await request(app).post(`/api/vendors/${testVendorId}/request-evaluation`).send({});
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 404 for invalid vendor', async () => {
+      const res = await request(app).post('/api/vendors/invalid-vendor-999/request-evaluation').set(authHeader('buyer')).send({});
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 400 when vendor has no email', async () => {
+      const vendorNoEmail = storeService.addVendor({
+        name: 'Vendor Without Email',
+        majorCategory: 'Mechanical',
+        source: 'buyer_manual',
+      });
+      const res = await request(app).post(`/api/vendors/${vendorNoEmail.id}/request-evaluation`).set(authHeader('admin')).send({});
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toContain('Vendor does not have a registered email address');
+    });
+
+    test('POST /api/vendors/:id/request-evaluation works for buyer without linked buyerAccount and handles errors', async () => {
+      const customBuyerHeader = customAuthHeader({
+        id: 'buyer-unlinked-id',
+        email: 'unlinked-buyer@example.com',
+        role: 'buyer',
+        name: 'Unlinked Buyer',
+      });
+      const res = await request(app)
+        .post(`/api/vendors/${testVendorId}/request-evaluation`)
+        .set(customBuyerHeader)
+        .send({});
+      expect(res.statusCode).toBe(200);
+
+      // Error handler branch
+      const req = { params: { id: testVendorId }, user: { role: 'admin' }, body: {} };
+      const resMock = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const nextMock = jest.fn();
+      const origReq = storeService.requestVendorEvaluationDurably;
+      storeService.requestVendorEvaluationDurably = jest.fn().mockRejectedValueOnce(new Error('Durable request failure'));
+      await vendorController.requestEvaluation(req, resMock, nextMock);
+      expect(nextMock).toHaveBeenCalledWith(expect.any(Error));
+      storeService.requestVendorEvaluationDurably = origReq;
+
+      // Missing user branch
+      await vendorController.requestEvaluation({ params: { id: testVendorId } }, resMock, nextMock);
+      expect(resMock.status).toHaveBeenCalledWith(401);
     });
 
     test('GET /api/vendors/:id/onboarding-email returns email preview payload', async () => {

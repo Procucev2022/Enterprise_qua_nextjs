@@ -683,6 +683,7 @@ sellerDirectory: {
     rfqDispatched: 'RFQ #{rfqNumber} successfully dispatched to {vendorCount} qualified vendors.',
     poGenerated: 'Pre-Purchase Order #{poNumber} created and committed to ERP.',
     ratingUpdated: 'Vendor rating for {vendorName} revised to {newScore}/100.',
+    evaluationRequested: 'Evaluation request sent to {vendorName}. The vendor has been notified to submit their performance evaluation details.',
     welcomeUser: 'Welcome back, {userName} ({userRole})',
     totalSpendSummary: 'Total analyzed spend: ₹{amount} across {categoryCount} categories.',
   },
@@ -3190,6 +3191,15 @@ sellerDirectory: {
     docColStatus: 'Audit Status',
     docStatusVerified: '✓ Verified',
     docMoreCount: '+ {count} more attachment(s) on record.',
+  },
+
+  vendorEvaluationRequest: {
+    buttonLabel: 'Request Vendor Evaluation',
+    buttonTooltip: 'Send performance evaluation request to this supplier',
+    successTitle: 'Evaluation Request Sent',
+    successBody: 'Evaluation request sent to {vendorName}. The vendor has been notified to submit their performance evaluation details.',
+    noEmailError: 'Vendor does not have a registered email address to receive an evaluation request.',
+    requestDispatchedBadge: 'Evaluation Request Dispatched to Vendor',
   },
 
   /** Shared modals in app/components/Modals.tsx. Each value comes from the server, or it shows one of the placeholders above. */

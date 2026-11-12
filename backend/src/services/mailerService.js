@@ -2415,6 +2415,67 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
   };
 }
 
+/** Performance evaluation request notification to vendor */
+function buildVendorEvaluationRequestEmail({
+  to,
+  recipientName,
+  vendorName,
+  buyerCompany,
+  buyerName,
+  buyerEmail,
+  notes,
+}) {
+  const safeRecipientName = recipientName ? escapeHtml(recipientName) : '';
+  const safeBuyerCompany = escapeHtml(buyerCompany || 'A buyer on Procucev');
+  const safeVendorName = escapeHtml(vendorName || 'Supplier');
+  const safeNotes = notes ? escapeHtml(notes) : '';
+  const subjectBuyerCompany = String(buyerCompany || 'A buyer on Procucev')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .trim();
+  const inner = `
+    <div style="font-family: Arial, sans-serif; width: 100%; box-sizing: border-box;">
+      <p style="font-size: 16px; color: #1e293b; margin-bottom: 20px;">
+        ${safeRecipientName ? `Dear <strong>${safeRecipientName}</strong>,` : 'Hello,'}
+      </p>
+      
+      <p style="font-size: 15px; color: #334155; margin-bottom: 20px; line-height: 1.6;">
+        <strong>${safeBuyerCompany}</strong> has requested an updated <strong>Performance &amp; Qualification Evaluation</strong> for <strong>${safeVendorName}</strong> on Procucev Enterprise.
+      </p>
+
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+        <h4 style="margin: 0 0 12px 0; color: #0f172a; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Action Required</h4>
+        <p style="margin: 0 0 10px 0; color: #475569; font-size: 13px; line-height: 1.5;">
+          Please log in to your Procucev Vendor Portal to review and submit your updated 360° supplier performance evaluation details, operational compliance records, and commercial credentials.
+        </p>
+        ${safeNotes ? `<p style="margin: 8px 0 0 0; color: #64748b; font-size: 12px; font-style: italic;">Buyer Notes: &ldquo;${safeNotes}&rdquo;</p>` : ''}
+      </div>
+
+      <div style="text-align: center; margin-bottom: 30px;">
+        <a href="${vendorSignInUrl()}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px; display: inline-block;">
+          Access Vendor Portal &amp; Submit Evaluation
+        </a>
+      </div>
+      
+      <p style="font-size: 13px; color: #64748b; line-height: 1.5;">
+        Requested by: <strong>${safeBuyerCompany}</strong>${buyerName ? ` (${escapeHtml(buyerName)})` : ''}${buyerEmail ? ` &lt;${escapeHtml(buyerEmail)}&gt;` : ''}
+      </p>
+    </div>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    replyTo: buyerEmail || emailGatewayAddress() || undefined,
+    subject: `[Action Required] Performance Evaluation Request from ${subjectBuyerCompany}`,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Supplier Performance Evaluation Request', inner),
+  };
+}
+
+async function sendVendorEvaluationRequestEmail(params) {
+  const message = buildVendorEvaluationRequestEmail(params);
+  return deliver(message, 'Vendor evaluation request email');
+}
+
 /**
  * Send one already-built ingestion email.
  *
@@ -2749,6 +2810,8 @@ module.exports = {
   buildBuyerProfileCompletionReminderEmail,
   sendBuyerProfileCompletionReminderEmail,
   buildRatingRevisionEmail,
+  buildVendorEvaluationRequestEmail,
+  sendVendorEvaluationRequestEmail,
   sendVendorIngestionEmail,
   buildRfqAcknowledgementEmail,
   sendRfqAcknowledgementEmail,

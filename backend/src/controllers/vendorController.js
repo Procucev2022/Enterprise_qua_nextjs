@@ -741,6 +741,63 @@ async function reviseRating(req, res, next) {
   }
 }
 
+async function requestEvaluation(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    if (req.user.role === 'vendor') {
+      return res.status(403).json({ success: false, error: 'Vendors cannot request evaluations on other vendors.' });
+    }
+
+    let buyerId = null;
+    let buyerCompany = req.user.orgName || req.user.name || 'Buyer';
+    let buyerName = req.user.name || '';
+    let buyerEmail = req.user.email || '';
+
+    if (req.user.role === 'buyer') {
+      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      if (buyerAccount) {
+        buyerId = buyerAccount.id;
+        buyerCompany = buyerAccount.organizationName || buyerCompany;
+        buyerName = buyerAccount.contactPerson || buyerName;
+      } else {
+        buyerId = req.user.sub || req.user.email;
+      }
+    }
+
+    const vendor = storeService.getVendorById(id, buyerId || 'all');
+    if (!vendor) {
+      logger.warn(`Vendor not found for evaluation request: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+
+    if (!vendor.email) {
+      logger.warn(`Cannot request evaluation: Vendor ${id} has no email`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'Vendor does not have a registered email address to receive an evaluation request.' });
+    }
+
+    logger.info(`Sending evaluation request for vendor ${vendor.name} (${vendor.id}) by ${buyerCompany}`, { vendorId: vendor.id, buyerCompany }, 'VENDOR_CONTROLLER');
+
+    const result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+      buyerCompany,
+      buyerName,
+      buyerEmail,
+      notes: req.body?.notes || '',
+    }, buyerId);
+
+    return res.status(200).json({
+      success: true,
+      message: `Evaluation request sent to ${vendor.name}. The vendor has been notified to submit their performance evaluation details.`,
+      data: result,
+    });
+  } catch (err) {
+    logger.error(`Error requesting evaluation for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 async function generateOnboardingEmailPreview(req, res, next) {
   try {
     const { id } = req.params;
@@ -1606,6 +1663,7 @@ module.exports = {
   deleteVendor,
   bulkDeleteVendors,
   reviseRating,
+  requestEvaluation,
   generateOnboardingEmailPreview,
   updateCategories,
   updateSubscription,

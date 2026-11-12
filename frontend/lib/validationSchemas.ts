@@ -716,3 +716,8 @@ export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
   amount: { min: 1 },
   reason: { maxLength: 1000 },
 } as const;
+
+/** Request Vendor Evaluation validation schema */
+export const REQUEST_VENDOR_EVALUATION_SCHEMA = {
+  notes: { maxLength: 1000 },
+} as const;

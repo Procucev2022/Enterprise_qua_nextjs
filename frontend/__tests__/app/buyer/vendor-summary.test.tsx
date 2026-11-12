@@ -71,6 +71,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   const mockOnNavigateToWizard = jest.fn();
   const mockShowToast = jest.fn();
   const mockReviseVendorRating = jest.fn();
+  const mockRequestVendorEvaluation = jest.fn().mockResolvedValue({ success: true, message: 'Sent' });
   const mockOpenRatingRevisionEmailModal = jest.fn();
   const mockAddBuyerVendor = jest.fn();
   const mockUpdateBuyerVendor = jest.fn();
@@ -226,6 +227,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         { majorCategory: 'Electrical', minorCategories: ['Cables', 'Transformers'] },
       ],
       reviseVendorRating: mockReviseVendorRating,
+      requestVendorEvaluation: mockRequestVendorEvaluation,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
     });
@@ -318,6 +320,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       deleteMultipleBuyerVendors: mockDeleteMultipleBuyerVendors,
       categoryTaxonomy: [{ majorCategory: 'Engineering Spares - Mechanical', minorCategories: ['Valves', 'Pumps'] }],
       reviseVendorRating: mockReviseVendorRating,
+      requestVendorEvaluation: mockRequestVendorEvaluation,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
     });
@@ -506,6 +509,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       showToast: mockShowToast,
       buyerVendors: mockBuyerVendors,
       reviseVendorRating: mockReviseVendorRating,
+      requestVendorEvaluation: mockRequestVendorEvaluation,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: null,
     });
@@ -543,6 +547,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       showToast: mockShowToast,
       buyerVendors: mockBuyerVendors,
       reviseVendorRating: mockReviseVendorRating,
+      requestVendorEvaluation: mockRequestVendorEvaluation,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: null,
     });
@@ -563,6 +568,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       showToast: mockShowToast,
       buyerVendors: mockBuyerVendors,
       reviseVendorRating: mockReviseVendorRating,
+      requestVendorEvaluation: mockRequestVendorEvaluation,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: null,
     });
@@ -1123,7 +1129,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
           { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
         ],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1197,7 +1204,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
           { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
         ],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1246,7 +1254,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: null,
       });
 
@@ -1288,7 +1297,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: null,
       });
 
@@ -1345,7 +1355,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1396,7 +1407,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited', pincode: '411001' },
       });
 
@@ -1559,7 +1571,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1692,7 +1705,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1727,6 +1741,12 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // No AI generator is wired to any action, so no generated figure or remark can appear.
       expect(screen.queryByRole('button', { name: /Auto-Generate with AI/i })).not.toBeInTheDocument();
       expect(mockShowToast).not.toHaveBeenCalledWith('AI Rating Generated', expect.anything(), expect.anything());
+
+      // Replaced with Request Vendor Evaluation button
+      const reqEvalBtn = screen.getByRole('button', { name: /Request Vendor Evaluation/i });
+      expect(reqEvalBtn).toBeInTheDocument();
+      fireEvent.click(reqEvalBtn);
+      expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-1');
     });
 
     it('closes the rating revision modal via Cancel button', () => {
@@ -1771,7 +1791,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1813,7 +1834,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1856,7 +1878,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1976,7 +1999,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
           { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
         ],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2462,7 +2486,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2481,6 +2506,231 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // No AI generator exists, so the modal offers no generated rating for this vendor.
       expect(screen.queryByRole('button', { name: /Auto-Generate with AI/i })).not.toBeInTheDocument();
       expect(mockShowToast).not.toHaveBeenCalledWith('AI Rating Generated', expect.anything(), expect.anything());
+    });
+
+    it('requests vendor evaluation from View Profile modal', async () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      fireEvent.click(viewBtns[0]);
+
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+
+      const reqEvalBtn = screen.getByRole('button', { name: /Request Vendor Evaluation/i });
+      expect(reqEvalBtn).toBeInTheDocument();
+      fireEvent.click(reqEvalBtn);
+
+      await waitFor(() => {
+        expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-1');
+      });
+    });
+
+    it('handles vendor evaluation request failure gracefully', async () => {
+      mockRequestVendorEvaluation.mockRejectedValueOnce(new Error('Network failure'));
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      fireEvent.click(reviseBtns[0]);
+
+      const reqEvalBtn = screen.getByRole('button', { name: /Request Vendor Evaluation/i });
+      fireEvent.click(reqEvalBtn);
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Evaluation Request Failed', 'Network failure', 'warning');
+      });
+    });
+
+    it('shows warning when vendor has no email address', async () => {
+      const vendorNoEmail = {
+        id: 'v-no-email',
+        name: 'No Email Supplier',
+        email: '',
+        majorCategory: 'Mechanical',
+        minorCategories: [],
+        rating: 4.0,
+        source: 'buyer_manual',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_1',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [vendorNoEmail],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      fireEvent.click(reviseBtns[0]);
+
+      const reqEvalBtn = screen.getByRole('button', { name: /Request Vendor Evaluation/i });
+      fireEvent.click(reqEvalBtn);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Evaluation Request Failed',
+        'Vendor does not have a registered email address to receive an evaluation request.',
+        'warning'
+      );
+    });
+
+    it('renders evaluation dispatched badge when vendor.evaluationRequested is true', () => {
+      const vendorRequested = {
+        id: 'v-requested',
+        name: 'Requested Supplier',
+        email: 'req@supplier.test',
+        majorCategory: 'Mechanical',
+        minorCategories: [],
+        rating: 4.2,
+        source: 'buyer_manual',
+        evaluationRequested: true,
+        evaluationRequestedAt: '2026-11-12T10:00:00.000Z',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_1',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [vendorRequested],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      fireEvent.click(reviseBtns[0]);
+
+      expect(screen.getByText('Evaluation Request Dispatched to Vendor')).toBeInTheDocument();
+    });
+
+    it('dispatches evaluation request successfully from Revise Rating modal and shows badge', async () => {
+      mockRequestVendorEvaluation.mockResolvedValueOnce({ success: true });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      fireEvent.click(reviseBtns[0]);
+
+      const reqEvalBtn = screen.getByRole('button', { name: /Request Vendor Evaluation/i });
+      fireEvent.click(reqEvalBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('Evaluation Request Dispatched to Vendor')).toBeInTheDocument();
+      });
+    });
+
+    it('handles vendor evaluation request returning success false or failure without error message', async () => {
+      mockRequestVendorEvaluation.mockResolvedValueOnce({ success: false });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      fireEvent.click(reviseBtns[0]);
+
+      const reqEvalBtn = screen.getByRole('button', { name: /Request Vendor Evaluation/i });
+      fireEvent.click(reqEvalBtn);
+
+      await waitFor(() => {
+        expect(mockRequestVendorEvaluation).toHaveBeenCalled();
+      });
+
+      // Also error without message
+      mockRequestVendorEvaluation.mockRejectedValueOnce({});
+      fireEvent.click(reqEvalBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Evaluation Request Failed', 'Could not send evaluation request.', 'warning');
+      });
+    });
+
+    it('renders origin badge for excel and self-onboarded vendor sources', () => {
+      const excelVendor = {
+        id: 'v-excel',
+        name: 'Excel Catalogue Vendor',
+        email: 'excel@test.com',
+        majorCategory: 'Mechanical',
+        minorCategories: [],
+        rating: 4.1,
+        source: 'excel',
+        addedByBuyerCompany: true,
+      };
+      const selfOnboardedVendor = {
+        id: 'v-self',
+        name: 'Self Onboarded Vendor',
+        email: 'self@test.com',
+        majorCategory: 'Electrical',
+        minorCategories: [],
+        rating: 4.0,
+        source: 'self_onboarded',
+        addedByBuyerCompany: true,
+      };
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_1',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [excelVendor, selfOnboardedVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      expect(screen.getByText('Category Manager Catalogue')).toBeInTheDocument();
+      expect(screen.getByText('Direct Self-Onboarded')).toBeInTheDocument();
     });
   });
 
@@ -2555,7 +2805,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -2612,7 +2863,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -2832,7 +3084,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -2861,7 +3114,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -2892,7 +3146,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -2920,7 +3175,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -2986,7 +3242,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3048,7 +3305,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: null,
       });
 
@@ -3091,7 +3349,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3127,7 +3386,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3216,7 +3476,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         deleteBuyerVendor: mockDeleteBuyerVendor,
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
-        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 

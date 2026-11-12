@@ -162,6 +162,30 @@ describe('Store Service & Business Operations', () => {
       expect(nullRevise).toBeNull();
     });
 
+    test('requestVendorEvaluation sends request and updates status', async () => {
+      const res = storeService.requestVendorEvaluation(testVendorId, {
+        buyerCompany: 'Test Buyer Corp',
+        buyerName: 'Buyer Lead',
+        buyerEmail: 'lead@buyer.test',
+        notes: 'Please submit evaluation form',
+      });
+      expect(res).toBeDefined();
+      expect(res.evaluationRequested).toBe(true);
+      expect(res.evaluationRequestedBy).toBe('Test Buyer Corp');
+
+      const nullReq = storeService.requestVendorEvaluation('nonexistent', {});
+      expect(nullReq).toBeNull();
+
+      const durableRes = await storeService.requestVendorEvaluationDurably(testVendorId, {
+        buyerCompany: 'Durable Buyer Corp',
+      });
+      expect(durableRes).toBeDefined();
+      expect(durableRes.evaluationRequested).toBe(true);
+
+      const nullDurable = await storeService.requestVendorEvaluationDurably('nonexistent', {});
+      expect(nullDurable).toBeNull();
+    });
+
     // addVendor no longer auto-fires onboarding provisioning itself (see
     // provisionVendorOnboarding's comment) — its only caller, createVendor's
     // controller, now awaits provisionVendorOnboarding explicitly after

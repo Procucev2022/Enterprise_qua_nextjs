@@ -1162,6 +1162,32 @@ describe('mailerService', () => {
       expect(email.subject).toContain('Bcc: attacker@example.test');
     });
 
+    test('buildVendorEvaluationRequestEmail renders evaluation request content', () => {
+      const email = mailerService.buildVendorEvaluationRequestEmail({
+        to: 'eval-vendor@test.com',
+        recipientName: 'Vikram',
+        vendorName: 'Apex Tools Ltd',
+        buyerCompany: 'Larsen & Toubro',
+        buyerName: 'Procurement Officer',
+        buyerEmail: 'officer@lt.test',
+        notes: 'Please submit 2026 ISO quality compliance certificate.',
+      });
+      expect(email.to).toBe('eval-vendor@test.com');
+      expect(email.subject).toContain('Larsen & Toubro');
+      expect(email.html).toContain('Apex Tools Ltd');
+      expect(email.html).toContain('Please submit 2026 ISO quality compliance certificate.');
+    });
+
+    test('sendVendorEvaluationRequestEmail delivers email message', async () => {
+      const result = await mailerService.sendVendorEvaluationRequestEmail({
+        to: 'eval-vendor@test.com',
+        recipientName: 'Vikram',
+        vendorName: 'Apex Tools Ltd',
+        buyerCompany: 'Larsen & Toubro',
+      });
+      expect(result).toHaveProperty('sent');
+    });
+
     test('sendVendorIngestionEmail and isConfigured work properly', async () => {
       const res = await mailerService.sendVendorIngestionEmail({ to: 'x@test.com' }, 'mapping');
       expect(res.sent).toBe(false);

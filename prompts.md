@@ -5559,3 +5559,11 @@ In the Buyer flow, Edit Vendor Profile – Third Section: Add the Edit option to
 In the Buyer flow, PAN Number – No Dummy Data: Do not automatically generate or insert dummy PAN numbers when the PAN field is empty. Expected Behaviour/Solution: Keep the PAN field blank if the user has not provided a PAN number. Save only the actual PAN details entered by the user. Please fix the issue
 ```
 ---
+
+
+### Prompt 178
+**Timestamp**: 2026-11-12T20:12:07+05:30
+```text
+In the Buyer flow, Remove the "Auto-Generate with AI" button and replace it with "Request Vendor Evaluation". Expected Behaviour/Solution: When the buyer clicks "Request Vendor Evaluation", send an evaluation request to the respective vendor and notify them to submit their performance evaluation details. Please fix the issue
+```
+---

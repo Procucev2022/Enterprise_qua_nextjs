@@ -1696,6 +1696,34 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(saved).toBeNull();
     });
 
+    // Request Vendor Evaluation
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, message: 'Evaluation request sent' }),
+    });
+    await act(async () => {
+      const res = await contextValue.requestVendorEvaluation('v-001', 'Please submit performance form');
+      expect(res.success).toBe(true);
+    });
+
+    // Request evaluation for non-existent vendor
+    await act(async () => {
+      const res = await contextValue.requestVendorEvaluation('nonexistent-vendor');
+      expect(res.success).toBe(false);
+    });
+
+    // Request evaluation failure response from server
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({ success: false, error: 'Internal failure' }),
+    });
+    await act(async () => {
+      const res = await contextValue.requestVendorEvaluation('v-001');
+      expect(res.success).toBe(false);
+    });
+
     // 3. Add Audit Log & Feed Item across all role contexts and feed types
     // Audit and feed writes are async: each entry appears only after the server returns it.
     await act(async () => {

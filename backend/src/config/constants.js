@@ -212,6 +212,11 @@ const VENDOR_RATING_LABELS = Object.freeze({
   UNRATED: 'not rated',
 });
 
+const VENDOR_EVALUATION_REQUEST = Object.freeze({
+  DEFAULT_STATUS: 'PENDING EVALUATION',
+  SUCCESS_MESSAGE: 'Evaluation request sent to vendor. The vendor has been notified to submit their performance evaluation details.',
+});
+
 // Shown for every write to the admin settings endpoint. The backend stores no
 // editable setting, and no backend code reads one, so nothing can be saved.
 const SYSTEM_CONFIG_MESSAGES = Object.freeze({
@@ -3430,6 +3435,7 @@ module.exports = {
   VENDOR_SUBSCRIPTION_PLANS,
   VENDOR_PLAN_RFQ_QUOTA,
   VENDOR_RATING_LABELS,
+  VENDOR_EVALUATION_REQUEST,
   SYSTEM_CONFIG_MESSAGES,
   SUPPORT_CHAT_STATUS,
   SUPPORT_CHAT_MESSAGES,

@@ -221,6 +221,9 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 ]);
 
 const VALIDATION_SCHEMAS = {
+  requestVendorEvaluation: {
+    notes: { type: 'string', required: false, maxLength: 1000 },
+  },
   clientLogEntry: {
       level: { type: 'string', required: false, enum: ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL', 'AUDIT'] },
     message: {

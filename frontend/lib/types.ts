@@ -1067,6 +1067,9 @@ export interface VendorEntry {
   status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
   score?: number | null;
   evaluated?: boolean;
+  evaluationRequested?: boolean;
+  evaluationRequestedAt?: string;
+  evaluationRequestedBy?: string;
   hasRecord?: boolean;
   matchReason?: string;
   proximity?: string;

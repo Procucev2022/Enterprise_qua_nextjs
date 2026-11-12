@@ -3548,6 +3548,125 @@ class StoreService {
     return { updatedVendor, revisionRecord: prepared.revisionRecord };
   }
 
+  requestVendorEvaluation(vendorId, options = {}, scopedBuyerId = null) {
+    const vendor = this.getVendorById(vendorId, scopedBuyerId);
+    if (!vendor) return null;
+
+    const requestedAt = new Date().toISOString();
+    const buyerCompany = options.buyerCompany || 'A buyer on Procucev';
+    const buyerName = options.buyerName || '';
+    const buyerEmail = options.buyerEmail || '';
+    const notes = options.notes || '';
+
+    const updates = {
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: vendor.status || 'PENDING EVALUATION',
+    };
+
+    const updatedVendor = this.updateVendor(vendor.id, updates);
+
+    if (vendor.email) {
+      try {
+        void mailerService.sendVendorEvaluationRequestEmail({
+          to: vendor.email,
+          recipientName: vendor.contactPerson || vendor.name,
+          vendorName: vendor.name,
+          buyerCompany,
+          buyerName,
+          buyerEmail,
+          notes,
+        });
+      } catch (emailErr) {
+        logger.error('Failed to dispatch evaluation request email', emailErr, 'STORE_SERVICE');
+      }
+    }
+
+    this.addFeedItem({
+      title: `Vendor Evaluation Requested: ${vendor.name}`,
+      description: `Buyer ${buyerCompany} requested 360° performance evaluation from ${vendor.name} (${vendor.email}).`,
+      source: 'system',
+      vendorName: vendor.name,
+    });
+
+    this.addAuditLog({
+      userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Requested performance evaluation for vendor ${vendor.name} (${vendor.email}) on behalf of ${buyerCompany}.`,
+    });
+
+    return {
+      vendorId: vendor.id,
+      vendorName: vendor.name,
+      vendorEmail: vendor.email,
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: updatedVendor?.status || vendor.status,
+    };
+  }
+
+  async requestVendorEvaluationDurably(vendorId, options = {}, scopedBuyerId = null) {
+    let vendor = this.getVendorById(vendorId, scopedBuyerId);
+    if (!vendor && pool.hasStorage()) {
+      vendor = await this.getVendorByIdWithDBFallback(vendorId, scopedBuyerId, { fresh: true });
+    }
+    if (!vendor) return null;
+
+    const requestedAt = new Date().toISOString();
+    const buyerCompany = options.buyerCompany || 'A buyer on Procucev';
+    const buyerName = options.buyerName || '';
+    const buyerEmail = options.buyerEmail || '';
+    const notes = options.notes || '';
+
+    const updates = {
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: vendor.status || 'PENDING EVALUATION',
+    };
+
+    const updatedVendor = await this.updateVendorDurably(vendor.id, () => updates);
+
+    if (vendor.email) {
+      try {
+        void mailerService.sendVendorEvaluationRequestEmail({
+          to: vendor.email,
+          recipientName: vendor.contactPerson || vendor.name,
+          vendorName: vendor.name,
+          buyerCompany,
+          buyerName,
+          buyerEmail,
+          notes,
+        });
+      } catch (emailErr) {
+        logger.error('Failed to dispatch evaluation request email', emailErr, 'STORE_SERVICE');
+      }
+    }
+
+    this.addFeedItem({
+      title: `Vendor Evaluation Requested: ${vendor.name}`,
+      description: `Buyer ${buyerCompany} requested 360° performance evaluation from ${vendor.name} (${vendor.email}).`,
+      source: 'system',
+      vendorName: vendor.name,
+    });
+
+    this.addAuditLog({
+      userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Requested performance evaluation for vendor ${vendor.name} (${vendor.email}) on behalf of ${buyerCompany}.`,
+    });
+
+    return {
+      vendorId: vendor.id,
+      vendorName: vendor.name,
+      vendorEmail: vendor.email,
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: updatedVendor?.status || vendor.status,
+    };
+  }
+
   // ==========================================
   // 3. RFQS
   // ==========================================

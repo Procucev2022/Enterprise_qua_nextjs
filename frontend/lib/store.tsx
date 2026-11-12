@@ -258,6 +258,7 @@ interface AppContextType {
 
   // Buyer Vendor Rating Revision Engine
   reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => Promise<VendorRatingRevisionRecord | null>;
+  requestVendorEvaluation: (vendorId: string, notes?: string) => Promise<{ success: boolean; message?: string }>;
   selectedRatingRevisionEmail: VendorRatingRevisionEmailPayload | null;
   setSelectedRatingRevisionEmail: (email: VendorRatingRevisionEmailPayload | null) => void;
   ratingRevisionEmailModalOpen: boolean;
@@ -1891,6 +1892,74 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return revisionRecord;
   };
 
+  const requestVendorEvaluation = async (
+    vendorId: string,
+    notes?: string
+  ): Promise<{ success: boolean; message?: string }> => {
+    const targetVendor = buyerVendors.find((v) => v.id === vendorId);
+    if (!targetVendor) {
+      showToast('Vendor Not Found', 'Could not locate the requested vendor in your directory.', 'warning');
+      return { success: false, message: 'Vendor not found' };
+    }
+    if (!targetVendor.email) {
+      showToast('Evaluation Request Failed', UI_STRINGS.vendorEvaluationRequest.noEmailError, 'warning');
+      return { success: false, message: UI_STRINGS.vendorEvaluationRequest.noEmailError };
+    }
+
+    try {
+      const res = await fetch(`/api/vendors/${encodeURIComponent(targetVendor.id)}/request-evaluation`, {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ notes: notes || '' }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        const errMessage = data?.error || 'Failed to send evaluation request. Please try again.';
+        showToast('Evaluation Request Failed', errMessage, 'warning');
+        return { success: false, message: errMessage };
+      }
+
+      setBuyerVendors((prev) =>
+        prev.map((v) => {
+          if (v.id === vendorId || v.name === targetVendor.name) {
+            return {
+              ...v,
+              evaluationRequested: true,
+              evaluationRequestedAt: new Date().toISOString(),
+              evaluationRequestedBy: activeBuyerAccount?.organizationName || 'Buyer',
+            };
+          }
+          return v;
+        })
+      );
+
+      void addFeedItem(
+        `Evaluation Requested: ${targetVendor.name}`,
+        `Sent 360° performance evaluation request to ${targetVendor.name} (${targetVendor.email}) on behalf of ${activeBuyerAccount?.organizationName || 'Buyer'}.`,
+        'system',
+        undefined,
+        targetVendor.name,
+        'system'
+      );
+
+      void addAuditLog(
+        `Requested performance evaluation from vendor ${targetVendor.name} (${targetVendor.email}) by buyer ${activeBuyerAccount?.organizationName || 'Buyer'}.`
+      );
+
+      showToast(
+        UI_STRINGS.vendorEvaluationRequest.successTitle,
+        formatString(UI_STRINGS.vendorEvaluationRequest.successBody, { vendorName: targetVendor.name }),
+        'success'
+      );
+
+      return { success: true, message: data.message };
+    } catch (err: any) {
+      logger.log('ERROR', 'Failed to request vendor evaluation', { error: err }, 'STORE');
+      showToast('Evaluation Request Failed', err?.message || 'Could not reach the server. Please try again.', 'warning');
+      return { success: false, message: err?.message };
+    }
+  };
+
   // Buyer Vendor Management — persists the vendor and waits for backend
   // onboarding so the success message accurately reflects credential delivery.
   const addBuyerVendor = async (vendor: Omit<VendorEntry, 'id'>): Promise<VendorEntry | null> => {
@@ -2855,6 +2924,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setVendorSelfEvaluationScore,
         isVendorEvaluationFeeWaived: vendorSubscription === 'connect' || vendorSubscription === 'select',
         reviseVendorRating,
+        requestVendorEvaluation,
         selectedRatingRevisionEmail,
         setSelectedRatingRevisionEmail,
         ratingRevisionEmailModalOpen,
