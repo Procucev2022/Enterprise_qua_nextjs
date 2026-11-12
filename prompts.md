@@ -5368,3 +5368,11 @@ Why are we creating the vendor_search_fts? As a part of DB migration, it should 
 ```
 ---
 
+### Prompt 153
+**Timestamp**: 2026-11-12T17:47:57+05:30
+```text
+In the Buyer flow, Incorrect vendor assignment in V1 and V2 – Matching vendors are displayed, but invited and assigned vendor counts show 0. Expected Behaviour/Solution: All eligible matched vendors should be assigned to the RFQ, invitations should be dispatched successfully, and correct counts should be displayed in both Buyer and Category Manager modules. Please fix the issue
+```
+---
+
+

@@ -278,7 +278,11 @@ export function toRFQCreatePayload(
     phone?: string | null;
     vendorCategory?: 'Client List' | 'Procucev Network';
     majorCategory?: string | null;
+    minorCategories?: string[] | null;
+    city?: string | null;
+    state?: string | null;
     location?: string | null;
+    pincode?: string | null;
     matchScore?: number | null;
   }>,
   source?: RFQSource

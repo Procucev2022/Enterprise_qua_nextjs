@@ -1179,7 +1179,7 @@ export default function IngestionWizard({
         name: v.name || 'Enterprise Vendor',
         email: v.email || null,
         contactPerson: v.contactPerson || v.name || null,
-        phone: v.phone || null,
+        phone: v.phone || (v as any).mobile || (v as any).mobileNumber || null,
         // Tag the entry so the confirmation modal and RFQ details view classify
         // it without needing the vendor's source: a buyer-uploaded vendor is the
         // buyer's own ('Client List'); anything else here is a Procucev vendor.
@@ -1233,7 +1233,7 @@ export default function IngestionWizard({
           );
         }
 
-        const finalMatching = dispatchSignals.length > 0
+        let finalMatching = dispatchSignals.length > 0
           ? selectVendorsForCategories(
               matchingVendors,
               dispatchSignals,
@@ -1241,6 +1241,10 @@ export default function IngestionWizard({
               { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode }
             ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+
+        if (finalMatching.length === 0 && matchingVendors.length > 0) {
+          finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+        }
 
         if (finalMatching.length > 0) {
           mode1AssignedVendors = finalMatching.map(toAssignedVendorEntry);

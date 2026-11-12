@@ -4075,7 +4075,7 @@ class StoreService {
 
       // Limit client vendors to MAX_CLIENT_PER_CATEGORY per unique minor category (with major fallback)
       if (shortlisted.length > 0) {
-        newRFQ.assignedVendors = this.selectVendorsForRFQ(
+        const selected = this.selectVendorsForRFQ(
           shortlisted,
           newRFQ,
           maxClientPerCat,
@@ -4084,6 +4084,7 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
+        newRFQ.assignedVendors = selected.length > 0 ? selected : shortlisted.slice(0, maxClientPerCat);
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -4106,14 +4107,14 @@ class StoreService {
     // If assignedVendors is empty, automatically identify and assign eligible vendors from
     // the buyer's private roster matching the RFQ category and delivery location.
     const isV1 = newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'v1' || newRFQ.sourcingMode === 'version_1';
-    if (!newRFQ.needsCategoryManagerAssignment && !newRFQ.categoryNotAvailable && isV1 && !hadExplicitVendors && (!Array.isArray(newRFQ.assignedVendors) || newRFQ.assignedVendors.length === 0)) {
+    if (!newRFQ.needsCategoryManagerAssignment && !newRFQ.categoryNotAvailable && isV1 && !hadExplicitVendors) {
       const categories = this._rfqDistinctCategories(newRFQ);
       const targetCategories = categories.length > 0 ? categories : (newRFQ.category ? [newRFQ.category] : []);
       if (targetCategories.length > 0) {
         const clientCandidates = this.candidateVendorsForRFQ(newRFQ).filter(
           (v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ)
         );
-        const clientMatches = this.selectVendorsForRFQ(
+        let clientMatches = this.selectVendorsForRFQ(
           clientCandidates,
           newRFQ,
           maxClientPerCat,
@@ -4122,6 +4123,9 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
+        if (clientMatches.length === 0 && clientCandidates.length > 0) {
+          clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
+        }
         if (clientMatches.length > 0) {
           newRFQ.assignedVendors = clientMatches.map((v) => ({
             id: v.id,
@@ -4130,8 +4134,9 @@ class StoreService {
             contactPerson: v.contactPerson || null,
             phone: v.phone || v.mobile || v.mobileNumber || null,
             source: v.source || 'buyer_uploaded',
+            vendorCategory: 'Client List',
             majorCategory: v.majorCategory || v.category || null,
-            minorCategories: v.minorCategories || [],
+            minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
             city: v.city || null,
             state: v.state || null,
             location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
@@ -4273,11 +4278,17 @@ class StoreService {
       };
 
       const allCandidates = this.candidateVendorsForRFQ(newRFQ);
-      const clientCandidates = allCandidates.filter((v) => !this.isProcucevVendor(v));
+      const clientCandidates = allCandidates.filter((v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ));
       const procucevCandidates = allCandidates.filter((v) => this.isProcucevVendor(v));
 
-      const clientMatches = this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, targetLocation);
-      const procucevMatches = this.selectVendorsForRFQ(procucevCandidates, newRFQ, maxProcucevPerCat, targetLocation);
+      let clientMatches = this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, targetLocation);
+      if (clientMatches.length === 0 && clientCandidates.length > 0) {
+        clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
+      }
+      let procucevMatches = this.selectVendorsForRFQ(procucevCandidates, newRFQ, maxProcucevPerCat, targetLocation);
+      if (procucevMatches.length === 0 && procucevCandidates.length > 0) {
+        procucevMatches = procucevCandidates.slice(0, targetCategories.length * maxProcucevPerCat);
+      }
       const categoryMatches = [...clientMatches, ...procucevMatches];
 
       const existingKeys = new Set(
@@ -4285,24 +4296,30 @@ class StoreService {
       );
       const additions = categoryMatches
         .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
-        .map((v) => ({
-          id: v.id,
-          name: v.name,
-          email: v.email || null,
-          contactPerson: v.contactPerson || null,
-          phone: v.phone || null,
-          source: v.source || (this.isProcucevVendor(v) ? 'procucev_network' : 'buyer_uploaded'),
-          majorCategory: v.majorCategory || v.category || null,
-          minorCategories: v.minorCategories || [],
-          city: v.city || null,
-          state: v.state || null,
-          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
-          pincode: v.pincode || null,
-        }));
+        .map((v) => {
+          const isProc = this.isProcucevVendor(v);
+          return {
+            id: v.id,
+            name: v.name,
+            email: v.email || null,
+            contactPerson: v.contactPerson || null,
+            phone: v.phone || v.mobile || v.mobileNumber || null,
+            source: v.source || (isProc ? 'procucev_network' : 'buyer_uploaded'),
+            vendorCategory: isProc ? 'Procucev Network' : 'Client List',
+            majorCategory: v.majorCategory || v.category || null,
+            minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+            city: v.city || null,
+            state: v.state || null,
+            location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+            pincode: v.pincode || null,
+          };
+        });
       if (additions.length > 0) {
         newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];
-        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
-        newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+        if (newRFQ.followUpData) {
+          newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+          newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+        }
       }
     }
 
@@ -4832,9 +4849,16 @@ class StoreService {
       }
 
       const assignedVendors = [...existing, ...committedAdditions];
+      const isV1 = current.sourcingMode === 'mode_1' || current.sourcingMode === 'v1' || current.sourcingMode === 'version_1';
+      const procucevCount = isV1
+        ? 0
+        : assignedVendors.filter((v) => {
+            const resolved = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
+            return v.vendorCategory === 'Procucev Network' || (!v.vendorCategory && this.isProcucevVendor(resolved));
+          }).length;
       const updates = {
         assignedVendors,
-        procucevVendorCount: assignedVendors.length,
+        procucevVendorCount: procucevCount,
         vendorInvitationTargets: this._buildRFQVendorInviteTargets(
           { ...current, assignedVendors },
           committedAdditions,
@@ -6587,7 +6611,31 @@ class StoreService {
             groupSelected.push(v);
           }
         }
-        // Major category fallback removed: strictly match minor category
+        // Major category fallback: if fewer than limit vendors matched minor category and majorCategory exists,
+        // fill remaining slots with vendors matching the parent major category
+        if (groupSelected.length < limit && majorCategory) {
+          const majorCandidates = candidatePool.filter((candidate) => {
+            const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
+            const hasCategory = Boolean(
+              v.majorCategory ||
+              (Array.isArray(v.minorCategories) && v.minorCategories.length > 0) ||
+              (Array.isArray(v.vendorSelectedCategories) && v.vendorSelectedCategories.length > 0) ||
+              (Array.isArray(v.clientMappedCategories) && v.clientMappedCategories.length > 0)
+            );
+            return !hasCategory || this.vendorCoversCategory(v, majorCategory);
+          });
+
+          sortCandidates(majorCandidates);
+
+          for (const v of majorCandidates) {
+            if (groupSelected.length >= limit) break;
+            const key = (v.id || v.email || v.name || '').toLowerCase().trim();
+            if (key && !groupSeenKeys.has(key)) {
+              groupSeenKeys.add(key);
+              groupSelected.push(v);
+            }
+          }
+        }
       } else if (majorCategory) {
         // Pure major category matching (used only when no minor category is present)
         const majorCandidates = candidatePool.filter((candidate) => {
@@ -7060,13 +7108,14 @@ class StoreService {
     if (!rfq) return rfq;
     const mode = String(rfq.sourcingMode || '');
     const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
-    if (isV1) return rfq;
+    const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2' || rfq.source === 'email_gateway';
 
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
     if (isV0) {
       return await this.augmentV0AssignmentsFromDB(rfq, { deferChasers });
     }
 
+    const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY || 5;
     const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY || 5;
     const signals = this._rfqCategorySignals(rfq);
     const categories = this._rfqDistinctCategories(rfq);
@@ -7077,59 +7126,116 @@ class StoreService {
     const targetCategories = categories.length > 0 ? categories : signals;
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
 
-    let dbMatches = [];
-    if (pool.hasStorage()) {
-      try {
-        dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit * 2);
-      } catch (err) {
-        logger.warn(
-          'Auto-assign DB-backed vendor assignment query failed',
-          { rfqNumber: rfq.rfqNumber, error: err.message },
-          'STORE_SERVICE'
-        );
-      }
-    }
-
-    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
-      dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
-    }
-
-    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
-      return rfq;
-    }
-
     const targetLocation = {
       pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
       location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
-    const candidatePool = dbMatches.filter((v) => this.isProcucevVendor(v));
-    const sorted = this.selectVendorsForRFQ(
-      candidatePool,
-      rfq,
-      maxProcucevPerCat,
-      targetLocation
-    ) || [];
+
+    let clientCandidates = [];
+    if (isV1 || isV2) {
+      let clientDbMatches = [];
+      if (pool.hasStorage()) {
+        try {
+          const buyerId = rfq.buyerAccountId || rfq.buyerCompanyId || rfq.buyerId || null;
+          const buyerEmail = rfq.buyerEmail || rfq.createdBy || null;
+          clientDbMatches = await domainQueries.getVendorsByBuyerFromDB(buyerId, limit * 2, buyerEmail);
+        } catch (err) {
+          logger.warn(
+            'Auto-assign DB-backed client vendor query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
+        }
+      }
+      const rawClient = [
+        ...(Array.isArray(clientDbMatches) ? clientDbMatches : []),
+        ...this.candidateVendorsForRFQ(rfq).filter(
+          (v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, rfq)
+        ),
+      ];
+      const seenClient = new Set();
+      for (const v of rawClient) {
+        const k = (v.id || v.email || v.name || '').toLowerCase();
+        if (k && !seenClient.has(k)) {
+          seenClient.add(k);
+          clientCandidates.push(v);
+        }
+      }
+    }
+
+    let sortedClient = [];
+    if (clientCandidates.length > 0) {
+      sortedClient = this.selectVendorsForRFQ(
+        clientCandidates,
+        rfq,
+        maxClientPerCat,
+        targetLocation
+      ) || [];
+      if (sortedClient.length === 0) {
+        sortedClient = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
+      }
+    }
+
+    let sortedProcucev = [];
+    if (!isV1) {
+      let dbMatches = [];
+      if (pool.hasStorage()) {
+        try {
+          dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit * 2);
+        } catch (err) {
+          logger.warn(
+            'Auto-assign DB-backed vendor assignment query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
+        }
+      }
+
+      if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+        dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
+      }
+
+      const candidatePool = (dbMatches || []).filter((v) => this.isProcucevVendor(v));
+      sortedProcucev = this.selectVendorsForRFQ(
+        candidatePool,
+        rfq,
+        maxProcucevPerCat,
+        targetLocation
+      ) || [];
+      if (sortedProcucev.length === 0 && candidatePool.length > 0) {
+        sortedProcucev = candidatePool.slice(0, targetCategories.length * maxProcucevPerCat);
+      }
+    }
+
+    const candidatePool = [...sortedClient, ...sortedProcucev];
+    if (candidatePool.length === 0) {
+      return rfq;
+    }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const existingKeys = new Set(
       existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
     );
-    const additions = sorted
+    const additions = candidatePool
       .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
-      .map((v) => ({
-        id: v.id,
-        name: v.name,
-        email: v.email || null,
-        contactPerson: v.contactPerson || null,
-        phone: v.phone || v.mobile || null,
-        source: v.source || 'procucev_network',
-        majorCategory: v.majorCategory || v.category || null,
-        minorCategories: v.minorCategories || [],
-        city: v.city || null,
-        state: v.state || null,
-        location: v.location || null,
-        pincode: v.pincode || null,
-      }));
+      .map((v) => {
+        const isProc = this.isProcucevVendor(v);
+        return {
+          id: v.id,
+          name: v.name,
+          email: v.email || null,
+          contactPerson: v.contactPerson || null,
+          phone: v.phone || v.mobile || v.mobileNumber || null,
+          source: v.source || (isProc ? 'procucev_network' : 'buyer_uploaded'),
+          vendorCategory: isProc ? 'Procucev Network' : 'Client List',
+          majorCategory: v.majorCategory || v.category || null,
+          minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+          city: v.city || null,
+          state: v.state || null,
+          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+          pincode: v.pincode || null,
+        };
+      });
 
     if (additions.length === 0) return rfq;
 
@@ -7286,6 +7392,7 @@ class StoreService {
       }
 
     this._persistRFQ(updated);
+    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-auto-assigned-vendor-invites');
     logger.info(
       `RFQ ${rfq.rfqNumber}: auto-assigned ${updated.assignedVendors.length} vendors from DB (${committedAdditions.length} added)`,
       { rfqNumber: rfq.rfqNumber, assigned: updated.assignedVendors.length },
@@ -7385,8 +7492,8 @@ class StoreService {
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => {
         if (signals.length === 0) return true;
-        if (hasMinorSignals) {
-          return signals.some((sig) => this.vendorCoversMinorCategory(v, sig));
+        if (hasMinorSignals && signals.some((sig) => this.vendorCoversMinorCategory(v, sig))) {
+          return true;
         }
         return signals.some((c) => this.vendorCoversCategory(v, c));
       })
@@ -7516,7 +7623,7 @@ class StoreService {
       const isMatch = signals.length === 0 || (
         hasCategory && (
           hasMinorSignals
-            ? signals.some((c) => this.vendorCoversMinorCategory(vendor, c))
+            ? (signals.some((c) => this.vendorCoversMinorCategory(vendor, c)) || signals.some((c) => this.vendorCoversCategory(vendor, c)))
             : signals.some((c) => this.vendorCoversCategory(vendor, c))
         )
       );

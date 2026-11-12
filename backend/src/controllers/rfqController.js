@@ -839,8 +839,7 @@ async function getRFQById(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const mode = String(rfq.sourcingMode || '');
-    const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
-    if (!isV1 && (!Array.isArray(rfq.assignedVendors) || rfq.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
+    if ((!Array.isArray(rfq.assignedVendors) || rfq.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
       try {
         rfq = await storeService.autoAssignVendorsFromDB(rfq);
       } catch (assignErr) {
@@ -1101,8 +1100,7 @@ async function createRFQ(req, res, next) {
         logger.warn('Could not apply DB-backed V0 vendor assignment', { error: err.message }, 'RFQ_CONTROLLER');
       }
     } else {
-      const isV1 = createdMode === 'mode_1' || createdMode === 'v1' || createdMode === 'version_1';
-      if (!isV1 && typeof storeService.autoAssignVendorsFromDB === 'function') {
+      if ((!Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
         try {
           finalRFQ = await storeService.autoAssignVendorsFromDB(created);
         } catch (err) {
