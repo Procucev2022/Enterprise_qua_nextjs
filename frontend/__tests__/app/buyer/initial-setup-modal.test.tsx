@@ -2099,11 +2099,13 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.queryByRole('button', { name: /View & Edit Template A/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /View & Edit Template B/i })).not.toBeInTheDocument();
 
-    // Verify remaining setup summary is intact
+    // Verify Step 5 renders only the 3 email dispatch confirmation cards and no extra cards or test data
     expect(screen.getByText(/Total Stored/i)).toBeInTheDocument();
     expect(screen.getByText(/PO Mapped/i)).toBeInTheDocument();
     expect(screen.getByText(/Self-Map Required/i)).toBeInTheDocument();
-    expect(screen.getByText(/3-Day Reminders/i)).toBeInTheDocument();
+    expect(screen.queryByText(/3-Day Reminders/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('step5-completion-summary')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('step5-skipped-vendors-list')).not.toBeInTheDocument();
 
     // Verify Back to Category Join navigation
     const backBtn = screen.getByRole('button', { name: /Back to Category Join/i });
@@ -3355,24 +3357,23 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       await Promise.resolve();
     });
 
-    expect(mockShowToast).toHaveBeenCalledWith(
-      'Ingestion Completed with Warnings',
-      expect.stringContaining('2 record(s) failed or were skipped'),
-      'warning'
-    );
+    try {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Ingestion Completed with Warnings',
+        expect.stringContaining('2 record(s) failed or were skipped'),
+        'warning'
+      );
 
-    const skippedList = screen.getByTestId('step5-skipped-vendors-list');
-    expect(skippedList).toBeInTheDocument();
-    expect(within(skippedList).getByText('Failed Vendor Co')).toBeInTheDocument();
-    expect(within(skippedList).getByText('A vendor with the email failed@vendor.com already exists.')).toBeInTheDocument();
-    expect(within(skippedList).getByText('Unsaved Vendor Co')).toBeInTheDocument();
+      // Verify no extra summary cards or test data are displayed below Step 5
+      expect(screen.queryByTestId('step5-skipped-vendors-list')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('step5-completion-summary')).not.toBeInTheDocument();
+      expect(screen.queryByText(/3-Day Reminders/i)).not.toBeInTheDocument();
 
-    // User can click Dismiss & Close Setup
-    const dismissBtn = screen.getByRole('button', { name: /Dismiss & Close Setup/i });
-    fireEvent.click(dismissBtn);
-    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
-
-    jest.useRealTimers();
+      // Setup modal closes on ingestion completion
+      expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('validates vendor mobile numbers during Vendor Master upload, rejecting alphanumeric and invalid mobile numbers', async () => {

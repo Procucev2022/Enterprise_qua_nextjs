@@ -5505,3 +5505,12 @@ In the Buyer flow, PO Dump Preview – Category Mapping: Ensure all uploaded PO 
 ```
 ---
 
+
+### Prompt 171
+**Timestamp**: 2026-11-12T20:00:53+05:30
+```text
+In the Buyer flow, Remove all existing summary cards and test data displayed below Step 5. Expected Behaviour/Solution: Keep Step 5 clean and simple, displaying only the email dispatch confirmation details Total Stored, PO Mapped, Self-Map Required and the Complete Setup & Ingest button. Please fix the issue
+```
+---
+
+
