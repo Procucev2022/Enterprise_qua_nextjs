@@ -1227,6 +1227,81 @@ function getSubscriptionPricing(req, res) {
   }
 }
 
+async function getBuyerUploadedVendors(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+    const parsedLimit = req.query && req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+    const queryValidation = validatePayload(VALIDATION_SCHEMAS.buyerUploadedVendorsQuery, {
+      ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+      ...(req.query && req.query.search !== undefined ? { search: req.query.search } : {}),
+    });
+    if (!queryValidation.isValid) {
+      return res.status(400).json({ success: false, error: Object.values(queryValidation.errors)[0] });
+    }
+
+    let buyer =
+      storeService.getBuyerAccounts().find((b) => b.id === id || b.organizationId === id) ||
+      null;
+    if (!buyer && pool.hasStorage()) {
+      buyer = await domainQueries.getBuyerAccountByIdFromDB(id).catch(() => null);
+    }
+    if (!buyer && pool.hasStorage()) {
+      try {
+        const buyerProfileQueries = require('../db/buyerProfileQueries');
+        const profileLookup = await buyerProfileQueries.findProfileByIdentifier({ organizationId: id });
+        if (profileLookup && profileLookup.found && profileLookup.profile) {
+          buyer = {
+            id: profileLookup.profile.organizationId,
+            organizationId: profileLookup.profile.organizationId,
+            userId: profileLookup.profile.userId,
+            organizationName: profileLookup.profile.companyName,
+            corporateEmail: profileLookup.profile.contactEmail,
+            contactPerson: profileLookup.profile.contactName,
+          };
+        }
+      } catch (lookupErr) {
+        logger.warn('Optional organization lookup failed during buyer uploaded-vendors resolve', {
+          error: lookupErr && lookupErr.message ? lookupErr.message : String(lookupErr),
+          buyerId: id,
+        }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
+
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: 'Buyer account not found.' });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    const limit = queryValidation.sanitizedData.limit || 200;
+    const search = String(queryValidation.sanitizedData.search || '').trim().toLowerCase();
+    const allVendors = await storeService.getUploadedVendorsForBuyer(id, buyer, limit);
+    const vendors = search
+      ? allVendors.filter((v) =>
+          [v.vendorName, v.companyName, v.contactPerson, v.email, v.phone, v.majorCategory, v.status]
+            .filter(Boolean)
+            .some((field) => String(field).toLowerCase().includes(search))
+        )
+      : allVendors;
+
+    logger.info('Fetched buyer uploaded vendors', {
+      buyerId: buyer.id,
+      requestedId: id,
+      count: vendors.length,
+    }, 'BUYER_ACCOUNT_CONTROLLER');
+
+    return res.json({
+      success: true,
+      buyerId: buyer.id,
+      totalVendors: vendors.length,
+      vendors,
+    });
+  } catch (err) {
+    logger.error('Failed to fetch buyer uploaded vendors', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -1247,6 +1322,7 @@ module.exports = {
   getBuyerCommunications,
   recordBuyerCommunication,
   getBuyerPaymentHistory,
+  getBuyerUploadedVendors,
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrBuyer,
 };

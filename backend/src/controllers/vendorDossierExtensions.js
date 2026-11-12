@@ -735,10 +735,52 @@ async function requestCreditApproval(req, res, next) {
   }
 }
 
+async function getVendorBuyerUploads(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrVendor(req, res)) return;
+    const { id } = req.params;
+    const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+    const parsedLimit = req.query && req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+    const queryValidation = validatePayload(VALIDATION_SCHEMAS.vendorBuyerUploadsQuery, {
+      ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+    });
+    if (!queryValidation.isValid) {
+      return res.status(400).json({ success: false, error: Object.values(queryValidation.errors)[0] });
+    }
+
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: 'Vendor not found.' });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    const limit = queryValidation.sanitizedData.limit || 200;
+    const result = await storeService.getBuyerUploadsForVendor(vendor.id || id, vendor, limit);
+    const payload = result || { vendorId: vendor.id || id, totalBuyers: 0, buyerUploads: [] };
+
+    logger.info('Fetched buyer uploads for vendor', {
+      vendorId: payload.vendorId,
+      requestedId: id,
+      totalBuyers: payload.totalBuyers,
+    }, 'VENDOR_CONTROLLER');
+
+    return res.json({
+      success: true,
+      vendorId: payload.vendorId,
+      totalBuyers: payload.totalBuyers,
+      buyerUploads: payload.buyerUploads,
+    });
+  } catch (err) {
+    logger.error('Failed to fetch buyer uploads for vendor', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
   resolveVendor,
+  getVendorBuyerUploads,
   getCreditHistory,
   getVendorCommunications,
   recordVendorCommunication,

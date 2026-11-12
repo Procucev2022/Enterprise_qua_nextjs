@@ -528,6 +528,21 @@ const APPROVAL_MESSAGES = Object.freeze({
   ALREADY_DECIDED: 'This approval was already decided. Refresh the list before taking another action.',
   PASSWORD_INVALID: 'The approver password is invalid. Check the selected approver and try again.',
   PASSWORD_CONFIGURATION_UNAVAILABLE: 'Approver password verification is not configured. Contact an administrator.',
+  APPROVER_UNKNOWN: 'Select a valid approving authority (Srinu Sir or Sudheer Sir).',
+  CREDENTIALS_REQUIRED: 'Enter the approver password or a 6-digit email OTP to confirm this action.',
+  OTP_SENT: 'Verification OTP sent to {email}.',
+  OTP_DELIVERY_FAILED: 'Unable to send the approver OTP email right now. Check mail delivery settings or retry shortly.',
+  OTP_STORAGE_FAILED: 'Unable to store the approval verification OTP. Please retry shortly.',
+  OTP_INVALID: 'The approval email OTP is invalid. Check the code sent to the approver email and try again.',
+  OTP_EXPIRED: 'The approval email OTP has expired. Request a new code and try again.',
+  OTP_MAX_ATTEMPTS: 'Maximum OTP verification attempts exceeded. Request a new code and try again.',
+});
+
+const APPROVAL_OTP_CONFIG = Object.freeze({
+  OTP_LENGTH: 6,
+  OTP_TTL_SECONDS: 300,
+  MAX_OTP_ATTEMPTS: 5,
+  OTP_KEY_PREFIX: 'approval_otp:',
 });
 
 const REGISTRATION_MESSAGES = Object.freeze({
@@ -3222,16 +3237,33 @@ const APPROVER_CONFIG = Object.freeze([
   },
 ]);
 
-function resolveApproverPasswordEnvironmentVariable(approverName) {
+function generateNumericOtp(length = APPROVAL_OTP_CONFIG.OTP_LENGTH) {
+  const ceiling = 10 ** length;
+  return String(crypto.randomInt(0, ceiling)).padStart(length, '0');
+}
+
+function resolveApproverConfig(approverName) {
   const normalizedName = String(approverName || '').trim().toLowerCase();
   if (!normalizedName) return null;
   if (normalizedName.includes('srinu') || normalizedName.includes('srinivas') || normalizedName.includes('mukku')) {
-    return 'SRINU_APPROVER_PASSWORD';
+    return {
+      ...APPROVER_CONFIG[0],
+      email: process.env.SRINU_APPROVER_EMAIL || APPROVER_CONFIG[0].email,
+      passwordEnvVar: 'SRINU_APPROVER_PASSWORD',
+    };
   }
   if (normalizedName.includes('sudheer') || normalizedName.includes('kangala')) {
-    return 'SUDHEER_APPROVER_PASSWORD';
+    return {
+      ...APPROVER_CONFIG[1],
+      email: process.env.SUDHEER_APPROVER_EMAIL || APPROVER_CONFIG[1].email,
+      passwordEnvVar: 'SUDHEER_APPROVER_PASSWORD',
+    };
   }
   return null;
+}
+
+function resolveApproverPasswordEnvironmentVariable(approverName) {
+  return resolveApproverConfig(approverName)?.passwordEnvVar || null;
 }
 
 function isApproverPasswordConfigured(approverName) {
@@ -3251,8 +3283,22 @@ function verifyApproverPassword(approverName, submittedPassword) {
   return crypto.timingSafeEqual(expectedHash, submittedHash);
 }
 
+const BUYER_VENDOR_UPLOAD_CONFIG = Object.freeze({
+  DEFAULT_SOURCE: 'buyer_uploaded',
+  DEFAULT_STATUS: 'ACTIVE',
+  DEFAULT_LIMIT: 200,
+  MAX_LIMIT: 500,
+  CACHE_TAG: 'buyer_vendor_uploads',
+  CACHE_TTL_MS: 30000,
+  D1_BATCH_SIZE: 25,
+});
+
 module.exports = {
+  BUYER_VENDOR_UPLOAD_CONFIG,
   APPROVER_CONFIG,
+  APPROVAL_OTP_CONFIG,
+  generateNumericOtp,
+  resolveApproverConfig,
   isApproverPasswordConfigured,
   verifyApproverPassword,
   INQUIRIES_PERSISTENCE_FILE,

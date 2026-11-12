@@ -25,7 +25,7 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
-import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RegisteredClient, ActionCenterSummaryPopupColumn, RegistrationColumnConfig, RegistrationColumnKey } from '@/lib/types';
 import { REGISTRATION_CLIENT_TYPES, REGISTRATION_COLUMN_PREF_KEY, DEFAULT_REGISTRATION_COLUMNS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
@@ -43,7 +43,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const [error, setError] = useState<string | null>(null);
   // Filters & Search
   const [search, setSearch] = useState<string>('');
-  const [sourceType, setSourceType] = useState<string>('all');
+  const [sourceType, setSourceType] = useState<string>('');
   const [clientType, setClientType] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
@@ -182,9 +182,9 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
     try {
       const params = new URLSearchParams();
       if (search.trim()) params.append('search', search.trim());
-      if (sourceType !== 'all') params.append('sourceType', sourceType);
-      if (clientType !== 'all') params.append('clientType', clientType);
-      if (statusFilter !== 'all') params.append('status', statusFilter);
+      if (sourceType && sourceType !== 'all') params.append('sourceType', sourceType);
+      if (clientType && clientType !== 'all') params.append('clientType', clientType);
+      if (statusFilter && statusFilter !== 'all') params.append('status', statusFilter);
       params.append('limit', String(pageSize));
       params.append('offset', String((currentPage - 1) * pageSize));
 
@@ -196,7 +196,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
       if (json.success && Array.isArray(json.data)) {
         setClients(json.data);
         setTotalCount(json.total ?? json.data.length);
-        if (sourceType === 'all' && !search.trim()) {
+        if ((!sourceType || sourceType === 'all') && !search.trim()) {
           const tally = { total: json.total ?? json.data.length, webApp: 0, whatsApp: 0, email: 0 };
           json.data.forEach((c: RegisteredClient) => {
             const s = String(c.sourceType || '').toLowerCase();
@@ -368,22 +368,9 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const totalPages = useMemo(() => Math.max(1, Math.ceil(totalCount / pageSize)), [totalCount, pageSize]);
 
   return (
-    <div className="w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-4 sm:p-6 space-y-4">
-      {/* Top Header Row with Total Badge */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold tracking-tight text-orange-600 dark:text-orange-500">
-            {strings.title}
-          </h2>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            {formatString(strings.totalCountBadge, { count: String(totalCount) })}
-          </span>
-        </div>
-      </div>
-
-      {/* 4 Dynamic Compact Summary Cards (1 Horizontal Row) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 w-full">
+    <div className="w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-4 sm:p-5 space-y-3.5">
+      {/* 4 Dynamic Compact Summary Cards (1 Horizontal Row at Top of Section) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 w-full">
         {/* Total Registered Clients */}
         <div
           role="group"
@@ -504,10 +491,10 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
       )}
 
       {/* Unified Horizontal Toolbar: Search Bar + Client View Filter + Source Type Filter + Status Filter + Refresh + Column Settings */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-2 shadow-xs flex flex-row items-center gap-1.5 sm:gap-2 w-full min-w-0 max-w-full box-border">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 shadow-xs flex flex-wrap lg:flex-nowrap items-center justify-between gap-2 w-full min-w-0 max-w-full box-border">
         {/* Search field: flexible width with non-overlapping icon and clear button */}
-        <div className="relative flex-1 min-w-[140px]">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={search}
@@ -517,7 +504,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
             }}
             placeholder={strings.searchPlaceholder}
             aria-label={strings.searchPlaceholder}
-            className="w-full pl-8 pr-7 py-1.5 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            className="w-full has-leading-icon has-trailing-icon py-1.5 h-9 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
           />
           {search && (
             <button
@@ -526,7 +513,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                 setSearch('');
                 setCurrentPage(1);
               }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               title="Clear search"
               aria-label="Clear search"
             >
@@ -535,79 +522,85 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
           )}
         </div>
 
-        {/* Client View Filter Dropdown */}
-        <select
-          id="client-type-select"
-          value={clientType}
-          onChange={(e) => {
-            setClientType(e.target.value);
-            setCurrentPage(1);
-          }}
-          aria-label={strings.clientTypeLabel}
-          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[145px] sm:w-[160px] truncate"
-        >
-          {REGISTRATION_CLIENT_TYPES.map((ct) => (
-            <option key={ct.id} value={ct.id}>
-              {ct.label}
+        {/* Independent Filters + Action Buttons */}
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+          {/* Client View Filter Dropdown */}
+          <select
+            id="client-type-select"
+            value={clientType}
+            onChange={(e) => {
+              setClientType(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label={strings.clientTypeLabel}
+            className="h-9 px-3 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 min-w-[175px]"
+          >
+            {REGISTRATION_CLIENT_TYPES.map((ct) => (
+              <option key={ct.id} value={ct.id}>
+                {ct.label}
+              </option>
+            ))}
+          </select>
+
+          {/* Source Type Filter Dropdown */}
+          <select
+            id="source-type-select"
+            value={sourceType}
+            onChange={(e) => {
+              setSourceType(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label={strings.sourceTypeLabel}
+            className="h-9 px-3 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 min-w-[130px]"
+          >
+            <option value="" disabled hidden>
+              {strings.sourceTypePlaceholder}
             </option>
-          ))}
-        </select>
+            <option value="all">{strings.allSources}</option>
+            <option value="Web App">{strings.webApp}</option>
+            <option value="WhatsApp">{strings.whatsapp}</option>
+            <option value="Email">{strings.email}</option>
+          </select>
 
-        {/* Source Type Filter Dropdown */}
-        <select
-          id="source-type-select"
-          value={sourceType}
-          onChange={(e) => {
-            setSourceType(e.target.value);
-            setCurrentPage(1);
-          }}
-          aria-label={strings.sourceTypeLabel}
-          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[110px] sm:w-[125px] truncate"
-        >
-          <option value="all">{strings.allSources}</option>
-          <option value="Web App">{strings.webApp}</option>
-          <option value="WhatsApp">{strings.whatsapp}</option>
-          <option value="Email">{strings.email}</option>
-        </select>
+          {/* Status Filter Dropdown */}
+          <select
+            id="registration-status-select"
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label={strings.colStatus}
+            className="h-9 px-3 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 min-w-[125px]"
+          >
+            <option value="all">{strings.allStatuses}</option>
+            <option value="New">{strings.statusNew}</option>
+            <option value="Accepted">{strings.statusAccepted}</option>
+            <option value="Rejected">{strings.statusRejected}</option>
+          </select>
 
-        {/* Status Filter Dropdown */}
-        <select
-          id="registration-status-select"
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setCurrentPage(1);
-          }}
-          aria-label={strings.colStatus}
-          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[105px] sm:w-[120px] truncate"
-        >
-          <option value="all">{strings.allStatuses}</option>
-          <option value="New">{strings.statusNew}</option>
-          <option value="Accepted">{strings.statusAccepted}</option>
-          <option value="Rejected">{strings.statusRejected}</option>
-        </select>
+          {/* Refresh Button */}
+          <button
+            type="button"
+            onClick={() => fetchRegistrations()}
+            title={strings.refreshTooltip}
+            aria-label={strings.refreshTooltip}
+            className="p-2 h-9 w-9 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
 
-        {/* Refresh Button */}
-        <button
-          type="button"
-          onClick={() => fetchRegistrations()}
-          title={strings.refreshTooltip}
-          aria-label={strings.refreshTooltip}
-          className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-
-        {/* Column Settings Gear Button */}
-        <button
-          type="button"
-          onClick={() => setShowColumnSettings(true)}
-          title={strings.columnSettingsTooltip}
-          aria-label={strings.columnSettingsTooltip}
-          className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
-        >
-          <Settings className="w-3.5 h-3.5" />
-        </button>
+          {/* Column Settings Gear Button */}
+          <button
+            type="button"
+            onClick={() => setShowColumnSettings(true)}
+            title={strings.columnSettingsTooltip}
+            aria-label={strings.columnSettingsTooltip}
+            className="p-2 h-9 w-9 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Column Customization Modal */}

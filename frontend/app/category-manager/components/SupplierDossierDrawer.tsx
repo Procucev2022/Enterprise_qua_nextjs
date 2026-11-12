@@ -51,6 +51,7 @@ import type {
   SupplierCommunicationItem,
   SupplierPaymentSummary,
   SupplierPaymentTransaction,
+  VendorBuyerUploadItem,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -65,12 +66,14 @@ import {
   CREDIT_APPROVAL_APPROVERS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
 import {
   fetchSupplierCreditHistory,
   updateSupplierCategories,
   fetchSupplierCommunications,
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
+  fetchVendorBuyerUploads,
 } from '@/lib/supplierProfileClient';
 import {
   addSellerQuoteCredits,
@@ -227,6 +230,51 @@ export default function SupplierDossierDrawer({
       setIsSavingCategories(false);
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // 1b. BUYER UPLOAD HISTORY (Tab 1: Profile)
+  // ---------------------------------------------------------------------------
+  const [buyerUploads, setBuyerUploads] = useState<VendorBuyerUploadItem[]>([]);
+  const [totalBuyerUploaders, setTotalBuyerUploaders] = useState<number>(0);
+  const [loadingBuyerUploads, setLoadingBuyerUploads] = useState<boolean>(false);
+  const [buyerUploadsError, setBuyerUploadsError] = useState<string | null>(null);
+
+  const loadBuyerUploads = useCallback(async () => {
+    setBuyerUploadsError(null);
+    if (!seller.id) {
+      setBuyerUploads([]);
+      setTotalBuyerUploaders(0);
+      return;
+    }
+    setLoadingBuyerUploads(true);
+    try {
+      const res = await fetchVendorBuyerUploads(seller.id);
+      if (res.success) {
+        const list = Array.isArray(res.buyerUploads) ? res.buyerUploads : [];
+        setBuyerUploads(list);
+        setTotalBuyerUploaders(typeof res.totalBuyers === 'number' ? res.totalBuyers : list.length);
+      } else {
+        const message = res.error || UI_STRINGS.sellerDirectory.dossier.buyerUploads.errorText;
+        logger.warn('Failed to load buyer upload records for seller', { sellerId: seller.id, error: message }, 'SUPPLIER_DOSSIER');
+        setBuyerUploadsError(message);
+        setBuyerUploads([]);
+        setTotalBuyerUploaders(0);
+      }
+    } catch (err) {
+      logger.error('Unexpected error loading buyer upload records for seller', { sellerId: seller.id, error: err }, 'SUPPLIER_DOSSIER');
+      setBuyerUploadsError(UI_STRINGS.sellerDirectory.dossier.buyerUploads.errorText);
+      setBuyerUploads([]);
+      setTotalBuyerUploaders(0);
+    } finally {
+      setLoadingBuyerUploads(false);
+    }
+  }, [seller.id]);
+
+  useEffect(() => {
+    if (dossierTab === 'profile') {
+      loadBuyerUploads();
+    }
+  }, [dossierTab, loadBuyerUploads]);
 
   // ---------------------------------------------------------------------------
   // 2. QUOTES TAB & QUOTE MODAL (Tab 2: Quotes)
@@ -1010,6 +1058,87 @@ export default function SupplierDossierDrawer({
                   </span>
                 ))}
               </div>
+            </div>
+
+            {/* BUYER UPLOAD */}
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  {UI_STRINGS.sellerDirectory.dossier.buyerUploads.sectionTitle}
+                </h3>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                  {formatString(UI_STRINGS.sellerDirectory.dossier.buyerUploads.totalBuyersBadge, {
+                    count: totalBuyerUploaders,
+                  })}
+                </span>
+              </div>
+
+              {loadingBuyerUploads ? (
+                <div className="flex items-center gap-2 py-6 justify-center text-xs text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                  <span>{UI_STRINGS.sellerDirectory.dossier.buyerUploads.loadingText}</span>
+                </div>
+              ) : buyerUploadsError ? (
+                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300">
+                  <span>{buyerUploadsError}</span>
+                  <button
+                    type="button"
+                    onClick={loadBuyerUploads}
+                    className="font-semibold underline cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : buyerUploads.length === 0 ? (
+                <div className="py-6 text-center space-y-1">
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    {UI_STRINGS.sellerDirectory.dossier.buyerUploads.emptyTitle}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {UI_STRINGS.sellerDirectory.dossier.buyerUploads.emptyDescription}
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-800/70 text-slate-500 uppercase text-[10px] font-semibold tracking-wider border-b border-slate-200 dark:border-slate-800">
+                        <th className="py-2 px-3">{UI_STRINGS.sellerDirectory.dossier.buyerUploads.colBuyerName}</th>
+                        <th className="py-2 px-3">{UI_STRINGS.sellerDirectory.dossier.buyerUploads.colCompanyDetails}</th>
+                        <th className="py-2 px-3">{UI_STRINGS.sellerDirectory.dossier.buyerUploads.colUploadDate}</th>
+                        <th className="py-2 px-3">{UI_STRINGS.sellerDirectory.dossier.buyerUploads.colStatus}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {buyerUploads.map((buyerItem) => (
+                        <tr key={buyerItem.id || buyerItem.buyerId} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                          <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-slate-100">
+                            {buyerItem.buyerName || UI_STRINGS.sellerDirectory.dossier.buyerUploads.notProvided}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300 space-y-0.5">
+                            <div className="font-medium text-slate-800 dark:text-slate-200">
+                              {buyerItem.companyName || UI_STRINGS.sellerDirectory.dossier.buyerUploads.notProvided}
+                            </div>
+                            {buyerItem.location && <div className="text-[11px] text-slate-500">{buyerItem.location}</div>}
+                            {buyerItem.corporateEmail && <div className="text-[11px] text-slate-500">{buyerItem.corporateEmail}</div>}
+                            {buyerItem.sourcingMode && <div className="text-[11px] text-slate-500">{buyerItem.sourcingMode}</div>}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                            {buyerItem.uploadDate
+                              ? formatIndianDateTime(buyerItem.uploadDate)
+                              : UI_STRINGS.sellerDirectory.dossier.buyerUploads.notProvided}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                              {buyerItem.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}

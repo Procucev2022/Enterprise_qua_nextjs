@@ -119,14 +119,66 @@ describe('RegistrationsDashboard', () => {
     });
   });
 
-  test('renders header with title and total count badge', async () => {
+  test('renders four summary cards at the top without duplicate Registered Clients header', async () => {
     const onCountChange = jest.fn();
     render(<RegistrationsDashboard onTotalCountChange={onCountChange} />);
 
-    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.title)).toBeInTheDocument();
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.title)).not.toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients)).toBeInTheDocument();
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWebApp).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWhatsApp).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiEmail).length).toBeGreaterThan(0);
+
     await waitFor(() => {
-      expect(screen.getByText(`${mockClients.length} Total`)).toBeInTheDocument();
+      expect(screen.getByText(String(mockClients.length))).toBeInTheDocument();
       expect(onCountChange).toHaveBeenCalledWith(mockClients.length);
+    });
+  });
+
+  test('displays Source Type label on second dropdown with All, Web App, WhatsApp, Email options and combines filters independently', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const sourceSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.sourceTypeLabel) as HTMLSelectElement;
+    expect(sourceSelect.value).toBe('');
+    const enabledOptions = Array.from(sourceSelect.options)
+      .filter((option) => !option.disabled)
+      .map((option) => option.text);
+    expect(enabledOptions).toEqual([
+      UI_STRINGS.actionCenter.registrationsDashboard.allSources,
+      UI_STRINGS.actionCenter.registrationsDashboard.webApp,
+      UI_STRINGS.actionCenter.registrationsDashboard.whatsapp,
+      UI_STRINGS.actionCenter.registrationsDashboard.email,
+    ]);
+
+    const clientSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
+    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
+
+    fireEvent.change(clientSelect, { target: { value: 'buyer' } });
+    fireEvent.change(sourceSelect, { target: { value: 'Email' } });
+    fireEvent.change(statusSelect, { target: { value: 'New' } });
+
+    await waitFor(() => {
+      const calls = (global.fetch as jest.Mock).mock.calls.map(([url]) => String(url));
+      expect(
+        calls.some(
+          (url) =>
+            url.includes('clientType=buyer') &&
+            url.includes('sourceType=Email') &&
+            url.includes('status=New')
+        )
+      ).toBe(true);
+    });
+
+    fireEvent.change(sourceSelect, { target: { value: 'all' } });
+    await waitFor(() => {
+      const lastUrl = String((global.fetch as jest.Mock).mock.calls.at(-1)?.[0] || '');
+      expect(lastUrl).toContain('clientType=buyer');
+      expect(lastUrl).toContain('status=New');
+      expect(lastUrl).not.toContain('sourceType=');
     });
   });
 

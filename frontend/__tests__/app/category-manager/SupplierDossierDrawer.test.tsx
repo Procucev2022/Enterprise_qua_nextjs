@@ -11,7 +11,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import SupplierDossierDrawer from '@/app/category-manager/components/SupplierDossierDrawer';
 import type { RFQItem } from '@/lib/types';
 import * as supplierProfileClient from '@/lib/supplierProfileClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/supplierProfileClient', () => ({
   fetchSupplierCreditHistory: jest.fn(),
@@ -19,6 +19,7 @@ jest.mock('@/lib/supplierProfileClient', () => ({
   fetchSupplierCommunications: jest.fn(),
   recordSupplierCommunication: jest.fn(),
   fetchSupplierPaymentHistory: jest.fn(),
+  fetchVendorBuyerUploads: jest.fn(),
 }));
 
 jest.mock('@/lib/documentVaultClient', () => ({
@@ -244,6 +245,13 @@ describe('SupplierDossierDrawer', () => {
     (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockResolvedValue({
       success: true,
       data: { id: 'new-comm-1' },
+    });
+
+    (supplierProfileClient.fetchVendorBuyerUploads as jest.Mock).mockResolvedValue({
+      success: true,
+      vendorId: mockSeller.id,
+      totalBuyers: 0,
+      buyerUploads: [],
     });
   });
 
@@ -1839,6 +1847,86 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
 
     unmountComm();
 
+  });
+
+  test('renders Add Quote Credits with a single plus icon and Buyer Upload records with total buyer count, error retry, and empty fallback', async () => {
+    const buyerUploadStrings = UI_STRINGS.sellerDirectory.dossier.buyerUploads;
+    (supplierProfileClient.fetchVendorBuyerUploads as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      vendorId: mockSeller.id,
+      totalBuyers: 2,
+      buyerUploads: [
+        {
+          id: 'bu-1',
+          buyerId: 'buyer-a',
+          buyerName: 'Ananya Sharma',
+          companyName: 'Bharat Precision Ltd',
+          corporateEmail: 'ananya@bharatprecision.in',
+          location: 'Bengaluru, Karnataka',
+          sourcingMode: 'Mode 1',
+          uploadDate: '2026-10-20T09:15:00.000Z',
+          status: 'ACTIVE_VERIFIED',
+        },
+        {
+          id: 'bu-2',
+          buyerId: 'buyer-b',
+          buyerName: '',
+          companyName: '',
+          corporateEmail: null,
+          location: null,
+          sourcingMode: null,
+          uploadDate: null,
+          status: 'ACTIVE',
+        },
+      ],
+    });
+
+    const { rerender } = render(
+      <SupplierDossierDrawer seller={mockSeller} onClose={jest.fn()} sellerRfqs={mockRfqs} />
+    );
+
+    const addCreditsBtn = screen.getByTitle('Add Quote Credits (1-5)');
+    expect(addCreditsBtn).toHaveTextContent(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.addCreditsBtn);
+    expect(addCreditsBtn.textContent?.trim()).toBe('Add Quote Credits');
+    expect(addCreditsBtn.querySelectorAll('svg')).toHaveLength(1);
+
+    expect(screen.getByText(buyerUploadStrings.sectionTitle)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(supplierProfileClient.fetchVendorBuyerUploads).toHaveBeenCalledWith(mockSeller.id);
+      expect(screen.getByText('Ananya Sharma')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(formatString(buyerUploadStrings.totalBuyersBadge, { count: 2 }))).toBeInTheDocument();
+    expect(screen.getByText('Bharat Precision Ltd')).toBeInTheDocument();
+    expect(screen.getByText('ananya@bharatprecision.in')).toBeInTheDocument();
+    expect(screen.getByText('Bengaluru, Karnataka')).toBeInTheDocument();
+    expect(screen.getByText('Mode 1')).toBeInTheDocument();
+    expect(screen.getByText('ACTIVE_VERIFIED')).toBeInTheDocument();
+    expect(screen.getAllByText(buyerUploadStrings.notProvided).length).toBeGreaterThanOrEqual(2);
+
+    (supplierProfileClient.fetchVendorBuyerUploads as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Unable to load buyer uploads',
+    });
+    rerender(<SupplierDossierDrawer seller={{ ...mockSeller, id: 'v-err-1' }} onClose={jest.fn()} />);
+    await waitFor(
+      () => {
+        expect(screen.getByText('Unable to load buyer uploads')).toBeInTheDocument();
+      },
+      { timeout: 5000 }
+    );
+
+    (supplierProfileClient.fetchVendorBuyerUploads as jest.Mock).mockRejectedValueOnce(new Error('Network down'));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(
+      () => {
+        expect(screen.getByText(buyerUploadStrings.errorText)).toBeInTheDocument();
+      },
+      { timeout: 5000 }
+    );
+
+    rerender(<SupplierDossierDrawer seller={{ ...mockSeller, id: '' }} onClose={jest.fn()} />);
+    expect(screen.getByText(buyerUploadStrings.emptyTitle)).toBeInTheDocument();
   });
 
 });

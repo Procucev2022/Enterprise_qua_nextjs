@@ -29,7 +29,16 @@ import {
   fetchApprovalSummary,
   fetchApprovals,
   processApprovalAction,
+  requestApprovalOtp,
 } from '@/lib/approvalClient';
+import {
+  APPROVAL_OTP_CONFIG,
+  APPROVAL_REQUEST_TYPES,
+  DEFAULT_APPROVAL_COLUMNS,
+  getApproverEmail,
+} from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { OTP_CODE_PATTERN } from '@/lib/validationSchemas';
 import { authClient } from '@/lib/authClient';
 import type {
   ApprovalRequest,
@@ -39,11 +48,6 @@ import type {
   ApprovalTabKey,
   ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
-import {
-  APPROVAL_REQUEST_TYPES,
-  DEFAULT_APPROVAL_COLUMNS,
-} from '@/lib/constants';
-import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 
 const STORAGE_PREFS_KEY_PREFIX = 'procucev_approval_col_prefs_';
@@ -96,7 +100,28 @@ export function ApprovalsDashboard() {
   const [actionApprover, setActionApprover] = useState<string>('Srinu Sir');
   const [actionPassword, setActionPassword] = useState<string>('');
   const [passwordError, setPasswordError] = useState<string>('');
+  const [actionOtp, setActionOtp] = useState<string>('');
+  const [isSendingOtp, setIsSendingOtp] = useState<boolean>(false);
+  const [otpSentEmail, setOtpSentEmail] = useState<string>('');
+  const [otpCooldown, setOtpCooldown] = useState<number>(0);
+  const [otpError, setOtpError] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+
+  const resetOtpState = useCallback(() => {
+    setActionOtp('');
+    setIsSendingOtp(false);
+    setOtpSentEmail('');
+    setOtpCooldown(0);
+    setOtpError('');
+  }, []);
+
+  useEffect(() => {
+    if (otpCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setOtpCooldown((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [otpCooldown]);
 
   // Summary Card Modal State
   const [summaryModalState, setSummaryModalState] = useState<{
@@ -130,17 +155,25 @@ export function ApprovalsDashboard() {
     setActionPassword('');
     setPasswordError('');
     setActionApprover('Srinu Sir');
-  }, []);
+    resetOtpState();
+  }, [resetOtpState]);
 
   // Open Action Modal
-  const openActionModal = useCallback((req: ApprovalRequest, action: 'APPROVE' | 'REJECT') => {
-    setSelectedRequest(req);
-    setPendingAction(action);
-    setActionRemarks('');
-    setActionPassword('');
-    setPasswordError('');
-    setActionApprover(req.assigned_approver || 'Srinu Sir');
-  }, []);
+  const openActionModal = useCallback(
+    (req: ApprovalRequest, action: 'APPROVE' | 'REJECT') => {
+      const normalizedApprover = req.assigned_approver?.toLowerCase().includes('sudheer')
+        ? 'Sudheer Sir'
+        : 'Srinu Sir';
+      setSelectedRequest(req);
+      setPendingAction(action);
+      setActionRemarks('');
+      setActionPassword('');
+      setPasswordError('');
+      setActionApprover(normalizedApprover);
+      resetOtpState();
+    },
+    [resetOtpState]
+  );
 
   // Restore column preferences from localStorage
   useEffect(() => {
@@ -304,24 +337,56 @@ export function ApprovalsDashboard() {
     }
   };
 
+  const handleSendApprovalOtp = async () => {
+    setOtpError('');
+    setPasswordError('');
+    setIsSendingOtp(true);
+    const res = await requestApprovalOtp(actionApprover);
+    setIsSendingOtp(false);
+
+    if (res.success) {
+      const targetEmail = res.email || getApproverEmail(actionApprover);
+      setOtpSentEmail(targetEmail);
+      setOtpCooldown(APPROVAL_OTP_CONFIG.RESEND_COOLDOWN_SECONDS);
+      showToast(formatString(strings.otpSentNotice, { email: targetEmail }));
+    } else {
+      setOtpError(res.error || strings.otpSendFailedError);
+    }
+  };
+
   // Handle Action Confirmation (Approve / Reject)
   const handleActionConfirm = async () => {
     if (!selectedRequest || !pendingAction) return;
 
-    if (!actionPassword.trim()) {
+    const cleanOtp = actionOtp.trim();
+    if (!actionPassword.trim() && !cleanOtp) {
       setPasswordError(strings.passwordRequiredError);
       return;
     }
+    if (cleanOtp && !OTP_CODE_PATTERN.test(cleanOtp)) {
+      setOtpError(strings.invalidOtpFormatError);
+      return;
+    }
     setPasswordError('');
+    setOtpError('');
 
     setIsProcessing(true);
-    const res = await processApprovalAction(
-      selectedRequest.id,
-      pendingAction,
-      actionRemarks,
-      actionPassword,
-      actionApprover
-    );
+    const res = cleanOtp
+      ? await processApprovalAction(
+          selectedRequest.id,
+          pendingAction,
+          actionRemarks,
+          actionPassword,
+          actionApprover,
+          cleanOtp
+        )
+      : await processApprovalAction(
+          selectedRequest.id,
+          pendingAction,
+          actionRemarks,
+          actionPassword,
+          actionApprover
+        );
     setIsProcessing(false);
 
     if (res.success) {
@@ -358,7 +423,12 @@ export function ApprovalsDashboard() {
       void loadSummary();
       void loadApprovals();
     } else {
-      setPasswordError(res.error || strings.invalidPasswordError);
+      const errorMessage = res.error || strings.invalidPasswordError;
+      if (cleanOtp) {
+        setOtpError(errorMessage);
+      } else {
+        setPasswordError(errorMessage);
+      }
       showToast(res.error || strings.databaseSyncError);
     }
   };
@@ -1450,7 +1520,7 @@ export function ApprovalsDashboard() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <h3 className="font-bold text-slate-900 dark:text-white text-base">
@@ -1497,7 +1567,11 @@ export function ApprovalsDashboard() {
               </label>
               <select
                 value={actionApprover}
-                onChange={(e) => setActionApprover(e.target.value)}
+                onChange={(e) => {
+                  setActionApprover(e.target.value);
+                  resetOtpState();
+                  if (passwordError) setPasswordError('');
+                }}
                 className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
               >
                 <option value="Srinu Sir">{strings.approverSrinu}</option>
@@ -1506,24 +1580,85 @@ export function ApprovalsDashboard() {
             </div>
 
             <div>
-              <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
-                {strings.passwordLabel} <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="password"
-                value={actionPassword}
-                onChange={(e) => {
-                  setActionPassword(e.target.value);
-                  if (passwordError) setPasswordError('');
-                }}
-                placeholder={strings.passwordPlaceholder}
-                className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
-                  passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
-                } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
-              />
-              {passwordError && (
-                <p className="text-[11px] text-rose-500 mt-1 font-medium">{passwordError}</p>
-              )}
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">
+                {strings.verificationHint}
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                <div>
+                  <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
+                    {strings.passwordLabel} <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={actionPassword}
+                    onChange={(e) => {
+                      setActionPassword(e.target.value);
+                      if (passwordError) setPasswordError('');
+                    }}
+                    placeholder={strings.passwordPlaceholder}
+                    className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
+                      passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                    } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                  />
+                  {passwordError && (
+                    <p className="text-[11px] text-rose-500 mt-1 font-medium">{passwordError}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
+                    {strings.otpLabel} <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={APPROVAL_OTP_CONFIG.OTP_LENGTH}
+                      value={actionOtp}
+                      onChange={(e) => {
+                        setActionOtp(
+                          e.target.value.replace(/\D/g, '').slice(0, APPROVAL_OTP_CONFIG.OTP_LENGTH)
+                        );
+                        if (otpError) setOtpError('');
+                        if (passwordError) setPasswordError('');
+                      }}
+                      placeholder={strings.otpPlaceholder}
+                      className={`w-full min-w-0 p-2 bg-slate-50 dark:bg-slate-800 border ${
+                        otpError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                      } rounded-lg text-xs tracking-widest focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSendApprovalOtp}
+                      disabled={isSendingOtp || otpCooldown > 0 || isProcessing}
+                      className="shrink-0 px-2.5 py-2 rounded-lg text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {isSendingOtp
+                        ? strings.sendingOtpBtn
+                        : otpCooldown > 0
+                          ? formatString(strings.resendOtpCountdown, {
+                              seconds: String(otpCooldown),
+                            })
+                          : otpSentEmail
+                            ? strings.resendOtpBtn
+                            : strings.sendOtpBtn}
+                    </button>
+                  </div>
+                  {otpError ? (
+                    <p className="text-[11px] text-rose-500 mt-1 font-medium">{otpError}</p>
+                  ) : otpSentEmail ? (
+                    <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-medium">
+                      {formatString(strings.otpSentNotice, { email: otpSentEmail })}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                      {formatString(strings.otpTargetHint, {
+                        email: getApproverEmail(actionApprover),
+                      })}
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div>

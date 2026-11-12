@@ -2,6 +2,7 @@ import {
   fetchApprovals,
   fetchApprovalSummary,
   processApprovalAction,
+  requestApprovalOtp,
 } from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
@@ -215,6 +216,99 @@ describe('approvalClient', () => {
         '/api/approvals?',
         expect.objectContaining({
           headers: { 'Content-Type': 'application/json' },
+        })
+      );
+    });
+  });
+
+  describe('requestApprovalOtp and OTP processApprovalAction', () => {
+    it('dispatches approval OTP request and returns response metadata', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          email: 'sudheer.kangala@procucev.com',
+          message: 'OTP sent',
+          expiresInSeconds: 300,
+        }),
+      });
+
+      const res = await requestApprovalOtp('Sudheer Sir');
+      expect(res).toEqual({
+        success: true,
+        email: 'sudheer.kangala@procucev.com',
+        message: 'OTP sent',
+        expiresInSeconds: 300,
+      });
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/approvals/request-otp',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ approverName: 'Sudheer Sir' }),
+        })
+      );
+    });
+
+    it('handles non-ok responses and network errors on requestApprovalOtp', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'SMTP unavailable' }),
+      });
+      expect(await requestApprovalOtp('Srinu Sir')).toEqual({
+        success: false,
+        error: 'SMTP unavailable',
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({}),
+      });
+      expect(await requestApprovalOtp('Srinu Sir')).toEqual({
+        success: false,
+        error: 'Failed to send approval OTP.',
+      });
+
+      global.fetch = jest.fn().mockRejectedValue(new Error('OTP transport down'));
+      expect(await requestApprovalOtp('Srinu Sir')).toEqual({
+        success: false,
+        error: 'OTP transport down',
+      });
+
+      global.fetch = jest.fn().mockRejectedValue('unknown');
+      expect(await requestApprovalOtp('Srinu Sir')).toEqual({
+        success: false,
+        error: 'Network error',
+      });
+    });
+
+    it('includes otpCode in processApprovalAction payload when supplied', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: { id: 'appr-1', status: 'Approved' } }),
+      });
+
+      const res = await processApprovalAction(
+        'appr-1',
+        'APPROVE',
+        'OTP approved',
+        '',
+        'Sudheer Sir',
+        ' 654321 '
+      );
+      expect(res.success).toBe(true);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/approvals/appr-1/action',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'APPROVE',
+            remarks: 'OTP approved',
+            password: '',
+            approverName: 'Sudheer Sir',
+            otpCode: '654321',
+          }),
         })
       );
     });

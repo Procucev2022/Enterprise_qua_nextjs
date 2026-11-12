@@ -835,3 +835,312 @@ describe('Approvals API & Controller', () => {
   });
 
 });
+
+describe('Approval Email OTP Verification', () => {
+  const authSessionQueries = require('../src/db/authSessionQueries');
+  const mailerService = require('../src/services/mailerService');
+  const constants = require('../src/config/constants');
+  const approvalController = require('../src/controllers/approvalController');
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await authSessionQueries.deleteOtp('approval_otp:srinivas.mukku@procucev.com').catch(() => {});
+    await authSessionQueries.deleteOtp('approval_otp:sudheer.kangala@procucev.com').catch(() => {});
+  });
+
+  test('constants resolve approvers, OTP key, and numeric OTP generation safely', () => {
+    expect(constants.resolveApproverConfig('Srinu Sir').email).toBe('srinivas.mukku@procucev.com');
+    expect(constants.resolveApproverConfig('sudheer').email).toBe('sudheer.kangala@procucev.com');
+    expect(constants.resolveApproverConfig('Unknown Person')).toBeNull();
+    expect(constants.isApproverPasswordConfigured('Unknown')).toBe(false);
+    expect(constants.verifyApproverPassword('Unknown', 'secret')).toBe(false);
+
+    const defaultOtp = constants.generateNumericOtp();
+    expect(defaultOtp).toMatch(/^\d{6}$/);
+    const customOtp = constants.generateNumericOtp(4);
+    expect(customOtp).toMatch(/^\d{4}$/);
+
+    expect(approvalQueries.buildApprovalOtpKey('Srinivas.Mukku@procucev.com')).toBe(
+      'approval_otp:srinivas.mukku@procucev.com'
+    );
+    expect(approvalQueries.buildApprovalOtpKey('')).toBe('approval_otp:');
+  });
+
+  test('requestApprovalOtp dispatches 6-digit OTP emails to configured approver addresses without exposing code', async () => {
+    const poolMod = require('../src/db/pool');
+    jest.spyOn(poolMod, 'hasStorage').mockReturnValue(false);
+    const mailSpy = jest
+      .spyOn(mailerService, 'sendOtpEmail')
+      .mockResolvedValue({ sent: true, messageId: 'msg-approval-1' });
+
+    const srinuResult = await approvalQueries.requestApprovalOtp(
+      'Srinu Sir',
+      { email: 'cm@procucev.com', role: 'category_manager' },
+      '127.0.0.1'
+    );
+    expect(srinuResult).toEqual({
+      success: true,
+      approverName: 'Srinu Sir',
+      email: 'srinivas.mukku@procucev.com',
+      expiresInSeconds: constants.APPROVAL_OTP_CONFIG.OTP_TTL_SECONDS,
+      message: constants.APPROVAL_MESSAGES.OTP_SENT.replace('{email}', 'srinivas.mukku@procucev.com'),
+    });
+    expect(srinuResult.otp).toBeUndefined();
+    expect(srinuResult.demoCode).toBeUndefined();
+    expect(mailSpy).toHaveBeenCalledWith(
+      'srinivas.mukku@procucev.com',
+      expect.stringMatching(/^\d{6}$/),
+      constants.APPROVAL_OTP_CONFIG.OTP_TTL_SECONDS,
+      expect.objectContaining({ approverName: 'Srinu Sir' })
+    );
+
+    mailSpy.mockResolvedValueOnce({ sent: false, reason: 'test environment' });
+    const sudheerResult = await approvalQueries.requestApprovalOtp('Sudheer Sir');
+    expect(sudheerResult.success).toBe(true);
+    expect(sudheerResult.email).toBe('sudheer.kangala@procucev.com');
+  });
+
+  test('requestApprovalOtp rejects unknown approver, storage outage, and SMTP failures', async () => {
+    await expect(approvalQueries.requestApprovalOtp('Nobody')).rejects.toMatchObject({
+      code: 'APPROVER_UNKNOWN',
+    });
+
+    const saveSpy = jest
+      .spyOn(authSessionQueries, 'saveOtp')
+      .mockRejectedValueOnce(new Error('DB write failure'));
+    await expect(approvalQueries.requestApprovalOtp('Srinu Sir')).rejects.toMatchObject({
+      code: 'APPROVAL_OTP_STORAGE_FAILED',
+    });
+
+    const unavailErr = new Error('Storage down');
+    unavailErr.code = 'PERSISTENCE_UNAVAILABLE';
+    saveSpy.mockRejectedValueOnce(unavailErr);
+    await expect(approvalQueries.requestApprovalOtp('Srinu Sir')).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
+    saveSpy.mockRestore();
+
+    jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValue({ ok: true });
+    const mailSpy = jest
+      .spyOn(mailerService, 'sendOtpEmail')
+      .mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+    await expect(approvalQueries.requestApprovalOtp('Sudheer Sir')).rejects.toMatchObject({
+      code: 'APPROVAL_OTP_DELIVERY_FAILED',
+    });
+
+    mailSpy.mockRejectedValueOnce(new Error('SMTP socket timeout'));
+    await expect(approvalQueries.requestApprovalOtp('Sudheer Sir')).rejects.toMatchObject({
+      code: 'APPROVAL_OTP_DELIVERY_FAILED',
+    });
+  });
+
+  test('processApprovalAction verifies Email OTP independently of APPROVER_PASSWORD configuration', async () => {
+    const poolMod = require('../src/db/pool');
+    jest.spyOn(poolMod, 'hasStorage').mockReturnValue(false);
+    const savedEnv = {
+      APPROVER_PASSWORD: process.env.APPROVER_PASSWORD,
+      SRINU_APPROVER_PASSWORD: process.env.SRINU_APPROVER_PASSWORD,
+      SUDHEER_APPROVER_PASSWORD: process.env.SUDHEER_APPROVER_PASSWORD,
+    };
+    delete process.env.APPROVER_PASSWORD;
+    delete process.env.SRINU_APPROVER_PASSWORD;
+    delete process.env.SUDHEER_APPROVER_PASSWORD;
+
+    try {
+      const approval = await approvalQueries.createApproval({
+        request_type: 'Seller Credit Addition',
+        module: 'Seller Credit Addition',
+        assigned_approver: 'Sudheer Sir',
+      });
+
+      await expect(
+        approvalQueries.processApprovalAction(approval.id, {
+          action: 'APPROVE',
+          approverName: 'Sudheer Sir',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_CREDENTIALS_REQUIRED' });
+
+      await expect(
+        approvalQueries.processApprovalAction(approval.id, {
+          action: 'APPROVE',
+          approverName: 'Sudheer Sir',
+          otpCode: '12ab',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_OTP_INVALID' });
+
+      await expect(
+        approvalQueries.processApprovalAction(approval.id, {
+          action: 'APPROVE',
+          approverName: 'Unknown Person',
+          otpCode: '123456',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVER_UNKNOWN' });
+
+      await expect(
+        approvalQueries.processApprovalAction(approval.id, {
+          action: 'APPROVE',
+          approverName: 'Sudheer Sir',
+          otpCode: '123456',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_OTP_INVALID' });
+
+      const mailSpy = jest
+        .spyOn(mailerService, 'sendOtpEmail')
+        .mockResolvedValue({ sent: true, messageId: 'msg-2' });
+      await approvalQueries.requestApprovalOtp('Sudheer Sir', { email: 'maker@procucev.com' });
+      const sentOtp = mailSpy.mock.calls[0][1];
+
+      // Wrong OTP increments attempts
+      await expect(
+        approvalQueries.processApprovalAction(approval.id, {
+          action: 'APPROVE',
+          approverName: 'Sudheer Sir',
+          otpCode: sentOtp === '000000' ? '111111' : '000000',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_OTP_INVALID' });
+
+      // Valid OTP succeeds without APPROVER_PASSWORD configured and invalidates OTP
+      const approved = await approvalQueries.processApprovalAction(approval.id, {
+        action: 'APPROVE',
+        remarks: 'Verified via Sudheer email OTP',
+        approverName: 'Sudheer Sir',
+        otpCode: sentOtp,
+      });
+      expect(approved.status).toBe('Approved');
+
+      // Reusing same OTP is rejected
+      const secondApproval = await approvalQueries.createApproval({ assigned_approver: 'Sudheer Sir' });
+      await expect(
+        approvalQueries.processApprovalAction(secondApproval.id, {
+          action: 'APPROVE',
+          approverName: 'Sudheer Sir',
+          otpCode: sentOtp,
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_OTP_INVALID' });
+
+      // Expired OTP and max-attempt OTP
+      jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValueOnce({
+        code: '654321',
+        expiresAt: Date.now() - 10_000,
+        attempts: 0,
+      });
+      await expect(
+        approvalQueries.processApprovalAction(secondApproval.id, {
+          action: 'REJECT',
+          approverName: 'Sudheer Sir',
+          otpCode: '654321',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_OTP_EXPIRED' });
+
+      jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValueOnce({
+        code: '654321',
+        expiresAt: Date.now() + 60_000,
+        attempts: constants.APPROVAL_OTP_CONFIG.MAX_OTP_ATTEMPTS,
+      });
+      await expect(
+        approvalQueries.processApprovalAction(secondApproval.id, {
+          action: 'REJECT',
+          approverName: 'Sudheer Sir',
+          otpCode: '654321',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_OTP_MAX_ATTEMPTS' });
+
+      // Unequal length otpCode
+      jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValueOnce({
+        code: '654',
+        expiresAt: Date.now() + 60_000,
+        attempts: 0,
+      });
+      await expect(
+        approvalQueries.processApprovalAction(secondApproval.id, {
+          action: 'REJECT',
+          approverName: 'Sudheer Sir',
+          otpCode: '654321',
+        })
+      ).rejects.toMatchObject({ code: 'APPROVAL_OTP_INVALID' });
+    } finally {
+      Object.entries(savedEnv).forEach(([k, v]) => {
+        if (v !== undefined) process.env[k] = v;
+        else delete process.env[k];
+      });
+    }
+  });
+
+  test('POST /api/approvals/request-otp and OTP errors on /:id/action return proper HTTP statuses', async () => {
+    const headers = authHeader('category_manager');
+
+    const invalidRes = await request(app)
+      .post('/api/approvals/request-otp')
+      .set(headers)
+      .send({});
+    expect(invalidRes.status).toBe(400);
+
+    const storageErr = new Error('Storage down');
+    storageErr.code = 'APPROVAL_OTP_STORAGE_FAILED';
+    const otpSpy = jest
+      .spyOn(approvalQueries, 'requestApprovalOtp')
+      .mockRejectedValueOnce(storageErr);
+    const storageRes = await request(app)
+      .post('/api/approvals/request-otp')
+      .set(headers)
+      .send({ approverName: 'Srinu Sir' });
+    expect(storageRes.status).toBe(503);
+    expect(storageRes.body.retryable).toBe(true);
+
+    const deliveryErr = new Error('SMTP down');
+    deliveryErr.code = 'APPROVAL_OTP_DELIVERY_FAILED';
+    otpSpy.mockRejectedValueOnce(deliveryErr);
+    const deliveryRes = await request(app)
+      .post('/api/approvals/request-otp')
+      .set(headers)
+      .send({ approverName: 'Srinu Sir' });
+    expect(deliveryRes.status).toBe(503);
+
+    otpSpy.mockRejectedValueOnce(new Error('Unexpected crash'));
+    const crashRes = await request(app)
+      .post('/api/approvals/request-otp')
+      .set(headers)
+      .send({ approverName: 'Srinu Sir' });
+    expect(crashRes.status).toBe(500);
+
+    otpSpy.mockResolvedValueOnce({
+      success: true,
+      approverName: 'Srinu Sir',
+      email: 'srinivas.mukku@procucev.com',
+      expiresInSeconds: 300,
+      message: constants.APPROVAL_MESSAGES.OTP_SENT.replace('{email}', 'srinivas.mukku@procucev.com'),
+    });
+    const okRes = await request(app)
+      .post('/api/approvals/request-otp')
+      .set(headers)
+      .send({ approverName: 'Srinu Sir' });
+    expect(okRes.status).toBe(200);
+    expect(okRes.body.email).toBe('srinivas.mukku@procucev.com');
+
+    // Missing both password and otpCode on /:id/action
+    const noCredRes = await request(app)
+      .post('/api/approvals/appr-1/action')
+      .set(headers)
+      .send({ action: 'APPROVE', approverName: 'Srinu Sir' });
+    expect(noCredRes.status).toBe(400);
+    expect(noCredRes.body.error).toBe(constants.APPROVAL_MESSAGES.CREDENTIALS_REQUIRED);
+
+    // Direct controller check without req.ip
+    const resMock = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    };
+    otpSpy.mockResolvedValueOnce({
+      success: true,
+      approverName: 'Sudheer Sir',
+      email: 'sudheer.kangala@procucev.com',
+      expiresInSeconds: 300,
+      message: constants.APPROVAL_MESSAGES.OTP_SENT.replace('{email}', 'sudheer.kangala@procucev.com'),
+    });
+    await approvalController.requestOtp(
+      { body: { approverName: 'Sudheer Sir' }, user: { email: 'cm@procucev.com', role: 'category_manager' } },
+      resMock
+    );
+    expect(resMock.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+});

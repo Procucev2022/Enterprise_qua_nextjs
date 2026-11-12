@@ -49,6 +49,7 @@ import type {
   BuyerCommunicationItem,
   BuyerPaymentSummary,
   BuyerPaymentTransaction,
+  BuyerUploadedVendorItem,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -68,6 +69,7 @@ import {
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
+  fetchBuyerUploadedVendors,
 } from '@/lib/buyerProfileClient';
 import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
@@ -292,6 +294,55 @@ export default function BuyerDossierDrawer({
       setIsSubmittingCategories(false);
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // 1b. BUYER UPLOADED VENDORS (Tab 1: Profile)
+  // ---------------------------------------------------------------------------
+  const [uploadedVendors, setUploadedVendors] = useState<BuyerUploadedVendorItem[]>([]);
+  const [loadingUploadedVendors, setLoadingUploadedVendors] = useState<boolean>(false);
+  const [uploadedVendorsError, setUploadedVendorsError] = useState<string | null>(null);
+  const [uploadedVendorSearch, setUploadedVendorSearch] = useState<string>('');
+
+  const loadUploadedVendors = useCallback(async () => {
+    setUploadedVendorsError(null);
+    if (!buyer.id) {
+      setUploadedVendors([]);
+      return;
+    }
+    setLoadingUploadedVendors(true);
+    try {
+      const res = await fetchBuyerUploadedVendors(buyer.id);
+      if (res.success) {
+        setUploadedVendors(Array.isArray(res.vendors) ? res.vendors : []);
+      } else {
+        const message = res.error || UI_STRINGS.buyerDirectory.dossier.uploadedVendors.errorText;
+        logger.warn('Failed to fetch buyer uploaded vendors', { buyerId: buyer.id, error: message }, 'BUYER_DOSSIER');
+        setUploadedVendorsError(message);
+        setUploadedVendors([]);
+      }
+    } catch (err) {
+      logger.error('Unexpected error fetching buyer uploaded vendors', { buyerId: buyer.id, error: err }, 'BUYER_DOSSIER');
+      setUploadedVendorsError(UI_STRINGS.buyerDirectory.dossier.uploadedVendors.errorText);
+      setUploadedVendors([]);
+    } finally {
+      setLoadingUploadedVendors(false);
+    }
+  }, [buyer.id]);
+
+  useEffect(() => {
+    if (dossierTab === 'profile') {
+      loadUploadedVendors();
+    }
+  }, [dossierTab, loadUploadedVendors]);
+
+  const filteredUploadedVendors = useMemo(() => {
+    const query = uploadedVendorSearch.trim().toLowerCase();
+    if (!query) return uploadedVendors;
+    return uploadedVendors.filter((item) =>
+      [item.vendorName, item.companyName, item.contactPerson, item.email, item.phone]
+        .some((val) => String(val || '').toLowerCase().includes(query))
+    );
+  }, [uploadedVendors, uploadedVendorSearch]);
 
   // ---------------------------------------------------------------------------
   // 2. RFQ TAB & RFQ MODAL (Tab 2: RFQs)
@@ -892,6 +943,115 @@ export default function BuyerDossierDrawer({
                     </span>
                   ))}
                 </div>
+              </div>
+
+              {/* Buyer Uploaded Vendors */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {UI_STRINGS.buyerDirectory.dossier.uploadedVendors.sectionTitle}
+                    </h3>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800">
+                      {formatString(UI_STRINGS.buyerDirectory.dossier.uploadedVendors.countBadge, {
+                        count: uploadedVendors.length,
+                      })}
+                    </span>
+                  </div>
+                  <div className="relative w-full sm:w-64">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={uploadedVendorSearch}
+                      onChange={(e) => setUploadedVendorSearch(e.target.value)}
+                      placeholder={UI_STRINGS.buyerDirectory.dossier.uploadedVendors.searchPlaceholder}
+                      className="w-full pl-8 pr-3 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                {loadingUploadedVendors ? (
+                  <div className="flex items-center gap-2 py-6 justify-center text-xs text-slate-500">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                    <span>{UI_STRINGS.buyerDirectory.dossier.uploadedVendors.loadingText}</span>
+                  </div>
+                ) : uploadedVendorsError ? (
+                  <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300">
+                    <span>{uploadedVendorsError}</span>
+                    <button
+                      type="button"
+                      onClick={loadUploadedVendors}
+                      className="inline-flex items-center gap-1 font-semibold underline cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Retry</span>
+                    </button>
+                  </div>
+                ) : filteredUploadedVendors.length === 0 ? (
+                  <div className="py-6 text-center space-y-1">
+                    <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      {UI_STRINGS.buyerDirectory.dossier.uploadedVendors.emptyTitle}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {UI_STRINGS.buyerDirectory.dossier.uploadedVendors.emptyDescription}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-800/70 text-slate-500 uppercase text-[10px] font-semibold tracking-wider border-b border-slate-200 dark:border-slate-800">
+                          <th className="py-2 px-3">{UI_STRINGS.buyerDirectory.dossier.uploadedVendors.colVendorName}</th>
+                          <th className="py-2 px-3">{UI_STRINGS.buyerDirectory.dossier.uploadedVendors.colCompany}</th>
+                          <th className="py-2 px-3">{UI_STRINGS.buyerDirectory.dossier.uploadedVendors.colContactDetails}</th>
+                          <th className="py-2 px-3">{UI_STRINGS.buyerDirectory.dossier.uploadedVendors.colUploadDate}</th>
+                          <th className="py-2 px-3">{UI_STRINGS.buyerDirectory.dossier.uploadedVendors.colStatus}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {filteredUploadedVendors.map((vendorItem) => {
+                          const contactParts = [vendorItem.contactPerson, vendorItem.email, vendorItem.phone].filter(Boolean);
+                          return (
+                            <tr key={vendorItem.id || vendorItem.vendorId} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                              <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-slate-100">
+                                {vendorItem.vendorName || UI_STRINGS.buyerDirectory.dossier.uploadedVendors.notProvided}
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">
+                                <div>{vendorItem.companyName || UI_STRINGS.buyerDirectory.dossier.uploadedVendors.notProvided}</div>
+                                {vendorItem.location && (
+                                  <div className="text-[11px] text-slate-500">{vendorItem.location}</div>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300 space-y-0.5">
+                                {contactParts.length > 0 ? (
+                                  contactParts.map((part, idx) => (
+                                    <div key={idx} className={idx === 0 ? undefined : 'text-[11px] text-slate-500'}>
+                                      {part}
+                                    </div>
+                                  ))
+                                ) : (
+                                  <span className="text-slate-400">
+                                    {UI_STRINGS.buyerDirectory.dossier.uploadedVendors.notProvided}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                                {vendorItem.uploadDate
+                                  ? formatIndianDateTime(vendorItem.uploadDate)
+                                  : UI_STRINGS.buyerDirectory.dossier.uploadedVendors.notProvided}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                                  {vendorItem.status}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           )}

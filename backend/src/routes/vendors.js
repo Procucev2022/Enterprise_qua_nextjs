@@ -33,6 +33,7 @@ router.get('/:id/onboarding-email', authenticate, vendorController.generateOnboa
 
 router.get('/:id/credit-history', authenticate, vendorController.getCreditHistory);
 router.post('/:id/add-quote-credits', authenticate, vendorController.addQuoteCredits);
+router.get('/:id/buyer-uploads', authenticate, vendorController.getVendorBuyerUploads);
 router.post('/:id/request-credit-approval', authenticate, vendorController.requestCreditApproval);
 router.get('/:id/communications', authenticate, vendorController.getVendorCommunications);
 router.post('/:id/communications', authenticate, vendorController.recordVendorCommunication);

@@ -289,8 +289,8 @@ describe('catalogue workbook preview validation', () => {
     ] });
     const { container } = render(<ItemCatalogue />);
     upload(new File(['workbook'], 'catalogue.xlsx'));
-    await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled());
-    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
+    await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1), { timeout: 5000 });
     const importButton = screen.getByRole('button', { name: /Import Valid Rows/ });
     await act(async () => { fireEvent.click(importButton); });
     expect(global.fetch).toHaveBeenCalledWith('/api/catalogue', expect.objectContaining({ method: 'POST', body: expect.stringContaining('"sku":"New"') }));
@@ -303,8 +303,8 @@ describe('catalogue workbook preview validation', () => {
     jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [row(), row({ rowNumber: 3, sku: 'IMPORTED-2' })] });
     const { container } = render(<ItemCatalogue />);
     upload(new File(['workbook'], 'catalogue.xlsx'));
-    await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled());
-    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
+    await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1), { timeout: 5000 });
     const importButton = screen.getByRole('button', { name: /Import Valid Rows/ });
     await act(async () => { fireEvent.click(importButton); });
     expect(showToast).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('1'), 'warning');

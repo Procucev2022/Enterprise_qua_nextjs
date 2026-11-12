@@ -10,7 +10,16 @@ const pool = require('./pool');
 const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
-const { APPROVAL_MESSAGES, isApproverPasswordConfigured, verifyApproverPassword } = require('../config/constants');
+const authSessionQueries = require('./authSessionQueries');
+const mailerService = require('../services/mailerService');
+const {
+  APPROVAL_MESSAGES,
+  APPROVAL_OTP_CONFIG,
+  generateNumericOtp,
+  isApproverPasswordConfigured,
+  resolveApproverConfig,
+  verifyApproverPassword,
+} = require('../config/constants');
 
 const memoryApprovals = [
   {
@@ -666,22 +675,147 @@ async function createApproval(data, actor = {}) {
   return rememberApproval(prepared.item);
 }
 
+function createApprovalError(message, code, statusCode) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
+
+function buildApprovalOtpKey(email) {
+  return `${APPROVAL_OTP_CONFIG.OTP_KEY_PREFIX}${String(email || '').trim().toLowerCase()}`;
+}
+
+/**
+ * Issue and email a single-use 6-digit OTP to the designated approver's corporate email.
+ */
+async function requestApprovalOtp(approverName, actor = {}, ipAddress = '') {
+  const approver = resolveApproverConfig(approverName);
+  if (!approver) {
+    throw createApprovalError(APPROVAL_MESSAGES.APPROVER_UNKNOWN, 'APPROVER_UNKNOWN', 400);
+  }
+
+  const code = generateNumericOtp(APPROVAL_OTP_CONFIG.OTP_LENGTH);
+  const expiresAt = Date.now() + APPROVAL_OTP_CONFIG.OTP_TTL_SECONDS * 1000;
+  const otpKey = buildApprovalOtpKey(approver.email);
+
+  try {
+    await authSessionQueries.saveOtp(otpKey, code, expiresAt, approver.email);
+  } catch (err) {
+    logger.error('Failed to store approval verification OTP', err, 'APPROVAL_QUERIES');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') throw err;
+    throw createApprovalError(APPROVAL_MESSAGES.OTP_STORAGE_FAILED, 'APPROVAL_OTP_STORAGE_FAILED', 503);
+  }
+
+  try {
+    const deliveryResult = await mailerService.sendOtpEmail(
+      approver.email,
+      code,
+      APPROVAL_OTP_CONFIG.OTP_TTL_SECONDS,
+      { purpose: 'Management Approval Confirmation', approverName: approver.name }
+    );
+    if (!deliveryResult || (deliveryResult.sent === false && deliveryResult.reason !== 'test environment')) {
+      throw createApprovalError(APPROVAL_MESSAGES.OTP_DELIVERY_FAILED, 'APPROVAL_OTP_DELIVERY_FAILED', 503);
+    }
+  } catch (err) {
+    await authSessionQueries.deleteOtp(otpKey).catch(() => {});
+    logger.error('Failed to deliver approval verification OTP email', {
+      approverName: approver.name,
+      approverEmail: approver.email,
+      error: err,
+    }, 'APPROVAL_QUERIES');
+    if (err?.code === 'APPROVAL_OTP_DELIVERY_FAILED') throw err;
+    throw createApprovalError(APPROVAL_MESSAGES.OTP_DELIVERY_FAILED, 'APPROVAL_OTP_DELIVERY_FAILED', 503);
+  }
+
+  logger.audit(
+    'Approval verification OTP dispatched',
+    actor.email || 'system@procucev.ai',
+    {
+      approverName: approver.name,
+      approverEmail: approver.email,
+      ipAddress: ipAddress || null,
+    },
+    approver.id
+  );
+
+  return {
+    success: true,
+    email: approver.email,
+    approverName: approver.name,
+    expiresInSeconds: APPROVAL_OTP_CONFIG.OTP_TTL_SECONDS,
+    message: APPROVAL_MESSAGES.OTP_SENT.replace('{email}', approver.email),
+  };
+}
+
+async function verifyApprovalEmailOtp(approver, submittedOtp) {
+  const cleanOtp = String(submittedOtp || '').trim();
+  if (!/^\d{6}$/.test(cleanOtp)) {
+    throw createApprovalError(APPROVAL_MESSAGES.OTP_INVALID, 'APPROVAL_OTP_INVALID', 401);
+  }
+
+  const otpKey = buildApprovalOtpKey(approver.email);
+  const storedOtp = await authSessionQueries.findOtp(otpKey);
+  if (!storedOtp) {
+    throw createApprovalError(APPROVAL_MESSAGES.OTP_INVALID, 'APPROVAL_OTP_INVALID', 401);
+  }
+
+  if (storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
+    await authSessionQueries.deleteOtp(otpKey);
+    throw createApprovalError(APPROVAL_MESSAGES.OTP_EXPIRED, 'APPROVAL_OTP_EXPIRED', 401);
+  }
+
+  if (storedOtp.attempts >= APPROVAL_OTP_CONFIG.MAX_OTP_ATTEMPTS) {
+    await authSessionQueries.deleteOtp(otpKey);
+    throw createApprovalError(APPROVAL_MESSAGES.OTP_MAX_ATTEMPTS, 'APPROVAL_OTP_MAX_ATTEMPTS', 401);
+  }
+
+  const storedCode = String(storedOtp.code || '');
+  const isMatch = storedCode.length === cleanOtp.length
+    && crypto.timingSafeEqual(Buffer.from(storedCode, 'utf8'), Buffer.from(cleanOtp, 'utf8'));
+  if (!isMatch) {
+    await authSessionQueries.incrementOtpAttempts(otpKey);
+    throw createApprovalError(APPROVAL_MESSAGES.OTP_INVALID, 'APPROVAL_OTP_INVALID', 401);
+  }
+
+  await authSessionQueries.deleteOtp(otpKey);
+}
+
 /**
  * Process approval or rejection action.
  * For Buyer Credit Additions, updates buyer credit balance and synchronizes corresponding internal task.
  */
-async function processApprovalAction(id, { action, remarks = '', password = '', approverName = '' }, actor = {}) {
-  if (!isApproverPasswordConfigured(approverName)) {
-    const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
-    configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';
-    configurationError.statusCode = 503;
-    throw configurationError;
+async function processApprovalAction(id, { action, remarks = '', password = '', otpCode = '', approverName = '' }, actor = {}) {
+  const cleanPassword = typeof password === 'string' ? password : '';
+  const cleanOtp = typeof otpCode === 'string' ? otpCode.trim() : '';
+
+  if (!cleanPassword && !cleanOtp) {
+    throw createApprovalError(APPROVAL_MESSAGES.CREDENTIALS_REQUIRED, 'APPROVAL_CREDENTIALS_REQUIRED', 400);
   }
-  if (!verifyApproverPassword(approverName, password)) {
-    const passwordError = new Error(APPROVAL_MESSAGES.PASSWORD_INVALID);
-    passwordError.code = 'APPROVER_PASSWORD_INVALID';
-    passwordError.statusCode = 401;
-    throw passwordError;
+
+  let verificationMethod = 'PASSWORD';
+  if (cleanOtp) {
+    const approver = resolveApproverConfig(approverName);
+    if (!approver) {
+      throw createApprovalError(APPROVAL_MESSAGES.APPROVER_UNKNOWN, 'APPROVER_UNKNOWN', 400);
+    }
+    await verifyApprovalEmailOtp(approver, cleanOtp);
+    verificationMethod = 'EMAIL_OTP';
+  } else {
+    if (!isApproverPasswordConfigured(approverName)) {
+      throw createApprovalError(
+        APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE,
+        'APPROVER_PASSWORD_NOT_CONFIGURED',
+        503
+      );
+    }
+    if (!verifyApproverPassword(approverName, cleanPassword)) {
+      throw createApprovalError(
+        APPROVAL_MESSAGES.PASSWORD_INVALID,
+        'APPROVER_PASSWORD_INVALID',
+        401
+      );
+    }
   }
 
   const normalizedAction = String(action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
@@ -762,12 +896,13 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
         pool.queryCache.invalidate('management_approvals');
         pool.queryCache.invalidate('management_approval_events');
         pool.queryCache.invalidate('approvals');
-        logger.audit(`Management approval ${normalizedAction.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+      logger.audit(`Management approval ${normalizedAction.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
           approvalId: managementApproval.id,
           requestNumber: managementApproval.request_number,
           actorId,
           remarks: normalizedRemarks,
           eventId,
+          verificationMethod,
         }, managementApproval.request_number);
         return managementApproval;
       }
@@ -859,6 +994,7 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
         actorId,
         remarks: normalizedRemarks,
         eventId,
+        verificationMethod,
       }, updatedApproval.request_number);
       return updatedApproval;
     } catch (error) {
@@ -891,6 +1027,7 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
     actorId,
     remarks: normalizedRemarks,
     eventId,
+    verificationMethod,
   }, item.request_number);
   return item;
 }
@@ -901,6 +1038,8 @@ module.exports = {
   createApproval,
   prepareApprovalCreate,
   rememberApproval,
+  requestApprovalOtp,
+  buildApprovalOtpKey,
   processApprovalAction,
   hydrateApprovalRow,
   memoryApprovals,

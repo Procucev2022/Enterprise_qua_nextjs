@@ -7,6 +7,7 @@ import type {
   RecordCommunicationPayload,
   SupplierPaymentSummary,
   SupplierPaymentTransaction,
+  VendorBuyerUploadsResponse,
 } from './types';
 
 function authHeaders(): Record<string, string> {
@@ -126,12 +127,31 @@ export async function updateSupplierCategories(
   }
 }
 
+export async function fetchVendorBuyerUploads(
+  vendorId: string,
+  limit = 200
+): Promise<VendorBuyerUploadsResponse> {
+  try {
+    const safeId = encodeURIComponent(vendorId);
+    const res = await fetch(`/api/vendors/${safeId}/buyer-uploads?limit=${encodeURIComponent(String(limit))}`, {
+      headers: authHeaders(),
+    });
+    const body = (await res.json()) as VendorBuyerUploadsResponse;
+    return body;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to fetch buyer uploads';
+    logger.error('Vendor buyer uploads load failed', { error: message }, 'SUPPLIER_CLIENT');
+    return { success: false, error: message };
+  }
+}
+
 const supplierProfileClient = {
   fetchSupplierCreditHistory,
   fetchSupplierCommunications,
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
   updateSupplierCategories,
+  fetchVendorBuyerUploads,
 };
 
 export default supplierProfileClient;

@@ -1116,16 +1116,31 @@ const VALIDATION_SCHEMAS = {
     comment: { type: 'string', required: true, minLength: 1, maxLength: 5000, message: 'Comment text cannot be empty.' },
   },
 
+  approvalOtpRequest: {
+    approverName: {
+      type: 'string',
+      required: true,
+      minLength: 2,
+      maxLength: 100,
+      message: 'Select the approver whose email should receive the OTP.',
+    },
+  },
+
   approvalAction: {
     action: { type: 'string', required: true, enum: ['APPROVE', 'REJECT', 'Approve', 'Reject', 'approved', 'rejected'], message: 'Action must be APPROVE or REJECT.' },
     remarks: { type: 'string', required: false, maxLength: 1000 },
-    password: { type: 'string', required: true, minLength: 1, message: 'Approver password confirmation is required.' },
-    approverName: { type: 'string', required: true, minLength: 2, maxLength: 100, message: 'Select the approver whose password you are confirming.' },
+    password: { type: 'string', required: false, maxLength: 500 },
+    otpCode: { type: 'string', required: false, pattern: OTP_CODE_REGEX, message: OTP_CODE_MESSAGE },
+    approverName: { type: 'string', required: true, minLength: 2, maxLength: 100, message: 'Select the approver whose password or email OTP you are confirming.' },
   },
 
   registrationList: {
     search: { type: 'string', required: false, maxLength: 200 },
-    clientType: { type: 'string', required: false, enum: ['all', 'buyer', 'seller'] },
+    clientType: {
+      type: 'string',
+      required: false,
+      enum: ['all', 'All', 'buyer', 'Buyer', 'Buyers', 'buyers', 'seller', 'Seller', 'Sellers', 'sellers'],
+    },
     sourceType: {
       type: 'string',
       required: false,
@@ -1390,6 +1405,31 @@ const VALIDATION_SCHEMAS = {
     dryRun: {
       type: 'boolean',
       required: false,
+    },
+  },
+
+  buyerUploadedVendorsQuery: {
+    limit: {
+      type: 'number',
+      required: false,
+      min: 1,
+      max: 500,
+      message: 'limit must be between 1 and 500.',
+    },
+    search: {
+      type: 'string',
+      required: false,
+      maxLength: 200,
+    },
+  },
+
+  vendorBuyerUploadsQuery: {
+    limit: {
+      type: 'number',
+      required: false,
+      min: 1,
+      max: 500,
+      message: 'limit must be between 1 and 500.',
     },
   },
 };

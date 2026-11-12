@@ -45,14 +45,97 @@ describe('registrationQueries', () => {
     web.clients.forEach((c) => expect(c.sourceType).toBe('Web App'));
   });
 
-  test('getRegisteredClients filters by status', async () => {
+  test('getRegisteredClients filters by status enforcing buyer/seller auto-approval rules', async () => {
     const accepted = await registrationQueries.getRegisteredClients({ status: 'Accepted' });
     expect(accepted.total).toBeGreaterThan(0);
     accepted.clients.forEach((c) => expect(c.status).toBe('Accepted'));
+    // Includes both approved buyers and auto-approved sellers
+    expect(accepted.clients.some((c) => c.clientType === 'Buyer')).toBe(true);
+    expect(accepted.clients.some((c) => c.clientType === 'Seller')).toBe(true);
 
     const pending = await registrationQueries.getRegisteredClients({ status: 'New' });
     expect(pending.total).toBeGreaterThan(0);
-    pending.clients.forEach((c) => expect(c.status).toBe('New'));
+    // New shows ONLY buyers awaiting approval; excludes sellers
+    pending.clients.forEach((c) => {
+      expect(c.status).toBe('New');
+      expect(c.clientType).toBe('Buyer');
+    });
+
+    // Reject a buyer and verify Rejected filter returns only rejected buyers
+    await registrationQueries.updateClientRegistrationStatus('reg-client-102', 'reject', 'Invalid KYC');
+    // Also reject a seller in memory to prove Rejected still excludes sellers
+    await registrationQueries.updateClientRegistrationStatus('reg-client-103', 'reject', 'Duplicate seller');
+    const rejected = await registrationQueries.getRegisteredClients({ status: 'Rejected' });
+    expect(rejected.total).toBe(1);
+    expect(rejected.clients[0].id).toBe('reg-client-102');
+    expect(rejected.clients[0].clientType).toBe('Buyer');
+
+    // Sellers combined with New or Rejected yields 0 rows; Accepted yields sellers
+    const newSellers = await registrationQueries.getRegisteredClients({ clientType: 'seller', status: 'New' });
+    expect(newSellers.total).toBe(0);
+    const rejectedSellers = await registrationQueries.getRegisteredClients({ clientType: 'seller', status: 'Rejected' });
+    expect(rejectedSellers.total).toBe(0);
+    const acceptedWhatsappSellers = await registrationQueries.getRegisteredClients({
+      clientType: 'seller',
+      sourceType: 'WhatsApp',
+      status: 'Accepted',
+    });
+    expect(acceptedWhatsappSellers.total).toBeGreaterThan(0);
+    acceptedWhatsappSellers.clients.forEach((c) => {
+      expect(c.clientType).toBe('Seller');
+      expect(c.sourceType).toBe('WhatsApp');
+      expect(c.status).toBe('Accepted');
+    });
+  });
+
+  test('SQL queries treat sellers as auto-approved and combine independent filters', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({
+      rows: [
+        {
+          id: 'db-seller-auto',
+          userName: 'Auto Seller',
+          companyName: 'Auto Components',
+          phoneNumber: '+919800011122',
+          userEmail: 'seller@auto.com',
+          regDate: new Date().toISOString(),
+          isApproved: false,
+          verificationStatus: 'PENDING',
+          sourceTypeRaw: 'web_app',
+          isWhatsApp: false,
+          roleName: 'registration',
+          total: 1,
+        },
+        {
+          id: 'db-seller-rejected',
+          userName: 'Rejected Seller',
+          companyName: 'Rejected Co',
+          phoneNumber: '+919800011133',
+          userEmail: 'reject@auto.com',
+          regDate: new Date().toISOString(),
+          isApproved: false,
+          verificationStatus: 'rejected',
+          sourceTypeRaw: 'web_app',
+          isWhatsApp: false,
+          roleName: 'vendor',
+          total: 1,
+        },
+      ],
+    });
+
+    const res = await registrationQueries.getRegisteredClients({
+      clientType: 'seller',
+      sourceType: 'Web App',
+      status: 'Accepted',
+    });
+
+    expect(res.clients[0].clientType).toBe('Seller');
+    expect(res.clients[0].status).toBe('Accepted');
+    expect(res.clients[0].isApproved).toBe(true);
+    expect(res.clients[1].status).toBe('Rejected');
+    expect(res.clients[1].isApproved).toBe(false);
+    expect(querySpy.mock.calls[0][0]).toContain("'seller_rejected'");
+    expect(querySpy.mock.calls[0][1]).toEqual(expect.arrayContaining(['web app', 'accepted', 'seller']));
   });
 
   test('getRegisteredClients handles pagination with limit and offset', async () => {

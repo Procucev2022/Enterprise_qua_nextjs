@@ -3347,3 +3347,50 @@ export interface ActionCenterSummaryPopupModalProps<T = Record<string, unknown>>
   searchKeys?: string[];
   initialPageSize?: number;
 }
+
+export interface BuyerUploadedVendorItem {
+  id: string;
+  vendorId: string;
+  vendorName: string;
+  companyName: string;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  location?: string | null;
+  majorCategory?: string | null;
+  uploadSource?: string | null;
+  uploadDate: string | null;
+  status: string;
+}
+
+export interface BuyerUploadedVendorsResponse {
+  success: boolean;
+  buyerId?: string;
+  totalVendors?: number;
+  vendors?: BuyerUploadedVendorItem[];
+  error?: string;
+}
+
+export interface VendorBuyerUploadItem {
+  id: string;
+  buyerId: string;
+  organizationId?: string | null;
+  buyerName: string;
+  companyName: string;
+  corporateEmail: string | null;
+  mobileNumber?: string | null;
+  location?: string | null;
+  gstin?: string | null;
+  sourcingMode?: string | null;
+  uploadSource?: string | null;
+  uploadDate: string | null;
+  status: string;
+}
+
+export interface VendorBuyerUploadsResponse {
+  success: boolean;
+  vendorId?: string;
+  totalBuyers?: number;
+  buyerUploads?: VendorBuyerUploadItem[];
+  error?: string;
+}

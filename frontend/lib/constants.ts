@@ -1631,6 +1631,21 @@ export const APPROVER_CONFIG = [
   },
 ] as const;
 
+export const APPROVAL_OTP_CONFIG = {
+  OTP_LENGTH: 6,
+  OTP_TTL_SECONDS: 300,
+  RESEND_COOLDOWN_SECONDS: 30,
+} as const;
+
+export function getApproverEmail(approverName: string): string {
+  const normalized = approverName.trim().toLowerCase();
+  const matched = APPROVER_CONFIG.find((entry) => {
+    const firstToken = entry.name.toLowerCase().split(' ')[0];
+    return entry.name.toLowerCase() === normalized || normalized.includes(firstToken);
+  });
+  return matched ? matched.email : APPROVER_CONFIG[0].email;
+}
+
 export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];
 
 export const CREDIT_APPROVAL_INITIATORS = [

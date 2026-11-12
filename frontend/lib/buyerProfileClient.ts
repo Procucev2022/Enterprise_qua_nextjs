@@ -14,6 +14,7 @@ import type {
   BuyerProfileResult,
   BuyerProfileSaveResult,
   BuyerProfileUpdatePayload,
+  BuyerUploadedVendorsResponse,
   CategoryTaxonomyResult,
   MajorMinorCategory,
 } from './types';
@@ -466,6 +467,23 @@ export async function fetchBuyerPaymentHistory(buyerId: string): Promise<{
   }
 }
 
+export async function fetchBuyerUploadedVendors(
+  buyerId: string,
+  limit = 200
+): Promise<BuyerUploadedVendorsResponse> {
+  try {
+    const safeId = encodeURIComponent(buyerId);
+    const res = await fetch(`/api/buyer-accounts/${safeId}/uploaded-vendors?limit=${encodeURIComponent(String(limit))}`, {
+      headers: authHeaders(),
+    });
+    const body = (await res.json()) as BuyerUploadedVendorsResponse;
+    return body;
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer uploaded vendors request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to fetch uploaded vendors') };
+  }
+}
+
 const buyerProfileClient = {
   fetchBuyerProfile,
   saveBuyerProfile,
@@ -480,6 +498,7 @@ const buyerProfileClient = {
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
+  fetchBuyerUploadedVendors,
 };
 
 export default buyerProfileClient;

@@ -5,6 +5,7 @@ import {
   fetchBuyerCreditHistory,
   fetchBuyerPaymentHistory,
   fetchBuyerProfile,
+  fetchBuyerUploadedVendors,
   fetchCategoryTaxonomy,
   fetchDispatchTemplates,
   flattenCategorySelection,
@@ -636,6 +637,47 @@ describe('buyerProfileClient', () => {
     });
   });
 
+  describe('fetchBuyerUploadedVendors', () => {
+    test('fetches uploaded vendors for buyer successfully', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          buyerId: 'buyer-1',
+          totalVendors: 1,
+          vendors: [{ id: 'bvu-1', vendorId: 'v-1', vendorName: 'Apex Steel', companyName: 'Apex Steel Pvt Ltd', status: 'ACTIVE' }],
+        }),
+      } as unknown as Response);
+
+      const res = await fetchBuyerUploadedVendors('buyer/1', 50);
+      expect(res.success).toBe(true);
+      expect(res.totalVendors).toBe(1);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/buyer-accounts/buyer%2F1/uploaded-vendors?limit=50',
+        expect.any(Object)
+      );
+    });
+
+    test('handles uploaded vendors fetch error and non-Error fallback', async () => {
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network timeout'));
+      const errorLog = jest.spyOn(logger, 'error');
+      const res1 = await fetchBuyerUploadedVendors('buyer-1');
+      expect(res1.success).toBe(false);
+      expect(res1.error).toBe('Network timeout');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer uploaded vendors request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'Network timeout' }),
+        'BUYER_PROFILE'
+      );
+
+      global.fetch = jest.fn().mockRejectedValueOnce(undefined);
+      const res2 = await fetchBuyerUploadedVendors('buyer-1');
+      expect(res2.success).toBe(false);
+      expect(res2.error).toBe('Failed to fetch uploaded vendors');
+    });
+  });
+
   test('the default export exposes the whole client surface', () => {
     expect(Object.keys(buyerProfileClient).sort()).toEqual([
       'addBuyerCredit',
@@ -644,6 +686,7 @@ describe('buyerProfileClient', () => {
       'fetchBuyerCreditHistory',
       'fetchBuyerPaymentHistory',
       'fetchBuyerProfile',
+      'fetchBuyerUploadedVendors',
       'fetchCategoryTaxonomy',
       'fetchDispatchTemplates',
       'flattenCategorySelection',

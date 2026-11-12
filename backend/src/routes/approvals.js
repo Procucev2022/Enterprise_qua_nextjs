@@ -7,6 +7,7 @@ const requireApprovalAccess = [authenticate, requireRole('admin', 'category_mana
 
 router.get('/summary', ...requireApprovalAccess, approvalController.getSummary);
 router.get('/', ...requireApprovalAccess, approvalController.getApprovals);
+router.post('/request-otp', ...requireApprovalAccess, approvalController.requestOtp);
 router.post('/:id/action', ...requireApprovalAccess, approvalController.processAction);
 
 module.exports = router;

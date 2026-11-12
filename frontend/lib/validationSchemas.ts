@@ -347,7 +347,16 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
 
   approvalActionForm: {
     action: { required: true, message: 'Action is required.' },
-    password: { required: true, minLength: 1, message: 'Approver password is required.' },
+    password: {
+      required: false,
+      minLength: 1,
+      message: 'Approver password must not be blank when provided.',
+    },
+    otpCode: {
+      required: false,
+      pattern: OTP_CODE_PATTERN,
+      message: OTP_CODE_MESSAGE,
+    },
   },
 
   registrationActionForm: {

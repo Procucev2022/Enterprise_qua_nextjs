@@ -19,6 +19,7 @@ const buyerRfqCreationQueries = require('./buyerRfqCreationQueries');
 const vendorRfqUnlockQueries = require('./vendorRfqUnlockQueries');
 const vendorQuoteCreditQueries = require('./vendorQuoteCreditQueries');
 const vendorQuoteSubmissionQueries = require('./vendorQuoteSubmissionQueries');
+const buyerVendorUploadQueries = require('./buyerVendorUploadQueries');
 const { queryCache } = require('./queryCache');
 const {
   INDIAN_STATES,
@@ -3060,4 +3061,8 @@ module.exports = {
   createRFQWithCreditInDB: buyerRfqCreationQueries.createRFQWithCreditInDB,
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
+  recordBuyerVendorUploadInDB: buyerVendorUploadQueries.recordBuyerVendorUploadInDB,
+  bulkRecordBuyerVendorUploadsInDB: buyerVendorUploadQueries.bulkRecordBuyerVendorUploadsInDB,
+  getUploadedVendorsByBuyerFromDB: buyerVendorUploadQueries.getUploadedVendorsByBuyerFromDB,
+  getBuyerUploadsByVendorFromDB: buyerVendorUploadQueries.getBuyerUploadsByVendorFromDB,
 };

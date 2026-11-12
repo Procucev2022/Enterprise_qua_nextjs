@@ -583,3 +583,15 @@ describe('getVendorCreditBalance', () => {
     expect(getVendorCreditBalance({ freeQuotationCredits: 0 })).toBe(0);
   });
 });
+
+describe('APPROVAL_OTP_CONFIG and getApproverEmail', () => {
+  const { APPROVAL_OTP_CONFIG, getApproverEmail } = require('@/lib/constants');
+
+  it('resolves exact, partial, and fallback approver email addresses cleanly', () => {
+    expect(APPROVAL_OTP_CONFIG.OTP_LENGTH).toBe(6);
+    expect(getApproverEmail('Srinu Sir')).toBe('srinivas.mukku@procucev.com');
+    expect(getApproverEmail('Sudheer Sir')).toBe('sudheer.kangala@procucev.com');
+    expect(getApproverEmail('sudheer')).toBe('sudheer.kangala@procucev.com');
+    expect(getApproverEmail('Unknown Approver')).toBe('srinivas.mukku@procucev.com');
+  });
+});

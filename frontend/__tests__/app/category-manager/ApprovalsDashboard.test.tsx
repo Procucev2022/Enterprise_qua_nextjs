@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ApprovalsDashboard from '@/app/category-manager/components/ApprovalsDashboard';
 import * as approvalClient from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/approvalClient', () => {
   const actual = jest.requireActual('@/lib/approvalClient');
@@ -12,6 +12,7 @@ jest.mock('@/lib/approvalClient', () => {
     fetchApprovalSummary: jest.fn(),
     fetchApprovals: jest.fn(),
     processApprovalAction: jest.fn(),
+    requestApprovalOtp: jest.fn(),
   };
 });
 
@@ -124,6 +125,11 @@ describe('ApprovalsDashboard', () => {
       total: 3,
     });
     (approvalClient.processApprovalAction as jest.Mock).mockResolvedValue({ success: true });
+    (approvalClient.requestApprovalOtp as jest.Mock).mockResolvedValue({
+      success: true,
+      email: 'srinivas.mukku@procucev.com',
+      expiresInSeconds: 300,
+    });
     window.localStorage.clear();
   });
 
@@ -1005,5 +1011,168 @@ describe('ApprovalsDashboard', () => {
 
     const closeBtn = screen.getByRole('button', { name: strings.closeDetails });
     fireEvent.click(closeBtn);
+  });
+
+  it('supports Email OTP verification alongside approver password, countdown resend, and error states', async () => {
+    const sudheerApproval = {
+      ...mockApprovalsList[0],
+      id: 'appr-sudheer-1',
+      request_number: 'REQ-SUD-1',
+      assigned_approver: 'Sudheer Sir',
+    };
+    (approvalClient.fetchApprovals as jest.Mock).mockResolvedValue({
+      data: [sudheerApproval],
+      total: 1,
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-SUD-1')).toBeInTheDocument();
+    });
+
+    // Open Approve modal — defaults to Sudheer Sir
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+    expect(screen.getByText(strings.passwordLabel)).toBeInTheDocument();
+    expect(screen.getByText(strings.otpLabel)).toBeInTheDocument();
+    expect(
+      screen.getByText(formatString(strings.otpTargetHint, { email: 'sudheer.kangala@procucev.com' }))
+    ).toBeInTheDocument();
+
+    // Empty credentials error, then typing OTP clears passwordError and strips non-digits
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    expect(screen.getByText(strings.passwordRequiredError)).toBeInTheDocument();
+
+    const otpInput = screen.getByPlaceholderText(strings.otpPlaceholder);
+    fireEvent.change(otpInput, { target: { value: '12a3' } });
+    expect(otpInput).toHaveValue('123');
+    expect(screen.queryByText(strings.passwordRequiredError)).not.toBeInTheDocument();
+
+    // Short OTP shows format error without calling processApprovalAction
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    expect(screen.getByText(strings.invalidOtpFormatError)).toBeInTheDocument();
+    expect(approvalClient.processApprovalAction).not.toHaveBeenCalled();
+
+    // Typing again clears otpError
+    fireEvent.change(otpInput, { target: { value: '654321' } });
+    expect(screen.queryByText(strings.invalidOtpFormatError)).not.toBeInTheDocument();
+
+    // Switching approver resets OTP state and updates target email hint
+    const selectEl = screen.getByDisplayValue(strings.approverSudheer);
+    fireEvent.change(selectEl, { target: { value: 'Srinu Sir' } });
+    expect(otpInput).toHaveValue('');
+    expect(
+      screen.getByText(formatString(strings.otpTargetHint, { email: 'srinivas.mukku@procucev.com' }))
+    ).toBeInTheDocument();
+
+    // OTP send error (without error text fallback -> uses otpSendFailedError)
+    (approvalClient.requestApprovalOtp as jest.Mock).mockResolvedValueOnce({ success: false });
+    fireEvent.click(screen.getByRole('button', { name: strings.sendOtpBtn }));
+    await waitFor(() => {
+      expect(screen.getByText(strings.otpSendFailedError)).toBeInTheDocument();
+    });
+
+    // Server OTP verification failure populates otpError (both with explicit error and fallback)
+    fireEvent.change(otpInput, { target: { value: '111111' } });
+    (approvalClient.processApprovalAction as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'OTP expired',
+    });
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    await waitFor(() => {
+      expect(screen.getAllByText('OTP expired')).toHaveLength(2);
+    });
+
+    (approvalClient.processApprovalAction as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    await waitFor(() => {
+      expect(screen.getByText(strings.invalidPasswordError)).toBeInTheDocument();
+    });
+
+    // Send OTP with custom error message, then with explicit response email
+    (approvalClient.requestApprovalOtp as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Delivery blocked',
+    });
+    fireEvent.click(screen.getByRole('button', { name: strings.sendOtpBtn }));
+    await waitFor(() => {
+      expect(screen.getByText('Delivery blocked')).toBeInTheDocument();
+    });
+
+    (approvalClient.requestApprovalOtp as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      email: 'srinivas.mukku@procucev.com',
+      expiresInSeconds: 300,
+    });
+    fireEvent.click(screen.getByRole('button', { name: strings.sendOtpBtn }));
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          formatString(strings.otpSentNotice, { email: 'srinivas.mukku@procucev.com' })
+        ).length
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    // Reset OTP state by switching approver back and forth
+    fireEvent.change(selectEl, { target: { value: 'Sudheer Sir' } });
+    fireEvent.change(selectEl, { target: { value: 'Srinu Sir' } });
+
+    // Successful OTP submission with fallback email & countdown timer
+    jest.useFakeTimers();
+    try {
+      let resolveOtp: ((val: { success: boolean }) => void) | undefined;
+      (approvalClient.requestApprovalOtp as jest.Mock).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOtp = resolve;
+          })
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: strings.sendOtpBtn }));
+      expect(screen.getByRole('button', { name: strings.sendingOtpBtn })).toBeDisabled();
+
+      await act(async () => {
+        resolveOtp?.({ success: true });
+      });
+
+      expect(
+        screen.getAllByText(
+          formatString(strings.otpSentNotice, { email: 'srinivas.mukku@procucev.com' })
+        ).length
+      ).toBeGreaterThanOrEqual(1);
+      expect(
+        screen.getByRole('button', {
+          name: formatString(strings.resendOtpCountdown, { seconds: '30' }),
+        })
+      ).toBeDisabled();
+
+      act(() => {
+        jest.advanceTimersByTime(30_000);
+      });
+
+      expect(screen.getByRole('button', { name: strings.resendOtpBtn })).toBeEnabled();
+    } finally {
+      jest.useRealTimers();
+    }
+
+    (approvalClient.processApprovalAction as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: { ...sudheerApproval, status: 'Approved' },
+    });
+    fireEvent.change(otpInput, { target: { value: '654321' } });
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+
+    await waitFor(() => {
+      expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
+        'appr-sudheer-1',
+        'APPROVE',
+        '',
+        '',
+        'Srinu Sir',
+        '654321'
+      );
+    });
   });
 });

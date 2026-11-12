@@ -360,6 +360,7 @@ describe('PostgreSQL migration runner', () => {
         '0027_email_gateway_retry_claims',
         '0028_drop_system_error_logs',
         '0029_drop_all_remaining_log_tables',
+        '0030_buyer_vendor_uploads',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

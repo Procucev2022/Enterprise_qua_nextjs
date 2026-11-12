@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import BuyerDossierDrawer from '@/app/category-manager/components/BuyerDossierDrawer';
 import type { BuyerAccount, RFQItem } from '@/lib/types';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import * as accountDocsClient from '@/lib/accountDocumentsClient';
 jest.mock('@/lib/accountDocumentsClient', () => ({
   createCreditApprovalIdempotencyKey: jest.fn(() => '00000000-0000-4000-8000-000000000001'),
@@ -20,6 +20,7 @@ jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerCommunications: jest.fn(),
   fetchBuyerPaymentHistory: jest.fn(),
   recordBuyerCommunication: jest.fn(),
+  fetchBuyerUploadedVendors: jest.fn(),
 }));
 
 jest.mock('@/lib/documentVaultClient', () => ({
@@ -192,6 +193,13 @@ describe('BuyerDossierDrawer', () => {
       transactions: generateMockTransactions(),
     });
 
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      buyerId: mockBuyer.id,
+      totalVendors: 0,
+      vendors: [],
+    });
+
     (buyerProfileClient.addBuyerCredit as jest.Mock).mockResolvedValue({
       success: true,
       message: 'Successfully allocated 5 credits.',
@@ -329,6 +337,13 @@ describe('BuyerDossierDrawer', () => {
 
     // Reopen and change values with empty reason to test default reason fallback (line 212)
     fireEvent.change(amountInput, { target: { value: '10' } });
+    const creditSelects = creditForm ? Array.from(creditForm.querySelectorAll('select')) : [];
+    if (creditSelects[0]?.options[1]) {
+      fireEvent.change(creditSelects[0], { target: { value: creditSelects[0].options[1].value } });
+    }
+    if (creditSelects[1]?.options[1]) {
+      fireEvent.change(creditSelects[1], { target: { value: creditSelects[1].options[1].value } });
+    }
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -621,7 +636,14 @@ describe('BuyerDossierDrawer', () => {
 
     const viewBtn = screen.getByRole('button', { name: /View Full Content/i });
     fireEvent.click(viewBtn);
-    expect(await screen.findByText('Email Dispatch Details')).toBeInTheDocument();
+    const emailHeading = await screen.findByText('Email Dispatch Details');
+    expect(emailHeading).toBeInTheDocument();
+    // Click inside modal (does not close) then backdrop (closes)
+    fireEvent.click(emailHeading);
+    expect(screen.getByText('Email Dispatch Details')).toBeInTheDocument();
+    const emailDialogBackdrop = emailHeading.closest('[role="dialog"]');
+    if (emailDialogBackdrop) fireEvent.click(emailDialogBackdrop);
+    expect(screen.queryByText('Email Dispatch Details')).toBeNull();
 
     // Reopen and test X button (line 1632)
     fireEvent.click(screen.getByRole('button', { name: /View Full Content/i }));
@@ -1611,6 +1633,19 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
   });
 
   test('handles buyer commercial email scenario selection and auto-attachments', async () => {
+    const mockVaultClient = jest.requireMock('@/lib/documentVaultClient') as { fetchDocuments: jest.Mock };
+    mockVaultClient.fetchDocuments.mockResolvedValueOnce([
+      {
+        id: 'doc-vault-mkt',
+        documentName: 'Marketing Overview Deck',
+        fileName: 'marketing_overview.pdf',
+        fileSize: 51200,
+        mimeType: 'application/pdf',
+        category: 'marketing_overview',
+        isActive: true,
+      },
+    ]);
+
     render(
       <BuyerDossierDrawer
         buyer={mockBuyer}
@@ -1621,6 +1656,10 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
 
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
+
+    await waitFor(() => {
+      expect(mockVaultClient.fetchDocuments).toHaveBeenCalled();
+    });
 
     const composeDialog = (await screen.findByPlaceholderText(/Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
 
@@ -1637,9 +1676,15 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     const subjectInput = within(composeDialog).getByPlaceholderText(/Price negotiation|Brief summary/i) as HTMLInputElement;
     expect(subjectInput.value).toContain('Exclusive Enterprise Sourcing Plan');
 
-    // Change to Conversion Followup
+    // Change to Conversion Followup (auto-attaches marketing_overview doc) and re-select to test dedup branch
     fireEvent.change(scenarioSelect, { target: { value: 'buyer_conversion_followup' } });
     expect(subjectInput.value).toContain('Procurement Optimization');
+    const attachedChip = await within(composeDialog).findByText('Marketing Overview Deck');
+    expect(attachedChip).toBeInTheDocument();
+    fireEvent.change(scenarioSelect, { target: { value: 'buyer_conversion_followup' } });
+    const removeChipBtn = attachedChip.parentElement?.querySelector('button');
+    expect(removeChipBtn).not.toBeNull();
+    if (removeChipBtn) fireEvent.click(removeChipBtn);
 
     // Test empty scenario selection
     fireEvent.change(scenarioSelect, { target: { value: '' } });
@@ -1806,6 +1851,109 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     // Select non-matching scenario
     const scenarioSelect = within(composeDialog).getByText(/Select Conversion Scenario/i).closest('div')?.querySelector('select') as HTMLSelectElement;
     fireEvent.change(scenarioSelect, { target: { value: 'NON_EXISTENT_SCENARIO' } });
+  });
+
+  test('renders Buyer Uploaded Vendors from database with search, contact details, sparse fallback, error retry, and empty id guard', async () => {
+    const uploadedStrings = UI_STRINGS.buyerDirectory.dossier.uploadedVendors;
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      buyerId: mockBuyer.id,
+      totalVendors: 2,
+      vendors: [
+        {
+          id: 'bvu-1',
+          vendorId: 'v-up-1',
+          vendorName: 'Apex Industrial Fasteners',
+          companyName: 'Apex Fasteners Pvt Ltd',
+          contactPerson: 'Rohan Mehta',
+          email: 'rohan@apexfasteners.in',
+          phone: '+91 9876501234',
+          location: 'Pune, Maharashtra',
+          uploadDate: '2026-10-25T10:30:00.000Z',
+          status: 'VERIFIED_CLIENT_LIST',
+        },
+        {
+          id: '',
+          vendorId: 'v-up-2',
+          vendorName: '',
+          companyName: '',
+          contactPerson: null,
+          email: null,
+          phone: null,
+          uploadDate: null,
+          status: 'PENDING EVALUATION',
+        },
+      ],
+    });
+
+    const { rerender } = render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
+
+    expect(screen.getByText(uploadedStrings.sectionTitle)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(buyerProfileClient.fetchBuyerUploadedVendors).toHaveBeenCalledWith(mockBuyer.id);
+      expect(screen.getByText('Apex Industrial Fasteners')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(formatString(uploadedStrings.countBadge, { count: 2 }))).toBeInTheDocument();
+    expect(screen.getByText('Apex Fasteners Pvt Ltd')).toBeInTheDocument();
+    expect(screen.getByText('Rohan Mehta')).toBeInTheDocument();
+    expect(screen.getByText('rohan@apexfasteners.in')).toBeInTheDocument();
+    expect(screen.getByText('+91 9876501234')).toBeInTheDocument();
+    expect(screen.getByText('VERIFIED_CLIENT_LIST')).toBeInTheDocument();
+    expect(screen.getAllByText(uploadedStrings.notProvided).length).toBeGreaterThanOrEqual(3);
+
+    const searchInput = screen.getByPlaceholderText(uploadedStrings.searchPlaceholder);
+    fireEvent.change(searchInput, { target: { value: 'Apex' } });
+    expect(screen.getByText('Apex Industrial Fasteners')).toBeInTheDocument();
+    fireEvent.change(searchInput, { target: { value: 'Nonexistent Supplier Query' } });
+    expect(screen.getByText(uploadedStrings.emptyTitle)).toBeInTheDocument();
+
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Database lookup failed',
+    });
+    rerender(<BuyerDossierDrawer buyer={{ ...mockBuyer, id: 'buyer-err-1' }} onClose={onCloseMock} />);
+    await waitFor(() => {
+      expect(screen.getByText('Database lookup failed')).toBeInTheDocument();
+    });
+
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockRejectedValueOnce(new Error('Network down'));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => {
+      expect(screen.getByText(uploadedStrings.errorText)).toBeInTheDocument();
+    });
+
+    rerender(<BuyerDossierDrawer buyer={{ ...mockBuyer, id: '' }} onClose={onCloseMock} />);
+    await waitFor(() => {
+      expect(screen.getByText(uploadedStrings.emptyTitle)).toBeInTheDocument();
+    });
+
+    // Cover fallback branches: res.success with undefined vendors, and !res.success without res.error
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      buyerId: 'buyer-empty-arr',
+    });
+    rerender(<BuyerDossierDrawer buyer={{ ...mockBuyer, id: 'buyer-empty-arr' }} onClose={onCloseMock} />);
+    await waitFor(() => {
+      expect(screen.getByText(uploadedStrings.emptyTitle)).toBeInTheDocument();
+    });
+
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    rerender(<BuyerDossierDrawer buyer={{ ...mockBuyer, id: 'buyer-err-fallback' }} onClose={onCloseMock} />);
+    await waitFor(() => {
+      expect(screen.getByText(uploadedStrings.errorText)).toBeInTheDocument();
+    });
+
+    // Cover payment error without res.error to ensure >90% branch coverage
+    (buyerProfileClient.fetchBuyerPaymentHistory as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Payments/i }));
+    await waitFor(() => {
+      expect(buyerProfileClient.fetchBuyerPaymentHistory).toHaveBeenCalled();
+    });
   });
 
 });

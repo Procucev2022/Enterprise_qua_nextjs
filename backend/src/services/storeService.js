@@ -28,6 +28,25 @@ const {
   RFQ_QUOTE_WRITE_RETRIES,
 } = require('../config/constants');
 const crypto = require('crypto');
+
+const cleanText = (val) => String(val || '').trim();
+const cleanLower = (val) => cleanText(val).toLowerCase();
+const firstText = (...values) => {
+  for (const val of values) {
+    const clean = cleanText(val);
+    if (clean) return clean;
+  }
+  return null;
+};
+const mergeMissingFields = (existing, incoming, fields) => {
+  const next = { ...existing };
+  for (const field of fields) {
+    if (!next[field] && incoming[field]) {
+      next[field] = incoming[field];
+    }
+  }
+  return next;
+};
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const rfqInquiryQueries = require('../db/rfqInquiryQueries');
@@ -131,6 +150,7 @@ class StoreService {
     this.buyerAccounts = [];
     this.activeBuyerAccount = null;
     this.vendors = [];
+    this.buyerVendorUploads = [];
     this.rfqs = [];
     this.evaluations = [];
     this.auditLogs = [];
@@ -151,6 +171,7 @@ class StoreService {
     this.buyerAccounts = [];
     this.activeBuyerAccount = null;
     this.vendors = [];
+    this.buyerVendorUploads = [];
     this.rfqs = [];
     this.evaluations = [];
     this.auditLogs = [];
@@ -856,6 +877,17 @@ class StoreService {
 
     const savedVendor = await this.updateVendorDurably(existing.id, updates);
     if (!savedVendor) return null;
+    if (savedVendor.buyerId || savedVendor.buyerAccountId || savedVendor.buyerEmail || savedVendor.addedByBuyerCompany) {
+      await this.recordBuyerVendorUpload(
+        {
+          id: savedVendor.buyerId || savedVendor.buyerAccountId,
+          corporateEmail: savedVendor.buyerEmail,
+          organizationName: savedVendor.addedByBuyerCompany,
+        },
+        savedVendor,
+        { uploadSource: savedVendor.source || 'buyer_manual' }
+      );
+    }
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
       action: `Linked migrated vendor ${savedVendor.name} (${savedVendor.email}) in category ${savedVendor.majorCategory}`,
@@ -1550,6 +1582,17 @@ class StoreService {
 
     const savedVendor = persistedVendor || newVendor;
     this.vendors.unshift(savedVendor);
+    if (savedVendor.buyerId || savedVendor.buyerAccountId || savedVendor.buyerEmail || savedVendor.addedByBuyerCompany) {
+      await this.recordBuyerVendorUpload(
+        {
+          id: savedVendor.buyerId || savedVendor.buyerAccountId,
+          corporateEmail: savedVendor.buyerEmail,
+          organizationName: savedVendor.addedByBuyerCompany,
+        },
+        savedVendor,
+        { uploadSource: savedVendor.source || 'buyer_uploaded' }
+      );
+    }
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
       action: `Registered vendor ${savedVendor.name} in category ${savedVendor.majorCategory}`,
@@ -1925,12 +1968,35 @@ class StoreService {
     // fixed — a 1000-new-row chunk alone would need ~5000 more subrequests.
     // The controller caps each request at 15 rows, bounding identity
     // provisioning to a safe number of sequential database operations.
+    const importedUploadEntries = [];
     for (const { rowNumber, vendor } of toInsert) {
       // A null-email row can never hit the ON CONFLICT (email) target, so it
       // always inserts — there is nothing to look up in insertedEmailSet.
       const persisted = !vendor.email || insertedEmailSet.has(vendor.email.toLowerCase());
       if (persisted) {
         this.vendors.unshift(vendor);
+        if (vendor.buyerId || vendor.buyerAccountId || vendor.buyerEmail || vendor.addedByBuyerCompany) {
+          const matchedAccount = this._findMatchingBuyerAccount({
+            buyerId: firstText(vendor.buyerId, vendor.buyerAccountId),
+            corporateEmail: vendor.buyerEmail,
+            companyName: vendor.addedByBuyerCompany,
+          });
+          const uploadEntry = this._createUploadRecord(
+            {
+              id: firstText(vendor.buyerId, vendor.buyerAccountId, matchedAccount && matchedAccount.id),
+              organizationName: firstText(vendor.addedByBuyerCompany, matchedAccount && matchedAccount.organizationName),
+              corporateEmail: firstText(vendor.buyerEmail, matchedAccount && matchedAccount.corporateEmail),
+            },
+            vendor,
+            { uploadSource: firstText(vendor.source) || 'excel' },
+            matchedAccount
+          );
+          if (uploadEntry) {
+            importedUploadEntries.push(uploadEntry);
+            if (!Array.isArray(this.buyerVendorUploads)) this.buyerVendorUploads = [];
+            this.buyerVendorUploads.unshift(uploadEntry);
+          }
+        }
         const importedResult = {
           rowNumber,
           status: 'imported',
@@ -2002,6 +2068,10 @@ class StoreService {
       } catch (err) {
         logger.error(`Failed to link migrated vendor ${vendor.email} during bulk import`, err, 'STORE_SERVICE');
       }
+    }
+
+    if (importedUploadEntries.length > 0 && pool.hasStorage() && typeof domainQueries.bulkRecordBuyerVendorUploadsInDB === 'function') {
+      await domainQueries.bulkRecordBuyerVendorUploadsInDB(importedUploadEntries);
     }
 
     const importedCount = results.filter((r) => r.status === 'imported').length;
@@ -8959,18 +9029,33 @@ class StoreService {
       if (existing) {
         const sBuyerId = buyerId ? String(buyerId).toLowerCase() : null;
         const sBuyerEmail = buyerEmail ? String(buyerEmail).toLowerCase() : null;
+        const existingMappedIds = Array.isArray(existing.mappedBuyerIds)
+          ? existing.mappedBuyerIds.map((id) => String(id || '').trim()).filter(Boolean)
+          : [];
+        const nextMappedIds = [...existingMappedIds];
+        for (const candidateId of [existing.buyerId, existing.buyerAccountId, buyerId]) {
+          const clean = candidateId ? String(candidateId).trim() : '';
+          if (clean && !nextMappedIds.some((item) => item.toLowerCase() === clean.toLowerCase())) {
+            nextMappedIds.push(clean);
+          }
+        }
         const alreadyScopedToThisBuyer = Boolean(
           (sBuyerId && (
             (existing.buyerId && String(existing.buyerId).toLowerCase() === sBuyerId) ||
-            (existing.buyerAccountId && String(existing.buyerAccountId).toLowerCase() === sBuyerId)
+            (existing.buyerAccountId && String(existing.buyerAccountId).toLowerCase() === sBuyerId) ||
+            existingMappedIds.some((item) => item.toLowerCase() === sBuyerId)
           )) ||
           (sBuyerEmail && existing.buyerEmail && String(existing.buyerEmail).toLowerCase() === sBuyerEmail)
         );
 
         const updatedVendor = { ...existing };
-        updatedVendor.buyerId = buyerId || updatedVendor.buyerId || null;
-        updatedVendor.buyerAccountId = buyerId || updatedVendor.buyerAccountId || null;
-        updatedVendor.buyerEmail = buyerEmail || updatedVendor.buyerEmail || null;
+        updatedVendor.mappedBuyerIds = nextMappedIds;
+        updatedVendor.buyerId = updatedVendor.buyerId || buyerId || null;
+        updatedVendor.buyerAccountId = updatedVendor.buyerAccountId || buyerId || null;
+        updatedVendor.buyerEmail = updatedVendor.buyerEmail || buyerEmail || null;
+        if (!updatedVendor.addedByBuyerCompany && buyerOrganizationName) {
+          updatedVendor.addedByBuyerCompany = buyerOrganizationName;
+        }
         if (name) updatedVendor.name = name;
         if (rec.contactPerson) updatedVendor.contactPerson = (rec.contactPerson || '').trim();
         if (rec.phone) updatedVendor.phone = (rec.phone || '').trim();
@@ -8998,6 +9083,15 @@ class StoreService {
           }
         } else {
           Object.assign(existing, updatedVendor);
+        }
+
+        if (attributedAccount || buyerId || buyerEmail) {
+          // eslint-disable-next-line no-await-in-loop
+          await this.recordBuyerVendorUpload(
+            attributedAccount || { id: buyerId, corporateEmail: buyerEmail, organizationName: buyerOrganizationName },
+            existing,
+            { uploadSource: 'historical_purchase_dump' }
+          );
         }
 
         if (!alreadyScopedToThisBuyer) {
@@ -9047,6 +9141,14 @@ class StoreService {
     for (const { row, vendor, isMapped } of createdThisRun) {
       try {
         await this.confirmVendorPersisted(vendor);
+        if (attributedAccount || buyerId || buyerEmail) {
+          // eslint-disable-next-line no-await-in-loop
+          await this.recordBuyerVendorUpload(
+            attributedAccount || { id: buyerId, corporateEmail: buyerEmail, organizationName: buyerOrganizationName },
+            vendor,
+            { uploadSource: 'historical_purchase_dump' }
+          );
+        }
       } catch (err) {
         this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
         importedCount--;
@@ -9368,6 +9470,17 @@ class StoreService {
 
     const savedVendor = persistedVendor || newVendor;
     this.vendors.unshift(savedVendor);
+    if (savedVendor.buyerId || savedVendor.buyerAccountId || savedVendor.buyerEmail || savedVendor.addedByBuyerCompany) {
+      await this.recordBuyerVendorUpload(
+        {
+          id: savedVendor.buyerId || savedVendor.buyerAccountId,
+          corporateEmail: savedVendor.buyerEmail,
+          organizationName: savedVendor.addedByBuyerCompany,
+        },
+        savedVendor,
+        { uploadSource: savedVendor.source || 'vendor_master_ingestion' }
+      );
+    }
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
       action: `Empanelled ${savedVendor.name} from vendor master ingestion in category ${savedVendor.majorCategory || 'unassigned'
@@ -10102,6 +10215,374 @@ class StoreService {
     };
   }
 
+  _collectBuyerAliasSets(buyerId, knownBuyer = null) {
+    const idSet = new Set();
+    const emailSet = new Set();
+    const pushId = (val) => {
+      const clean = cleanLower(val);
+      if (clean) idSet.add(clean);
+    };
+    const pushEmail = (val) => {
+      const clean = cleanLower(val);
+      if (clean) emailSet.add(clean);
+    };
+
+    pushId(buyerId);
+    if (cleanText(buyerId).includes('@')) pushEmail(buyerId);
+    if (knownBuyer) {
+      pushId(knownBuyer.id);
+      pushId(knownBuyer.organizationId);
+      pushId(knownBuyer.userId);
+      pushEmail(knownBuyer.corporateEmail);
+      pushEmail(knownBuyer.email);
+    }
+    for (const acc of this.buyerAccounts || []) {
+      const matches =
+        idSet.has(cleanLower(acc.id)) ||
+        idSet.has(cleanLower(acc.organizationId)) ||
+        emailSet.has(cleanLower(acc.corporateEmail));
+      if (matches) {
+        pushId(acc.id);
+        pushId(acc.organizationId);
+        pushId(acc.userId);
+        pushEmail(acc.corporateEmail);
+        pushEmail(acc.email);
+      }
+    }
+    return { idSet, emailSet };
+  }
+
+  _findMatchingBuyerAccount({ buyerId, corporateEmail, companyName } = {}) {
+    const targetId = cleanLower(buyerId);
+    const targetEmail = cleanLower(corporateEmail);
+    const targetCompany = cleanLower(companyName);
+    return this.buyerAccounts.find((acc) => {
+      if (targetId && (cleanLower(acc.id) === targetId || cleanLower(acc.organizationId) === targetId)) {
+        return true;
+      }
+      if (targetEmail && cleanLower(acc.corporateEmail) === targetEmail) {
+        return true;
+      }
+      if (targetCompany && cleanLower(acc.organizationName) === targetCompany) {
+        return true;
+      }
+      return false;
+    }) || null;
+  }
+
+  _resolveBuyerContext(buyerInfo) {
+    if (typeof buyerInfo === 'string') {
+      const found = this._findMatchingBuyerAccount({ buyerId: buyerInfo, corporateEmail: buyerInfo });
+      return found || { id: buyerInfo };
+    }
+    return buyerInfo || {};
+  }
+
+  _createUploadRecord(rawBuyer, vendor, options = {}, preMatchedAccount = null) {
+    const matchedAccount = preMatchedAccount || this._findMatchingBuyerAccount({
+      buyerId: firstText(rawBuyer.id, rawBuyer.buyerId, rawBuyer.organizationId, vendor.buyerId, vendor.buyerAccountId),
+      corporateEmail: firstText(rawBuyer.corporateEmail, rawBuyer.email, vendor.buyerEmail),
+      companyName: firstText(rawBuyer.organizationName, rawBuyer.companyName, vendor.addedByBuyerCompany),
+    });
+    const resolvedBuyerId = firstText(
+      rawBuyer.id,
+      rawBuyer.buyerId,
+      matchedAccount && matchedAccount.id,
+      rawBuyer.organizationId,
+      vendor.buyerId,
+      vendor.buyerAccountId
+    );
+    if (!resolvedBuyerId) return null;
+
+    const emailVal = firstText(rawBuyer.corporateEmail, rawBuyer.email, matchedAccount && matchedAccount.corporateEmail, vendor.buyerEmail);
+    const vendorEmailVal = firstText(vendor.email);
+    return {
+      id: options.id || `bvu-${crypto.randomUUID()}`,
+      buyerId: resolvedBuyerId,
+      vendorId: vendor.id,
+      buyerName: firstText(rawBuyer.contactPerson, rawBuyer.buyerName, matchedAccount && matchedAccount.contactPerson),
+      buyerCompany: firstText(rawBuyer.organizationName, rawBuyer.companyName, matchedAccount && matchedAccount.organizationName, vendor.addedByBuyerCompany),
+      buyerEmail: emailVal ? emailVal.toLowerCase() : null,
+      vendorName: firstText(vendor.name),
+      vendorEmail: vendorEmailVal ? vendorEmailVal.toLowerCase() : null,
+      uploadSource: firstText(options.uploadSource, vendor.source) || 'buyer_uploaded',
+      status: firstText(options.status, vendor.verificationStatus, vendor.status) || 'ACTIVE',
+      uploadedAt: firstText(options.uploadedAt, vendor.createdAt, vendor.created_at) || new Date().toISOString(),
+    };
+  }
+
+  async recordBuyerVendorUpload(buyerInfo, vendor, options = {}) {
+    if (!vendor || !vendor.id) return null;
+    const rawBuyer = this._resolveBuyerContext(buyerInfo);
+    const entry = this._createUploadRecord(rawBuyer, vendor, options);
+    if (!entry) return null;
+
+    if (!Array.isArray(this.buyerVendorUploads)) this.buyerVendorUploads = [];
+    const idx = this.buyerVendorUploads.findIndex(
+      (item) =>
+        cleanLower(item.buyerId) === cleanLower(entry.buyerId) &&
+        cleanLower(item.vendorId) === cleanLower(entry.vendorId)
+    );
+    if (idx === -1) {
+      this.buyerVendorUploads.unshift(entry);
+    } else {
+      this.buyerVendorUploads[idx] = {
+        ...this.buyerVendorUploads[idx],
+        ...entry,
+        buyerName: entry.buyerName || this.buyerVendorUploads[idx].buyerName,
+        buyerCompany: entry.buyerCompany || this.buyerVendorUploads[idx].buyerCompany,
+        buyerEmail: entry.buyerEmail || this.buyerVendorUploads[idx].buyerEmail,
+        uploadedAt: this.buyerVendorUploads[idx].uploadedAt || entry.uploadedAt,
+      };
+    }
+
+    if (pool.hasStorage() && typeof domainQueries.recordBuyerVendorUploadInDB === 'function') {
+      await domainQueries.recordBuyerVendorUploadInDB(entry);
+    }
+    return entry;
+  }
+
+  async linkBuyerToExistingVendor(existingVendor, buyerInfo, options = {}) {
+    if (!existingVendor || !existingVendor.id) return null;
+    const rawBuyer = this._resolveBuyerContext(buyerInfo);
+    const matchedAccount = this._findMatchingBuyerAccount({
+      buyerId: firstText(rawBuyer.id, rawBuyer.buyerId, rawBuyer.organizationId),
+      corporateEmail: firstText(rawBuyer.corporateEmail, rawBuyer.email),
+      companyName: firstText(rawBuyer.organizationName, rawBuyer.companyName),
+    });
+    const resolvedBuyerId = firstText(rawBuyer.id, rawBuyer.buyerId, matchedAccount && matchedAccount.id, rawBuyer.organizationId);
+    if (!resolvedBuyerId) return null;
+
+    const existingMapped = Array.isArray(existingVendor.mappedBuyerIds)
+      ? existingVendor.mappedBuyerIds.map(cleanText).filter(Boolean)
+      : [];
+    const nextMapped = [...existingMapped];
+    for (const candidateId of [existingVendor.buyerId, existingVendor.buyerAccountId, resolvedBuyerId, rawBuyer.organizationId]) {
+      const clean = cleanText(candidateId);
+      if (clean && !nextMapped.some((item) => cleanLower(item) === cleanLower(clean))) {
+        nextMapped.push(clean);
+      }
+    }
+
+    if (nextMapped.length > existingMapped.length) {
+      existingVendor.mappedBuyerIds = nextMapped;
+      if (pool.hasStorage()) {
+        try {
+          await domainQueries.upsertVendorInDB(existingVendor);
+        } catch (error) {
+          logger.warn('Failed to persist mappedBuyerIds update on existing vendor', {
+            error: error && error.message ? error.message : String(error),
+            vendorId: existingVendor.id,
+            buyerId: resolvedBuyerId,
+          }, 'STORE_SERVICE');
+        }
+      }
+    }
+
+    await this.recordBuyerVendorUpload(rawBuyer, existingVendor, options);
+    return existingVendor;
+  }
+
+  async getUploadedVendorsForBuyer(buyerId, knownBuyer = null, limit = 200) {
+    const safeLimit = Math.min(Math.max(1, Number(limit) || 200), 500);
+    const { idSet, emailSet } = this._collectBuyerAliasSets(buyerId, knownBuyer);
+    const dbItems = pool.hasStorage() && typeof domainQueries.getUploadedVendorsByBuyerFromDB === 'function'
+      ? await domainQueries.getUploadedVendorsByBuyerFromDB(buyerId, { limit: safeLimit, knownBuyer })
+      : [];
+
+    const deduped = new Map();
+    const mergeFields = ['vendorName', 'companyName', 'contactPerson', 'email', 'phone', 'location', 'majorCategory', 'uploadSource', 'uploadDate', 'status'];
+    const mergeItem = (item) => {
+      if (!item) return;
+      const key = cleanLower(item.vendorId) || (item.email ? `email:${cleanLower(item.email)}` : '');
+      if (!key) return;
+      const existing = deduped.get(key);
+      deduped.set(key, existing ? mergeMissingFields(existing, item, mergeFields) : item);
+    };
+
+    for (const item of dbItems) {
+      mergeItem(item);
+    }
+
+    const formatVendorEntry = (v, rel = null) => {
+      const vid = (v && v.id) || (rel && rel.vendorId) || '';
+      const vName = firstText(v && v.name, rel && rel.vendorName, (v && v.email) || (rel && rel.vendorEmail), vid);
+      return {
+        id: (rel && rel.id) || `bvu-${vid}`,
+        vendorId: vid,
+        vendorName: vName,
+        companyName: firstText(v && v.companyName, v && v.name, rel && rel.vendorName, vid),
+        contactPerson: firstText(v && v.contactPerson),
+        email: firstText(v && v.email, rel && rel.vendorEmail),
+        phone: firstText(v && v.phone, v && v.mobile),
+        location: firstText([v && v.location, v && v.city, v && v.state, v && v.country].filter(Boolean).join(', ')),
+        majorCategory: firstText(v && v.majorCategory),
+        uploadSource: firstText(rel && rel.uploadSource, v && v.source) || 'buyer_uploaded',
+        uploadDate: firstText(rel && rel.uploadedAt, v && v.uploadedAt, v && v.createdAt, v && v.created_at),
+        status: firstText(v && v.verificationStatus, v && v.status, rel && rel.status) || 'ACTIVE',
+      };
+    };
+
+    for (const rel of this.buyerVendorUploads || []) {
+      const matches = idSet.has(cleanLower(rel.buyerId)) || (rel.buyerEmail && emailSet.has(cleanLower(rel.buyerEmail)));
+      if (!matches) continue;
+      const v = this.vendors.find((item) => cleanLower(item.id) === cleanLower(rel.vendorId));
+      mergeItem(formatVendorEntry(v, rel));
+    }
+
+    for (const v of this.vendors) {
+      const vIds = [
+        v.buyerId,
+        v.buyerAccountId,
+        ...(Array.isArray(v.mappedBuyerIds) ? v.mappedBuyerIds : []),
+        ...(Array.isArray(v.buyerIds) ? v.buyerIds : []),
+      ].map(cleanLower).filter(Boolean);
+      const vEmail = cleanLower(v.buyerEmail);
+      if (vIds.some((id) => idSet.has(id)) || (vEmail && emailSet.has(vEmail))) {
+        mergeItem(formatVendorEntry(v));
+      }
+    }
+
+    return Array.from(deduped.values())
+      .sort((a, b) => new Date(b.uploadDate || 0).getTime() - new Date(a.uploadDate || 0).getTime())
+      .slice(0, safeLimit);
+  }
+
+  async getBuyerUploadsForVendor(vendorIdOrEmail, knownVendor = null, limit = 200) {
+    const safeLimit = Math.min(Math.max(1, Number(limit) || 200), 500);
+    let vendor = knownVendor || this.getVendorById(vendorIdOrEmail, 'all');
+    if (!vendor && pool.hasStorage()) {
+      vendor = await this.getVendorByIdWithDBFallback(vendorIdOrEmail, 'all');
+    }
+
+    const dbPayload = pool.hasStorage() && typeof domainQueries.getBuyerUploadsByVendorFromDB === 'function'
+      ? await domainQueries.getBuyerUploadsByVendorFromDB(vendor ? vendor.id : vendorIdOrEmail, {
+          limit: safeLimit,
+          knownVendor: vendor,
+        })
+      : null;
+
+    if (!vendor && !dbPayload) return null;
+    const resolvedVendorId = (vendor && vendor.id) || (dbPayload && dbPayload.vendorId) || String(vendorIdOrEmail);
+    const resolvedVendorEmail = cleanLower(vendor && vendor.email);
+
+    const deduped = new Map();
+    const buyerMergeFields = ['buyerName', 'companyName', 'corporateEmail', 'mobileNumber', 'location', 'gstin', 'sourcingMode', 'uploadDate', 'status'];
+    const mergeBuyer = (entry) => {
+      if (!entry) return;
+      const canonical =
+        cleanLower(entry.organizationId || entry.buyerId) ||
+        (entry.corporateEmail ? `email:${cleanLower(entry.corporateEmail)}` : '') ||
+        (entry.companyName ? `company:${cleanLower(entry.companyName)}` : '');
+      if (!canonical) return;
+      const existing = deduped.get(canonical);
+      deduped.set(canonical, existing ? mergeMissingFields(existing, entry, buyerMergeFields) : entry);
+    };
+
+    const normalizeBuyerSeed = (seed, preferDbValues = false) => {
+      if (!seed) return null;
+      const matched = this._findMatchingBuyerAccount({
+        buyerId: seed.organizationId || seed.buyerId,
+        corporateEmail: seed.corporateEmail,
+        companyName: seed.companyName,
+      });
+      if (preferDbValues && !matched) return seed;
+
+      const finalBuyerId = firstText(matched && matched.id, seed.buyerId) || '';
+      const finalOrgId = firstText(matched && matched.organizationId, seed.organizationId);
+      const finalCompany = preferDbValues
+        ? firstText(seed.companyName, matched && matched.organizationName)
+        : firstText(matched && matched.organizationName, seed.companyName);
+      const finalEmail = preferDbValues
+        ? firstText(seed.corporateEmail, matched && matched.corporateEmail)
+        : firstText(matched && matched.corporateEmail, seed.corporateEmail);
+      const finalName = firstText(matched && matched.contactPerson, seed.buyerName, finalCompany, finalEmail);
+      if (!finalBuyerId && !finalCompany && !finalEmail) return null;
+
+      return {
+        ...(preferDbValues ? seed : {}),
+        id: seed.id || `bu-${finalOrgId || finalBuyerId || finalEmail || finalCompany}`,
+        buyerId: firstText(finalBuyerId, finalOrgId, finalEmail, finalCompany),
+        organizationId: finalOrgId,
+        buyerName: firstText(finalName, finalCompany, finalEmail, finalBuyerId),
+        companyName: firstText(finalCompany, finalName, finalBuyerId),
+        corporateEmail: finalEmail,
+        mobileNumber: firstText(seed.mobileNumber, matched && matched.mobileNumber),
+        location: firstText(
+          seed.location,
+          matched && matched.primaryPlantLocation,
+          matched ? [matched.city, matched.state].filter(Boolean).join(', ') : null
+        ),
+        gstin: firstText(seed.gstin, matched && matched.gstin),
+        sourcingMode: firstText(seed.sourcingMode, matched && matched.sourcingMode),
+        uploadSource: firstText(seed.uploadSource, vendor && vendor.source) || 'buyer_uploaded',
+        uploadDate: firstText(seed.uploadDate, vendor && vendor.createdAt, vendor && vendor.created_at),
+        status: firstText(matched && matched.status, seed.status) || 'ACTIVE',
+      };
+    };
+
+    for (const row of (dbPayload && dbPayload.buyerUploads) || []) {
+      mergeBuyer(normalizeBuyerSeed(row, true));
+    }
+
+    for (const rel of this.buyerVendorUploads || []) {
+      const matchesVendor =
+        cleanLower(rel.vendorId) === cleanLower(resolvedVendorId) ||
+        (resolvedVendorEmail && cleanLower(rel.vendorEmail) === resolvedVendorEmail);
+      if (!matchesVendor) continue;
+      mergeBuyer(normalizeBuyerSeed({
+        id: rel.id,
+        buyerId: rel.buyerId,
+        buyerName: rel.buyerName,
+        companyName: rel.buyerCompany,
+        corporateEmail: rel.buyerEmail,
+        uploadSource: rel.uploadSource,
+        uploadDate: rel.uploadedAt,
+        status: rel.status,
+      }));
+    }
+
+    if (vendor) {
+      const primaryId = firstText(vendor.buyerId, vendor.buyerAccountId);
+      const primaryEmail = firstText(vendor.buyerEmail);
+      const primaryCompany = firstText(vendor.addedByBuyerCompany);
+      if (primaryId || primaryEmail || primaryCompany) {
+        mergeBuyer(normalizeBuyerSeed({
+          id: `v-owner-${resolvedVendorId}`,
+          buyerId: primaryId,
+          companyName: primaryCompany,
+          corporateEmail: primaryEmail,
+          uploadSource: vendor.source,
+          uploadDate: vendor.createdAt || vendor.created_at,
+          status: vendor.verificationStatus || vendor.status,
+        }));
+      }
+      const mappedIds = [
+        ...(Array.isArray(vendor.mappedBuyerIds) ? vendor.mappedBuyerIds : []),
+        ...(Array.isArray(vendor.buyerIds) ? vendor.buyerIds : []),
+      ];
+      for (const mappedId of mappedIds) {
+        if (!mappedId) continue;
+        mergeBuyer(normalizeBuyerSeed({
+          id: `v-mapped-${resolvedVendorId}-${mappedId}`,
+          buyerId: mappedId,
+          uploadSource: vendor.source,
+          uploadDate: vendor.createdAt || vendor.created_at,
+          status: vendor.verificationStatus || vendor.status,
+        }));
+      }
+    }
+
+    const buyerUploads = Array.from(deduped.values())
+      .sort((a, b) => new Date(b.uploadDate || 0).getTime() - new Date(a.uploadDate || 0).getTime())
+      .slice(0, safeLimit);
+
+    return {
+      vendorId: resolvedVendorId,
+      totalBuyers: buyerUploads.length,
+      buyerUploads,
+    };
+  }
 }
 
 // Global Singleton Instance for Node.js process

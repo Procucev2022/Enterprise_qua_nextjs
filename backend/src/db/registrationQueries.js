@@ -569,8 +569,16 @@ function normalizeSourceType(source) {
 function normalizeClientType(val, companyName = '', userEmail = '') {
   if (val) {
     const s = String(val).toLowerCase().trim();
-    if (s.includes('seller') || s.includes('vendor') || s.includes('supplier')) return 'Seller';
-    if (s.includes('buyer')) return 'Buyer';
+    const compact = s.replace(/\s+/g, '');
+    if (
+      IDENTITY_ROLE_MAP[compact] === 'vendor' ||
+      s.includes('seller') ||
+      s.includes('vendor') ||
+      s.includes('supplier')
+    ) {
+      return 'Seller';
+    }
+    if (IDENTITY_ROLE_MAP[compact] === 'buyer' || s.includes('buyer')) return 'Buyer';
   }
   const check = `${companyName} ${userEmail}`.toLowerCase();
   if (
@@ -629,7 +637,9 @@ function registrationConflict() {
 
 function normalizeClientRow(row) {
   const source = row.isWhatsApp ? 'WhatsApp' : normalizeSourceType(row.sourceTypeRaw);
-  const computedStatus = normalizeStatus(row.isApproved, row.verificationStatus);
+  const clientType = normalizeClientType(row.roleName, row.companyName, row.userEmail);
+  const rawStatus = normalizeStatus(row.isApproved, row.verificationStatus);
+  const computedStatus = clientType === 'Seller' && rawStatus !== 'Rejected' ? 'Accepted' : rawStatus;
   const registeredAt = row.regDate ? new Date(row.regDate) : new Date();
   return {
     id: row.id,
@@ -640,14 +650,36 @@ function normalizeClientRow(row) {
     regDate: Number.isNaN(registeredAt.getTime()) ? new Date().toISOString() : registeredAt.toISOString(),
     status: computedStatus,
     sourceType: source,
-    isApproved: Boolean(row.isApproved),
-    clientType: normalizeClientType(row.roleName, row.companyName, row.userEmail),
+    isApproved: clientType === 'Seller' ? computedStatus === 'Accepted' : Boolean(row.isApproved),
+    clientType,
   };
 }
 
 function buildRegistrationRolePredicate(startIndex) {
   const placeholders = REGISTRATION_ROLE_NAMES.map((_, index) => `$${startIndex + index}`).join(', ');
   return `LOWER(REPLACE(COALESCE(r.role_name, ''), ' ', '')) IN (${placeholders})`;
+}
+
+function buildSellerRolePredicate(startIndex) {
+  const placeholders = REGISTRATION_VENDOR_ROLE_NAMES.map((_, index) => `$${startIndex + index}`).join(', ');
+  return `(LOWER(REPLACE(COALESCE(r.role_name, ''), ' ', '')) IN (${placeholders})
+    OR LOWER(COALESCE(r.role_name, '')) LIKE '%vendor%'
+    OR LOWER(COALESCE(r.role_name, '')) LIKE '%supplier%'
+    OR LOWER(COALESCE(r.role_name, '')) LIKE '%seller%')`;
+}
+
+function getEffectiveRegistrationStatus(client) {
+  const isSeller = String(client?.clientType || 'Buyer').toLowerCase() === 'seller';
+  const rawStatus = String(client?.status || 'New').toLowerCase();
+  if (isSeller) {
+    return rawStatus === 'rejected' ? 'seller_rejected' : 'accepted';
+  }
+  return rawStatus;
+}
+
+function normalizeFilterClientType(val) {
+  const lower = String(val || '').toLowerCase().trim();
+  return lower.startsWith('seller') ? 'seller' : 'buyer';
 }
 
 function buildRegistrationSelect(whereClause) {
@@ -709,14 +741,22 @@ async function getRegisteredClients({
           ELSE 'web app' END) = $${index}`);
       }
       if (status && status.toLowerCase() !== 'all') {
+        const sellerStart = params.length + 1;
+        params.push(...REGISTRATION_VENDOR_ROLE_NAMES);
+        const sellerExpr = buildSellerRolePredicate(sellerStart);
         addFilter(status.toLowerCase(), (index) => `(CASE
+          WHEN ${sellerExpr} AND LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'seller_rejected'
+          WHEN ${sellerExpr} THEN 'accepted'
           WHEN LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'rejected'
           WHEN u.is_approved = true OR LOWER(COALESCE(u.verification_status, '')) IN ('verified', 'accepted', 'active') THEN 'accepted'
           ELSE 'new' END) = $${index}`);
       }
       if (clientType && clientType.toLowerCase() !== 'all') {
-        addFilter(clientType.toLowerCase(), (index) => `(CASE
-          WHEN LOWER(COALESCE(r.role_name, '')) LIKE '%vendor%' OR LOWER(COALESCE(r.role_name, '')) LIKE '%supplier%' THEN 'seller'
+        const sellerStart = params.length + 1;
+        params.push(...REGISTRATION_VENDOR_ROLE_NAMES);
+        const sellerExpr = buildSellerRolePredicate(sellerStart);
+        addFilter(normalizeFilterClientType(clientType), (index) => `(CASE
+          WHEN ${sellerExpr} THEN 'seller'
           ELSE 'buyer' END) = $${index}`);
       }
       if (search && search.trim()) {
@@ -769,14 +809,13 @@ async function getRegisteredClients({
 
   if (status && status.toLowerCase() !== 'all') {
     const targetStatus = status.toLowerCase();
-    filtered = filtered.filter((c) => c.status.toLowerCase() === targetStatus);
+    filtered = filtered.filter((c) => getEffectiveRegistrationStatus(c) === targetStatus);
   }
 
   if (clientType && clientType.toLowerCase() !== 'all') {
-    const targetType = clientType.toLowerCase();
+    const targetType = normalizeFilterClientType(clientType);
     filtered = filtered.filter((c) => (c.clientType || 'Buyer').toLowerCase() === targetType);
   }
-
 
   if (search && search.trim()) {
     const q = search.toLowerCase().trim();
@@ -792,7 +831,13 @@ async function getRegisteredClients({
   const total = filtered.length;
   const numLimit = Math.min(Math.max(parseInt(String(limit), 10) || 100, 1), 200);
   const numOffset = Math.max(0, parseInt(String(offset), 10) || 0);
-  const paginated = filtered.slice(numOffset, numOffset + numLimit);
+  const paginated = filtered.slice(numOffset, numOffset + numLimit).map((c) => {
+    const isSeller = String(c.clientType || 'Buyer').toLowerCase() === 'seller';
+    if (isSeller && c.status !== 'Rejected' && c.status !== 'Accepted') {
+      return { ...c, status: 'Accepted', isApproved: true };
+    }
+    return c;
+  });
 
   return {
     total,

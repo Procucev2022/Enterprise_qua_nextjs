@@ -1152,6 +1152,10 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     ? mapping.buyerMinorCategories
     : mapping.aiSuggestion.minorCategories;
 
+  const resolvedBuyerEmail = context.email || null;
+  const resolvedOrgId = context.organizationId || null;
+  const resolvedOrgName = context.organizationName || null;
+
   const payload = {
     name: mapping.companyName,
     email: mapping.email,
@@ -1163,7 +1167,16 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     minorCategories: categories,
     clientMappedCategories: categories,
     vendorCode: mapping.vendorCode || null,
-    addedByBuyerCompany: context.organizationName || null,
+    addedByBuyerCompany: existing
+      ? (existing.addedByBuyerCompany || resolvedOrgName)
+      : resolvedOrgName,
+    ...(existing
+      ? {}
+      : {
+          buyerId: resolvedOrgId,
+          buyerAccountId: resolvedOrgId,
+          buyerEmail: resolvedBuyerEmail,
+        }),
   };
 
   const vendor = existing
@@ -1171,6 +1184,27 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     : await storeService.empanelIngestedVendor(payload, context.email);
 
   if (vendor) {
+    if (existing && typeof storeService.linkBuyerToExistingVendor === 'function') {
+      await storeService.linkBuyerToExistingVendor(
+        vendor,
+        {
+          organizationId: resolvedOrgId,
+          organizationName: resolvedOrgName,
+          corporateEmail: resolvedBuyerEmail,
+        },
+        { uploadSource: 'vendor_master_ingestion' }
+      );
+    } else if (!existing && typeof storeService.recordBuyerVendorUpload === 'function') {
+      await storeService.recordBuyerVendorUpload(
+        {
+          organizationId: resolvedOrgId,
+          organizationName: resolvedOrgName,
+          corporateEmail: resolvedBuyerEmail,
+        },
+        vendor,
+        { uploadSource: vendor.source || 'vendor_master_ingestion' }
+      );
+    }
     await queries.attachVendorId(mapping.id, context.organizationId, vendor.id);
   } else {
     logger.warn('Approved vendor mapping was saved but its vendor record was not available for attachment', {

@@ -9,6 +9,7 @@ const {
   PASSWORD_MIN_LENGTH,
   VENDOR_DIRECTORY_AUTH_CONFIG,
   VENDOR_FREE_CREDITS_LIMIT,
+  generateNumericOtp,
 } = require('../config/constants');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const pool = require('../db/pool');
@@ -98,8 +99,7 @@ function buildVendorDirectoryOtpKey(normalizedEmail) {
 }
 
 function generateOtpCode() {
-  const ceiling = 10 ** OTP_LENGTH;
-  return String(crypto.randomInt(0, ceiling)).padStart(OTP_LENGTH, '0');
+  return generateNumericOtp(OTP_LENGTH);
 }
 
 /**

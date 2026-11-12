@@ -82,18 +82,53 @@ export async function fetchApprovals(filters: {
 /**
  * Approve or reject an approval request.
  */
+export async function requestApprovalOtp(
+  approverName: string
+): Promise<{ success: boolean; email?: string; message?: string; expiresInSeconds?: number; error?: string }> {
+  try {
+    const res = await fetch('/api/approvals/request-otp', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ approverName }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      logApprovalResponseFailure('Approval OTP request', res.status);
+      return { success: false, error: json.error || 'Failed to send approval OTP.' };
+    }
+    return {
+      success: true,
+      email: json.email,
+      message: json.message,
+      expiresInSeconds: json.expiresInSeconds,
+    };
+  } catch (err: unknown) {
+    logApprovalTransportFailure('Approval OTP request', err);
+    const msg = err instanceof Error && err.message ? err.message : 'Network error';
+    return { success: false, error: msg };
+  }
+}
+
 export async function processApprovalAction(
   id: string,
   action: 'APPROVE' | 'REJECT',
   remarks = '',
   password = '',
-  approverName = ''
+  approverName = '',
+  otpCode = ''
 ): Promise<{ success: boolean; data?: ApprovalRequest; error?: string }> {
   try {
+    const cleanOtp = otpCode.trim();
     const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ action, remarks, password, approverName }),
+      body: JSON.stringify({
+        action,
+        remarks,
+        password,
+        approverName,
+        ...(cleanOtp ? { otpCode: cleanOtp } : {}),
+      }),
     });
     const json = await res.json();
     if (!res.ok) {

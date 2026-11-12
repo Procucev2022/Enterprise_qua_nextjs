@@ -4,6 +4,7 @@ import {
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
   updateSupplierCategories,
+  fetchVendorBuyerUploads,
 } from '@/lib/supplierProfileClient';
 import supplierProfileClient from '@/lib/supplierProfileClient';
 import { authClient } from '@/lib/authClient';
@@ -199,6 +200,39 @@ describe('supplierProfileClient', () => {
     });
   });
 
+  describe('fetchVendorBuyerUploads', () => {
+    test('fetches buyer upload history successfully', async () => {
+      global.fetch = jest.fn().mockResolvedValue(
+        jsonResponse({
+          success: true,
+          vendorId: 'v-123',
+          totalBuyers: 2,
+          buyerUploads: [{ id: 'bu-1', buyerId: 'b-1', buyerName: 'Buyer A', companyName: 'Corp A', status: 'ACTIVE' }],
+        })
+      );
+
+      const res = await fetchVendorBuyerUploads('v/123', 100);
+      expect(res.success).toBe(true);
+      expect(res.totalBuyers).toBe(2);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/vendors/v%2F123/buyer-uploads?limit=100',
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-token' }) })
+      );
+    });
+
+    test('handles error and non-Error fallback for buyer uploads', async () => {
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network down'));
+      const res1 = await fetchVendorBuyerUploads('v-123');
+      expect(res1.success).toBe(false);
+      expect(res1.error).toBe('Network down');
+
+      global.fetch = jest.fn().mockRejectedValueOnce(undefined);
+      const res2 = await fetchVendorBuyerUploads('v-123');
+      expect(res2.success).toBe(false);
+      expect(res2.error).toBe('Failed to fetch buyer uploads');
+    });
+  });
+
   describe('supplierProfileClient default export', () => {
     test('contains all expected methods', () => {
       expect(typeof supplierProfileClient.fetchSupplierCreditHistory).toBe('function');
@@ -206,6 +240,7 @@ describe('supplierProfileClient', () => {
       expect(typeof supplierProfileClient.recordSupplierCommunication).toBe('function');
       expect(typeof supplierProfileClient.fetchSupplierPaymentHistory).toBe('function');
       expect(typeof supplierProfileClient.updateSupplierCategories).toBe('function');
+      expect(typeof supplierProfileClient.fetchVendorBuyerUploads).toBe('function');
     });
 
     test('authHeaders handles unauthenticated state', async () => {
