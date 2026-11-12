@@ -5406,3 +5406,12 @@ In the Buyer flow, RFQ dashboard filter – Selecting AI Extraction RFQ also dis
 In the Buyer flow, Buyer-uploaded vendor – Four vendors are selected for upload, but only two vendors are successfully uploaded. The remaining two vendors are not uploaded despite having complete details. Expected Behaviour/Solution: All four selected vendors should be uploaded successfully. Display accurate upload counts and show clear error messages for any failed vendor records. Please fix the issue
 ```
 ---
+
+### Prompt 158
+**Timestamp**: 2026-11-12T20:00:15+05:30
+```text
+[User re-uploaded screenshots for Seller Side issues]:
+1. AUTOMATED SYSTEM REMINDER: "145 quotations awaiting your response" -> red box highlighting "quotations", needs to be "145 RFQs awaiting response".
+2. Filtration Issue: Category "Civil Works 10" selected, but displaying 19 enquiries including "Others - New Product", "Engineering Spares - Electrical", and uncategorized enquiries.
+```
+---
