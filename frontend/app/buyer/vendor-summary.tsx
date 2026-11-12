@@ -575,11 +575,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   // Confirm Delete Vendor
-  const handleDeleteVendorConfirm = () => {
+  const handleDeleteVendorConfirm = async () => {
     if (!selectedVendorForCrud) return;
-    deleteBuyerVendor(selectedVendorForCrud.id);
-    setDeleteModalOpen(false);
-    setSelectedVendorForCrud(null);
+    const vendorId = selectedVendorForCrud.id;
+    try {
+      const res = await deleteBuyerVendor(vendorId);
+      if (res !== false) {
+        setDeleteModalOpen(false);
+        setSelectedVendorForCrud(null);
+      }
+    } catch (err) {
+      logger.log('ERROR', 'Failed to delete vendor', { error: err, vendorId }, 'VENDOR_DIRECTORY');
+    }
   };
 
   // Open Bulk Delete Modal
@@ -597,7 +604,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       if (typeof deleteMultipleBuyerVendors === 'function') {
         await deleteMultipleBuyerVendors(idsToDelete);
       } else if (typeof deleteBuyerVendor === 'function') {
-        idsToDelete.forEach((id) => deleteBuyerVendor(id));
+        await Promise.all(idsToDelete.map((id) => deleteBuyerVendor(id)));
       }
       setSelectedVendorIds([]);
       setBulkDeleteModalOpen(false);

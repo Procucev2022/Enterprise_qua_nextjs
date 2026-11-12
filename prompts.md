@@ -5591,3 +5591,11 @@ In the Buyer flow, Minor Category Field: Rename "Minor Categories" to "Category"
 In the Buyer flow, Major Category Field: Rename "Major Category" to "Division". Expected Behaviour/Solution: Display the Division dropdown with the existing major category options. Please fix the issue
 ```
 ---
+
+
+### Prompt 182
+**Timestamp**: 2026-11-12T20:19:25+05:30
+```text
+In the Buyer flow, Deleted Vendor Reappearing: When a buyer deletes a vendor from the Vendor Upload page, the deleted vendor sometimes appears again in the vendor list. Expected Behaviour/Solution: Once a vendor is deleted, remove the vendor permanently from the buyer's vendor list and ensure the deleted vendor does not reappear after refreshing the page, logging out and logging in, or reopening the Vendor Upload page. Please fix the issue
+```
+---

@@ -2089,7 +2089,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
-    setBuyerVendors((prev) => prev.filter((v) => v.id !== vendorId));
+    setBuyerVendors((prev) => {
+      const updated = prev.filter((v) => v.id !== vendorId && v.email !== vendorId);
+      setSessionCache('vendors', updated);
+      return updated;
+    });
     void addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
     return true;
@@ -2123,7 +2127,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : [];
     const deletedSet = new Set(deletedIds);
-    setBuyerVendors((prev) => prev.filter((v) => !deletedSet.has(v.id)));
+    setBuyerVendors((prev) => {
+      const updated = prev.filter((v) => !deletedSet.has(v.id) && !deletedSet.has(v.email || ''));
+      setSessionCache('vendors', updated);
+      return updated;
+    });
     void addAuditLog(`Removed ${deletedIds.length} vendor record(s) from buyer vendor master.`);
     showToast(
       'Vendors Removed',

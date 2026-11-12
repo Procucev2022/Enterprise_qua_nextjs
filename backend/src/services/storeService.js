@@ -2279,7 +2279,13 @@ class StoreService {
   }
 
   async deleteVendorDurably(id, actorEmail = null) {
-    const target = this.vendors.find((vendor) => vendor.id === id || vendor.email === id);
+    let target = this.vendors.find((vendor) => vendor.id === id || vendor.email === id);
+    if (!target && pool.hasStorage()) {
+      target = await domainQueries.getVendorByIdFromDB(id);
+      if (!target && typeof id === 'string' && id.includes('@')) {
+        target = await domainQueries.getVendorByEmailFromDB(id);
+      }
+    }
     if (!target) return false;
 
     if (pool.hasStorage()) {
@@ -2294,10 +2300,10 @@ class StoreService {
       }
     }
 
-    if (!this.deleteVendor(id, actorEmail, { deferPersistence: true, deferAudit: true })) return false;
+    this.deleteVendor(target.id, actorEmail, { deferPersistence: true, deferAudit: true });
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-      action: `Removed vendor ${target.name} (${target.email || 'no email on record'}) from the vendor master`,
+      action: `Removed vendor ${target.name || id} (${target.email || 'no email on record'}) from the vendor master`,
     });
     return true;
   }

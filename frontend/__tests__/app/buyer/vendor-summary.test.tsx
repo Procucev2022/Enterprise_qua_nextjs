@@ -894,6 +894,28 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockDeleteBuyerVendor).toHaveBeenCalledWith('v-1');
     });
 
+    it('keeps Delete Vendor modal open when deleteBuyerVendor returns false', async () => {
+      mockDeleteBuyerVendor.mockResolvedValueOnce(false);
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const deleteBtns = screen.getAllByRole('button', { name: /Delete/i });
+      fireEvent.click(deleteBtns[0]);
+      expect(screen.getByText('Delete Vendor Record')).toBeInTheDocument();
+
+      const confirmDeleteBtn = screen.getByRole('button', { name: /Delete Vendor/i });
+      await act(async () => {
+        fireEvent.click(confirmDeleteBtn);
+      });
+
+      expect(mockDeleteBuyerVendor).toHaveBeenCalledWith('v-1');
+      expect(screen.getByText('Delete Vendor Record')).toBeInTheDocument();
+    });
+
     it('handles tab navigation, search input, status filter, and category filter', async () => {
       render(
         <VendorSummary

@@ -45,16 +45,66 @@ async function checkVendorOwnership(user, vendorOrEmail) {
     return true;
   }
 
-  if (user.role === 'buyer' && typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
+  if (user.role === 'buyer') {
     const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
     const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    const sId = String(buyerId).toLowerCase();
-    const isOwner =
-      (vendorOrEmail.buyerId && String(vendorOrEmail.buyerId).toLowerCase() === sId) ||
-      (vendorOrEmail.buyerAccountId && String(vendorOrEmail.buyerAccountId).toLowerCase() === sId) ||
-      (vendorOrEmail.buyerEmail && String(vendorOrEmail.buyerEmail).toLowerCase() === sId) ||
-      (vendorOrEmail.id && (String(vendorOrEmail.id).startsWith('v-hist-') || String(vendorOrEmail.id).startsWith('v-buyer-') || String(vendorOrEmail.id).startsWith('vm-')));
-    if (isOwner) return true;
+    const sId = buyerId ? String(buyerId).toLowerCase() : '';
+    const uEmail = user.email ? String(user.email).toLowerCase() : '';
+    const orgName = buyerAccount?.organizationName ? String(buyerAccount.organizationName).toLowerCase() : '';
+
+    if (typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
+      const vBuyerId = vendorOrEmail.buyerId ? String(vendorOrEmail.buyerId).toLowerCase() : '';
+      const vBuyerAccountId = vendorOrEmail.buyerAccountId ? String(vendorOrEmail.buyerAccountId).toLowerCase() : '';
+      const vBuyerEmail = vendorOrEmail.buyerEmail ? String(vendorOrEmail.buyerEmail).toLowerCase() : '';
+      const vCompany = vendorOrEmail.addedByBuyerCompany ? String(vendorOrEmail.addedByBuyerCompany).toLowerCase() : '';
+
+      const matchesBuyerId = (vBuyerId && vBuyerId === sId) || (vBuyerAccountId && vBuyerAccountId === sId);
+      const matchesBuyerEmail = (vBuyerEmail && (vBuyerEmail === uEmail || vBuyerEmail === sId));
+      const matchesCompany = Boolean(vCompany && orgName && vCompany === orgName);
+
+      if (matchesBuyerId || matchesBuyerEmail || matchesCompany) {
+        return true;
+      }
+
+      // If it belongs to a different buyer explicitly, deny
+      if ((vBuyerId && vBuyerId !== sId) || (vBuyerAccountId && vBuyerAccountId !== sId) || (vBuyerEmail && vBuyerEmail !== uEmail && vBuyerEmail !== sId)) {
+        return false;
+      }
+
+      // Check buyer source or buyer-prefixed ID or buyer empanelment
+      const isBuyerSource = [
+        'buyer_uploaded',
+        'buyer_manual',
+        'buyer_excel',
+        'vendor_master_ingestion',
+        'historical_purchase_dump',
+        'buyer',
+        'manual_buyer_upload'
+      ].includes(String(vendorOrEmail.source || vendorOrEmail.uploadSource || '').toLowerCase());
+
+      const hasBuyerPrefix = vendorOrEmail.id && (
+        String(vendorOrEmail.id).startsWith('v-hist-') ||
+        String(vendorOrEmail.id).startsWith('v-buyer-') ||
+        String(vendorOrEmail.id).startsWith('vm-') ||
+        String(vendorOrEmail.id).startsWith('v-ingest-') ||
+        String(vendorOrEmail.id).startsWith('v-bulk-')
+      );
+
+      if (isBuyerSource || hasBuyerPrefix || vendorOrEmail.isBuyerEmpanelled === true || vendorOrEmail.empanelledByBuyer === true) {
+        return true;
+      }
+    } else if (typeof vendorOrEmail === 'string') {
+      const idStr = String(vendorOrEmail).trim();
+      if (
+        idStr.startsWith('v-hist-') ||
+        idStr.startsWith('v-buyer-') ||
+        idStr.startsWith('vm-') ||
+        idStr.startsWith('v-ingest-') ||
+        idStr.startsWith('v-bulk-')
+      ) {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -606,12 +656,15 @@ async function updateVendor(req, res, next) {
 async function deleteVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id, 'all');
+    let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    if (!existing) {
+      existing = storeService.getVendorById(id, 'all');
+    }
     if (!existing) {
       // If it's a buyer vendor ID pattern or buyer session, handle deletion idempotently
       if (
         (req.user && (req.user.role === 'buyer' || req.user.role === 'admin')) &&
-        (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+        (id.startsWith('v-') || id.startsWith('vm-'))
       ) {
         logger.info(`Cleaning up vendor ID ${id}`, { id }, 'VENDOR_CONTROLLER');
         await storeService.deleteVendorDurably(id, req.user && req.user.email);
@@ -650,12 +703,15 @@ async function bulkDeleteVendors(req, res, next) {
     for (const rawId of targetIds) {
       const id = String(rawId).trim();
       if (!id) continue;
-      const existing = storeService.getVendorById(id, 'all');
+      let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+      if (!existing) {
+        existing = storeService.getVendorById(id, 'all');
+      }
 
       if (!existing) {
         if (
           (user.role === 'buyer' || user.role === 'admin') &&
-          (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+          (id.startsWith('v-') || id.startsWith('vm-'))
         ) {
           await storeService.deleteVendorDurably(id, user.email);
           deletedIds.push(id);
