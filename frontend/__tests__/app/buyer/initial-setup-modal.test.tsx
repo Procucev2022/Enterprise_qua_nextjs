@@ -210,21 +210,26 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByRole('heading', { level: 2, name: /Buyer Initial Setup: Vendor Master & PO Data Ingestion/i })).toBeInTheDocument();
     expect(screen.queryByText(/Dual-File ERP Setup/i)).not.toBeInTheDocument();
 
-    // STEP 1: Select Period
+    // STEP 1: Select Period (Required Columns & template button should not be here)
     expect(screen.getByText(/Step 1: Choose Historical Purchase Period/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Download Vendor Master Template/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Required Columns/i)).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));
     expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('1_year');
 
     fireEvent.click(screen.getByText(/Last 3 Years \(36 Months\)/i));
     expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('3_years');
 
-    // Download Vendor Master template from Step 1 (Time Horizon)
-    fireEvent.click(screen.getByText(/Download Vendor Master Template/i));
-    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
-
     // Continue to STEP 2
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
     expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
+
+    // Required Columns section and Download Vendor Master Template button are in Step 2
+    expect(screen.getByText(/Required Columns/i)).toBeInTheDocument();
+    expect(screen.getByText(/Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN & Location/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Download Vendor Master Template/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
 
     // Step 2 starts empty (default selection removed)
     expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
@@ -1051,13 +1056,16 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
   it('downloads vendor master Excel template and PO dump Excel template', () => {
     const { container } = render(<InitialSetupModal />);
-    // In Step 1: Time Horizon
-    const vendorTemplateBtn = screen.getByText(/Download Vendor Master Template/i);
-    fireEvent.click(vendorTemplateBtn);
-    expect(vendorTemplateBtn).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    // In Step 1: Time Horizon (vendor template is not here)
     expect(screen.queryByText(/Download Vendor Master Template/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Required Columns/i)).not.toBeInTheDocument();
+
+    // Navigate to Step 2: Vendor Master
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vendorTemplateBtn = screen.getByText(/Download Vendor Master Template/i);
+    expect(vendorTemplateBtn).toBeInTheDocument();
+    expect(screen.getByText(/Required Columns/i)).toBeInTheDocument();
+    fireEvent.click(vendorTemplateBtn);
 
     const vFile = createValidVendorMasterFile();
     const fileInput = container.querySelector('input[type="file"]');

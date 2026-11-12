@@ -1521,25 +1521,6 @@ export default function InitialSetupModal() {
               </h3>
             </div>
 
-            {/* Vendor Master Template & Required Columns Banner */}
-            <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs flex-wrap sm:flex-nowrap">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
-                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium">
-                  Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN &amp; Location
-                </span>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleDownloadVendorMasterExcel}
-                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
-                >
-                  <Download size={13} /> Download Vendor Master Template
-                </button>
-              </div>
-            </div>
-
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
                 {
@@ -1633,6 +1614,25 @@ export default function InitialSetupModal() {
                   Clear Selection
                 </button>
               )}
+            </div>
+
+            {/* Vendor Master Template & Required Columns Banner */}
+            <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium">
+                  Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN &amp; Location
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleDownloadVendorMasterExcel}
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+                >
+                  <Download size={13} /> Download Vendor Master Template
+                </button>
+              </div>
             </div>
 
             {/* Error Banner if Vendor Upload has issues */}

@@ -5456,3 +5456,11 @@ In the Buyer flow, Mobile Number Validation: The Registered Mobile Number field 
 In the Buyer flow, Remove Dual-File ERP Setup Label: Remove the “DUAL-FILE ERP SETUP” label displayed in the Buyer Initial Setup popup. Expected Behaviour/Solution: Remove the label and maintain a clean, professional header without affecting the existing setup functionality. Please fix the issue
 ```
 ---
+
+
+### Prompt 165
+**Timestamp**: 2026-11-12T19:13:24+05:30
+```text
+In the Buyer flow, Move Required Columns to Vendor Master Page: Move the Required Columns section and Download Vendor Master Template button from Step 1 (Time Horizon) to Step 2 (Vendor Master). Expected Behaviour/Solution: Display the required column details and vendor master template download option on the Vendor Master page, where users upload the vendor file. Please fix the issue
+```
+---
