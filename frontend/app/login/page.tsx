@@ -772,9 +772,6 @@ function LoginPageContent() {
                   <div className="flex-1 min-h-0 flex flex-col justify-between gap-2">
                     <div>
                       <h3 className="text-lg sm:text-xl font-bold text-[#0B1B3D] dark:text-white tracking-tight">Welcome back</h3>
-                      <p className="text-xs text-slate-600 dark:text-gray-400 mt-1 leading-relaxed">
-                        Sign in with your Procucev account. Credentials are verified against the enterprise user directory.
-                      </p>
                     </div>
 
                     {/* Auth method switcher */}

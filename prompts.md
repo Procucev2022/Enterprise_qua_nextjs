@@ -5435,3 +5435,10 @@ In the Buyer flow, Mobile Number Validation: The mobile number field should acce
 In the Buyer flow, GSTIN Validation: Implement proper GSTIN validation during buyer registration. Expected Behaviour/Solution: Validate the standard 15-character GSTIN format and display a clear error message for invalid GST numbers. Prevent registration until a valid GSTIN is entered. Please fix the issue
 ```
 ---
+
+### Prompt 162
+**Timestamp**: 2026-11-12T18:55:32+05:30
+```text
+In the Buyer flow, Login Page – Remove Unnecessary Text: Remove the sentence “Sign in with your Procucev account. Credentials are verified against the enterprise user directory” displayed below the “Welcome back” heading Expected Behaviour/Solution: Keep the login page clean and simple by displaying only the “Welcome back” heading without the additional description. Please fix the issue
+```
+---

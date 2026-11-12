@@ -127,6 +127,15 @@ describe('LoginPage', () => {
       expect(screen.queryByText(/Instant 1-Click/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/Align Existing Public System Account/i)).not.toBeInTheDocument();
     });
+
+    it('renders the clean Welcome back heading without unnecessary enterprise directory description', () => {
+      render(<LoginPage />);
+
+      expect(screen.getByRole('heading', { level: 3, name: /Welcome back/i })).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Sign in with your Procucev account\. Credentials are verified against the enterprise user directory/i)
+      ).not.toBeInTheDocument();
+    });
   });
 
   describe('password sign-in', () => {
