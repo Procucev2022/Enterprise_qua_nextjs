@@ -1366,6 +1366,7 @@ sellerDirectory: {
       'Full name, company email, mobile number and password are all required to create an account.',
     passwordTooShort: 'Choose a password of at least 8 characters.',
     mobileInvalid: 'Enter a valid 10-digit Indian mobile number.',
+    gstinInvalid: 'GSTIN must be 15 characters in the format 99AAAAA9999A9Z9, for example 27AAAAA0000A1Z5.',
 
     // Network / backend reachability. These replace the previous behaviour of
     // silently fabricating a valid session when the API could not be reached.

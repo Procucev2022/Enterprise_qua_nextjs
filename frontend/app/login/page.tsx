@@ -11,6 +11,7 @@ import {
   INDIAN_MOBILE_PATTERN,
   EXACT_10_DIGIT_MOBILE_PATTERN,
   sanitize10DigitMobile,
+  GSTIN_PATTERN,
   validateFormData,
   validatePincode,
   PostOfficeDetail,
@@ -152,6 +153,7 @@ function LoginPageContent() {
   const [regMobile, setRegMobile] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regGstin, setRegGstin] = useState('');
+  const [regGstinError, setRegGstinError] = useState<string | null>(null);
   const [regCity, setRegCity] = useState('');
   const [regState, setRegState] = useState('');
   const [regPincode, setRegPincode] = useState('');
@@ -422,6 +424,7 @@ function LoginPageContent() {
 
     const rawMobile = regMobile.trim();
     const mobile = rawMobile.replace(/\D/g, '');
+    const cleanGstin = regGstin.trim().toUpperCase();
 
     if (
       !regName.trim() ||
@@ -429,7 +432,7 @@ function LoginPageContent() {
       !regEmail.trim() ||
       !mobile ||
       !regPassword ||
-      !regGstin.trim() ||
+      !cleanGstin ||
       !regCity.trim() ||
       !regState.trim() ||
       !regPincode.trim()
@@ -443,6 +446,11 @@ function LoginPageContent() {
     }
     if (mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.registrationFailedTitle, AUTH.mobileInvalid, 'warning');
+      return;
+    }
+    if (!GSTIN_PATTERN.test(cleanGstin)) {
+      setRegGstinError(AUTH.gstinInvalid);
+      showToast(AUTH.registrationFailedTitle, AUTH.gstinInvalid, 'warning');
       return;
     }
     if (!/^[1-9][0-9]{5}$/.test(regPincode.trim())) {
@@ -1045,13 +1053,36 @@ function LoginPageContent() {
                               type="text"
                               placeholder={AUTH.fieldPlaceholders.gstin}
                               value={regGstin}
-                              onChange={(e) => setRegGstin(e.target.value.toUpperCase())}
-                              className={`${iconFieldInput} font-mono uppercase`}
+                              onChange={(e) => {
+                                const val = e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 15);
+                                setRegGstin(val);
+                                if (val.length === 15) {
+                                  if (!GSTIN_PATTERN.test(val)) {
+                                    setRegGstinError(AUTH.gstinInvalid);
+                                  } else {
+                                    setRegGstinError(null);
+                                  }
+                                } else if (regGstinError) {
+                                  setRegGstinError(null);
+                                }
+                              }}
+                              onBlur={() => {
+                                const val = regGstin.trim().toUpperCase();
+                                if (val.length > 0 && !GSTIN_PATTERN.test(val)) {
+                                  setRegGstinError(AUTH.gstinInvalid);
+                                } else {
+                                  setRegGstinError(null);
+                                }
+                              }}
+                              className={`${iconFieldInput} font-mono uppercase ${regGstinError ? 'border-red-400 dark:border-red-700' : ''}`}
                               style={ICON_PAD}
                               maxLength={15}
                               required
                             />
                           </div>
+                          {regGstinError && (
+                            <p className="text-[11px] text-rose-500 font-medium mt-1">{regGstinError}</p>
+                          )}
                         </div>
 
                         {/* Pincode + City side by side, State full width */}

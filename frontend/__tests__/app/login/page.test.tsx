@@ -761,6 +761,51 @@ describe('LoginPage', () => {
       expect(mobileInput).toHaveValue('9876543210');
     });
 
+    it('rejects an invalid GSTIN before calling the API and prevents registration', () => {
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      typeInto(/GST Number/i, 'INVALIDGSTIN123');
+
+      submitForm(/Create Account/i);
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.registrationFailedTitle, AUTH.gstinInvalid, 'warning');
+      expect(screen.getByText(AUTH.gstinInvalid)).toBeInTheDocument();
+      expect(authClient.requestOtp).not.toHaveBeenCalled();
+      expect(authClient.register).not.toHaveBeenCalled();
+    });
+
+    it('validates GSTIN on blur and clears inline error when a valid 15-character GSTIN is entered', () => {
+      render(<LoginPage />);
+      openRegister();
+      const gstinInput = screen.getByLabelText(/GST Number/i);
+
+      // Invalid GSTIN blurred -> inline error shown
+      fireEvent.change(gstinInput, { target: { value: '27INVALID12345' } });
+      fireEvent.blur(gstinInput);
+      expect(screen.getByText(AUTH.gstinInvalid)).toBeInTheDocument();
+      expect(gstinInput).toHaveClass('border-red-400');
+
+      // Valid GSTIN entered (15 chars) -> inline error cleared
+      fireEvent.change(gstinInput, { target: { value: '27AAAAA0000A1Z5' } });
+      expect(screen.queryByText(AUTH.gstinInvalid)).not.toBeInTheDocument();
+      expect(gstinInput).not.toHaveClass('border-red-400');
+
+      // Cleared input blurred -> error cleared
+      fireEvent.change(gstinInput, { target: { value: '' } });
+      fireEvent.blur(gstinInput);
+      expect(screen.queryByText(AUTH.gstinInvalid)).not.toBeInTheDocument();
+    });
+
+    it('auto-uppercases GSTIN and strips non-alphanumeric characters', () => {
+      render(<LoginPage />);
+      openRegister();
+      const gstinInput = screen.getByLabelText(/GST Number/i);
+
+      fireEvent.change(gstinInput, { target: { value: '27aaaaa-0000a!1z5' } });
+      expect(gstinInput).toHaveValue('27AAAAA0000A1Z5');
+    });
+
     it('requires every mandatory field', () => {
       render(<LoginPage />);
       openRegister();

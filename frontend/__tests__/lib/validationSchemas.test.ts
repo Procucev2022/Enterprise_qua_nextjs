@@ -120,6 +120,33 @@ describe('Frontend validationSchemas Unit Tests', () => {
       expect(res.isValid).toBe(false);
       expect(res.fieldErrors.password).toBe(UI_STRINGS.auth.passwordRequired);
     });
+
+    test('validates buyerRegistrationForm schema', () => {
+      const validReg = {
+        fullName: 'Jane Doe',
+        companyName: 'Acme Enterprises',
+        gstNumber: '27AAAAA0000A1Z5',
+        pincode: '411001',
+        city: 'Pune',
+        state: 'Maharashtra',
+        email: 'jane@acme.com',
+        mobile: '9876543210',
+        password: 'Password123!',
+      };
+
+      const validRes = validateFormData(FORM_SCHEMAS.buyerRegistrationForm, validReg);
+      expect(validRes.isValid).toBe(true);
+
+      // Rejects invalid GSTIN
+      const badGstRes = validateFormData(FORM_SCHEMAS.buyerRegistrationForm, { ...validReg, gstNumber: 'INVALIDGSTIN' });
+      expect(badGstRes.isValid).toBe(false);
+      expect(badGstRes.fieldErrors.gstNumber).toBe(UI_STRINGS.auth.gstinInvalid);
+
+      // Rejects invalid mobile
+      const badMobileRes = validateFormData(FORM_SCHEMAS.buyerRegistrationForm, { ...validReg, mobile: '12345' });
+      expect(badMobileRes.isValid).toBe(false);
+      expect(badMobileRes.fieldErrors.mobile).toBe(UI_STRINGS.auth.mobileInvalid);
+    });
   });
 
   test('validates rfqIngestion schema with valid data', () => {

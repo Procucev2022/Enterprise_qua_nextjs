@@ -373,6 +373,18 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     action: { required: true, message: 'Action is required.' },
   },
 
+  buyerRegistrationForm: {
+    fullName: { required: true, minLength: 1, message: 'Full Name is required.' },
+    companyName: { required: true, minLength: 1, message: 'Company Name is required.' },
+    gstNumber: { required: true, pattern: GSTIN_PATTERN, message: UI_STRINGS.auth.gstinInvalid },
+    pincode: { required: true, pattern: /^[1-9][0-9]{5}$/, message: 'PIN Code must be 6 digits and cannot start with 0.' },
+    city: { required: true, minLength: 1, message: 'City is required.' },
+    state: { required: true, minLength: 1, message: 'State is required.' },
+    email: { required: true, pattern: EMAIL_PATTERN, message: UI_STRINGS.auth.emailInvalid },
+    mobile: { required: true, pattern: EXACT_10_DIGIT_MOBILE_PATTERN, message: UI_STRINGS.auth.mobileInvalid },
+    password: { required: true, minLength: PASSWORD_MIN_LENGTH, message: UI_STRINGS.auth.passwordTooShort },
+  },
+
   extendRFQ: {
     hours: {
       required: true,
