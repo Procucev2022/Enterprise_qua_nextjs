@@ -91,6 +91,9 @@ jobs:
           6. Maintainability: only if it is significant (dead code, duplicated logic, misleading names).
 
           RULES
+          - Before answering, trace the changed code paths end to end, consider how callers
+            and callees are affected, and verify each suspected bug against the actual diff
+            before reporting it.
           - Be specific: cite the exact line, explain WHY it is a problem and the realistic
             failure scenario, then give a concrete fix.
           - Do NOT comment on formatting, style, or trivial naming. Do NOT praise.
@@ -135,6 +138,8 @@ jobs:
           }
           EOF
 
+          # Deep thinking: thinkingLevel "high" + a large output budget
+          # (thinking tokens count against maxOutputTokens)
           jq -n \
             --rawfile diff annotated_diff.txt \
             --rawfile sys system_prompt.txt \
@@ -146,19 +151,16 @@ jobs:
                  "\n\n<diff>\n" + $diff + "\n</diff>")}]}],
               generationConfig: {
                 temperature: 0.2,
-                maxOutputTokens: 4096,
+                maxOutputTokens: 32768,
+                thinkingConfig: { thinkingLevel: "high" },
                 responseMimeType: "application/json",
                 responseSchema: $schema[0]
               }
             }' > payload.json
 
-          # ---------- 3. Pick model order by diff size, call Gemini with fallback ----------
+          # ---------- 3. Call Gemini with fallback (strongest model first) ----------
           SIZE=$(wc -c < annotated_diff.txt)
-          if [ "$SIZE" -lt 20000 ]; then
-            CANDIDATE_MODELS=("gemini-3.5-flash-lite" "gemini-3.5-flash" "gemini-3.8-flash")
-          else
-            CANDIDATE_MODELS=("gemini-3.5-flash" "gemini-3.8-flash" "gemini-3.5-flash-lite")
-          fi
+          CANDIDATE_MODELS=("gemini-3.8-flash" "gemini-3.5-flash" "gemini-3.5-flash-lite")
 
           REVIEW_JSON=""
           LAST_STATUS=""; LAST_RESPONSE=""
@@ -166,7 +168,7 @@ jobs:
           for MODEL in "${CANDIDATE_MODELS[@]}"; do
             echo "Attempting review with model: ${MODEL} (diff size: ${SIZE} bytes)..."
             rm -f gemini_response.json
-            HTTP_STATUS=$(curl -s --connect-timeout 15 --max-time 120 -o gemini_response.json -w "%{http_code}" -X POST \
+            HTTP_STATUS=$(curl -s --connect-timeout 15 --max-time 300 -o gemini_response.json -w "%{http_code}" -X POST \
               "https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent" \
               -H "x-goog-api-key: ${GEMINI_API_KEY}" \
               -H "Content-Type: application/json" \
@@ -176,7 +178,8 @@ jobs:
             echo "=== ${MODEL}: HTTP ${HTTP_STATUS} ==="
 
             if [ "$HTTP_STATUS" = "200" ]; then
-              TEXT=$(jq -r '.candidates[0].content.parts[0].text // empty' gemini_response.json 2>/dev/null)
+              # Skip any "thought" parts, keep only the real answer
+              TEXT=$(jq -r '[.candidates[0].content.parts[]? | select(.thought != true) | .text // empty] | join("")' gemini_response.json 2>/dev/null)
               if [ -n "$TEXT" ] && echo "$TEXT" | jq -e '.summary' >/dev/null 2>&1; then
                 REVIEW_JSON="$TEXT"; break
               fi
