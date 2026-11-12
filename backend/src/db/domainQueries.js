@@ -1420,6 +1420,28 @@ async function getEvaluationsFromDB(limit = null) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
+// Upper bound on rows one vendor lookup may return. Matches the cap the
+// evaluation list endpoint applies to its limit parameter.
+const VENDOR_EVALUATION_LOOKUP_MAX_ROWS = 500;
+
+// Saved evaluations for one vendor, newest first. Reads the table directly
+// through idx_evaluations_vendor_id, so a record older than the in-memory window
+// is still found. Deliberately not cached: a cached "no record" answer on one
+// worker would let a request go out for a vendor another worker just evaluated.
+async function getEvaluationsForVendorFromDB(vendorId, limit = 1) {
+  if (!pool.hasStorage()) return [];
+  const normalizedVendorId = String(vendorId || '').trim();
+  if (!normalizedVendorId) return [];
+  const requestedRows = Number.parseInt(limit, 10);
+  const rowLimit = Math.min(Math.max(Number.isInteger(requestedRows) ? requestedRows : 1, 1), VENDOR_EVALUATION_LOOKUP_MAX_ROWS);
+  const sql = 'SELECT raw FROM evaluations WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2';
+  const result = await pool.query(sql, [normalizedVendorId, rowLimit], {
+    d1: true,
+    d1Text: sql,
+  });
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
 async function upsertEvaluationInDB(evaluation) {
   if (!pool.hasStorage()) return null;
   const { id, vendorId, status } = evaluation;
@@ -2913,6 +2935,7 @@ module.exports = {
   extendRFQOnceInDB,
   deleteRFQInDB,
   getEvaluationsFromDB,
+  getEvaluationsForVendorFromDB,
   upsertEvaluationInDB,
   getVendorCatalogueFromDB,
   getVendorCatalogueByVendorFromDB,

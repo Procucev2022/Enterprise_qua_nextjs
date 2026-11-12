@@ -2683,11 +2683,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(reqEvalBtn);
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Evaluation Request Failed', 'Network failure', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(UI_STRINGS.vendorEvaluationRequest.requestFailedTitle, 'Network failure', 'warning');
       });
     });
 
-    it('shows warning when vendor has no email address', async () => {
+    it('hands a vendor without an email to the store, which decides the outcome', async () => {
       const vendorNoEmail = {
         id: 'v-no-email',
         name: 'No Email Supplier',
@@ -2727,11 +2727,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const reqEvalBtn = screen.getByRole('button', { name: /Request Vendor Evaluation/i });
       fireEvent.click(reqEvalBtn);
 
-      expect(mockShowToast).toHaveBeenCalledWith(
-        'Evaluation Request Failed',
-        'Vendor does not have a registered email address to receive an evaluation request.',
-        'warning'
-      );
+      // The email requirement is enforced by the server after it checks for a saved evaluation.
+      // The component hands the request to the store, which reports the outcome.
+      await waitFor(() => {
+        expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-no-email');
+      });
     });
 
     it('renders evaluation dispatched badge when vendor.evaluationRequested is true', () => {
@@ -2817,8 +2817,46 @@ describe('app/buyer/vendor-summary.tsx', () => {
       mockRequestVendorEvaluation.mockRejectedValueOnce({});
       fireEvent.click(reqEvalBtn);
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Evaluation Request Failed', 'Could not send evaluation request.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorEvaluationRequest.requestFailedTitle,
+          UI_STRINGS.vendorEvaluationRequest.requestFailedFallback,
+          'warning'
+        );
       });
+    });
+
+    it('opens the saved evaluation and shows no dispatched badge when the server returns one', async () => {
+      const savedEvaluation = {
+        id: 'eval-saved-1',
+        vendorId: 'v-saved',
+        vendorName: 'Saved Evaluation Supplier',
+        email: 'saved@supplier.test',
+        overallScore: 72,
+        status: 'CONDITIONAL / UNDER REVIEW',
+        moduleScores: {},
+        documents: [],
+      };
+      mockRequestVendorEvaluation.mockResolvedValueOnce({
+        success: true,
+        message: 'A saved evaluation already exists.',
+        evaluationExists: true,
+        evaluation: savedEvaluation,
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+      fireEvent.click(screen.getAllByText(/Revise Rating/i)[0]);
+      fireEvent.click(screen.getByRole('button', { name: /Request Vendor Evaluation/i }));
+
+      await waitFor(() => {
+        expect(mockOnViewEvaluation).toHaveBeenCalledWith(savedEvaluation);
+      });
+      expect(mockRequestVendorEvaluation).toHaveBeenCalled();
+      expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.requestDispatchedBadge)).not.toBeInTheDocument();
     });
 
     it('renders origin badge for excel and self-onboarded vendor sources', () => {

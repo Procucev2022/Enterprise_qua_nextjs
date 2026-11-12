@@ -215,6 +215,8 @@ const VENDOR_RATING_LABELS = Object.freeze({
 const VENDOR_EVALUATION_REQUEST = Object.freeze({
   DEFAULT_STATUS: 'PENDING EVALUATION',
   SUCCESS_MESSAGE: 'Evaluation request sent to vendor. The vendor has been notified to submit their performance evaluation details.',
+  // {vendorName} is filled by formatMessage. Returned in place of a new request when a saved evaluation exists.
+  EXISTING_EVALUATION_MESSAGE: 'A saved evaluation for {vendorName} already exists, so no new evaluation request was sent. The saved evaluation is shown instead.',
 });
 
 // Shown for every write to the admin settings endpoint. The backend stores no

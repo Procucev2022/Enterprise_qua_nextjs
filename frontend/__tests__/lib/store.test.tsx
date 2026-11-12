@@ -1707,6 +1707,81 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(res.success).toBe(true);
     });
 
+    // Request Vendor Evaluation returns a saved evaluation and sends no new request
+    const savedForRequest: VendorEvaluationRecord = { ...evalRecord, id: 'eval-saved-for-request', overallScore: 81 };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        message: 'A saved evaluation already exists.',
+        evaluationExists: true,
+        data: { evaluation: savedForRequest },
+      }),
+    });
+    await act(async () => {
+      const res = await contextValue.requestVendorEvaluation('v-001');
+      expect(res).toEqual({
+        success: true,
+        message: 'A saved evaluation already exists.',
+        evaluationExists: true,
+        evaluation: savedForRequest,
+      });
+    });
+    expect(contextValue.vendorEvaluations[0]).toEqual(savedForRequest);
+    expect(contextValue.toastMessage).toEqual(
+      expect.objectContaining({ title: UI_STRINGS.vendorEvaluationRequest.existingTitle, type: 'info' })
+    );
+
+    // fetchVendorEvaluation: blank input, local matches by id and by name, and the database fallback
+    await act(async () => {
+      expect(await contextValue.fetchVendorEvaluation('')).toBeNull();
+      expect(await contextValue.fetchVendorEvaluation('V-001')).toEqual(savedForRequest);
+      expect(await contextValue.fetchVendorEvaluation('apex industrial dynamics pvt ltd')).toEqual(savedForRequest);
+    });
+    const remoteEvaluation: VendorEvaluationRecord = {
+      ...evalRecord,
+      id: 'eval-remote-404',
+      vendorId: 'v-404',
+      vendorName: 'Remote Supplier',
+      overallScore: 66,
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, data: [remoteEvaluation] }),
+    });
+    await act(async () => {
+      expect(await contextValue.fetchVendorEvaluation('v-404')).toEqual(remoteEvaluation);
+    });
+    expect(contextValue.vendorEvaluations[0]).toEqual(remoteEvaluation);
+
+    // Database responses without a usable scored record return null
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false }) });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, data: [] }) });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, data: [{ id: 'eval-unscored', vendorId: 'v-405' }] }),
+    });
+    mockFetch.mockRejectedValueOnce(new Error('network down'));
+    await act(async () => {
+      expect(await contextValue.fetchVendorEvaluation('v-405')).toBeNull();
+      expect(await contextValue.fetchVendorEvaluation('v-405')).toBeNull();
+      expect(await contextValue.fetchVendorEvaluation('v-405')).toBeNull();
+      expect(await contextValue.fetchVendorEvaluation('v-405')).toBeNull();
+    });
+
+    // A request failure with no server message or error object uses the UI string fallbacks
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false }) });
+    mockFetch.mockRejectedValueOnce({});
+    await act(async () => {
+      const failed = await contextValue.requestVendorEvaluation('v-001');
+      expect(failed).toEqual({ success: false, message: UI_STRINGS.vendorEvaluationRequest.requestFailedFallback });
+      const unreachable = await contextValue.requestVendorEvaluation('v-001');
+      expect(unreachable).toEqual({ success: false, message: undefined });
+    });
+
     // Request evaluation for non-existent vendor
     await act(async () => {
       const res = await contextValue.requestVendorEvaluation('nonexistent-vendor');

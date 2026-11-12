@@ -908,6 +908,16 @@ export interface VendorEvaluationRecord {
   responses?: Record<string, string | number>;
 }
 
+/** Outcome of asking the server for a vendor evaluation. */
+export interface VendorEvaluationRequestResult {
+  success: boolean;
+  message?: string;
+  /** True when a saved evaluation already existed, so no request was sent to the vendor. */
+  evaluationExists?: boolean;
+  /** The saved evaluation to display in place of a new request. */
+  evaluation?: VendorEvaluationRecord;
+}
+
 export interface MajorMinorCategory {
   majorCategory: string;
   minorCategories: string[];

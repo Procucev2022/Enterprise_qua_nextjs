@@ -27,6 +27,8 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   PERSISTENCE_MESSAGES,
   EVENT_OUTBOX_TYPES,
+  VENDOR_EVALUATION_REQUEST,
+  formatMessage,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
@@ -807,6 +809,12 @@ async function requestEvaluation(req, res, next) {
       return res.status(403).json({ success: false, error: 'Vendors cannot request evaluations on other vendors.' });
     }
 
+    const bodyValidation = validatePayload(VALIDATION_SCHEMAS.requestVendorEvaluation, req.body || {});
+    if (!bodyValidation.isValid) {
+      logger.warn('Rejected vendor evaluation request with invalid payload', { fields: Object.keys(bodyValidation.errors) }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'Invalid evaluation request.', errors: bodyValidation.errors });
+    }
+
     let buyerId = null;
     let buyerCompany = req.user.orgName || req.user.name || 'Buyer';
     let buyerName = req.user.name || '';
@@ -829,6 +837,19 @@ async function requestEvaluation(req, res, next) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
 
+    // Check for a saved evaluation before anything is sent. When one exists, it is
+    // returned as it is: no email reaches the vendor and the vendor record is not changed.
+    const [savedEvaluation] = await storeService.getVendorEvaluationsDurably(vendor.id, 1);
+    if (savedEvaluation) {
+      logger.info(`Saved evaluation found for vendor ${vendor.name} (${vendor.id}); no new evaluation request sent`, { vendorId: vendor.id, evaluationId: savedEvaluation.id, buyerCompany }, 'VENDOR_CONTROLLER');
+      return res.status(200).json({
+        success: true,
+        evaluationExists: true,
+        message: formatMessage(VENDOR_EVALUATION_REQUEST.EXISTING_EVALUATION_MESSAGE, { vendorName: vendor.name }),
+        data: { evaluation: savedEvaluation },
+      });
+    }
+
     if (!vendor.email) {
       logger.warn(`Cannot request evaluation: Vendor ${id} has no email`, { id }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor does not have a registered email address to receive an evaluation request.' });
@@ -840,7 +861,7 @@ async function requestEvaluation(req, res, next) {
       buyerCompany,
       buyerName,
       buyerEmail,
-      notes: req.body?.notes || '',
+      notes: bodyValidation.sanitizedData.notes || '',
     }, buyerId);
 
     return res.status(200).json({

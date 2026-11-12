@@ -8842,6 +8842,38 @@ class StoreService {
     return this.evaluations.slice(0, 500);
   }
 
+  /**
+   * Saved evaluations for one vendor, newest first. With persistent storage the
+   * database is queried directly, so a record older than the in-memory window is
+   * still found. Without storage, the in-memory list is searched by vendor id or
+   * vendor name. A failed read throws a 503 so callers never treat an unreadable
+   * store as "no evaluation exists".
+   */
+  async getVendorEvaluationsDurably(vendorId, limit = 1) {
+    const normalizedId = String(vendorId || '').trim();
+    if (!normalizedId) return [];
+
+    if (!pool.hasStorage()) {
+      const lookupKey = normalizedId.toLowerCase();
+      return this.evaluations
+        .filter((evaluation) =>
+          String(evaluation.vendorId || '').toLowerCase() === lookupKey ||
+          String(evaluation.vendorName || '').toLowerCase() === lookupKey
+        )
+        .slice(0, limit);
+    }
+
+    try {
+      return await domainQueries.getEvaluationsForVendorFromDB(normalizedId, limit);
+    } catch (error) {
+      logger.error('Failed to read saved vendor evaluations', error, 'STORE_SERVICE');
+      const readError = new Error('Saved evaluations could not be read from storage. No evaluation request was sent. Try again.');
+      readError.statusCode = 503;
+      readError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw readError;
+    }
+  }
+
   _buildEvaluationRecord(evalData) {
     const { moduleScores, overallScore, status, systemAction } = calculate360Evaluation(evalData.moduleScores || {});
 

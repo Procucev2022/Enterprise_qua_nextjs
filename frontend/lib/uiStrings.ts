@@ -3210,8 +3210,14 @@ sellerDirectory: {
     buttonTooltip: 'Send performance evaluation request to this supplier',
     successTitle: 'Evaluation Request Sent',
     successBody: 'Evaluation request sent to {vendorName}. The vendor has been notified to submit their performance evaluation details.',
-    noEmailError: 'Vendor does not have a registered email address to receive an evaluation request.',
     requestDispatchedBadge: 'Evaluation Request Dispatched to Vendor',
+    requestFailedTitle: 'Evaluation Request Failed',
+    requestFailedFallback: 'Failed to send evaluation request. Please try again.',
+    unreachableFallback: 'Could not reach the server. Please try again.',
+    vendorNotFoundTitle: 'Vendor Not Found',
+    vendorNotFoundBody: 'Could not locate the requested vendor in your directory.',
+    existingTitle: 'Saved Evaluation Found',
+    existingBody: 'A saved evaluation for {vendorName} already exists. It is shown now, and no new evaluation request was sent.',
   },
 
   addVendorModal: {

@@ -727,20 +727,28 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
     const targetVendor = vendorToRequest || selectedVendorForRevision;
     if (!targetVendor) return;
-    if (!targetVendor.email) {
-      showToast('Evaluation Request Failed', UI_STRINGS.vendorEvaluationRequest.noEmailError, 'warning');
-      return;
-    }
 
     setIsRequestingEvaluation(true);
     try {
+      // The store asks the server to look for a saved evaluation before it sends any request.
       const res = await requestVendorEvaluation(targetVendor.id);
+      if (res.success && res.evaluationExists && res.evaluation) {
+        // A saved evaluation was returned. Open it. No request was sent, so the dispatched badge stays off.
+        setSelectedVendorForRevision(null);
+        setViewModalOpen(false);
+        onViewEvaluation(res.evaluation);
+        return;
+      }
       if (res.success) {
         setEvaluationRequestDispatched(true);
       }
     } catch (err: any) {
       logger.log('ERROR', 'Failed to request vendor evaluation', { error: err }, 'VENDOR_SUMMARY');
-      showToast('Evaluation Request Failed', err?.message || 'Could not send evaluation request.', 'warning');
+      showToast(
+        UI_STRINGS.vendorEvaluationRequest.requestFailedTitle,
+        err?.message || UI_STRINGS.vendorEvaluationRequest.requestFailedFallback,
+        'warning'
+      );
     } finally {
       setIsRequestingEvaluation(false);
     }

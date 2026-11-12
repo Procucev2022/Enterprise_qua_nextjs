@@ -224,6 +224,9 @@ const VALIDATION_SCHEMAS = {
   requestVendorEvaluation: {
     notes: { type: 'string', required: false, maxLength: 1000 },
   },
+  evaluationListQuery: {
+    vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },
+  },
   clientLogEntry: {
       level: { type: 'string', required: false, enum: ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL', 'AUDIT'] },
     message: {

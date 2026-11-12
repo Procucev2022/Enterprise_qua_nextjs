@@ -5623,3 +5623,21 @@ In the Buyer flow, Vendor Evaluation Summary – Table Layout: Convert the entir
 In the Buyer flow, Vendor Score Visibility: Do not display a vendor score (such as 11%) unless an evaluation or review request has been submitted and the score is available in the database. Expected Behaviour/Solution: Fetch and display the existing vendor evaluation score from the database only when a buyer requests to view the review and a completed evaluation is available. Please fix the issue
 ```
 ---
+
+
+### Prompt 186
+**Timestamp**: 2026-11-12T20:22:35+05:30
+```text
+In the Buyer flow, Existing Evaluation: When the buyer requests a vendor review, first check whether an evaluation record already exists in the database. Expected Behaviour/Solution: If an evaluation exists, fetch and display the saved evaluation details and score without triggering a new evaluation. Please fix the issue
+```
+---
+
+### Prompt 187
+
+**Timestamp**: 2026-11-13T03:23:37+05:30
+
+```text
+In the Buyer flow, Existing Evaluation: When the buyer requests a vendor review, first check whether an evaluation record already exists in the database. Expected Behaviour/Solution: If an evaluation exists, fetch and display the saved evaluation details and score without triggering a new evaluation. Please fix the issue
+```
+
+---

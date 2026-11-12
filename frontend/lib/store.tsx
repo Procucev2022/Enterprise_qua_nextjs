@@ -12,6 +12,7 @@ import {
   AzureServiceHealth,
   SystemConfig,
   VendorEvaluationRecord,
+  VendorEvaluationRequestResult,
   VendorSubscriptionPlan,
   VendorEntry,
   StandardRFQEmailPayload,
@@ -258,7 +259,7 @@ interface AppContextType {
 
   // Buyer Vendor Rating Revision Engine
   reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => Promise<VendorRatingRevisionRecord | null>;
-  requestVendorEvaluation: (vendorId: string, notes?: string) => Promise<{ success: boolean; message?: string }>;
+  requestVendorEvaluation: (vendorId: string, notes?: string) => Promise<VendorEvaluationRequestResult>;
   selectedRatingRevisionEmail: VendorRatingRevisionEmailPayload | null;
   setSelectedRatingRevisionEmail: (email: VendorRatingRevisionEmailPayload | null) => void;
   ratingRevisionEmailModalOpen: boolean;
@@ -1905,18 +1906,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const requestVendorEvaluation = async (
     vendorId: string,
     notes?: string
-  ): Promise<{ success: boolean; message?: string }> => {
+  ): Promise<VendorEvaluationRequestResult> => {
     const targetVendor = buyerVendors.find((v) => v.id === vendorId);
     if (!targetVendor) {
-      showToast('Vendor Not Found', 'Could not locate the requested vendor in your directory.', 'warning');
+      showToast(UI_STRINGS.vendorEvaluationRequest.vendorNotFoundTitle, UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody, 'warning');
       return { success: false, message: 'Vendor not found' };
-    }
-    if (!targetVendor.email) {
-      showToast('Evaluation Request Failed', UI_STRINGS.vendorEvaluationRequest.noEmailError, 'warning');
-      return { success: false, message: UI_STRINGS.vendorEvaluationRequest.noEmailError };
     }
 
     try {
+      // The server looks for a saved evaluation before it sends any request. The
+      // vendor's email is checked there too, after that lookup.
       const res = await fetch(`/api/vendors/${encodeURIComponent(targetVendor.id)}/request-evaluation`, {
         method: 'POST',
         headers: authFetchHeaders(),
@@ -1924,9 +1923,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
-        const errMessage = data?.error || 'Failed to send evaluation request. Please try again.';
-        showToast('Evaluation Request Failed', errMessage, 'warning');
+        const errMessage = data?.error || UI_STRINGS.vendorEvaluationRequest.requestFailedFallback;
+        showToast(UI_STRINGS.vendorEvaluationRequest.requestFailedTitle, errMessage, 'warning');
         return { success: false, message: errMessage };
+      }
+
+      if (data.evaluationExists && data.data?.evaluation) {
+        // A saved evaluation exists, so no request went to the vendor. Keep the record
+        // in the local list so the score and details can be shown without another fetch.
+        const savedEvaluation: VendorEvaluationRecord = data.data.evaluation;
+        setVendorEvaluations((prev) => {
+          const filtered = prev.filter((e) => e.id !== savedEvaluation.id && e.vendorId !== savedEvaluation.vendorId);
+          return [savedEvaluation, ...filtered];
+        });
+        logger.log('INFO', 'Saved vendor evaluation returned; no evaluation request sent', {
+          vendorId,
+          evaluationId: savedEvaluation.id,
+        }, 'EVALUATION');
+        showToast(
+          UI_STRINGS.vendorEvaluationRequest.existingTitle,
+          formatString(UI_STRINGS.vendorEvaluationRequest.existingBody, { vendorName: targetVendor.name }),
+          'info'
+        );
+        return { success: true, message: data.message, evaluationExists: true, evaluation: savedEvaluation };
       }
 
       setBuyerVendors((prev) =>
@@ -1965,7 +1984,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return { success: true, message: data.message };
     } catch (err: any) {
       logger.log('ERROR', 'Failed to request vendor evaluation', { error: err }, 'STORE');
-      showToast('Evaluation Request Failed', err?.message || 'Could not reach the server. Please try again.', 'warning');
+      showToast(UI_STRINGS.vendorEvaluationRequest.requestFailedTitle, err?.message || UI_STRINGS.vendorEvaluationRequest.unreachableFallback, 'warning');
       return { success: false, message: err?.message };
     }
   };
