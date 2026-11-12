@@ -656,14 +656,14 @@ describe('enquiry filtering', () => {
     });
   }
 
-  test('keeps the enquiries whose own category, RFQ record or line items match the selected category', async () => {
+  test('keeps the enquiries whose resolved category matches the selected category', async () => {
     await renderCategoryScenario();
     expectRows(everyCategoryRfq, []);
 
     fireEvent.change(categorySelect(), { target: { value: 'Electrical' } });
 
-    expectRows(['RFQ-CAT-2', 'RFQ-CAT-5'], ['RFQ-CAT-1', 'RFQ-CAT-3', 'RFQ-CAT-4', 'RFQ-CAT-6']);
-    expect(screen.getByText(/Showing/)).toHaveTextContent('Showing 2 of 6 enquiries');
+    expectRows(['RFQ-CAT-2'], ['RFQ-CAT-1', 'RFQ-CAT-3', 'RFQ-CAT-4', 'RFQ-CAT-5', 'RFQ-CAT-6']);
+    expect(screen.getByText(/Showing/)).toHaveTextContent('Showing 1 of 6 enquiries');
     expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
   });
 
@@ -672,11 +672,11 @@ describe('enquiry filtering', () => {
     fireEvent.change(categorySelect(), { target: { value: 'Electrical' } });
 
     fireEvent.click(screen.getByRole('button', { name: /^Hydraulics/ }));
-    expectRows(['RFQ-CAT-2', 'RFQ-CAT-3', 'RFQ-CAT-5'], ['RFQ-CAT-1', 'RFQ-CAT-4', 'RFQ-CAT-6']);
+    expectRows(['RFQ-CAT-2', 'RFQ-CAT-3'], ['RFQ-CAT-1', 'RFQ-CAT-4', 'RFQ-CAT-5', 'RFQ-CAT-6']);
     expect(screen.getByText('(Filtered by 2 categories)')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Hydraulics/ }));
-    expectRows(['RFQ-CAT-2', 'RFQ-CAT-5'], ['RFQ-CAT-3']);
+    expectRows(['RFQ-CAT-2'], ['RFQ-CAT-3']);
     expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
   });
 

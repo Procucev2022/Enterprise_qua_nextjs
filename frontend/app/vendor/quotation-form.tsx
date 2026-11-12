@@ -297,6 +297,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const isRfqLockedForVendor = (rfqNumber: string) =>
     !isPaidOrUnlimitedVendor && vendorFreeCreditsRemaining === 0 && !isOwnBuyerRfq(rfqNumber);
 
+  const resolveOpportunityCategory = useCallback((opp: VendorOpportunity): string => {
+    const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+    return (
+      opp.majorCategory ||
+      opp.category ||
+      rfqRecord?.category ||
+      rfqRecord?.extractedEntities?.[0]?.majorCategory ||
+      rfqRecord?.extractedEntities?.[0]?.category ||
+      ''
+    ).trim();
+  }, [rfqs]);
+
   // Extract distinct categories available across opportunities
   const availableCategories = useMemo(() => {
     const set = new Set<string>();
@@ -328,15 +340,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         if (opportunityStatusFilter === 'direct' && !isOwnBuyerRfq(opp.rfqNumber)) return false;
 
         const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
-        const oppCat = (opp.majorCategory || opp.category || rfqRecord?.category || rfqRecord?.extractedEntities?.[0]?.majorCategory || '').trim();
+        const oppCat = resolveOpportunityCategory(opp);
 
-        // Category filter check (multi-category support)
+        // Category filter check (multi-category support):
+        // Filter strictly by the enquiry's resolved category so that choosing a category
+        // (e.g. Civil Works) does not surface RFQs from other categories (e.g. Electrical, IT).
         if (selectedCategories.length > 0) {
-          const matchesCategory = selectedCategories.some((cat) =>
-            cat.toLowerCase() === oppCat.toLowerCase() ||
-            (rfqRecord?.extractedEntities || []).some(
-              (ent) => (ent.majorCategory || ent.category || '').toLowerCase() === cat.toLowerCase()
-            )
+          const matchesCategory = selectedCategories.some(
+            (cat) => cat.toLowerCase() === oppCat.toLowerCase()
           );
           if (!matchesCategory) return false;
         }
@@ -386,7 +397,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         const bTime = new Date(b.deadline || 0).getTime();
         return bTime - aTime;
       });
-  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, isOwnBuyerRfq]);
+  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, isOwnBuyerRfq, resolveOpportunityCategory]);
 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
@@ -930,8 +941,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               {availableCategories.map((cat) => {
                 const isSelected = selectedCategories.includes(cat);
                 const count = vendorOpportunities.filter((opp) => {
-                  const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
-                  return (opp.majorCategory || opp.category || rfqRecord?.category || '').trim() === cat;
+                  return resolveOpportunityCategory(opp).toLowerCase() === cat.toLowerCase();
                 }).length;
                 return (
                   <button
@@ -1091,9 +1101,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                     <td data-label="RFQ Details" className="py-3">
                       <div className="font-semibold text-slate-800 dark:text-gray-200">{opp.title}</div>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
-                        {(opp.majorCategory || rfqRecord?.category) && (
+                        {resolveOpportunityCategory(opp) && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-                            {opp.majorCategory || rfqRecord?.category}
+                            {resolveOpportunityCategory(opp)}
                           </span>
                         )}
                         {(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (

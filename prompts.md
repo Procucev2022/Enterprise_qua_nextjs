@@ -5346,3 +5346,10 @@ Seller Side:
 it needs to be 145 RFQs awaiting response. Can you please check & fix
 ```
 ---
+
+### Prompt 151
+**Timestamp**: 2026-11-12T17:11:08+05:30
+```text
+Filtration Issue, chosen category Civil works but showing results of Uncategorised, Electrical, IT, as well
+```
+---
