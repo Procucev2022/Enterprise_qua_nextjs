@@ -1,6 +1,6 @@
 const buyerProfileService = require('../services/buyerProfileService');
 const { logger } = require('../services/loggerService');
-const { BUYER_PROFILE_MESSAGES } = require('../config/constants');
+const { BUYER_PROFILE_MESSAGES, DEFAULT_CATEGORY_TAXONOMY } = require('../config/constants');
 
 const LOG_CATEGORY = 'BUYER_PROFILE_CONTROLLER';
 
@@ -89,10 +89,52 @@ async function updateMyProfile(req, res, next) {
 /**
  * GET /api/buyer-profile/categories
  * The shared major/minor procurement taxonomy the profile screen selects from.
+ * Supports optional ?q= query param to search matching minor categories across 305+ categories.
  */
 async function getCategoryTaxonomy(req, res, next) {
   try {
-    const taxonomy = await buyerProfileService.getCategoryTaxonomy();
+    let taxonomy = await buyerProfileService.getCategoryTaxonomy();
+    if ((!taxonomy || taxonomy.length === 0) && Array.isArray(DEFAULT_CATEGORY_TAXONOMY) && DEFAULT_CATEGORY_TAXONOMY.length > 0) {
+      taxonomy = DEFAULT_CATEGORY_TAXONOMY;
+    }
+    const q = req.query && typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : null;
+
+    if (q !== null) {
+      const allMinors = Array.from(
+        new Set(
+          (taxonomy || []).flatMap((t) => t.minorCategories || [])
+        )
+      ).filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+      const filteredMinors = q.length >= 3
+        ? allMinors.filter((m) => m.toLowerCase().includes(q))
+        : [];
+
+      return res.json({
+        success: true,
+        count: taxonomy.length,
+        totalMinors: allMinors.length,
+        data: taxonomy,
+        minorCategories: filteredMinors,
+      });
+    }
+
+    if (req.query && (req.query.includeMinors === 'true' || req.query.format === 'flat')) {
+      const allMinors = Array.from(
+        new Set(
+          (taxonomy || []).flatMap((t) => t.minorCategories || [])
+        )
+      ).filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+      return res.json({
+        success: true,
+        count: taxonomy.length,
+        totalMinors: allMinors.length,
+        data: taxonomy,
+        minorCategories: allMinors,
+      });
+    }
+
     return res.json({ success: true, count: taxonomy.length, data: taxonomy });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error reading category taxonomy');

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
@@ -93,6 +93,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     deleteBuyerVendor,
     deleteMultipleBuyerVendors,
     categoryTaxonomy,
+    ensureCategoryTaxonomy,
     reviseVendorRating,
     requestVendorEvaluation,
     openRatingRevisionEmailModal,
@@ -129,6 +130,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       cancelled = true;
     };
   }, [activeBuyerAccount?.pincode]);
+
+  useEffect(() => {
+    if (ensureCategoryTaxonomy) {
+      void ensureCategoryTaxonomy();
+    }
+  }, [ensureCategoryTaxonomy]);
 
   // Pincode-first sort: vendors whose pincode matches the buyer's own are
   // moved to the front, preserving whatever relative order (rating, etc.)
@@ -173,6 +180,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formMajorCategory, setFormMajorCategory] = useState('');
   const [formMinorCategories, setFormMinorCategories] = useState<string[]>([]);
   const [formMinorInput, setFormMinorInput] = useState('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
   const [formContactPerson, setFormContactPerson] = useState('');
   const [formContactDesignation, setFormContactDesignation] = useState('');
   const [formEmail, setFormEmail] = useState('');
@@ -305,14 +313,47 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     new Set((categoryTaxonomy || []).map((c) => c.majorCategory).filter(Boolean))
   );
 
+  const getMajorForCategory = useCallback(
+    (minorName: string): string => {
+      if (!minorName) return '';
+      const match = (categoryTaxonomy || []).find((c) =>
+        (c.minorCategories || []).some((m) => m.toLowerCase() === minorName.toLowerCase())
+      );
+      return match ? match.majorCategory : '';
+    },
+    [categoryTaxonomy]
+  );
+
+  const allAvailableMinorCategories = useMemo(() => {
+    const list: string[] = [];
+    (categoryTaxonomy || []).forEach((c) => {
+      (c.minorCategories || []).forEach((m) => {
+        if (m && !list.includes(m)) {
+          list.push(m);
+        }
+      });
+    });
+    return list.sort((a, b) => a.localeCompare(b));
+  }, [categoryTaxonomy]);
+
+  const filteredCategorySuggestions = useMemo(() => {
+    const q = formMinorInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableMinorCategories.filter((cat) => cat.toLowerCase().includes(q));
+  }, [formMinorInput, allAvailableMinorCategories]);
+
   // Open Add Vendor Modal — reuses the same form field state as Edit, reset
   // to blanks/defaults since there is no existing vendor to populate from.
   const handleOpenAddModal = () => {
+    if (ensureCategoryTaxonomy) {
+      void ensureCategoryTaxonomy();
+    }
     setFormName('');
     setFormBrandName('');
     setFormMajorCategory('');
     setFormMinorCategories([]);
     setFormMinorInput('');
+    setShowCategorySuggestions(false);
     setFormContactPerson('');
     setFormContactDesignation('');
     setFormEmail('');
@@ -400,12 +441,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   // Open Edit Vendor Modal
   const handleOpenEditModal = (vendor: any) => {
+    if (ensureCategoryTaxonomy) {
+      void ensureCategoryTaxonomy();
+    }
     setSelectedVendorForCrud(vendor);
     setFormName(vendor.name || '');
     setFormBrandName(vendor.brandName || vendor.name || '');
     setFormMajorCategory(vendor.majorCategory || '');
     setFormMinorCategories(vendor.minorCategories ? [...vendor.minorCategories] : []);
     setFormMinorInput('');
+    setShowCategorySuggestions(false);
     setFormContactPerson(vendor.contactPerson || '');
     setFormContactDesignation(vendor.contactDesignation || '');
     setFormEmail(vendor.email || '');
@@ -441,8 +486,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const trimmed = tag.trim();
     if (trimmed && !formMinorCategories.includes(trimmed)) {
       setFormMinorCategories([...formMinorCategories, trimmed]);
+      if (!formMajorCategory) {
+        const inferredMajor = getMajorForCategory(trimmed);
+        if (inferredMajor) {
+          setFormMajorCategory(inferredMajor);
+        }
+      }
     }
     setFormMinorInput('');
+    setShowCategorySuggestions(false);
   };
 
   // Remove Minor Category Tag
@@ -1001,11 +1053,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         </td>
 
-        {/* Minor Categories */}
+        {/* Category */}
         <td className="py-2.5 px-3 min-w-[150px] align-middle">
           {vendor.minorCategories && vendor.minorCategories.length > 0 ? (
             <div className="flex flex-wrap items-center gap-1 max-w-[200px]">
-              <span className="text-[9px] text-slate-400 font-semibold">Minors:</span>
+              <span className="text-[9px] text-slate-400 font-semibold">{UI_STRINGS.vendorCategorySelect.categoryBadgePrefix}</span>
               {vendor.minorCategories.map((m: string) => (
                 <span
                   key={m}
@@ -1321,7 +1373,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </th>
                     <th className="py-2.5 px-3 min-w-[240px]">Supplier &amp; Details</th>
                     <th className="py-2.5 px-3 min-w-[200px]">Contact &amp; Location</th>
-                    <th className="py-2.5 px-3 min-w-[150px]">Minor Categories</th>
+                    <th className="py-2.5 px-3 min-w-[150px]">{UI_STRINGS.vendorCategorySelect.categoryHeader}</th>
                     <th className="py-2.5 px-3 min-w-[140px] text-center">AI Score &amp; Rating</th>
                     <th className="py-2.5 px-3 min-w-[130px] text-center">Status</th>
                     <th className="py-2.5 px-3 min-w-[200px] text-right">Actions</th>
@@ -1494,53 +1546,97 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
 
               <div>
-                <label htmlFor="add-vendor-minor-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                  Minor Categories
+                <label htmlFor="add-vendor-category-input" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  {UI_STRINGS.vendorCategorySelect.categoryLabel}
                 </label>
-                <div className="flex flex-wrap gap-1.5 mb-1.5">
-                  {formMinorCategories.map((tag) => (
-                    <span
-                      key={tag}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold"
-                    >
-                      {tag}
-                      <button type="button" onClick={() => handleRemoveMinorCategoryTag(tag)}>
-                        <X size={10} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <div className="space-y-1.5">
-                  <select
-                    id="add-vendor-minor-category"
-                    value=""
+                {formMinorCategories.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {formMinorCategories.map((tag) => (
+                      <span
+                        key={tag}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-semibold border border-indigo-200/50 dark:border-indigo-800"
+                      >
+                        {tag}
+                        <button type="button" aria-label={`Remove ${tag}`} onClick={() => handleRemoveMinorCategoryTag(tag)}>
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="relative">
+                  <input
+                    id="add-vendor-category-input"
+                    type="text"
+                    aria-label={UI_STRINGS.vendorCategorySelect.categoryLabel}
+                    value={formMinorInput}
                     onChange={(e) => {
-                      if (e.target.value) {
-                        handleAddMinorCategoryTag(e.target.value);
+                      setFormMinorInput(e.target.value);
+                      setShowCategorySuggestions(true);
+                    }}
+                    onFocus={() => {
+                      if (formMinorInput.trim().length >= 3) {
+                        setShowCategorySuggestions(true);
                       }
                     }}
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-                  >
-                    <option value="">Select Minor Category from dropdown...</option>
-                    {(formMajorCategory ? getMinorCategories(formMajorCategory) : []).map((minor) => (
-                      <option key={minor} value={minor}>
-                        {minor}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={formMinorInput}
-                    onChange={(e) => setFormMinorInput(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        handleAddMinorCategoryTag(formMinorInput);
+                        if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                          handleAddMinorCategoryTag(filteredCategorySuggestions[0]);
+                        } else if (formMinorInput.trim()) {
+                          handleAddMinorCategoryTag(formMinorInput);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setShowCategorySuggestions(false);
                       }
                     }}
-                    placeholder="Type a minor category and press Enter"
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                    placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
                   />
+                  {formMinorInput.trim().length > 0 && formMinorInput.trim().length < 3 && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
+                      {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                    </p>
+                  )}
+                  {showCategorySuggestions && formMinorInput.trim().length >= 3 && (
+                    <div
+                      id="add-vendor-category-suggestions"
+                      role="listbox"
+                      className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                    >
+                      <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                        <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                        <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                      </div>
+                      {filteredCategorySuggestions.length > 0 ? (
+                        filteredCategorySuggestions.map((category) => (
+                          <button
+                            key={category}
+                            type="button"
+                            role="option"
+                            aria-selected={formMinorCategories.includes(category)}
+                            onClick={() => handleAddMinorCategoryTag(category)}
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors"
+                          >
+                            <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                            <span className="text-[10px] text-slate-400 italic">{getMajorForCategory(category)}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="p-3 text-center">
+                          <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                          <button
+                            type="button"
+                            onClick={() => handleAddMinorCategoryTag(formMinorInput.trim())}
+                            className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            + Add &quot;{formMinorInput.trim()}&quot; as custom category
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1711,7 +1807,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </div>
 
             {/* Modal Body Form */}
-            <form onSubmit={handleEditVendorSubmit} className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
+            <form onSubmit={handleEditVendorSubmit} noValidate className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
               {/* Section 1: Basic Company & Brand Details */}
               <div className="space-y-3 p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block flex items-center gap-1.5">
@@ -1783,35 +1879,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   </div>
                 </div>
 
-                {/* Minor Categories Chips Input */}
+                {/* Category Chips & Searchable Dropdown */}
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Minor Categories &amp; Line Items
+                  <label htmlFor="edit-vendor-category-input" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    {UI_STRINGS.vendorCategorySelect.categoryLabel}
                   </label>
-                  <div className="flex items-center gap-2 mb-2">
-                    <input
-                      type="text"
-                      placeholder="Type category and press Add Tag..."
-                      value={formMinorInput}
-                      onChange={(e) => setFormMinorInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddMinorCategoryTag(formMinorInput);
-                        }
-                      }}
-                      className="flex-1 text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleAddMinorCategoryTag(formMinorInput)}
-                      className="btn btn-secondary btn-xs font-semibold px-3 py-2"
-                    >
-                      Add Tag
-                    </button>
-                  </div>
                   {formMinorCategories.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-1.5 mb-2">
                       {formMinorCategories.map((tag) => (
                         <span
                           key={tag}
@@ -1820,6 +1894,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           {tag}
                           <button
                             type="button"
+                            aria-label={`Remove ${tag}`}
                             onClick={() => handleRemoveMinorCategoryTag(tag)}
                             className="hover:text-rose-500 ml-0.5"
                           >
@@ -1829,6 +1904,89 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       ))}
                     </div>
                   )}
+                  <div className="relative">
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="edit-vendor-category-input"
+                        type="text"
+                        aria-label={UI_STRINGS.vendorCategorySelect.categoryLabel}
+                        placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                        value={formMinorInput}
+                        onChange={(e) => {
+                          setFormMinorInput(e.target.value);
+                          setShowCategorySuggestions(true);
+                        }}
+                        onFocus={() => {
+                          if (formMinorInput.trim().length >= 3) {
+                            setShowCategorySuggestions(true);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                              handleAddMinorCategoryTag(filteredCategorySuggestions[0]);
+                            } else if (formMinorInput.trim()) {
+                              handleAddMinorCategoryTag(formMinorInput);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setShowCategorySuggestions(false);
+                          }
+                        }}
+                        className="flex-1 text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAddMinorCategoryTag(formMinorInput)}
+                        className="btn btn-secondary btn-xs font-semibold px-3 py-2 shrink-0"
+                      >
+                        Add Tag
+                      </button>
+                    </div>
+                    {formMinorInput.trim().length > 0 && formMinorInput.trim().length < 3 && (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
+                        {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                      </p>
+                    )}
+                    {showCategorySuggestions && formMinorInput.trim().length >= 3 && (
+                      <div
+                        id="edit-vendor-category-suggestions"
+                        role="listbox"
+                        className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                      >
+                        <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                          <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                          <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                        </div>
+                        {filteredCategorySuggestions.length > 0 ? (
+                          filteredCategorySuggestions.map((category) => (
+                            <button
+                              key={category}
+                              type="button"
+                              role="option"
+                              aria-selected={formMinorCategories.includes(category)}
+                              onClick={() => handleAddMinorCategoryTag(category)}
+                              className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors"
+                            >
+                              <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                              <span className="text-[10px] text-slate-400 italic">{getMajorForCategory(category)}</span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="p-3 text-center">
+                            <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                            <button
+                              type="button"
+                              onClick={() => handleAddMinorCategoryTag(formMinorInput.trim())}
+                              className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                            >
+                              + Add &quot;{formMinorInput.trim()}&quot; as custom category
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2582,7 +2740,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </div>
 
                 {/* Modal Body Form */}
-                <form onSubmit={handleSaveRatingRevision} className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
+                <form onSubmit={handleSaveRatingRevision} noValidate className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
                   {/* Vendor & Buyer Context Bar */}
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 grid grid-cols-2 gap-2 text-[11px]">
                     <div>

@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
 import { logger } from '@/lib/logger';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { VendorEntry } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
@@ -704,7 +705,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByDisplayValue('Rejected Vendor Co')).toBeInTheDocument();
     });
 
-    it('adds and removes a minor category tag in the Add Vendor form', () => {
+    it('adds and removes a category tag in the Add Vendor form', () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -713,9 +714,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
-      const minorInput = screen.getByPlaceholderText(/Type a minor category and press Enter/i);
-      fireEvent.change(minorInput, { target: { value: 'Custom Category' } });
-      fireEvent.keyDown(minorInput, { key: 'Enter' });
+      const categoryInput = screen.getByPlaceholderText(/search category/i);
+      fireEvent.change(categoryInput, { target: { value: 'Custom Category' } });
+      fireEvent.keyDown(categoryInput, { key: 'Enter' });
       expect(screen.getByText('Custom Category')).toBeInTheDocument();
 
       fireEvent.click(screen.getByText('Custom Category').closest('span')!.querySelector('button')!);
@@ -962,7 +963,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const editBtns = screen.getAllByRole('button', { name: /Edit/i });
       fireEvent.click(editBtns[0]);
 
-      const tagInput = screen.getByPlaceholderText(/Type category and press Add Tag/i);
+      const tagInput = screen.getByPlaceholderText(/search category/i);
       const addTagBtn = screen.getByRole('button', { name: /Add Tag/i });
 
       // Add a brand-new tag
@@ -1592,7 +1593,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockShowToast).toHaveBeenCalledWith('Invalid Pincode', 'Invalid PIN code format', 'warning');
     });
 
-    it('handles empty major category in Add Vendor modal for minor options', () => {
+    it('handles category input and 3-character threshold in Add Vendor modal', () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -1602,11 +1603,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      const majorSelect = screen.getByLabelText(/Major Category/i);
-      fireEvent.change(majorSelect, { target: { value: '' } });
-
-      const minorSelect = document.getElementById('add-vendor-minor-category');
-      expect(minorSelect).toBeInTheDocument();
+      const categoryInput = document.getElementById('add-vendor-category-input');
+      expect(categoryInput).toBeInTheDocument();
+      // When fewer than 3 chars typed, shows hint
+      fireEvent.change(categoryInput as HTMLElement, { target: { value: 'ca' } });
+      expect(screen.getByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeInTheDocument();
     });
 
     it('triggers onClose on VendorUploadModal', () => {
@@ -1645,7 +1646,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockUpdateBuyerVendor).not.toHaveBeenCalled();
     });
 
-    it('selects a minor category from dropdown in Add Vendor modal, and handles empty selection', () => {
+    it('selects a category from searchable dropdown suggestions in Add Vendor modal', () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -1655,13 +1656,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      const minorSelect = document.getElementById('add-vendor-minor-category');
-      expect(minorSelect).toBeInTheDocument();
-      // Select empty option (false branch of if (e.target.value))
-      fireEvent.change(minorSelect as HTMLElement, { target: { value: '' } });
-      // Select valid minor category (true branch)
-      fireEvent.change(minorSelect as HTMLElement, { target: { value: 'Valves' } });
-      expect(screen.getByText('Valves')).toBeInTheDocument();
+      const categoryInput = document.getElementById('add-vendor-category-input');
+      expect(categoryInput).toBeInTheDocument();
+      // Type >= 3 characters to search across 305+ categories
+      fireEvent.change(categoryInput as HTMLElement, { target: { value: 'Valves' } });
+      const option = screen.getByRole('option', { name: /Valves/i });
+      expect(option).toBeInTheDocument();
+      fireEvent.click(option);
+      expect(screen.getAllByText('Valves').length).toBeGreaterThan(0);
     });
 
     it('finds vendor evaluation from vendorEvaluations array when storeRecord is not present on vendor', () => {
@@ -3163,8 +3165,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
     });
   });
 
-  describe('Add Vendor minor category dropdown and keydown branches', () => {
-    it('handles selecting minor category from dropdown and pressing Enter in input (lines 1458, 1476)', () => {
+  describe('Add Vendor category dropdown and keydown branches', () => {
+    it('handles selecting category from suggestions, hint for < 3 chars, and Enter/Escape keydown', () => {
       (useApp as jest.Mock).mockReturnValue({
         vendorEvaluations: [],
         currentMode: 'mode_3',
@@ -3190,21 +3192,27 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      // 1. Select minor category from dropdown with empty value (no-op)
-      const minorSelect = screen.getByRole('combobox', { name: /Minor Categories/i });
-      fireEvent.change(minorSelect, { target: { value: '' } });
+      const categoryInput = screen.getByPlaceholderText(/search category/i);
 
-      // 2. Select minor category with 'Valves'
-      fireEvent.change(minorSelect, { target: { value: 'Valves' } });
-      expect(screen.getByText('Valves')).toBeInTheDocument();
+      // 1. Type < 3 characters (e.g. 'Va') -> shows hint
+      fireEvent.change(categoryInput, { target: { value: 'Va' } });
+      expect(screen.getByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeInTheDocument();
 
-      // 3. Type in custom minor category input and press non-Enter key (no-op)
-      const minorInput = screen.getByPlaceholderText(/Type a minor category and press Enter/i);
-      fireEvent.change(minorInput, { target: { value: 'Turbines' } });
-      fireEvent.keyDown(minorInput, { key: 'a' });
+      // 2. Type >= 3 characters (e.g. 'Valves') -> displays matching suggestions
+      fireEvent.change(categoryInput, { target: { value: 'Valves' } });
+      fireEvent.focus(categoryInput);
+      const option = screen.getByRole('option', { name: /Valves/i });
+      expect(option).toBeInTheDocument();
 
-      // 4. Press Enter
-      fireEvent.keyDown(minorInput, { key: 'Enter' });
+      // 3. Select suggestion
+      fireEvent.click(option);
+      expect(screen.getAllByText('Valves').length).toBeGreaterThan(0);
+
+      // 4. Type custom and test keydowns
+      fireEvent.change(categoryInput, { target: { value: 'Turbines' } });
+      fireEvent.keyDown(categoryInput, { key: 'Escape' });
+      fireEvent.keyDown(categoryInput, { key: 'a' });
+      fireEvent.keyDown(categoryInput, { key: 'Enter' });
       expect(screen.getByText('Turbines')).toBeInTheDocument();
     });
   });
@@ -3534,6 +3542,264 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(minorValves).toHaveAttribute('title', 'Valves');
       const minorPumps = screen.getByText('Pumps');
       expect(minorPumps).toHaveAttribute('title', 'Pumps');
+    });
+  });
+
+  describe('Searchable category dropdown coverage booster', () => {
+    it('covers all branches of category suggestions in Add and Edit modals', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [
+          {
+            id: 'v-no-minors',
+            name: 'No Minors Co',
+            source: 'buyer_uploaded',
+            majorCategory: 'Mechanical',
+            minorCategories: [],
+            email: 'none@minors.co',
+            phone: '+91 99999 88888',
+            city: 'Nagpur',
+            state: '',
+            status: 'PREFERRED ENTERPRISE SUPPLIER',
+            isUploaded: true,
+          },
+          {
+            id: 'v-only-state',
+            name: 'Only State Co',
+            source: 'buyer_uploaded',
+            majorCategory: 'Mechanical',
+            minorCategories: undefined,
+            email: 'state@minors.co',
+            phone: '+91 99999 77777',
+            city: '',
+            state: 'Gujarat',
+            status: 'PROCUCEV VERIFIED VENDOR',
+            isUploaded: false,
+          },
+        ],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [
+          { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps', 'Turbines'] },
+          { majorCategory: 'Electrical', minorCategories: ['Cables', 'Transformers'] },
+        ],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Verify "None" is displayed when minorCategories is empty
+      expect(screen.getAllByText('None').length).toBeGreaterThan(0);
+
+      // ─── ADD VENDOR MODAL ───
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      const addInput = document.getElementById('add-vendor-category-input') as HTMLInputElement;
+
+      // Focus when length < 3 does nothing
+      fireEvent.focus(addInput);
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+
+      // Type >= 3 chars with no match
+      fireEvent.change(addInput, { target: { value: 'zzznonexistent' } });
+      expect(screen.getByText(UI_STRINGS.vendorCategorySelect.noMatches)).toBeInTheDocument();
+
+      // Click "+ Add zzznonexistent as custom category"
+      const addCustomBtn = screen.getByRole('button', { name: /\+ Add "zzznonexistent" as custom category/i });
+      fireEvent.click(addCustomBtn);
+      expect(screen.getByText('zzznonexistent')).toBeInTheDocument();
+
+      // Type >= 3 chars with match and press Enter to select first suggestion
+      fireEvent.change(addInput, { target: { value: 'Cab' } });
+      fireEvent.keyDown(addInput, { key: 'Enter' });
+      expect(screen.getByText('Cables')).toBeInTheDocument();
+
+      // Verify Major Category was auto-set to Electrical
+      const majorSelect = screen.getByLabelText(/Major Category/i) as HTMLSelectElement;
+      expect(majorSelect.value).toBe('Electrical');
+
+      // Close modal via Cancel
+      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+
+      // ─── EDIT VENDOR MODAL ───
+      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
+      fireEvent.click(editBtns[0]);
+
+      const editInput = document.getElementById('edit-vendor-category-input') as HTMLInputElement;
+
+      // Focus when length < 3
+      fireEvent.focus(editInput);
+
+      // Type < 3 chars
+      fireEvent.change(editInput, { target: { value: 'Tr' } });
+      expect(screen.getByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeInTheDocument();
+
+      // Type >= 3 chars
+      fireEvent.change(editInput, { target: { value: 'Trans' } });
+      fireEvent.focus(editInput);
+      expect(screen.getByText('Transformers')).toBeInTheDocument();
+
+      // Press Escape to close suggestions
+      fireEvent.keyDown(editInput, { key: 'Escape' });
+      expect(screen.queryByText('Transformers')).not.toBeInTheDocument();
+
+      // Type again with new search term and press Enter to select first suggestion
+      fireEvent.change(editInput, { target: { value: 'Cabl' } });
+      fireEvent.keyDown(editInput, { key: 'Enter' });
+      expect(screen.getByText('Cables')).toBeInTheDocument();
+
+      // Type no match in edit modal and add custom
+      fireEvent.change(editInput, { target: { value: 'customedit999' } });
+      const editAddCustomBtn = screen.getByRole('button', { name: /\+ Add "customedit999" as custom category/i });
+      fireEvent.click(editAddCustomBtn);
+      expect(screen.getByText('customedit999')).toBeInTheDocument();
+    });
+
+    it('covers ensureCategoryTaxonomy, invalid formRating, invalid score revision, and non-uploaded RFQ vendor', async () => {
+      const mockEnsureTaxonomy = jest.fn();
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [
+          {
+            id: 'rfq-101',
+            rfqNumber: 'RFQ-99999',
+            invitedVendors: [{ id: 'v-network-only' }],
+          },
+        ],
+        showToast: mockShowToast,
+        buyerVendors: [
+          {
+            id: 'v-network-only',
+            name: 'Network Vendor Only',
+            majorCategory: 'Mechanical',
+            minorCategories: ['Valves'],
+            email: 'network@supplier.com',
+            phone: '+91 91234 56789',
+            status: 'PROCUCEV VERIFIED VENDOR',
+            source: 'procucev_network',
+            isUploaded: false,
+          },
+        ],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
+        ensureCategoryTaxonomy: mockEnsureTaxonomy,
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Verify ensureCategoryTaxonomy was called on mount
+      expect(mockEnsureTaxonomy).toHaveBeenCalled();
+
+      // ─── ADD MODAL INVALID RATING BRANCH ───
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      expect(mockEnsureTaxonomy).toHaveBeenCalledTimes(2);
+
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Invalid Rating Co' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Agent' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'agent@invalid.com' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 90000 00000' } });
+      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAACA1928K1Z4' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '6.5' } });
+
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+      expect(mockShowToast).toHaveBeenCalledWith('Invalid Rating', 'Rating must be between 1.0 and 5.0.', 'warning');
+      fireEvent.click(screen.getByTestId('close-add-vendor-modal'));
+
+      // ─── EDIT MODAL INVALID RATING BRANCH ───
+      // Open add modal and then test edit
+      const editVendorObj = {
+        id: 'v-network-only',
+        name: 'Network Vendor Only',
+        contactPerson: 'Contact Person',
+        source: 'buyer_uploaded',
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
+        email: 'network@supplier.com',
+        phone: '+91 91234 56789',
+        rating: 4.0,
+        isUploaded: true,
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [editVendorObj],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
+        ensureCategoryTaxonomy: mockEnsureTaxonomy,
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      const { unmount } = render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const editBtn = screen.getAllByRole('button', { name: /Edit/i })[0];
+      fireEvent.click(editBtn);
+
+      fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '0.5' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+      expect(mockShowToast).toHaveBeenCalledWith('Invalid Rating', 'Rating must be between 1.0 and 5.0.', 'warning');
+      unmount();
+
+      // ─── REVISE RATING MODAL INVALID SCORES BRANCH ───
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const reviseBtn = screen.getByRole('button', { name: /Revise Rating/i });
+      fireEvent.click(reviseBtn);
+
+      // Set quality score to invalid (e.g. empty or 150)
+      const numberInputs = screen.getAllByRole('spinbutton');
+      fireEvent.change(numberInputs[0], { target: { value: '' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /Submit Revision & Dispatch Email/i }));
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Scores Required',
+        'Enter quality, cost and delivery scores between 0 and 100.',
+        'warning'
+      );
     });
   });
 });

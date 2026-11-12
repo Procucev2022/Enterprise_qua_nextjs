@@ -1012,6 +1012,8 @@ export interface BuyerProfileSaveResult extends BuyerProfileResult {
 export interface CategoryTaxonomyResult {
   success: boolean;
   data: MajorMinorCategory[];
+  minorCategories?: string[];
+  totalMinors?: number;
   error?: string;
 }
 

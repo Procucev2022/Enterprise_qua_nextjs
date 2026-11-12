@@ -213,6 +213,58 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
       expect(res.body).toEqual({ success: true, count: 2, data: taxonomy });
     });
 
+    test('filters minor categories when search query has at least 3 characters', async () => {
+      const taxonomy = [
+        { majorCategory: 'Civil Works', minorCategories: ['Piling'] },
+        { majorCategory: 'IT', minorCategories: ['Laptop', 'Servers'] },
+      ];
+      jest.spyOn(buyerProfileService, 'getCategoryTaxonomy').mockResolvedValue(taxonomy);
+
+      const res = await request(app).get('/api/buyer-profile/categories?q=lap').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.minorCategories).toEqual(['Laptop']);
+    });
+
+    test('returns empty minor categories when search query has fewer than 3 characters', async () => {
+      const taxonomy = [
+        { majorCategory: 'Civil Works', minorCategories: ['Piling'] },
+        { majorCategory: 'IT', minorCategories: ['Laptop', 'Servers'] },
+      ];
+      jest.spyOn(buyerProfileService, 'getCategoryTaxonomy').mockResolvedValue(taxonomy);
+
+      const res = await request(app).get('/api/buyer-profile/categories?q=la').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.minorCategories).toEqual([]);
+    });
+
+    test('returns all minor categories when includeMinors query is set to true', async () => {
+      const taxonomy = [
+        { majorCategory: 'Civil Works', minorCategories: ['Piling'] },
+        { majorCategory: 'IT', minorCategories: ['Laptop', 'Servers'] },
+      ];
+      jest.spyOn(buyerProfileService, 'getCategoryTaxonomy').mockResolvedValue(taxonomy);
+
+      const res = await request(app).get('/api/buyer-profile/categories?includeMinors=true').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.minorCategories).toEqual(['Laptop', 'Piling', 'Servers']);
+    });
+
+    test('falls back to default taxonomy when service returns empty list', async () => {
+      jest.spyOn(buyerProfileService, 'getCategoryTaxonomy').mockResolvedValue([]);
+
+      const res = await request(app).get('/api/buyer-profile/categories').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.count).toBeGreaterThan(0);
+    });
+
     test('reports a master read failure as 503', async () => {
       jest
         .spyOn(buyerProfileService, 'getCategoryTaxonomy')

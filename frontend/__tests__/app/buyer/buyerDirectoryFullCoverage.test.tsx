@@ -257,7 +257,7 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       // Add a minor category tag
-      const minorInput = screen.getByPlaceholderText(/Type category and press Add Tag/i);
+      const minorInput = screen.getByPlaceholderText(/search category/i);
       fireEvent.change(minorInput, { target: { value: 'Control Valves' } });
       fireEvent.keyDown(minorInput, { key: 'Enter', code: 'Enter' });
 

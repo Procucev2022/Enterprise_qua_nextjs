@@ -180,12 +180,13 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
       .find((select) => select.querySelector('option[value="Civil Works"]') !== null) as HTMLSelectElement;
     fireEvent.change(majorSelect, { target: { value: 'Civil Works' } });
 
-    // The minor list is built from the chosen major, so it appears only once a major is selected.
-    const minorSelect = addDialog.querySelector('#add-vendor-minor-category') as HTMLSelectElement;
-    fireEvent.change(minorSelect, { target: { value: 'Back filing' } });
+    // The searchable category input shows suggestions when >= 3 characters are typed
+    const categoryInput = addDialog.querySelector('#add-vendor-category-input') as HTMLInputElement;
+    fireEvent.change(categoryInput, { target: { value: 'Back filing' } });
+    const suggestionOption = screen.getByRole('option', { name: /Back filing/i });
+    fireEvent.click(suggestionOption);
 
-    // The option and the new tag both read "Back filing".
-    expect(within(addDialog).getAllByText('Back filing').length).toBeGreaterThan(1);
+    expect(within(addDialog).getByText('Back filing')).toBeInTheDocument();
   });
 
   it('clears the rating field in the add form', () => {

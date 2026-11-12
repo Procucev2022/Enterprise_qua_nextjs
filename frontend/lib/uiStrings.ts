@@ -3207,6 +3207,19 @@ sellerDirectory: {
     description: 'Add a vendor you deal with directly to your vendor directory only.',
   },
 
+  vendorCategorySelect: {
+    categoryHeader: 'Category',
+    categoryLabel: 'Category',
+    categoryBadgePrefix: 'Category:',
+    searchPlaceholder: 'Search category (min. 3 characters)...',
+    minCharsHint: 'Type at least 3 characters to search 305+ categories...',
+    noMatches: 'No matching categories found.',
+    matchingCategories: 'Matching Categories',
+    masterCountBadge: '305+ in Master',
+    addCustomTag: 'Add as custom category tag',
+    selectCategory: 'Select category',
+  },
+
   /** Shared modals in app/components/Modals.tsx. Each value comes from the server, or it shows one of the placeholders above. */
   modals: {
     purchaseOrder: {

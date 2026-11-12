@@ -3236,7 +3236,7 @@ export default function IngestionWizard({
               {vendorFormMajorCategory && minorsFor(vendorFormMajorCategory).length > 0 && (
                 <div>
                   <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Minor Category
+                    Category
                   </label>
                   <select
                     value={vendorFormMinorCategories[0] || ''}
@@ -3246,7 +3246,7 @@ export default function IngestionWizard({
                     }}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
                   >
-                    <option value="">Select Minor Category...</option>
+                    <option value="">Select Category...</option>
                     {minorsFor(vendorFormMajorCategory).map((minor) => (
                       <option key={minor} value={minor}>
                         {minor}

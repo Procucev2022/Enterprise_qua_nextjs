@@ -5575,3 +5575,11 @@ In the Buyer flow, Remove the "Auto-Generate with AI" button and replace it with
 In the Buyer flow, Add Vendor Description: Change the text "Add a vendor you deal with directly — added to your vendor directory only" to "Add a vendor you deal with directly to your vendor directory only." Expected Behaviour/Solution: Display the updated description below the Add Vendor heading. Please fix the issue
 ```
 ---
+
+
+### Prompt 180
+**Timestamp**: 2026-11-12T20:17:24+05:30
+```text
+In the Buyer flow, Minor Category Field: Rename "Minor Categories" to "Category". Expected Behaviour/Solution: Provide a searchable dropdown that fetches the 305+ available minor categories from the backend and displays matching suggestions after the user enters at least 3 characters. Allow the user to select the required category from the suggestions. Please fix the issue
+```
+---
