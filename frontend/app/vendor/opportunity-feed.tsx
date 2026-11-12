@@ -3,7 +3,7 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl } from '@/lib/rfqClient';
 import { logger } from '@/lib/logger';
@@ -532,15 +532,25 @@ export default function OpportunityFeed({
           <div className="flex items-center gap-2.5">
             <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
             <div>
-              <span className="font-bold text-slate-900 dark:text-white">AUTOMATED SYSTEM REMINDER:</span>{' '}
-              <span>{pendingBidCount} quotation{pendingBidCount === 1 ? '' : 's'} awaiting your response, starting with <span className="mono font-bold text-slate-900 dark:text-white">{pendingBidOpportunity.rfqNumber}</span>.</span>
+              <span className="font-bold text-slate-900 dark:text-white">
+                {UI_STRINGS.vendorWorkspace.urgentReminderHeader}
+              </span>{' '}
+              <span>
+                {formatString(
+                  pendingBidCount === 1
+                    ? UI_STRINGS.vendorWorkspace.urgentReminderSingular
+                    : UI_STRINGS.vendorWorkspace.urgentReminderPlural,
+                  { count: pendingBidCount }
+                )}{' '}
+                <span className="mono font-bold text-slate-900 dark:text-white">{pendingBidOpportunity.rfqNumber}</span>.
+              </span>
             </div>
           </div>
           <button
             onClick={handleDirectReminderBid}
             className="btn btn-amber btn-sm font-bold shrink-0"
           >
-            Submit Quote Now
+            {UI_STRINGS.vendorWorkspace.submitQuoteNowAction}
           </button>
         </div>
       )}

@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import OpportunityFeed from '@/app/vendor/opportunity-feed';
 import { AppProvider, useApp } from '@/lib/store';
 import { logger } from '@/lib/logger';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { QuoteComparison, RFQItem, VendorOpportunity, VendorSubscriptionPlan } from '@/lib/types';
 
 const mockRouterPush = jest.fn();
@@ -561,18 +561,20 @@ describe('OpportunityFeed: pending-bid reminder', () => {
     await renderFeed({ onNavigateToBidForm });
 
     // Four of the six fixtures carry no quote.
-    expect(screen.getByText(/4 quotations awaiting your response/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Submit Quote Now/i }));
+    const expectedPlural = formatString(UI_STRINGS.vendorWorkspace.urgentReminderPlural, { count: 4 });
+    expect(screen.getByText(new RegExp(expectedPlural, 'i'))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorWorkspace.submitQuoteNowAction, 'i') }));
     expect(onNavigateToBidForm).toHaveBeenCalledWith(
       expect.objectContaining({ rfqNumber: DIRECT_OWN.rfqNumber })
     );
   });
 
-  test('uses the singular form for a single outstanding quotation', async () => {
+  test('uses the singular form for a single outstanding RFQ', async () => {
     serveRFQs([DIRECT_OWN]);
     await renderFeed();
 
-    expect(screen.getByText(/1 quotation awaiting your response/i)).toBeInTheDocument();
+    const expectedSingular = formatString(UI_STRINGS.vendorWorkspace.urgentReminderSingular, { count: 1 });
+    expect(screen.getByText(new RegExp(expectedSingular, 'i'))).toBeInTheDocument();
   });
 });
 

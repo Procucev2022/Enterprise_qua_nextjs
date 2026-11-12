@@ -5331,3 +5331,18 @@ Run node scripts/migrate-d1.js --dev
 [INFO] [DATABASE_MIGRATION] D1 migration lease released
 ```
 ---
+
+### Prompt 149
+**Timestamp**: 2026-11-12T16:49:00+05:30
+```text
+Currently for any small change in antigravity, it is taking too much time in quality checks, any way to speed it up.  
+```
+---
+
+### Prompt 150
+**Timestamp**: 2026-11-12T16:53:30+05:30
+```text
+Seller Side:
+it needs to be 145 RFQs awaiting response. Can you please check & fix
+```
+---

@@ -2218,6 +2218,10 @@ sellerDirectory: {
    * the pricing API returns. When a limit is not returned, the copy names no number.
    */
   vendorWorkspace: {
+    urgentReminderHeader: 'AUTOMATED SYSTEM REMINDER:',
+    urgentReminderSingular: '1 RFQ awaiting response, starting with',
+    urgentReminderPlural: '{count} RFQs awaiting response, starting with',
+    submitQuoteNowAction: 'Submit Quote Now',
     notAvailable: 'Not available',
     downloadsLabel: 'RFQ Downloads:',
     downloadsLabelThreeMonth: '3-Month Downloads:',
