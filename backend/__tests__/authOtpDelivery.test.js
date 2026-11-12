@@ -284,6 +284,14 @@ describe('authService registration OTP verification and startup', () => {
     expect(authService.resolveAuthSecret({})).toMatch(/^[0-9a-f]{96}$/);
   });
 
+  test('does not memoize an empty auth secret', () => {
+    jest.isolateModules(() => {
+      const isolatedAuthService = require('../src/services/authService');
+      expect(isolatedAuthService.getAuthSecret(() => '')).toBeUndefined();
+      expect(isolatedAuthService.getAuthSecret(() => 'configured-after-startup')).toBe('configured-after-startup');
+    });
+  });
+
   test('hydrateFromDB sweeps expired state and survives a failed sweep', async () => {
     jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValue({ isConnected: true });
     const purge = jest.spyOn(authSessionQueries, 'purgeExpiredAuthState').mockResolvedValue({ otpsPurged: 2, revokedTokensPurged: 0 });

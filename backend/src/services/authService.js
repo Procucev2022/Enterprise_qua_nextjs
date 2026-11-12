@@ -54,8 +54,9 @@ function resolveAuthSecret(env = process.env) {
 
 let authSecret;
 
-function getAuthSecret() {
-  if (!authSecret) authSecret = resolveAuthSecret();
+function getAuthSecret(resolve = resolveAuthSecret) {
+  const resolved = authSecret || resolve();
+  if (resolved) authSecret = resolved;
   return authSecret;
 }
 
@@ -1614,6 +1615,7 @@ async function getAllUsers(limit = 200) {
 
 module.exports = {
   resolveAuthSecret,
+  getAuthSecret,
   hashPassword,
   verifyPassword,
   loadIdentityUser,
