@@ -1073,6 +1073,7 @@ export interface VendorEntry {
   evaluationRequestedAt?: string;
   evaluationRequestedBy?: string;
   hasRecord?: boolean;
+  storeRecord?: VendorEvaluationRecord | null;
   matchReason?: string;
   proximity?: string;
   proximityMatch?: boolean;

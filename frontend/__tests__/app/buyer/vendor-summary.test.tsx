@@ -78,6 +78,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   const mockUpdateBuyerVendor = jest.fn();
   const mockDeleteBuyerVendor = jest.fn();
   const mockDeleteMultipleBuyerVendors = jest.fn();
+  const mockFetchVendorEvaluation = jest.fn();
 
   const mockBuyerVendors: any[] = [
     {
@@ -231,6 +232,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       requestVendorEvaluation: mockRequestVendorEvaluation,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      fetchVendorEvaluation: mockFetchVendorEvaluation,
     });
     mockFetchAllVendors.mockImplementation(async (opts: { search?: string } = {}) => {
       const q = (opts.search || '').toLowerCase();
@@ -324,6 +326,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       requestVendorEvaluation: mockRequestVendorEvaluation,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      fetchVendorEvaluation: mockFetchVendorEvaluation,
     });
 
     render(
@@ -1171,6 +1174,114 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(viewEvalBtns[0]);
       expect(mockOnViewEvaluation).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith('Not evaluated', 'No evaluation record exists for this vendor yet.', 'info');
+    });
+
+    it('fetches existing evaluation from database when buyer requests to view the review', async () => {
+      const vendorAwaitingFetch = [
+        {
+          id: 'v-fetch-eval-1',
+          name: 'Remote Evaluated Co',
+          source: 'buyer_uploaded',
+          majorCategory: 'Mechanical',
+          evaluated: false,
+          score: null,
+        },
+      ];
+      const remoteRecord = {
+        id: 'eval-remote-1',
+        vendorId: 'v-fetch-eval-1',
+        vendorName: 'Remote Evaluated Co',
+        overallScore: 88,
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+      };
+      mockFetchVendorEvaluation.mockResolvedValueOnce(remoteRecord);
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: vendorAwaitingFetch,
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+        fetchVendorEvaluation: mockFetchVendorEvaluation,
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Score is not displayed because no completed evaluation was available yet in store
+      expect(screen.getByText('Not Evaluated')).toBeInTheDocument();
+      expect(screen.queryByText('88%')).not.toBeInTheDocument();
+
+      // Buyer clicks View 360° Evaluation to request viewing the review
+      const viewEvalBtn = screen.getByText(/View 360° Evaluation/i);
+      fireEvent.click(viewEvalBtn);
+
+      await waitFor(() => {
+        expect(mockFetchVendorEvaluation).toHaveBeenCalledWith('v-fetch-eval-1');
+        expect(mockOnViewEvaluation).toHaveBeenCalledWith(remoteRecord);
+      });
+    });
+
+    it('does not display dummy 11% score in table or profile modal when vendor is not evaluated in database', () => {
+      const vendorWithDummyScore = [
+        {
+          id: 'v-dummy-score-1',
+          name: 'Dummy Score Co',
+          source: 'buyer_uploaded',
+          majorCategory: 'Mechanical',
+          contactPerson: 'Dummy Contact',
+          email: 'dummy@test.com',
+          phone: '+91 99999 88888',
+          evaluated: false,
+          score: 11,
+          rating: 0.55,
+        },
+      ];
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: vendorWithDummyScore,
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+        fetchVendorEvaluation: mockFetchVendorEvaluation,
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // 11% score must NOT be displayed in table
+      expect(screen.queryByText('11%')).not.toBeInTheDocument();
+      expect(screen.getByText('Not Evaluated')).toBeInTheDocument();
+
+      // Open View Profile modal
+      fireEvent.click(screen.getByText(/View Profile/i));
+      // AI Score in profile modal must show '—', NOT '11%'
+      expect(screen.queryByText('11%')).not.toBeInTheDocument();
     });
 
     it('submits a rating revision successfully and closes the modal on success', async () => {
@@ -3404,6 +3515,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
         evaluated: true,
         score: 90,
         rating: undefined,
+        storeRecord: {
+          id: 'eval-no-rating-1',
+          vendorId: 'v-buyer-eval-no-rating',
+          vendorName: 'Eval No Rating Co',
+          overallScore: 90,
+          status: 'PREFERRED ENTERPRISE SUPPLIER',
+        },
       };
 
       (useApp as jest.Mock).mockReturnValue({

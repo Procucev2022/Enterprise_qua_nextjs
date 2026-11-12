@@ -99,6 +99,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     openRatingRevisionEmailModal,
     activeBuyerAccount,
     isLoadingVendors,
+    fetchVendorEvaluation,
   } = useApp();
 
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
@@ -785,18 +786,37 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const allEvaluations = [...vendorEvaluations];
   const mergeWithEvaluations = (list: VendorEntry[]) =>
     list.map((bv) => {
-      const storeEval = allEvaluations.find((e) => e.vendorName === bv.name || e.vendorId === bv.id);
-      if (storeEval) {
+      const storeEval = allEvaluations.find(
+        (e) =>
+          (e.vendorId && e.vendorId === bv.id) ||
+          (e.vendorName && e.vendorName.toLowerCase() === (bv.name || '').toLowerCase())
+      );
+      if (storeEval && typeof storeEval.overallScore === 'number') {
         return {
           ...bv,
-          status: storeEval.status,
+          status: storeEval.status || bv.status,
           score: storeEval.overallScore,
           evaluated: true,
           hasRecord: true,
           storeRecord: storeEval,
         };
       }
-      return { ...bv };
+      if (bv.storeRecord && typeof bv.storeRecord.overallScore === 'number') {
+        return {
+          ...bv,
+          status: bv.storeRecord.status || bv.status,
+          score: bv.storeRecord.overallScore,
+          evaluated: true,
+          hasRecord: true,
+        };
+      }
+      return {
+        ...bv,
+        score: null,
+        evaluated: false,
+        hasRecord: false,
+        storeRecord: null,
+      };
     });
 
   const mergedVendors = mergeWithEvaluations(buyerVendors);
@@ -892,23 +912,32 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     );
 
     // Version Rules
+    const hasCompletedEvaluation = Boolean(
+      (vendor.storeRecord && typeof vendor.storeRecord.overallScore === 'number') ||
+      allEvaluations.some(
+        (e) =>
+          ((e.vendorId && e.vendorId === vendor.id) ||
+           (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())) &&
+          typeof e.overallScore === 'number'
+      )
+    );
     let showEvaluation = false;
     let isLockedForProcucevV2 = false;
 
     if (currentMode === 'mode_1') {
-      showEvaluation = !!(vendor.evaluated && isUploaded);
+      showEvaluation = isUploaded;
     } else if (currentMode === 'mode_2') {
       const hasOverlap = (vendor as any).overlap === true;
       if (vendor.source === 'procucev_network' || hasOverlap) {
         if (hasSubmittedQuote) {
-          showEvaluation = !!vendor.evaluated;
+          showEvaluation = true;
         } else {
           isLockedForProcucevV2 = true;
         }
       }
     } else {
       // Version 3: AI Sourcing Engine
-      showEvaluation = !!vendor.evaluated;
+      showEvaluation = true;
     }
 
     const engagement = getVendorRfqEngagement(vendor);
@@ -991,7 +1020,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <span className="truncate block" title={vendor.name}>
                 {vendor.name}
               </span>
-              {showEvaluation && vendor.score && vendor.score >= 80 && (
+              {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' && vendor.score >= 80 && (
                 <ShieldCheck className="text-emerald-500 shrink-0" size={14} />
               )}
             </h3>
@@ -1088,7 +1117,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
         {/* AI Score & Rating */}
         <td className="py-2.5 px-3 min-w-[140px] text-center align-middle">
-          {showEvaluation && vendor.score ? (
+          {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
             <div className="space-y-0.5">
               <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
               <div className="text-base font-mono font-black text-indigo-600 dark:text-indigo-400">
@@ -1188,10 +1217,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {showEvaluation ? (
               <button
-                onClick={() => {
+                type="button"
+                onClick={async () => {
                   // Opens only a stored evaluation record. No record means no evaluation.
-                  const evalRec = (vendor as any).storeRecord || vendorEvaluations.find((e) => e.vendorId === vendor.id);
-                  if (!evalRec) {
+                  let evalRec =
+                    (vendor as any).storeRecord ||
+                    vendorEvaluations.find(
+                      (e) =>
+                        (e.vendorId && e.vendorId === vendor.id) ||
+                        (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())
+                    );
+                  if (!evalRec && fetchVendorEvaluation) {
+                    try {
+                      evalRec = await fetchVendorEvaluation(vendor.id || vendor.name);
+                    } catch {
+                      // ignore fetch error
+                    }
+                  }
+                  if (!evalRec || typeof evalRec.overallScore !== 'number') {
                     showToast('Not evaluated', 'No evaluation record exists for this vendor yet.', 'info');
                     return;
                   }
@@ -2342,7 +2385,20 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Mode 3 AI Score</span>
                   <div className="font-extrabold font-mono text-indigo-600 text-sm mt-0.5">
-                    {typeof selectedVendorForCrud.score === 'number' ? `${selectedVendorForCrud.score}%` : '—'}
+                    {(() => {
+                      const hasRecord = Boolean(
+                        (selectedVendorForCrud.storeRecord && typeof selectedVendorForCrud.storeRecord.overallScore === 'number') ||
+                        allEvaluations.some(
+                          (e) =>
+                            ((e.vendorId && e.vendorId === selectedVendorForCrud.id) ||
+                             (e.vendorName && e.vendorName.toLowerCase() === (selectedVendorForCrud.name || '').toLowerCase())) &&
+                            typeof e.overallScore === 'number'
+                        )
+                      );
+                      return hasRecord && typeof selectedVendorForCrud.score === 'number'
+                        ? `${selectedVendorForCrud.score}%`
+                        : '—';
+                    })()}
                   </div>
                 </div>
 

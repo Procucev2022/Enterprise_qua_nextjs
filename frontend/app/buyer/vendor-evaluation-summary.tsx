@@ -236,7 +236,16 @@ export default function VendorEvaluationSummary({
   vendorEvaluation,
   onBack,
 }: VendorEvaluationSummaryProps) {
-  const { buyerVendors, vendorEvaluations, setActiveEvaluationRecord, showToast, dbConnected, isLoadingDB, refreshFromDB } = useApp();
+  const {
+    buyerVendors,
+    vendorEvaluations,
+    setActiveEvaluationRecord,
+    showToast,
+    dbConnected,
+    isLoadingDB,
+    refreshFromDB,
+    fetchVendorEvaluation,
+  } = useApp();
 
   // The reference load that carries the suppliers and their evaluations has finished and failed. An empty list then
   // does not mean nothing is on record, so the screen says the load failed.
@@ -358,8 +367,16 @@ export default function VendorEvaluationSummary({
     setSearchQuery('');
     const option = allOptions.find((c) => c.id === vendorId);
     if (!option) return;
+    const existingRec = findEvaluation(vendorEvaluations, vendorId);
     if (setActiveEvaluationRecord) {
-      setActiveEvaluationRecord(findEvaluation(vendorEvaluations, vendorId));
+      setActiveEvaluationRecord(existingRec);
+    }
+    if (!existingRec && fetchVendorEvaluation) {
+      void fetchVendorEvaluation(vendorId).then((fetched) => {
+        if (fetched && setActiveEvaluationRecord) {
+          setActiveEvaluationRecord(fetched);
+        }
+      });
     }
     showToast(
       SUMMARY.companySelectedTitle,

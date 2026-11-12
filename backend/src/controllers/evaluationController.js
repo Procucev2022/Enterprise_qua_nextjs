@@ -6,7 +6,14 @@ function getEvaluations(req, res, next) {
     logger.info('Fetching vendor evaluations list', { query: req.query }, 'EVALUATION_CONTROLLER');
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
-    const evals = storeService.getEvaluations(limit);
+    let evals = storeService.getEvaluations(limit);
+    if (req.query && req.query.vendorId) {
+      const qVendorId = String(req.query.vendorId).trim().toLowerCase();
+      evals = evals.filter((e) =>
+        (e.vendorId && String(e.vendorId).toLowerCase() === qVendorId) ||
+        (e.vendorName && String(e.vendorName).toLowerCase() === qVendorId)
+      );
+    }
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: evals });
   } catch (err) {
     logger.error('Error fetching vendor evaluations', err, 'EVALUATION_CONTROLLER');

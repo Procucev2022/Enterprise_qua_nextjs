@@ -338,6 +338,7 @@ interface AppContextType {
   openRFQDeepDive: (rfq: RFQItem) => void;
   vendorEvaluations: VendorEvaluationRecord[];
   addVendorEvaluation: (record: VendorEvaluationRecord) => Promise<boolean>;
+  fetchVendorEvaluation: (vendorIdOrName: string) => Promise<VendorEvaluationRecord | null>;
   selectedVendorEvaluation: VendorEvaluationRecord | null;
   setSelectedVendorEvaluation: (evalRecord: VendorEvaluationRecord | null) => void;
   evaluationModalOpen: boolean;
@@ -1421,6 +1422,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       logger.log('ERROR', 'Failed to save evaluation to backend', { error: e }, 'EVALUATION');
       return false;
     }
+  };
+
+  const fetchVendorEvaluation = async (vendorIdOrName: string): Promise<VendorEvaluationRecord | null> => {
+    if (!vendorIdOrName) return null;
+    const norm = String(vendorIdOrName).trim().toLowerCase();
+    const existing = vendorEvaluations.find(
+      (e) => (e.vendorId && e.vendorId.toLowerCase() === norm) || (e.vendorName && e.vendorName.toLowerCase() === norm)
+    );
+    if (existing && typeof existing.overallScore === 'number') {
+      return existing;
+    }
+    try {
+      const res = await fetch(`/api/evaluations?vendorId=${encodeURIComponent(vendorIdOrName)}`, {
+        headers: authFetchHeaders(),
+      });
+      if (res.ok) {
+        const body = await res.json();
+        if (body.success && Array.isArray(body.data) && body.data.length > 0) {
+          const rec = body.data[0];
+          if (rec && typeof rec.overallScore === 'number') {
+            setVendorEvaluations((prev) => {
+              const filtered = prev.filter((e) => e.id !== rec.id && e.vendorId !== rec.vendorId);
+              return [rec, ...filtered];
+            });
+            return rec;
+          }
+        }
+      }
+    } catch (err) {
+      logger.log('WARN', 'Failed to fetch vendor evaluation from database', { error: err, vendorIdOrName }, 'EVALUATION');
+    }
+    return null;
   };
 
   // Helper to check if vendor exists in platform central database
@@ -2831,6 +2864,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         openRFQDeepDive,
         vendorEvaluations,
         addVendorEvaluation,
+        fetchVendorEvaluation,
         selectedVendorEvaluation,
         setSelectedVendorEvaluation,
         evaluationModalOpen,

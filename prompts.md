@@ -5615,3 +5615,11 @@ In the Buyer flow, Vendor Rating Update Issue: After the buyer submits a revised
 In the Buyer flow, Vendor Evaluation Summary – Table Layout: Convert the entire Vendor Evaluation Summary page from the current card-based layout into a compact table format with proper columns and rows. Expected Behaviour/Solution: Display vendor details, evaluation status, overall score, category scores, and review status in a clean, aligned table with reduced spacing. Please fix the issue
 ```
 ---
+
+
+### Prompt 185
+**Timestamp**: 2026-11-12T20:22:12+05:30
+```text
+In the Buyer flow, Vendor Score Visibility: Do not display a vendor score (such as 11%) unless an evaluation or review request has been submitted and the score is available in the database. Expected Behaviour/Solution: Fetch and display the existing vendor evaluation score from the database only when a buyer requests to view the review and a completed evaluation is available. Please fix the issue
+```
+---
