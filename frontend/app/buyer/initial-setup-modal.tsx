@@ -2161,37 +2161,57 @@ export default function InitialSetupModal() {
                                   : 'hover:bg-slate-50 dark:hover:bg-gray-800/40'
                               }`}
                             >
-                              <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || '1'}</td>
-                              <td className="p-2.5 font-bold text-slate-800 dark:text-white">
+                              <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[100px] truncate" title={v.vendorCode || '1'}>
+                                {v.vendorCode || '1'}
+                              </td>
+                              <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[180px]">
                                 {isNameInvalid ? (
                                   <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
                                     <AlertCircle size={11} /> Required
                                   </span>
                                 ) : (
-                                  v.companyName
+                                  <span className="truncate block" title={v.companyName}>
+                                    {v.companyName}
+                                  </span>
                                 )}
                               </td>
-                              <td className="p-2.5 text-slate-700 dark:text-gray-300 font-medium">{v.contactPerson || '—'}</td>
-                              <td className="p-2.5 font-mono text-[11px]">
+                              <td className="p-2.5 text-slate-700 dark:text-gray-300 font-medium max-w-[140px]">
+                                <span className="truncate block" title={v.contactPerson || undefined}>
+                                  {v.contactPerson || '—'}
+                                </span>
+                              </td>
+                              <td className="p-2.5 font-mono text-[11px] max-w-[180px]">
                                 {isEmailInvalid ? (
                                   <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
                                     <AlertCircle size={11} /> Invalid Email
                                   </span>
                                 ) : (
-                                  <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{v.email || '—'}</span>
+                                  <span className="text-indigo-600 dark:text-indigo-400 font-semibold truncate block" title={v.email || undefined}>
+                                    {v.email || '—'}
+                                  </span>
                                 )}
                               </td>
-                              <td className="p-2.5 font-mono text-[11px]">
+                              <td className="p-2.5 font-mono text-[11px] max-w-[130px]">
                                 {isPhoneInvalid ? (
                                   <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
                                     <AlertCircle size={11} /> Invalid Mobile ({v.phone})
                                   </span>
                                 ) : (
-                                  <span className="text-slate-600 dark:text-gray-400">{v.phone || '—'}</span>
+                                  <span className="text-slate-600 dark:text-gray-400 truncate block" title={v.phone || undefined}>
+                                    {v.phone || '—'}
+                                  </span>
                                 )}
                               </td>
-                              <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold">{v.gstNumber || '—'}</td>
-                              <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] truncate max-w-[200px]">{v.address || '—'}</td>
+                              <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold max-w-[130px]">
+                                <span className="truncate block" title={v.gstNumber || undefined}>
+                                  {v.gstNumber || '—'}
+                                </span>
+                              </td>
+                              <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] max-w-[200px]">
+                                <span className="truncate block" title={v.address || undefined}>
+                                  {v.address || '—'}
+                                </span>
+                              </td>
                               <td className="p-2.5 font-bold">
                                 {v.vendorRatingScore !== undefined && v.vendorRatingScore !== null ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
@@ -2498,20 +2518,29 @@ export default function InitialSetupModal() {
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
                     {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                        <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[120px] truncate" title={p.poNumber}>{p.poNumber}</td>
                         <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{normalizePoDate(p.poDate) || p.poDate || '—'}</td>
-                        <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
-                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200">{p.itemName}</td>
-                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px] truncate">{p.specs || '—'}</td>
+                        <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[160px]">
+                          <span className="truncate block" title={p.vendorIdentifier}>{p.vendorIdentifier}</span>
+                        </td>
+                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200 max-w-[200px]">
+                          <span className="truncate block" title={p.itemName}>{p.itemName}</span>
+                        </td>
+                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px]">
+                          <span className="truncate block" title={p.specs || undefined}>{p.specs || '—'}</span>
+                        </td>
                         <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity.toLocaleString('en-IN')}</td>
                         <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.unit}</td>
                         <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {formatCurrency(p.totalSpend)}
                         </td>
-                        <td className="p-2.5 text-[10px]">
+                        <td className="p-2.5 text-[10px] max-w-[160px]">
                           {p.category || p.minorCategory ? (
-                            <span className="font-semibold text-slate-800 dark:text-gray-200">
+                            <span
+                              className="font-semibold text-slate-800 dark:text-gray-200 truncate block"
+                              title={p.category || p.minorCategory}
+                            >
                               {p.category || p.minorCategory}
                             </span>
                           ) : (
@@ -2645,7 +2674,9 @@ export default function InitialSetupModal() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="font-black text-slate-900 dark:text-white text-xs">{v.companyName}</h4>
+                          <h4 className="font-black text-slate-900 dark:text-white text-xs truncate max-w-[200px]" title={v.companyName}>
+                            {v.companyName}
+                          </h4>
                           {v.vendorCode && (
                             <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300">
                               {v.vendorCode}

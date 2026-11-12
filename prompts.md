@@ -5535,3 +5535,11 @@ In the Buyer flow, Change Vendor Label: Replace the "Uploaded by Buyer" label wi
 In the Buyer flow, Compact Table Layout: Convert the current vendor cards into a compact table format with reduced spacing and aligned columns. Expected Behaviour/Solution: Display vendor information in a clean, space-efficient table with consistent row heights and column alignment. Please fix the issue
 ```
 ---
+
+
+### Prompt 175
+**Timestamp**: 2026-11-12T20:05:35+05:30
+```text
+In the Buyer flow, Popup for Long Data: When vendor details such as company name, email, address, or category are too long to fit in the table, truncate the visible text & show "...." Expected Behaviour/Solution: Show the complete information in a tooltip or popup when the user hovers the cursor over the truncated field. Please fix the issue
+```
+---

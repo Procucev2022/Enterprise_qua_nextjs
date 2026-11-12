@@ -3785,5 +3785,54 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText('Unmapped')).toBeInTheDocument();
     expect(screen.queryByText('Administrative Services')).not.toBeInTheDocument();
   });
+
+  it('truncates long vendor and PO details with tooltip popups on hover', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Upload Vendor Master with long details
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-LONG-1',
+        'Company Name': 'Ultra Mega Long Engineering Systems Global Private Limited',
+        'Contact Person': 'Alexander Bartholomew Montgomery-Smith',
+        Email: 'alexander.montgomery-smith@ultramegalongengineering.international.com',
+        Phone: '+91 98201 98201',
+        GSTIN: '27AABCU9603R1ZM',
+        Address: 'Plot No. 42-B, Industrial Innovation Cyber Park, Phase IV, Hinjewadi Rajiv Gandhi Infotech Park, Pune, Maharashtra 411057',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'long_vendors.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const vendorInput = fileInputs[0];
+    if (vendorInput) {
+      await act(async () => {
+        fireEvent.change(vendorInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Assert that table elements have truncation and title tooltips
+    const companyEl = screen.getByText('Ultra Mega Long Engineering Systems Global Private Limited');
+    expect(companyEl).toHaveAttribute('title', 'Ultra Mega Long Engineering Systems Global Private Limited');
+
+    const contactEl = screen.getByText('Alexander Bartholomew Montgomery-Smith');
+    expect(contactEl).toHaveAttribute('title', 'Alexander Bartholomew Montgomery-Smith');
+
+    const emailEl = screen.getByText('alexander.montgomery-smith@ultramegalongengineering.international.com');
+    expect(emailEl).toHaveAttribute('title', 'alexander.montgomery-smith@ultramegalongengineering.international.com');
+
+    const addressEl = screen.getByText(/Hinjewadi Rajiv Gandhi Infotech Park/);
+    expect(addressEl).toHaveAttribute('title', 'Plot No. 42-B, Industrial Innovation Cyber Park, Phase IV, Hinjewadi Rajiv Gandhi Infotech Park, Pune, Maharashtra 411057');
+  });
 });
 

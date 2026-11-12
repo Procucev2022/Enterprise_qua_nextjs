@@ -819,7 +819,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         <td className="py-2.5 px-3 min-w-[240px] align-middle">
           <div className="space-y-1">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[11px] text-slate-500 dark:text-gray-400 font-semibold">{vendor.majorCategory}</span>
+              <span
+                className="text-[11px] text-slate-500 dark:text-gray-400 font-semibold truncate max-w-[160px] inline-block align-middle"
+                title={vendor.majorCategory}
+              >
+                {vendor.majorCategory}
+              </span>
               <span className="text-slate-300 dark:text-gray-600">•</span>
 
               {/* Primary Source Badge */}
@@ -861,10 +866,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               )}
             </div>
 
-            <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-              {vendor.name}
+            <h3
+              className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[280px]"
+              title={vendor.name}
+            >
+              <span className="truncate block" title={vendor.name}>
+                {vendor.name}
+              </span>
               {showEvaluation && vendor.score && vendor.score >= 80 && (
-                <ShieldCheck className="text-emerald-500" size={14} />
+                <ShieldCheck className="text-emerald-500 shrink-0" size={14} />
               )}
             </h3>
 
@@ -905,30 +915,49 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         {/* Contact & Location */}
         <td className="py-2.5 px-3 min-w-[200px] align-middle">
           <div className="space-y-0.5 text-[11px] text-slate-600 dark:text-gray-300">
-            <div className="truncate font-medium text-slate-700 dark:text-slate-200">
+            <div
+              className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[190px]"
+              title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
+            >
               👤 Contact: {vendor.contactPerson}
             </div>
-            <div className="truncate text-slate-500 dark:text-gray-400">
+            <div
+              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
+              title={vendor.email}
+            >
               ✉️ {vendor.email}
             </div>
-            <div className="truncate text-slate-500 dark:text-gray-400">
+            <div
+              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
+              title={vendor.phone}
+            >
               📞 {vendor.phone}
             </div>
-            <div className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate">
-              <MapPin size={11} className="shrink-0" /> {vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`}
-            </div>
+            {(() => {
+              const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
+              return (
+                <div
+                  className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate max-w-[190px]"
+                  title={vendorAddress || undefined}
+                >
+                  <MapPin size={11} className="shrink-0" />
+                  <span className="truncate">{vendorAddress || '—'}</span>
+                </div>
+              );
+            })()}
           </div>
         </td>
 
         {/* Minor Categories */}
         <td className="py-2.5 px-3 min-w-[150px] align-middle">
           {vendor.minorCategories && vendor.minorCategories.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1 max-w-[200px]">
               <span className="text-[9px] text-slate-400 font-semibold">Minors:</span>
               {vendor.minorCategories.map((m: string) => (
                 <span
                   key={m}
-                  className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40"
+                  title={m}
+                  className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40 truncate max-w-[110px] inline-block align-middle"
                 >
                   {m}
                 </span>
@@ -2848,39 +2877,44 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                                     <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-slate-400 font-bold whitespace-nowrap">
                                       {r.vendorCode || '—'}
                                     </td>
-                                    <td className="p-2.5">
-                                      <div className="font-bold text-slate-800 dark:text-white">
+                                    <td className="p-2.5 max-w-[180px]">
+                                      <div className="font-bold text-slate-800 dark:text-white truncate" title={r.name || undefined}>
                                         {r.name || '—'}
                                       </div>
                                       {r.brandName && (
-                                        <div className="text-[10px] text-slate-400 font-medium">
+                                        <div className="text-[10px] text-slate-400 font-medium truncate" title={`Brand: ${r.brandName}`}>
                                           Brand: {r.brandName}
                                         </div>
                                       )}
                                     </td>
-                                    <td className="p-2.5">
-                                      <div className="font-medium text-slate-700 dark:text-gray-300">
+                                    <td className="p-2.5 max-w-[140px]">
+                                      <div className="font-medium text-slate-700 dark:text-gray-300 truncate" title={r.contactPerson || undefined}>
                                         {r.contactPerson || '—'}
                                       </div>
                                       {r.contactDesignation && (
-                                        <div className="text-[10px] text-slate-400">
+                                        <div className="text-[10px] text-slate-400 truncate" title={r.contactDesignation}>
                                           {r.contactDesignation}
                                         </div>
                                       )}
                                     </td>
-                                    <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold whitespace-nowrap">
+                                    <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold max-w-[180px] truncate" title={r.email || undefined}>
                                       {r.email || '—'}
                                     </td>
-                                    <td className="p-2.5 whitespace-nowrap">
-                                      <div className="font-mono text-[11px] text-slate-600 dark:text-gray-400">
+                                    <td className="p-2.5 max-w-[160px]">
+                                      <div className="font-mono text-[11px] text-slate-600 dark:text-gray-400 truncate" title={r.phone || undefined}>
                                         {r.phone || '—'}
                                       </div>
-                                      <div className="text-[10px] text-slate-500">
-                                        {[r.city, r.state, r.pincode].filter(Boolean).join(', ') || '—'}
-                                      </div>
+                                      {(() => {
+                                        const loc = [r.city, r.state, r.pincode].filter(Boolean).join(', ');
+                                        return (
+                                          <div className="text-[10px] text-slate-500 truncate" title={loc || undefined}>
+                                            {loc || '—'}
+                                          </div>
+                                        );
+                                      })()}
                                     </td>
-                                    <td className="p-2.5">
-                                      <span className="badge badge-slate font-bold text-[10px]">
+                                    <td className="p-2.5 max-w-[140px]">
+                                      <span className="badge badge-slate font-bold text-[10px] truncate max-w-[130px] inline-block" title={r.category || undefined}>
                                         {r.category || '—'}
                                       </span>
                                     </td>

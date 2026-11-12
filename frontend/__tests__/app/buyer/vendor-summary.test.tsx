@@ -3129,6 +3129,44 @@ describe('app/buyer/vendor-summary.tsx', () => {
         expect.objectContaining({ id: 'eval-db-dyn-1' })
       );
     });
+
+    it('truncates long vendor details and exposes full information via hover tooltips', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Company name has title tooltip and truncation
+      const apexName = screen.getByText('Apex Supplies Ltd.');
+      expect(apexName).toHaveAttribute('title', 'Apex Supplies Ltd.');
+      expect(apexName.closest('h3')).toHaveAttribute('title', 'Apex Supplies Ltd.');
+
+      // Email has title tooltip
+      const emailEl = screen.getByText(/rajesh@apex\.in/);
+      expect(emailEl).toHaveAttribute('title', 'rajesh@apex.in');
+
+      // Contact person has title tooltip
+      const contactEl = screen.getByText(/Rajesh Nair/);
+      expect(contactEl).toHaveAttribute('title', 'Contact: Rajesh Nair');
+
+      // Location has title tooltip
+      const locationEl = screen.getByText(/Pune, Maharashtra/);
+      expect(locationEl.closest('div')).toHaveAttribute('title', 'Pune, Maharashtra');
+
+      // Major Category has title tooltip
+      const majorCategoryEls = screen.getAllByText('Mechanical');
+      const tableMajorCategory = majorCategoryEls.find((el) => el.getAttribute('title') === 'Mechanical');
+      expect(tableMajorCategory).toBeDefined();
+      expect(tableMajorCategory).toHaveAttribute('title', 'Mechanical');
+
+      // Minor categories have title tooltip
+      const minorValves = screen.getByText('Valves');
+      expect(minorValves).toHaveAttribute('title', 'Valves');
+      const minorPumps = screen.getByText('Pumps');
+      expect(minorPumps).toHaveAttribute('title', 'Pumps');
+    });
   });
 });
 
