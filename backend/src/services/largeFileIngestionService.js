@@ -389,6 +389,20 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
       invalid.push({ row, reason: 'Company Name is required' });
       continue;
     }
+    const rawPhone = row.phone !== undefined && row.phone !== null ? String(row.phone).trim() : '';
+    if (rawPhone) {
+      if (/[a-zA-Z]/.test(rawPhone)) {
+        invalid.push({ row, reason: 'Mobile number cannot contain alphanumeric characters' });
+        continue;
+      }
+      let digits = rawPhone.replace(/\D/g, '');
+      if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+      else if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+      if (digits.length !== 10) {
+        invalid.push({ row, reason: 'Mobile number must be exactly 10 numeric digits' });
+        continue;
+      }
+    }
     valid.push({
       ...row,
       companyName: String(companyName).trim(),

@@ -5464,3 +5464,11 @@ In the Buyer flow, Remove Dual-File ERP Setup Label: Remove the “DUAL-FILE ERP
 In the Buyer flow, Move Required Columns to Vendor Master Page: Move the Required Columns section and Download Vendor Master Template button from Step 1 (Time Horizon) to Step 2 (Vendor Master). Expected Behaviour/Solution: Display the required column details and vendor master template download option on the Vendor Master page, where users upload the vendor file. Please fix the issue
 ```
 ---
+
+
+### Prompt 166
+**Timestamp**: 2026-11-12T19:15:04+05:30
+```text
+In the Buyer flow, Vendor Mobile Number Validation: During Vendor Master Excel upload, mobile number fields are accepting alphanumeric values without proper validation. Expected Behaviour/Solution: Validate mobile numbers as numeric values with exactly 10 digits. Reject invalid or alphanumeric mobile numbers and display clear validation errors. Please fix the issue
+```
+---

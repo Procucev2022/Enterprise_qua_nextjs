@@ -3374,5 +3374,98 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
     jest.useRealTimers();
   });
+
+  it('validates vendor mobile numbers during Vendor Master upload, rejecting alphanumeric and invalid mobile numbers', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Create a Vendor Master Excel file containing alphanumeric and invalid mobile numbers
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-VAL-1',
+        'Company Name': 'Valid Mobile Enterprise',
+        Email: 'valid@enterprise.com',
+        Phone: '+91 98112 23344',
+      },
+      {
+        'Vendor Code': 'V-VAL-2',
+        'Company Name': 'Zero Prefix Enterprise',
+        Email: 'zero@enterprise.com',
+        Phone: '09876543210',
+      },
+      {
+        'Vendor Code': 'V-INV-ALPHA',
+        'Company Name': 'Alphanumeric Phone Vendor',
+        Email: 'alpha@vendor.com',
+        Phone: '98765abcde',
+      },
+      {
+        'Vendor Code': 'V-INV-SHORT',
+        'Company Name': 'Short Phone Vendor',
+        Email: 'short@vendor.com',
+        Phone: '12345',
+      },
+      {
+        'Vendor Code': 'V-INV-SYM',
+        'Company Name': 'Symbol Phone Vendor',
+        Email: 'symbol@vendor.com',
+        Phone: '98765#$@!',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_mobile_validation.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Displays clear upload error banner and toast for invalid/alphanumeric mobile numbers
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Invalid Mobile Numbers',
+      expect.stringContaining('vendor record(s) contain invalid or alphanumeric mobile numbers'),
+      'warning'
+    );
+    expect(screen.getByTestId('vendor-upload-error-banner')).toBeInTheDocument();
+    expect(screen.getByText(/Mobile numbers must be numeric values with exactly 10 digits/i)).toBeInTheDocument();
+
+    // Warning banner reports records missing required fields or invalid data
+    expect(screen.getByTestId('vendor-validation-warning-banner')).toBeInTheDocument();
+
+    // Read-only table displays invalid mobile badge
+    expect(screen.getByText(/Invalid Mobile \(98765abcde\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Invalid Mobile \(12345\)/i)).toBeInTheDocument();
+
+    // Attempting to navigate to Step 3 is rejected
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Validation Error in Vendor Master',
+      expect.stringContaining('Cannot proceed: 3 vendor record(s) contain missing or invalid required fields'),
+      'warning'
+    );
+    expect(screen.queryByText(/Step 3: Upload File 2/i)).not.toBeInTheDocument();
+
+    // Switch to Edit Data mode and verify inline error message
+    fireEvent.click(screen.getByText('Edit Data'));
+    expect(screen.getAllByText('Must be 10 numeric digits').length).toBeGreaterThanOrEqual(1);
+
+    // Fix the alphanumeric phone record in the table
+    const phoneInputs = screen.getAllByPlaceholderText('+91 Phone');
+    const alphaInput = phoneInputs.find((input: any) => input.value === '98765abcde');
+    if (alphaInput) {
+      fireEvent.change(alphaInput, { target: { value: '9876543210' } });
+      expect(alphaInput).toHaveValue('9876543210');
+    }
+  });
 });
 

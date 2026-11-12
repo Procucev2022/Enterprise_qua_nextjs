@@ -276,8 +276,31 @@ export default function InitialSetupModal() {
   const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
   const [apiJoinedVendors, setApiJoinedVendors] = useState<HistoricalPurchaseVendorRecord[] | null>(null);
 
+  // Validate vendor mobile number: exactly 10 numeric digits, rejects alphanumeric values
+  const isValidVendorMobile = (phone: string | undefined | null): boolean => {
+    if (!phone || typeof phone !== 'string') return true;
+    const trimmed = phone.trim();
+    if (trimmed === '') return true;
+
+    // Alphanumeric values containing alphabetic characters are rejected
+    if (/[a-zA-Z]/.test(trimmed)) return false;
+
+    // Reject invalid symbols (only digits, +, -, space, parentheses allowed)
+    if (!/^[\d\s+\-()]+$/.test(trimmed)) return false;
+
+    // Normalize Indian prefixes (+91, 91, 0)
+    let digits = trimmed.replace(/\D/g, '');
+    if (digits.length === 11 && digits.startsWith('0')) {
+      digits = digits.slice(1);
+    } else if (digits.length === 12 && digits.startsWith('91')) {
+      digits = digits.slice(2);
+    }
+
+    // Must be numeric value with exactly 10 digits
+    return digits.length === 10 && /^\d{10}$/.test(digits);
+  };
+
   // Validate a vendor row for required fields
-  // Note: Temporary required columns (email, phone) are not enforced from uploaded files
   const getVendorRowErrors = (v: VendorMasterUploadRecord): string[] => {
     const errs: string[] = [];
     if (!v.companyName || v.companyName.trim() === '') {
@@ -285,6 +308,9 @@ export default function InitialSetupModal() {
     }
     if (v.email && v.email.trim() !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim())) {
       errs.push('Invalid email format');
+    }
+    if (v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone)) {
+      errs.push('Mobile number must be a 10-digit numeric value');
     }
     return errs;
   };
@@ -650,7 +676,17 @@ export default function InitialSetupModal() {
             return;
           }
 
-          setVendorUploadError(null);
+          const invalidMobiles = parsedVendors.filter(
+            (v) => v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone)
+          );
+          if (invalidMobiles.length > 0) {
+            const sample = invalidMobiles[0].phone;
+            const errMsg = `${invalidMobiles.length} vendor record(s) contain invalid or alphanumeric mobile numbers (e.g. "${sample}"). Mobile numbers must be numeric values with exactly 10 digits. Please click 'Edit Data' to correct them.`;
+            setVendorUploadError(errMsg);
+            showToast('Invalid Mobile Numbers', errMsg, 'warning');
+          } else {
+            setVendorUploadError(null);
+          }
 
           setStoredVendors(parsedVendors);
           setVendorMasterUploaded(true);
@@ -1668,8 +1704,8 @@ export default function InitialSetupModal() {
                     {invalidVendors.length} Supplier Record{invalidVendors.length > 1 ? 's' : ''} Missing Required Fields
                   </p>
                   <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                    Required field: <strong>Company Name</strong>.
-                    Please click &apos;Edit Data&apos; to fix records missing company names before continuing.
+                    Required field: <strong>Company Name</strong> (and mobile numbers must be 10-digit numeric values).
+                    Please click &apos;Edit Data&apos; to fix records missing company names or with invalid mobile numbers before continuing.
                   </p>
                   {!isEditingVendorTable && (
                     <button
@@ -1852,7 +1888,7 @@ export default function InitialSetupModal() {
                           const hasErrors = rowErrors.length > 0;
                           const isNameInvalid = !v.companyName || v.companyName.trim() === '';
                           const isEmailInvalid = Boolean(v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim()));
-                          const isPhoneInvalid = false;
+                          const isPhoneInvalid = Boolean(v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone));
 
                           return (
                             <tr
@@ -1928,7 +1964,7 @@ export default function InitialSetupModal() {
                                   }`}
                                 />
                                 {isPhoneInvalid && (
-                                  <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">Required</span>
+                                  <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">Must be 10 numeric digits</span>
                                 )}
                               </td>
                               <td className="p-1.5 align-top">
@@ -2008,7 +2044,7 @@ export default function InitialSetupModal() {
                           const hasErrors = rowErrors.length > 0;
                           const isNameInvalid = !v.companyName || v.companyName.trim() === '';
                           const isEmailInvalid = Boolean(v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim()));
-                          const isPhoneInvalid = false;
+                          const isPhoneInvalid = Boolean(v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone));
 
                           return (
                             <tr
@@ -2040,7 +2076,13 @@ export default function InitialSetupModal() {
                                 )}
                               </td>
                               <td className="p-2.5 font-mono text-[11px]">
-                                <span className="text-slate-600 dark:text-gray-400">{v.phone || '—'}</span>
+                                {isPhoneInvalid ? (
+                                  <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
+                                    <AlertCircle size={11} /> Invalid Mobile ({v.phone})
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-600 dark:text-gray-400">{v.phone || '—'}</span>
+                                )}
                               </td>
                               <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold">{v.gstNumber || '—'}</td>
                               <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] truncate max-w-[200px]">{v.address || '—'}</td>

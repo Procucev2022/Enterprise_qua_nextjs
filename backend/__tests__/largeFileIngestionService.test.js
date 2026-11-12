@@ -291,6 +291,19 @@ describe('largeFileIngestionService unit tests', () => {
       expect(res.failed).toBe(1);
     });
 
+    it('validates mobile numbers in vendor master batches and rejects alphanumeric or non-10-digit phones', async () => {
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+      const res = await largeFileIngestionService.processVendorMasterBatch('s1', 'o1', [
+        { companyName: 'Valid Mobile Co', phone: '+91 9811223344' },
+        { companyName: 'Valid 0-Prefixed Co', phone: '09811223344' },
+        { companyName: 'Alpha Mobile Co', phone: '98765abcde' },
+        { companyName: 'Short Mobile Co', phone: '12345' },
+      ]);
+      expect(res.imported).toBe(2);
+      expect(res.skipped).toBe(2);
+      expect(res.failed).toBe(2);
+    });
+
     it('handles bulkUpsertVendorMasterRecords failure', async () => {
       jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockRejectedValueOnce(new Error('DB err'));
       const res = await largeFileIngestionService.processVendorMasterBatch('s1', 'o1', [{ companyName: 'Valid' }]);
