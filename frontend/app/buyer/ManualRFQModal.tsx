@@ -593,6 +593,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     setSubmitAttempted(true);
     setSubmitError(null);
 
+    // No mode is preselected. An unchosen mode stops the submit, and the same message shows under the mode cards.
+    if (form.sourcingMode === null) {
+      setSubmitError(MANUAL.sourcingModeRequired);
+      return;
+    }
+
     if (isQuotaExhausted) {
       setSubmitError(MODAL.quotaExhaustedMessage);
       setUpgradeModalTargetMode(form.sourcingMode);
@@ -884,7 +890,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   href="/buyer/subscription-center"
                   onClick={(e) => {
                     e.preventDefault();
-                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                     setIsUpgradeModalOpen(true);
                   }}
                   className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
@@ -1504,6 +1510,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             </div>
 
 
+
+            <FieldError message={formErrors.sourcingMode} />
 
             {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
             {form.sourcingMode === 'mode_1' && (
@@ -2372,7 +2380,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   href="/buyer/subscription-center"
                   onClick={(e) => {
                     e.preventDefault();
-                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                     setIsUpgradeModalOpen(true);
                   }}
                   className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"

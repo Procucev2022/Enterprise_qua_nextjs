@@ -62,7 +62,7 @@ export default function VendorCard({ vendor, onViewDetails }: VendorCardProps) {
         <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
           <MapPin size={11} className="shrink-0 text-slate-400" />
           <span className="truncate">
-            {[vendor.city, vendor.state].filter(Boolean).join(', ') || vendor.location || 'India'}
+            {[vendor.city, vendor.state].filter(Boolean).join(', ') || vendor.location || UI_STRINGS.vendorWorkspace.publicDirectory.locationNotAvailable}
           </span>
         </div>
 

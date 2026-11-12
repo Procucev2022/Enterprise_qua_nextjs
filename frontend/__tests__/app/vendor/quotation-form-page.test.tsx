@@ -4,6 +4,7 @@ import '@testing-library/jest-dom';
 import VendorQuotationFormPage from '@/app/vendor/quotation-form/page';
 import QuotationForm from '@/app/vendor/quotation-form';
 import { useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { ExtractedEntity, RFQItem, VendorOpportunity } from '@/lib/types';
 
 const mockRouterPush = jest.fn();
@@ -62,10 +63,29 @@ describe('VendorQuotationFormPage', () => {
     setStore();
   });
 
-  test('renders the empty state and requests RFQs when no opportunity exists', () => {
+  test('shows the enquiry list without a bid form and requests RFQs when the link names no RFQ', () => {
     render(<VendorQuotationFormPage />);
-    expect(screen.getByText(/No open opportunity is available to quote on right now/i)).toBeInTheDocument();
+    expect(screen.getByTestId('mock-quotation-form')).toBeInTheDocument();
+    expect(renderedOpportunity()).toBeUndefined();
     expect(mockRefreshRFQs).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not open a bid form for the previously selected opportunity when the link names no RFQ', () => {
+    const opportunity = {
+      id: 'opp-selected-1', rfqNumber: 'RFQ-SEL-1', title: 'Direct Selected Opp',
+      type: 'direct_invitation', status: 'pending_bid', buyer: 'Selected Buyer Corp',
+    } as VendorOpportunity;
+    setStore({ selectedVendorOpportunity: opportunity, vendorOpportunities: [opportunity] });
+    render(<VendorQuotationFormPage />);
+    expect(renderedOpportunity()).toBeUndefined();
+    expect(mockRefreshRFQs).not.toHaveBeenCalled();
+  });
+
+  test('does not open a bid form for an open RFQ when the link names no RFQ', () => {
+    setStore({ rfqs: [makeRFQ({ id: 'rfq-active-1', rfqNumber: 'RFQ-ACT-1', title: 'Active Open RFQ' })] });
+    render(<VendorQuotationFormPage />);
+    expect(renderedOpportunity()).toBeUndefined();
+    expect(screen.getByTestId('mock-quotation-form')).toBeInTheDocument();
   });
 
   test('resolves the requested RFQ with its stated budget, buyer and pending bid status', () => {
@@ -93,7 +113,8 @@ describe('VendorQuotationFormPage', () => {
     expect(screen.getByTestId('opp-title')).toHaveTextContent('Marketplace Screws');
     expect(screen.getByTestId('opp-type')).toHaveTextContent('network_marketplace');
     expect(screen.getByTestId('opp-status')).toHaveTextContent('Closed');
-    expect(screen.getByTestId('opp-buyer')).toHaveTextContent('Buyer enterprise');
+    // No buyer name on the RFQ, so the opportunity carries an empty buyer rather than a made-up one.
+    expect(screen.getByTestId('opp-buyer').textContent).toBe('');
     expect(screen.getByTestId('opp-est-val')).toHaveTextContent('no-est-val');
   });
 
@@ -108,32 +129,21 @@ describe('VendorQuotationFormPage', () => {
     expect(screen.getByTestId('opp-status')).toHaveTextContent('under_review');
   });
 
-  test('uses the selected opportunity and does not refresh a populated opportunity list', () => {
-    const opportunity = {
-      id: 'opp-selected-1', rfqNumber: 'RFQ-SEL-1', title: 'Direct Selected Opp',
-      type: 'direct_invitation', status: 'pending_bid', buyer: 'Selected Buyer Corp',
-    } as VendorOpportunity;
-    setStore({ selectedVendorOpportunity: opportunity, vendorOpportunities: [opportunity] });
-    render(<VendorQuotationFormPage />);
-    expect(screen.getByTestId('opp-title')).toHaveTextContent(opportunity.title);
-    expect(mockRefreshRFQs).not.toHaveBeenCalled();
-  });
-
-  test('prefers an open RFQ when deriving an opportunity without a requested RFQ', () => {
-    setStore({ rfqs: [
-      makeRFQ({ id: 'rfq-expired-1', rfqNumber: 'RFQ-EXP-1', title: 'Expired RFQ', status: 'Expired' }),
-      makeRFQ({ id: 'rfq-active-1', rfqNumber: 'RFQ-ACT-1', title: 'Active Open RFQ' }),
-    ] });
-    render(<VendorQuotationFormPage />);
-    expect(screen.getByTestId('opp-title')).toHaveTextContent('Active Open RFQ');
-    expect(screen.getByTestId('opp-status')).toHaveTextContent('pending_bid');
-  });
-
-  test('retains the closed status when only closed RFQs are available', () => {
-    setStore({ rfqs: [makeRFQ({ title: 'Only Closed RFQ', status: 'Closed' })] });
+  test('keeps a closed RFQ named in the link so its status is shown', () => {
+    mockSearchParams.set('rfq', 'RFQ-CLOSED-1');
+    setStore({ rfqs: [makeRFQ({ rfqNumber: 'RFQ-CLOSED-1', title: 'Only Closed RFQ', status: 'Closed' })] });
     render(<VendorQuotationFormPage />);
     expect(screen.getByTestId('opp-title')).toHaveTextContent('Only Closed RFQ');
     expect(screen.getByTestId('opp-status')).toHaveTextContent('Closed');
+  });
+
+  test('shows the loading state while the RFQ list is still loading and the link names an RFQ', () => {
+    mockSearchParams.set('rfq', 'RFQ-LATER');
+    setStore({ isLoadingRFQs: true });
+    render(<VendorQuotationFormPage />);
+    expect(screen.getByText('Loading quotation form...')).toBeInTheDocument();
+    expect(screen.queryByText(UI_STRINGS.vendorWorkspace.rfqNotInEnquiriesTitle)).not.toBeInTheDocument();
+    expect(QuotationForm).not.toHaveBeenCalled();
   });
 
   test.each([['rfq', 'RFQ-TARGET'], ['id', 'opp-target']])('uses a requested opportunity matched through %s ahead of the selected opportunity', (parameter, value) => {
@@ -160,23 +170,20 @@ describe('VendorQuotationFormPage', () => {
     expect(renderedOpportunity()).toBe(requested);
   });
 
-  test('retains the selected opportunity when a requested RFQ is unavailable', () => {
+  test('shows that the named RFQ is unavailable instead of opening a different RFQ', () => {
     const selected = { id: 'opp-selected', rfqNumber: 'RFQ-SELECTED', title: 'Selected available opportunity' } as VendorOpportunity;
     const other = { id: 'opp-other', rfqNumber: 'RFQ-OTHER', title: 'Other available opportunity' } as VendorOpportunity;
     mockSearchParams.set('rfq', 'RFQ-MISSING');
     setStore({ selectedVendorOpportunity: selected, vendorOpportunities: [other, selected], rfqs: [makeRFQ()] });
     render(<VendorQuotationFormPage />);
-    expect(renderedOpportunity()).toBe(selected);
+    expect(QuotationForm).not.toHaveBeenCalled();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.rfqNotInEnquiriesTitle)).toBeInTheDocument();
+    expect(screen.getByText(/RFQ-MISSING/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorWorkspace.viewAllEnquiriesAction }));
+    expect(mockRouterPush).toHaveBeenCalledWith('/vendor/quotation-form');
   });
 
-  test('uses the first opportunity when there is no requested or selected opportunity', () => {
-    const first = { id: 'opp-first', rfqNumber: 'RFQ-FIRST', title: 'First available opportunity' } as VendorOpportunity;
-    setStore({ vendorOpportunities: [first], rfqs: [makeRFQ()] });
-    render(<VendorQuotationFormPage />);
-    expect(renderedOpportunity()).toBe(first);
-  });
-
-  test.each(['requested', 'default'])('maps RFQ line items and preserves purchase details on the %s route', (route) => {
+  test('maps RFQ line items and preserves purchase details for the RFQ the link names', () => {
     const line: ExtractedEntity = {
       id: 'line-pump', itemName: 'Industrial Pump', quantity: 2, unit: 'Each',
       technicalSpecs: 'SS316', targetDate: '2026-12-01', confidence: 95,
@@ -189,7 +196,7 @@ describe('VendorQuotationFormPage', () => {
       quotes: [{ vendorId: 'existing-quote' } as RFQItem['quotes'][number]],
       extractedEntities: [line, { ...line, id: '', itemName: 'Isolation Valve', quantity: 3 }],
     });
-    if (route === 'requested') mockSearchParams.set('id', rfq.id);
+    mockSearchParams.set('id', rfq.id);
     setStore({ rfqs: [rfq] });
     render(<VendorQuotationFormPage />);
     expect(renderedOpportunity()).toMatchObject({
@@ -205,16 +212,16 @@ describe('VendorQuotationFormPage', () => {
     });
   });
 
-  test.each(['requested', 'default'])('preserves an expired RFQ on the %s route', (route) => {
+  test('preserves an expired RFQ that the link names', () => {
     const rfq = makeRFQ({
       id: 'rfq-expired', rfqNumber: 'RFQ-EXPIRED', status: 'Expired',
       targetDeliveryDate: '', category: '', budget: 0,
     });
-    if (route === 'requested') mockSearchParams.set('id', rfq.id);
+    mockSearchParams.set('id', rfq.id);
     setStore({ rfqs: [rfq] });
     render(<VendorQuotationFormPage />);
     expect(renderedOpportunity()).toMatchObject({
-      status: 'Expired', deadline: '', buyer: 'Buyer enterprise',
+      status: 'Expired', deadline: '', buyer: '',
       majorCategory: '', minorCategory: '', deliveryLocation: '', lineItems: [],
     });
   });

@@ -1,9 +1,11 @@
 /**
  * Centralized Email Scenario Templates
- * Focused strictly on converting Buyers and Sellers into PAID customers.
- * Includes both strategic commercial conversion proposals and call-outcome-specific drafts.
- * Each scenario highlights commercial value, ROI, exclusive enterprise plans,
- * and follow-up schedules with auto-suggested Document Vault collateral.
+ * Focused on converting Buyers and Sellers into paid customers.
+ * Includes both commercial proposals and call-outcome-specific drafts.
+ *
+ * The copy makes no statistics, prices, credit terms, offers or meeting times of its own.
+ * Every specific value comes from the placeholders the sender fills in ({companyName},
+ * {followupDate}, {followupTime}, {assigneeName}, {senderName}, {contactName}).
  */
 
 export interface EmailScenarioTemplate {
@@ -26,7 +28,7 @@ export const EMAIL_SCENARIO_TEMPLATES: EmailScenarioTemplate[] = [
   {
     id: 'buyer_conversion_followup',
     name: 'Post-Call Follow-up & Commercial Proposal',
-    description: 'Recap sales call, confirm scheduled follow-up meeting, and pitch enterprise procurement ROI.',
+    description: 'Recap sales call, confirm scheduled follow-up meeting, and share the procurement overview.',
     targetCategory: 'BUYER',
     scenarioGroup: 'commercial_pitch',
     suggestedVaultTags: ['marketing_overview', 'rate_cards'],
@@ -38,10 +40,10 @@ Thank you for discussing {companyName}'s procurement goals with our Category Lea
 
 As agreed, we have scheduled our follow-up discussion:
 - Meeting Date & Time: {followupDate} at {followupTime}
-- Key Agenda: Commercial Plan Review & Sourcing Fee Structure
+- Key Agenda: Commercial Plan Review
 - Category Specialist: {assigneeName}
 
-To help your team evaluate our commercial model, please find attached our Enterprise Procurement ROI Overview and Plan Breakdown. Our clients typically achieve 8-14% direct cost savings across industrial categories while reducing cycle times by 60%.
+To help your team evaluate our commercial model, please find attached our Enterprise Procurement overview and plan breakdown.
 
 Please let us know if you would like us to invite any additional stakeholders from your finance or commercial teams to the calendar invite.
 
@@ -51,24 +53,22 @@ Enterprise Category Solutions | Procucev`,
   },
   {
     id: 'buyer_demo_trial',
-    name: 'Platform Demo & Sourcing Pilot Offer',
-    description: 'Invite buyer to a walkthrough and offer a pilot sourcing cycle with zero upfront listing fees.',
+    name: 'Platform Demo Invitation',
+    description: 'Invite buyer to a platform walkthrough.',
     targetCategory: 'BUYER',
     scenarioGroup: 'commercial_pitch',
     suggestedVaultTags: ['marketing_overview'],
     defaultFollowupDays: 1,
-    subjectTemplate: 'Invitation: Enterprise Sourcing Walkthrough & Pilot Requisition - {companyName}',
+    subjectTemplate: 'Invitation: Enterprise Sourcing Walkthrough - {companyName}',
     bodyTemplate: `Dear {contactName},
 
-We would love to invite {companyName}'s procurement leadership to an exclusive 30-minute platform demonstration.
+We would like to invite {companyName}'s procurement leadership to a platform demonstration.
 
 Demo Details:
 - Scheduled Date: {followupDate}
-- Scheduled Time: 2:30 PM IST
+- Scheduled Time: {followupTime}
 - Session Agenda: Automated Vendor Discovery, Real-time Bid Matrix & Spend Analytics
 - Session Host: {assigneeName}
-
-As part of this session, we are pleased to offer {companyName} a complimentary Pilot Sourcing Cycle for your upcoming requisition, allowing you to experience our verified supplier network and price discovery at zero risk.
 
 Attached is our Platform Capabilities Walkthrough guide for your preliminary review.
 
@@ -78,56 +78,24 @@ Enterprise Category Solutions | Procucev`,
   },
   {
     id: 'buyer_subscription_offer',
-    name: 'Enterprise Sourcing Plan & Credit Package',
-    description: 'Present premium buyer subscription tiers, dedicated category manager SLA, and credit line benefits.',
+    name: 'Enterprise Sourcing Plan Overview',
+    description: 'Share buyer subscription plan options for the buyer to review.',
     targetCategory: 'BUYER',
     scenarioGroup: 'commercial_pitch',
     suggestedVaultTags: ['rate_cards', 'compliance'],
     defaultFollowupDays: 3,
-    subjectTemplate: 'Exclusive Enterprise Sourcing Plan & Credit Facilities - {companyName}',
+    subjectTemplate: 'Enterprise Sourcing Plan Overview - {companyName}',
     bodyTemplate: `Dear {contactName},
 
-Following our recent evaluation of {companyName}'s monthly sourcing volume, we have tailored an Enterprise Sourcing Membership package designed to maximize your bottom-line savings:
+Following our recent discussion of {companyName}'s sourcing requirements, we would like to share our Enterprise Sourcing plan options.
 
-Key Membership Entitlements:
-- Unlimited RFQ Dispatches with autonomous supplier matching
-- Dedicated Category Manager & Expedited SLA turnaround
-- Verified Supplier Network Access with pre-negotiated wholesale pricing
-- Flexible 30/60-Day Rolling Procurement Credit Line
+Attached is our Enterprise Sourcing Plans & Entitlements brochure, which sets out each plan and what it includes.
 
-Attached is our detailed Enterprise Sourcing Plans & Entitlements brochure. We are currently offering a 15% incentive on annual agreements executed this quarter.
-
-Could we schedule a brief 10-minute call this {followupDate} to finalize terms that best suit your fiscal cycle?
+Could we schedule a brief call on {followupDate} to review the plan options that best suit your fiscal cycle?
 
 Sincerely,
 {senderName}
-Director of Enterprise Growth | Procucev`,
-  },
-  {
-    id: 'buyer_credit_activation',
-    name: 'Credit Line & Working Capital Terms',
-    description: 'Pitch interest-free rolling procurement credit to unlock immediate purchasing liquidity.',
-    targetCategory: 'BUYER',
-    scenarioGroup: 'commercial_pitch',
-    suggestedVaultTags: ['compliance'],
-    defaultFollowupDays: 2,
-    subjectTemplate: 'Unlock Working Capital: Pre-Approved Procurement Credit for {companyName}',
-    bodyTemplate: `Dear {contactName},
-
-We are pleased to share that {companyName} is eligible for our Pre-Approved Rolling Procurement Credit Facility of up to ₹25,00,000 to streamline your purchase order liquidity.
-
-Key Highlights of the Facility:
-- Flexible 30 to 60-day settlement windows
-- 0% interest on settlements completed within standard cycle
-- Zero upfront collateral requirement for verified corporate entities
-
-Review the attached Procurement Credit Terms & Guidelines for complete details. Activating this facility requires simple digital verification and can be completed in under 24 hours.
-
-Let us know when you would like our finance specialist to walk your team through the activation checklist.
-
-Warm regards,
-{senderName}
-Procurement Finance Desk | Procucev`,
+Enterprise Growth | Procucev`,
   },
 
   // ---------------------------------------------------------------------------
@@ -136,7 +104,7 @@ Procurement Finance Desk | Procucev`,
   {
     id: 'buyer_call_outcome_connected',
     name: 'Call Outcome: Connected - Commercial Follow-up & Plan Review',
-    description: 'Recap phone discussion with buyer, confirm agreed follow-up meeting, and attach ROI brochure and plan details.',
+    description: 'Recap phone discussion with buyer, confirm agreed follow-up meeting, and attach the overview and plan details.',
     targetCategory: 'BUYER',
     scenarioGroup: 'call_outcome',
     callOutcomeValue: 'Connected',
@@ -153,7 +121,7 @@ Key Takeaways & Next Steps:
 - Discussion Agenda: Commercial Proposal Review & Tier Selection
 - Assigned Category Lead: {assigneeName}
 
-As discussed, please find attached our Enterprise Procurement ROI Overview and Sourcing Plan options. With our autonomous vendor matching and pre-negotiated wholesale rates, enterprise buyers achieve an average 8-14% bottom-line savings while cutting procurement turnaround times by over 50%.
+As discussed, please find attached our Enterprise Procurement overview and Sourcing Plan options.
 
 We look forward to reconvening on {followupDate}. Please feel free to reply directly to this email if you would like to include additional team members in our next session.
 
@@ -164,7 +132,7 @@ Category Management & Enterprise Sourcing | Procucev`,
   {
     id: 'buyer_call_outcome_left_voicemail',
     name: 'Call Outcome: Left Voicemail - Sourcing Optimization & Pilot Access',
-    description: 'Follow up on voicemail left for buyer, pitch enterprise sourcing savings, and offer a zero-risk pilot.',
+    description: 'Follow up on voicemail left for buyer, describe sourcing support, and offer a short discovery call.',
     targetCategory: 'BUYER',
     scenarioGroup: 'call_outcome',
     callOutcomeValue: 'Left Voicemail',
@@ -175,11 +143,11 @@ Category Management & Enterprise Sourcing | Procucev`,
 
 I just left a brief voicemail for your team regarding {companyName}'s current industrial sourcing and procurement requirements.
 
-We partner with leading enterprises across your sector to reduce supply costs by 8-14% through our verified supplier network and automated bid-matrix engine.
+We support procurement teams with verified supplier discovery and an automated bid comparison matrix.
 
-I would welcome 10 minutes to walk you through our zero-risk Sourcing Pilot Requisition program. I have attached our Enterprise Capabilities Overview for your quick reference.
+I would welcome a short call to walk you through our Sourcing Pilot Requisition program. I have attached our Enterprise Capabilities Overview for your quick reference.
 
-Could you please let me know if {followupDate} at {followupTime} works for a quick 10-minute discovery call, or feel free to propose a time that best suits your schedule.
+Could you please let me know if {followupDate} at {followupTime} works for a quick discovery call, or feel free to propose a time that best suits your schedule.
 
 Best regards,
 {senderName}
@@ -199,9 +167,9 @@ Category Solutions | Procucev`,
 
 I attempted to reach you by phone earlier today, but the line was busy. I completely understand that you have a demanding schedule.
 
-I am reaching out regarding {companyName}'s upcoming procurement cycles. Our category desk provides pre-vetted supplier matching, direct factory pricing, and flexible 30-60 day rolling procurement credit.
+I am reaching out regarding {companyName}'s upcoming procurement cycles. Our category desk provides pre-vetted supplier matching and bid comparison.
 
-Attached is our one-page Enterprise Sourcing Overview. When would be a convenient time to reconnect for a brief 5-minute conversation? Alternatively, I will attempt to reach you again on {followupDate}.
+Attached is our one-page Enterprise Sourcing Overview. When would be a convenient time to reconnect for a brief conversation? Alternatively, I will attempt to reach you again on {followupDate}.
 
 Looking forward to connecting with your team.
 
@@ -212,7 +180,7 @@ Enterprise Category Management | Procucev`,
   {
     id: 'buyer_call_outcome_no_answer',
     name: 'Call Outcome: No Answer - Enterprise Sourcing Value & Pilot Intro',
-    description: 'Polite email when buyer did not answer, providing 3 key value highlights and scheduling options.',
+    description: 'Polite email when buyer did not answer, listing the main sourcing benefits and scheduling options.',
     targetCategory: 'BUYER',
     scenarioGroup: 'call_outcome',
     callOutcomeValue: 'No Answer',
@@ -224,13 +192,13 @@ Enterprise Category Management | Procucev`,
 I tried connecting with you by phone today to introduce Procucev's enterprise procurement platform, but was unable to reach you.
 
 We help commercial procurement leaders at {companyName}:
-1. Access 10,000+ audited manufacturers with guaranteed quality compliance
-2. Secure 8-14% average savings through consolidated competitive bidding
-3. Leverage pre-approved rolling procurement credit facilities (up to ₹25 Lakhs)
+1. Reach a verified supplier network across industrial categories
+2. Compare competing bids in one place
+3. Keep each requisition's RFQ, quotes and approvals together
 
 I have attached our Enterprise Sourcing Overview and Plan Brochure for your review.
 
-Would you be open to a brief 10-minute call on {followupDate} at {followupTime}? Please reply with a preferred time slot if another time works better.
+Would you be open to a brief call on {followupDate} at {followupTime}? Please reply with a preferred time slot if another time works better.
 
 Warm regards,
 {senderName}
@@ -267,7 +235,7 @@ Category Solutions | Procucev`,
   {
     id: 'seller_conversion_followup',
     name: 'Post-Call Follow-up & Paid Roster Invitation',
-    description: 'Recap supplier onboarding call, schedule next discussion, and pitch verified supplier tier benefits.',
+    description: 'Recap supplier onboarding call, schedule next discussion, and describe the verified supplier program.',
     targetCategory: 'SELLER',
     scenarioGroup: 'commercial_pitch',
     suggestedVaultTags: ['marketing_overview', 'rate_cards'],
@@ -282,36 +250,33 @@ As discussed, we have logged our follow-up schedule:
 - Focus: Verified Vendor Tier Enrollment & Immediate Enterprise Inquiries
 - Assigned Specialist: {assigneeName}
 
-We have attached our Supplier Monetization & Growth Handbook detailing how our verified suppliers secure guaranteed buyer quote shortlists and access ₹50Cr+ in monthly requisition volumes.
+We have attached our Supplier Growth Handbook, which explains how verified suppliers receive buyer RFQs in their categories.
 
 We look forward to onboarding {companyName} into our premier vendor roster.
 
 Best regards,
 {senderName}
-Supplier Partnerships Lead | Procucev`,
+Supplier Partnerships | Procucev`,
   },
   {
     id: 'seller_premium_access',
-    name: 'Exclusive High-Value RFQ Access Plan',
-    description: 'Pitch premium seller membership unlocking high-budget enterprise RFQs and direct buyer introductions.',
+    name: 'Supplier Membership Plan Invitation',
+    description: 'Invite a supplier to review premium membership plans.',
     targetCategory: 'SELLER',
     scenarioGroup: 'commercial_pitch',
     suggestedVaultTags: ['rate_cards'],
     defaultFollowupDays: 2,
-    subjectTemplate: 'Exclusive Invitation: High-Value Enterprise RFQ Pipeline for {companyName}',
+    subjectTemplate: 'Invitation: Supplier Membership Plans for {companyName}',
     bodyTemplate: `Dear {contactName},
 
-Our category desk currently manages active enterprise procurement pipelines exceeding ₹10 Crore in your primary supply categories.
+Our category desk currently manages enterprise procurement requisitions in your primary supply categories.
 
-To grant {companyName} immediate unsealed access to quote on these requisitions, we invite you to subscribe to our Premium Supplier Growth Plan:
+To help {companyName} review access to these requisitions, we invite you to look at our premium supplier membership plans:
 
-Plan Advantages:
-- Priority RFQ Routing: Receive high-value commercial tenders 48 hours prior to general release
-- Verified Supplier Gold Badge: 3.5x higher quote acceptance rate among corporate buyers
-- Direct Buyer Procurement Introductions with Category Manager backing
-- Unlimited Quotation Submissions with zero per-lead deduction
+- Plan details and entitlements are set out in the attached Premium Supplier Membership Plans sheet
+- Our category desk can walk you through which plan fits your current capacity
 
-Please review the attached Premium Supplier Membership Plans sheet. We would be delighted to activate your premium status ahead of our upcoming weekly RFQ releases.
+We would be glad to activate premium status for {companyName} if the plan suits your business. Please let us know a convenient time on {followupDate}.
 
 Warm regards,
 {senderName}
@@ -319,8 +284,8 @@ Enterprise Supplier Network | Procucev`,
   },
   {
     id: 'seller_featured_placement',
-    name: 'Featured Vendor & Guaranteed Lead Allocation',
-    description: 'Offer featured catalog placement and guaranteed monthly buyer lead quota in specific divisions.',
+    name: 'Featured Supplier Sponsorship',
+    description: 'Offer featured supplier sponsorship in a category.',
     targetCategory: 'SELLER',
     scenarioGroup: 'commercial_pitch',
     suggestedVaultTags: ['rate_cards', 'marketing_overview'],
@@ -328,20 +293,15 @@ Enterprise Supplier Network | Procucev`,
     subjectTemplate: 'Category Exclusive: Featured Supplier Sponsorship in your Category - {companyName}',
     bodyTemplate: `Dear {contactName},
 
-We are opening exclusive Featured Supplier sponsorships for your primary manufacturing and supply categories for the upcoming quarter.
+We are opening featured supplier sponsorships for your primary manufacturing and supply categories for the upcoming quarter.
 
-Featured Partner Benefits:
-- Top-of-page search and catalog ranking across 500+ active enterprise buyer accounts
-- Guaranteed quota of verified buyer RFQ dispatches every month
-- Custom Digital Showroom showcasing {companyName}'s manufacturing capabilities and QA certifications
+Attached is the Category Featured Partner Benefits presentation, which sets out the available options and pricing.
 
-Review the attached Category Featured Partner Benefits presentation for performance metrics and pricing options.
-
-Slots per major category are strictly capped to ensure maximum lead conversion for our partners. Let us know if you would like to reserve {companyName}'s position.
+Let us know if you would like us to reserve a sponsorship position for {companyName}.
 
 Sincerely,
 {senderName}
-Head of Vendor Monetization | Procucev`,
+Supplier Partnerships | Procucev`,
   },
 
   // ---------------------------------------------------------------------------
@@ -367,7 +327,7 @@ Summary & Next Steps:
 - Discussion Focus: Verified Supplier Enrollment & Direct Buyer RFQs
 - Category Manager: {assigneeName}
 
-Attached is our Supplier Monetization & Growth Playbook along with our Verified Supplier Tier details. As a verified supplier, {companyName} gains direct visibility across 500+ corporate buyers with pre-cleared budgets and priority RFQ dispatch.
+Attached is our Supplier Growth Playbook along with our Verified Supplier Tier details. As a verified supplier, {companyName} would receive buyer RFQs in its supply categories.
 
 We look forward to speaking with you again on {followupDate}.
 
@@ -391,7 +351,7 @@ I just left a brief voicemail for your sales office regarding incoming enterpris
 
 Our buyer network is currently seeking verified suppliers in your category for upcoming corporate requisitions.
 
-I have attached our Supplier Growth Guide for your review. We would love to connect for 10 minutes to verify your production capacities and route these RFQs directly to your sales desk.
+I have attached our Supplier Growth Guide for your review. We would love to connect for a short call to verify your production capacities and route these RFQs directly to your sales desk.
 
 Are you available for a brief call on {followupDate} at {followupTime}? Please let me know if a different time suits you best.
 
@@ -413,9 +373,9 @@ Supplier Partnerships | Procucev`,
 
 I tried calling your sales desk earlier today, but the line was engaged.
 
-I am reaching out from Procucev because enterprise buyers in our platform are actively requesting quotes for categories supplied by {companyName}. We want to ensure your team is positioned to bid on these contracts.
+I am reaching out from Procucev because enterprise buyers on our platform are requesting quotes for categories supplied by {companyName}. We want to ensure your team is positioned to bid on these contracts.
 
-Attached is our Supplier Growth Overview. When would be a good time to connect for a 5-minute phone alignment? I will also try calling back on {followupDate}.
+Attached is our Supplier Growth Overview. When would be a good time to connect for a brief phone alignment? I will also try calling back on {followupDate}.
 
 Looking forward to collaborating.
 
@@ -426,7 +386,7 @@ Category Lead | Procucev`,
   {
     id: 'seller_call_outcome_no_answer',
     name: 'Call Outcome: No Answer - New RFQ Opportunities for {companyName}',
-    description: 'Reach out when vendor did not answer, presenting immediate vendor benefits and scheduling a briefing.',
+    description: 'Reach out when vendor did not answer, describing the RFQ opportunities and scheduling a briefing.',
     targetCategory: 'SELLER',
     scenarioGroup: 'call_outcome',
     callOutcomeValue: 'No Answer',
@@ -437,14 +397,14 @@ Category Lead | Procucev`,
 
 I called your office earlier today regarding {companyName}'s supplier profile on Procucev, but was unable to reach you.
 
-We are currently onboarding trusted manufacturing and supply partners to fulfill high-budget purchase orders from verified corporate buyers.
+We are onboarding trusted manufacturing and supply partners to respond to requisitions from corporate buyers.
 
-Key Benefits for {companyName}:
-1. Zero cost per lead — receive verified RFQs directly to your dashboard
-2. Guaranteed payment protection via verified buyer credit facilities
-3. Category exclusivity and preferential bid showcase
+Key Points for {companyName}:
+1. Verified RFQs for your supply categories, sent to your dashboard
+2. Clear quote, award and approval status for each requisition
+3. Category-based routing so you see the requests that match your capabilities
 
-Please review the attached Supplier Growth Playbook. Could we schedule a 10-minute briefing on {followupDate} at {followupTime}?
+Please review the attached Supplier Growth Playbook. Could we schedule a short briefing on {followupDate} at {followupTime}?
 
 Best regards,
 {senderName}

@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { User, Phone, Mail, MapPin, Building2, ShieldCheck } from 'lucide-react';
 
 // Real per-company contact details the caller already has from an actual
@@ -38,7 +39,7 @@ export default function CompanyHoverTooltip({
 }: CompanyHoverTooltipProps) {
   const { currentRole } = useApp();
   const [isHovered, setIsHovered] = useState(false);
-  const displayName = name && name.trim() ? name.trim() : 'Enterprise Partner';
+  const displayName = name && name.trim() ? name.trim() : UI_STRINGS.recordPlaceholders.notRecorded;
   const hasContactDetails = !!(contact?.contactPerson || contact?.mobile || contact?.email);
 
   // Strictly enforce hover contact card visibility ONLY for Category Manager role

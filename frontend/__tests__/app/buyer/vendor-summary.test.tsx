@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
 import { logger } from '@/lib/logger';
+import type { VendorEntry } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -40,6 +41,23 @@ const mockValidatePincode = validatePincode as jest.Mock;
 
 const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
 const mockFetchBuyerProfile = buyerProfileClient.fetchBuyerProfile as jest.Mock;
+
+/** A complete VendorEntry, so classification fixtures carry the real shape. Only the overridden fields differ. */
+function vendorRecord(overrides: Partial<VendorEntry>): VendorEntry {
+  return {
+    id: 'v-fixture',
+    name: 'Fixture Vendor',
+    contactPerson: 'Fixture Contact',
+    phone: '',
+    email: '',
+    majorCategory: '',
+    minorCategories: [],
+    location: '',
+    rating: 0,
+    source: 'procucev_network',
+    ...overrides,
+  };
+}
 
 describe('app/buyer/vendor-summary.tsx', () => {
   const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
@@ -237,8 +255,16 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(isBuyerUploaded({ source: 'historical_purchase_dump' })).toBe(true);
       expect(isBuyerUploaded({ source: 'buyer_manual' })).toBe(true);
       expect(isBuyerUploaded({ source: 'buyer_excel' })).toBe(true);
-      expect(isBuyerUploaded({ id: 'v-ingest-123', source: 'any' })).toBe(true);
-      expect(isBuyerUploaded({ id: 'v-hist-123', source: 'any' })).toBe(true);
+      expect(isBuyerUploaded({ source: 'any', buyerAccountId: 'acc-1' })).toBe(true);
+      expect(isBuyerUploaded({ source: 'any', buyerId: 'acc-1' })).toBe(true);
+      expect(isBuyerUploaded({ source: 'any', addedByBuyerCompany: 'Acme Ltd' })).toBe(true);
+    });
+
+    it('does not infer buyer ownership from the vendor ID alone', () => {
+      expect(isBuyerUploaded(vendorRecord({ id: 'v-ingest-123', source: 'any' }))).toBe(false);
+      expect(isBuyerUploaded(vendorRecord({ id: 'v-hist-123', source: 'any' }))).toBe(false);
+      expect(isBuyerUploaded(vendorRecord({ id: 'vm-123', source: 'procucev_network' }))).toBe(false);
+      expect(isBuyerUploaded(null)).toBe(false);
     });
 
     it('correctly classifies Procucev vendors', () => {
@@ -548,6 +574,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
       fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
@@ -561,6 +588,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
           city: 'Mumbai',
           state: 'Maharashtra',
           pincode: '400001',
+          rating: 4.2,
+          score: 84,
         })
       ));
       // Modal closes only after the backend confirms the write.
@@ -601,6 +630,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
       fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
       await waitFor(() => expect(mockAddBuyerVendor).toHaveBeenCalled());
@@ -843,15 +873,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
         target: { value: 'Mumbai, Maharashtra' },
       });
 
-      // Designation, City, State, Pincode, Country, GST, PAN, MSME, Annual Turnover
-      fireEvent.change(screen.getByDisplayValue('Authorized Representative'), {
-        target: { value: 'VP Sales' },
-      });
+      // Country and annual turnover are set by value. The vendor has no recorded designation, so that
+      // field starts blank and the sweep below fills it with the other empty inputs.
       fireEvent.change(screen.getByDisplayValue('India'), { target: { value: 'Bharat' } });
-      fireEvent.change(screen.getByDisplayValue('₹10 - ₹50 Cr'), {
-        target: { value: '₹100 Cr+' },
-      });
-
       const emptyTextInputs = screen
         .getAllByRole('textbox')
         .filter((input) => (input as HTMLInputElement).value === '');
@@ -917,7 +941,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.queryByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).not.toBeInTheDocument();
     });
 
-    it('closes the rating revision modal via Cancel and falls back to a synthetic evaluation record for View 360° Evaluation', () => {
+    it('shows a not-evaluated notice and opens no record for View 360° when the vendor has no stored evaluation', () => {
       const vendorsWithoutStoreEval = [
         {
           ...mockBuyerVendors[1],
@@ -947,12 +971,12 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      // v-2 (Global Valves) is marked evaluated:true in fixture, has no matching vendorEvaluations record
+      // v-2 (Global Valves) is marked evaluated:true in fixture, but has no stored evaluation record.
+      // No record is invented, so the evaluation is not opened and the buyer is told why.
       const viewEvalBtns = screen.getAllByText(/View 360° Evaluation/i);
       fireEvent.click(viewEvalBtns[0]);
-      expect(mockOnViewEvaluation).toHaveBeenCalledWith(
-        expect.objectContaining({ vendorName: 'Global Valves Ltd', id: 'eval-v-2' })
-      );
+      expect(mockOnViewEvaluation).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith('Not evaluated', 'No evaluation record exists for this vendor yet.', 'info');
     });
 
     it('submits a rating revision successfully and closes the modal on success', async () => {
@@ -1021,14 +1045,16 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
+      // The roster lists buyer-owned vendors only, whatever their buyer-side origin label.
       expect(screen.getByText('Dump Vendor')).toBeInTheDocument();
       expect(screen.getByText('Master Ingestion Vendor')).toBeInTheDocument();
-      expect(screen.getByText('Excel Vendor')).toBeInTheDocument();
-      expect(screen.getByText('CM Vendor')).toBeInTheDocument();
-      expect(screen.getByText('Self Onboard Vendor')).toBeInTheDocument();
-      expect(screen.getByText('Registration Vendor')).toBeInTheDocument();
-      expect(screen.getByText('Self Reg Vendor')).toBeInTheDocument();
       expect(screen.getByText('Company Match Vendor')).toBeInTheDocument();
+      // Procucev-origin records are not buyer-owned, so the roster leaves them out.
+      expect(screen.queryByText('Excel Vendor')).not.toBeInTheDocument();
+      expect(screen.queryByText('CM Vendor')).not.toBeInTheDocument();
+      expect(screen.queryByText('Self Onboard Vendor')).not.toBeInTheDocument();
+      expect(screen.queryByText('Registration Vendor')).not.toBeInTheDocument();
+      expect(screen.queryByText('Self Reg Vendor')).not.toBeInTheDocument();
     });
 
     it('renders View Profile / Origin / Engagement default fallbacks for a vendor with minimal fields', () => {
@@ -1073,9 +1099,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Open View Profile modal to exercise all the default-value fallbacks
       fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
       expect(screen.getAllByText('Bare Minimum Traders').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('N/A').length).toBeGreaterThan(0);
+      // Missing values show a dash, and no category is invented for a vendor that has none.
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
       expect(screen.getByText('No specific minors tagged')).toBeInTheDocument();
-      expect(screen.getAllByText('General Industrial').length).toBeGreaterThan(0);
+      expect(screen.queryByText('General Industrial')).not.toBeInTheDocument();
       expect(screen.getAllByText('Not Provided').length).toBeGreaterThan(0);
     });
 
@@ -1096,7 +1123,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         addBuyerVendor: mockAddBuyerVendor,
         updateBuyerVendor: mockUpdateBuyerVendor,
         deleteBuyerVendor: mockDeleteBuyerVendor,
-        categoryTaxonomy: [],
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
         openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: null,
@@ -1111,6 +1138,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
+
+      // The major category is required, so the sparse vendor's blank one is chosen from the master.
+      const selects = screen.getAllByRole('combobox');
+      fireEvent.change(selects[selects.length - 1], { target: { value: 'Mechanical' } });
 
       // Fill only the truly-required fields left blank by the sparse vendor; leave the rest
       // (brand name, minor categories, location, country, etc.) blank to hit their fallback defaults.
@@ -1250,6 +1281,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
       expect(mockShowToast).toHaveBeenCalledWith('Invalid Pincode', 'Invalid or dummy PIN code', 'warning');
@@ -1511,7 +1544,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('AI Rating Auto-Generation', () => {
-    it('auto-generates rating using AI and updates scores and remarks', async () => {
+    it('offers no AI rating generator, so the revision modal never shows a generated rating', () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -1525,21 +1558,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
 
-      const aiBtn = screen.getByRole('button', { name: /Auto-Generate with AI/i });
-      fireEvent.click(aiBtn);
-
-      await waitFor(
-        () => {
-          expect(mockShowToast).toHaveBeenCalledWith(
-            'AI Rating Generated',
-            expect.stringContaining('Calculated performance scores for Apex Supplies Ltd.'),
-            'success'
-          );
-        },
-        { timeout: 2000 }
-      );
-
-      expect(screen.getByDisplayValue(/AI Auto-Generated Performance Rating/i)).toBeInTheDocument();
+      // No AI generator is wired to any action, so no generated figure or remark can appear.
+      expect(screen.queryByRole('button', { name: /Auto-Generate with AI/i })).not.toBeInTheDocument();
+      expect(mockShowToast).not.toHaveBeenCalledWith('AI Rating Generated', expect.anything(), expect.anything());
     });
 
     it('closes the rating revision modal via Cancel button', () => {
@@ -1564,10 +1585,12 @@ describe('app/buyer/vendor-summary.tsx', () => {
     it('renders evaluation locked button for network vendor in mode 2 without quote', () => {
       const networkVendor = {
         id: 'v-buyer-net-99',
+        // The roster lists buyer-owned vendors, so a network vendor shows here only as a buyer overlap.
+        buyerId: 'acc-1',
+        overlap: true,
         name: 'Locked Network Vendor',
         email: 'locked@net.test',
         source: 'procucev_network',
-        overlap: true,
         evaluated: false,
       };
 
@@ -1596,9 +1619,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByRole('button', { name: /Evaluation Locked \(Pending Quote\)/i })).toBeDisabled();
     });
 
-    it('renders trigger evaluation button for network vendor in mode 2 with quote and triggers evaluation on click', () => {
+    it('offers no trigger action for a quoting network vendor, so no evaluation is faked', () => {
       const networkVendorWithQuote = {
         id: 'v-buyer-net-quote',
+        buyerId: 'acc-1',
         name: 'Quoting Network Vendor',
         email: 'quote@net.test',
         source: 'procucev_network',
@@ -1634,15 +1658,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const triggerBtn = screen.getByRole('button', { name: /Trigger Evaluation/i });
-      expect(triggerBtn).toBeInTheDocument();
-      fireEvent.click(triggerBtn);
-
-      expect(mockShowToast).toHaveBeenCalledWith(
-        'Triggering AI Evaluation Request',
-        expect.stringContaining('Verification request email dispatched to quote@net.test'),
-        'info'
-      );
+      // Nothing has been evaluated, and no endpoint backs a trigger, so the roster offers no
+      // trigger button and shows no success notice for an evaluation that never ran.
+      expect(screen.queryByRole('button', { name: /Trigger Evaluation/i })).not.toBeInTheDocument();
+      expect(mockShowToast).not.toHaveBeenCalledWith('Triggering AI Evaluation Request', expect.anything(), expect.anything());
     });
 
     it('renders qualification reason for buyer empanelled vendor active in RFQs', () => {
@@ -2131,11 +2150,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
 
-      // Verify batch cards render with fallbacks
-      // Batch 2 should show 'Vendor_Master_Upload.xlsx' as fileName fallback
-      expect(screen.getByText('Vendor_Master_Upload.xlsx')).toBeInTheDocument();
-      // Batch 2 should show 'Recent' as timestamp fallback
-      expect(screen.getByText('Recent')).toBeInTheDocument();
+      // Batch 2 has no recorded file name or timestamp. No name or date is invented for it, so the
+      // card shows a dash instead of a stand-in file name or 'Recent'.
+      expect(screen.queryByText('Vendor_Master_Upload.xlsx')).not.toBeInTheDocument();
+      expect(screen.queryByText('Recent')).not.toBeInTheDocument();
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
 
       // Click Download CSV on batch with sparse record — covers r.field || '' fallbacks (line 265)
       const downloadCsvBtns = screen.getAllByRole('button', { name: /Download CSV/i });
@@ -2153,10 +2172,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Vendor Template Upload Batch Details')).toBeInTheDocument();
 
       // Verify sparse record renders table fallbacks (lines 2778-2822)
-      // '—' for vendorCode, contactPerson, email, phone, gstin; 'General' for category; 85 for rating
+      // Missing vendorCode, contactPerson, email, phone, gstin and category show a dash, not a stand-in label.
       const allDashes = screen.getAllByText('—');
       expect(allDashes.length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('General')).toBeInTheDocument();
+      expect(screen.queryByText('General')).not.toBeInTheDocument();
 
       // Verify contactDesignation renders for the second record (line 2794-2797)
       expect(screen.getByText('Manager')).toBeInTheDocument();
@@ -2252,7 +2271,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('AI Rating alternate branch coverage', () => {
-    it('auto-generates rating for vendor with ISO, low rating, low score, no GST, not in RFQ', async () => {
+    it('offers no AI rating for an ISO, low-score vendor with no GST and no RFQ link', () => {
       const isoVendor = {
         id: 'v-buyer-iso-low',
         name: 'ISO Low Score Vendor',
@@ -2293,23 +2312,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(reviseBtns[0]);
       expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
 
-      // Click AI Auto-Generate
-      const aiBtn = screen.getByRole('button', { name: /Auto-Generate with AI/i });
-      fireEvent.click(aiBtn);
-
-      await waitFor(
-        () => {
-          expect(mockShowToast).toHaveBeenCalledWith(
-            'AI Rating Generated',
-            expect.stringContaining('ISO Low Score Vendor'),
-            'success'
-          );
-        },
-        { timeout: 2000 }
-      );
-
-      // The remarks should contain 'ISO/Verified' since iso is true
-      expect(screen.getByDisplayValue(/AI Auto-Generated Performance Rating/i)).toBeInTheDocument();
+      // No AI generator exists, so the modal offers no generated rating for this vendor.
+      expect(screen.queryByRole('button', { name: /Auto-Generate with AI/i })).not.toBeInTheDocument();
+      expect(mockShowToast).not.toHaveBeenCalledWith('AI Rating Generated', expect.anything(), expect.anything());
     });
   });
 
@@ -2475,41 +2480,20 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      // Fill required fields using placeholders
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. Ashok Industries/i), {
-        target: { value: 'Fallback Test Co' },
-      });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. John Doe/i), {
-        target: { value: 'John Doe' },
-      });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. contact@example\.com/i), {
-        target: { value: 'john@fallback.test' },
-      });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. 9000000001/i), {
-        target: { value: '+91 99999 11111' },
-      });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. Pune/i), {
-        target: { value: 'Mumbai' },
-      });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. Maharashtra/i), {
-        target: { value: 'Maharashtra' },
-      });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. 411001/i), {
-        target: { value: '800001' },
-      });
+      // Fill the required fields by label. No minor category, brand, location or country is entered.
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Fallback Test Co' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'John Doe' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'john@fallback.test' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 99999 11111' } });
+      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '800001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAACA1928K1Z4' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4' } });
 
       // Wait for debounce on pincode validation
       await waitFor(() => {}, { timeout: 600 });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. 27AAAAA0000A1Z5/i), {
-        target: { value: '27AAACA1928K1Z4' },
-      });
 
       // Submit via testid
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
@@ -2519,7 +2503,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
           expect.objectContaining({
             name: 'Fallback Test Co',
             brandName: 'Fallback Test Co',
-            minorCategories: expect.arrayContaining(['Mechanical']),
+            minorCategories: [],
             country: 'India',
             location: 'Mumbai, Maharashtra',
           })
@@ -2539,33 +2523,18 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. Ashok Industries/i), {
-        target: { value: 'Failed Add Co' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. John Doe/i), {
-        target: { value: 'John Doe' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. contact@example\.com/i), {
-        target: { value: 'fail@add.test' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. 9000000001/i), {
-        target: { value: '+91 99999 22222' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. Pune/i), {
-        target: { value: 'Delhi' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. Maharashtra/i), {
-        target: { value: 'Delhi' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. 411001/i), {
-        target: { value: '800001' },
-      });
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Failed Add Co' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'John Doe' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'fail@add.test' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 99999 22222' } });
+      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Delhi' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Delhi' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '800001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '07AAACA1928K1Z4' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4' } });
 
       await waitFor(() => {}, { timeout: 600 });
-
-      fireEvent.change(screen.getByPlaceholderText(/e\.g\. 27AAAAA0000A1Z5/i), {
-        target: { value: '07AAACA1928K1Z4' },
-      });
 
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
@@ -2639,7 +2608,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      const pincodeInput = screen.getByPlaceholderText(/e\.g\. 411001/i);
+      const pincodeInput = screen.getByLabelText(/Pincode/i);
       fireEvent.change(pincodeInput, { target: { value: '411006' } });
 
       await waitFor(() => {
@@ -2666,7 +2635,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      const pincodeInput = screen.getByPlaceholderText(/e\.g\. 411001/i);
+      const pincodeInput = screen.getByLabelText(/Pincode/i);
       fireEvent.change(pincodeInput, { target: { value: '411007' } });
 
       await waitFor(() => {
@@ -2883,7 +2852,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
           brandName: 'Edit Fallback Co',
           location: 'Nagpur, Maharashtra',
           country: 'India',
-          minorCategories: expect.arrayContaining(['Mechanical']),
+          minorCategories: [],
         })
       );
     });
@@ -2926,7 +2895,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Revise Rating/i }));
       expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
-      expect(screen.getByText(/Larsen & Toubro Limited/i)).toBeInTheDocument();
+      // No score or rating is recorded, so the previous figures show a dash rather than an assumed 88%.
+      expect(screen.queryByText('88%')).not.toBeInTheDocument();
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+      // With no buyer account loaded, no company name is shown.
+      expect(screen.queryByText(/Larsen & Toubro Limited/i)).not.toBeInTheDocument();
     });
   });
 
@@ -3049,7 +3022,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('View 360 Evaluation dynamic storeRecord find', () => {
-    it('falls back to vendorEvaluations.find when storeRecord is undefined (line 1034)', () => {
+    it('opens the stored evaluation record for a vendor when it has one', () => {
       const dynVendor = {
         id: 'v-buyer-dyn-eval',
         name: 'Dynamic Eval Vendor',
@@ -3059,7 +3032,15 @@ describe('app/buyer/vendor-summary.tsx', () => {
       };
 
       (useApp as jest.Mock).mockReturnValue({
-        vendorEvaluations: [],
+        vendorEvaluations: [
+          {
+            id: 'eval-db-dyn-1',
+            vendorId: 'v-buyer-dyn-eval',
+            vendorName: 'Dynamic Eval Vendor',
+            overallScore: 77,
+            status: 'PREFERRED ENTERPRISE SUPPLIER',
+          },
+        ],
         currentMode: 'mode_3',
         rfqs: [],
         showToast: mockShowToast,
@@ -3083,8 +3064,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const viewEvalBtn = screen.getByRole('button', { name: /View 360° Evaluation/i });
       fireEvent.click(viewEvalBtn);
 
+      // The stored evaluation for this vendor is the record that opens; nothing is synthesized.
       expect(mockOnViewEvaluation).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'eval-v-buyer-dyn-eval' })
+        expect.objectContaining({ id: 'eval-db-dyn-1' })
       );
     });
   });

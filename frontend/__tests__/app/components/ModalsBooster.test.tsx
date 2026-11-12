@@ -10,6 +10,7 @@ import {
 } from '@/app/components/Modals';
 import type { RFQItem, QuoteComparison } from '@/lib/types';
 import * as storeModule from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
 
@@ -346,6 +347,62 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
     });
   });
 
+  describe('PurchaseOrderModal with no recorded values', () => {
+    it('shows placeholders instead of invented party, term, tax and total values', () => {
+      render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqNumber="RFQ-PO-EMPTY"
+          vendorId={null}
+          vendorName=""
+          unitPrice={0}
+          totalAmount={0}
+          leadTime={0}
+          deliveryDate=""
+          lineItems={[{ description: '', quantity: 0, unit: '', technicalSpecs: 'Standard Specification' }]}
+        />
+      );
+
+      // No tax was recorded, so GST and the grand total are not available and no amount in words is shown.
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notAvailable).length).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText(/Rupees/)).not.toBeInTheDocument();
+      // The vendor name, item description, unit and lead time were not recorded.
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  describe('SupplierQuotesModal with unrecorded quote fields', () => {
+    it('keeps incomplete quotes searchable and shows placeholders where a value is missing', () => {
+      const incompleteRfq = {
+        status: 'In Evaluation',
+        quotes: [
+          { quoteId: 'q-gap-1' },
+          { quoteId: 'q-gap-2', vendorName: 'Gap Vendor', unitPrice: 1500, complianceStatus: 'Minor Exception' },
+        ],
+      } as unknown as RFQItem;
+
+      render(
+        <SupplierQuotesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={[incompleteRfq]}
+          onNavigateToMatrix={jest.fn()}
+          onOpenDeepDive={jest.fn()}
+        />
+      );
+
+      const searchInput = screen.getByPlaceholderText(/Search by vendor name, item title, or RFQ/i);
+      fireEvent.change(searchInput, { target: { value: 'no-such-value' } });
+      expect(screen.getByText('No supplier quotes found')).toBeInTheDocument();
+
+      fireEvent.change(searchInput, { target: { value: '' } });
+      expect(screen.getByText('₹1,500')).toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notAvailable).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThan(0);
+    });
+  });
+
   describe('PurchaseOrderModal multi-item and quote fallback branches', () => {
     it('covers multi-item lineItems mapping when lineItemQuotes is absent', () => {
       render(
@@ -367,7 +424,8 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
       );
 
       expect(screen.getByText('Turbine Blade A')).toBeInTheDocument();
-      expect(screen.getByText('Item #2')).toBeInTheDocument();
+      // The second line has no description or unit, so both cells show the not-recorded placeholder.
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThanOrEqual(2);
     });
 
     it('covers lineItemQuotes with missing fields and quote commercial terms', () => {
@@ -400,7 +458,8 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
 
       expect(screen.getByText('Immediate 100% Advance')).toBeInTheDocument();
       expect(screen.getByText('3 Year(s) Manufacturer Warranty')).toBeInTheDocument();
-      expect(screen.getByText(/Procurement Item #1/i)).toBeInTheDocument();
+      // No item description or unit was recorded, so the table shows the placeholder instead of an invented label.
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThanOrEqual(2);
     });
 
     it('handles default empty lineItems parameter', () => {
@@ -577,6 +636,31 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
         quotesCount: 0,
       } as any,
     ];
+
+    it('shows a not-recorded origin for an email upload with no sender or file, and searches incomplete records safely', () => {
+      const gapRfqs = [
+        { id: 'gap-web', rfqNumber: undefined, title: undefined, category: undefined, status: undefined, source: undefined, quotes: [] },
+        { id: 'gap-email', rfqNumber: 'RFQ-GAP-EMAIL', title: 'Gap Email Requisition', source: 'email_upload', quotes: [] },
+      ] as unknown as RFQItem[];
+
+      render(
+        <IntakeSourcesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={gapRfqs}
+          onOpenDeepDive={jest.fn()}
+          onNavigateToMatrix={jest.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getByText('⚡ Autonomous Ingestion · Auto-circulated'));
+      expect(screen.getByText(/Origin:/)).toHaveTextContent(UI_STRINGS.recordPlaceholders.notRecorded);
+
+      fireEvent.click(screen.getByText('AI RFQ Create'));
+      const searchInput = screen.getByPlaceholderText(/Filter by origin or title/i);
+      fireEvent.change(searchInput, { target: { value: 'no-such-value' } });
+      expect(screen.queryByText('Gap Email Requisition')).not.toBeInTheDocument();
+    });
 
     it('filters by intake source cards and search input', () => {
       render(

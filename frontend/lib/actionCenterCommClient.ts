@@ -1,10 +1,14 @@
 import { authClient } from './authClient';
 import { logger } from './logger';
+import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ActionCenterCommunicationPayload,
   ActionCenterCommunicationRecord,
   ActionCenterCommunicationResult,
 } from './types';
+
+const ACTION_CENTER_COMM_LOG_CATEGORY = 'ACTION_CENTER_COMM_CLIENT';
+const RESOURCES = UI_STRINGS.dataLoad.resources;
 
 function authHeaders(): Record<string, string> {
   const token = authClient.getToken();
@@ -14,12 +18,22 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+/** The delivery state the API reports for a send, taken from the response only. */
+function reportedStatus(json: { status?: unknown; communication?: { deliveryStatus?: unknown } }): string | undefined {
+  if (typeof json.status === 'string') return json.status;
+  const deliveryStatus = json.communication?.deliveryStatus;
+  return typeof deliveryStatus === 'string' ? deliveryStatus : undefined;
+}
+
 /**
  * Dispatch an Action Center notification across SMS, Email, or Both.
+ *
+ * `success` is true only when the API reports success. A reply without that flag, or a
+ * non-2xx reply, is a failure. `status` is the delivery state the API reported.
  */
 export async function dispatchActionCenterCommunication(
   payload: ActionCenterCommunicationPayload
-): Promise<ActionCenterCommunicationResult> {
+): Promise<ActionCenterCommunicationResult & { status?: string }> {
   try {
     const res = await fetch('/api/action-center/communications', {
       method: 'POST',
@@ -28,26 +42,28 @@ export async function dispatchActionCenterCommunication(
     });
 
     const json = await res.json();
-    if (!res.ok) {
+    if (!res.ok || json.success !== true) {
       logger.warn(
         'Action Center communication dispatch failed at API boundary',
         { status: res.status, error: json.error },
-        'ACTION_CENTER_COMM_CLIENT'
+        ACTION_CENTER_COMM_LOG_CATEGORY
       );
       return {
         success: false,
-        error: json.error || `HTTP ${res.status}: Failed to dispatch communication`,
+        status: reportedStatus(json) ?? 'failed',
+        error: json.error || formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: res.status }),
       };
     }
 
     logger.info(
       'Action Center communication dispatched successfully',
       { entityType: payload.entityType, entityId: payload.entityId, channel: payload.channel },
-      'ACTION_CENTER_COMM_CLIENT'
+      ACTION_CENTER_COMM_LOG_CATEGORY
     );
 
     return {
-      success: json.success !== false,
+      success: true,
+      status: reportedStatus(json),
       queued: json.queued === true,
       message: json.message,
       communication: json.communication,
@@ -58,21 +74,22 @@ export async function dispatchActionCenterCommunication(
       followupError: json.followupError,
     };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Network error';
     logger.error(
       'Error calling /api/action-center/communications',
-      { error: message },
-      'ACTION_CENTER_COMM_CLIENT'
+      { error: err instanceof Error ? err.message : 'Network error' },
+      ACTION_CENTER_COMM_LOG_CATEGORY
     );
     return {
       success: false,
-      error: message,
+      status: 'failed',
+      error: UI_STRINGS.dataLoad.requestNetworkFailed,
     };
   }
 }
 
 /**
  * Fetch communication logs for Action Center entities with pagination.
+ * On failure `items` is empty and `error` says why.
  */
 export async function fetchActionCenterCommunications(params?: {
   entityType?: string;
@@ -83,7 +100,10 @@ export async function fetchActionCenterCommunications(params?: {
 }): Promise<{
   items: ActionCenterCommunicationRecord[];
   pagination: { total: number; page: number; pageSize: number; totalPages: number };
+  error?: string;
 }> {
+  const resource = RESOURCES.actionCenterCommunications;
+  const emptyPagination = { total: 0, page: params?.page || 1, pageSize: params?.pageSize || 20, totalPages: 1 };
   try {
     const q = new URLSearchParams();
     if (params?.entityType) q.append('entityType', params.entityType);
@@ -96,28 +116,40 @@ export async function fetchActionCenterCommunications(params?: {
       headers: authHeaders(),
     });
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      return {
+        items: [],
+        pagination: emptyPagination,
+        error: formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource, status: res.status }),
+      };
+    }
     const json = await res.json();
+    if (!Array.isArray(json?.items)) {
+      return {
+        items: [],
+        pagination: emptyPagination,
+        error: formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource }),
+      };
+    }
     return {
-      items: json.items || [],
+      items: json.items,
       pagination: json.pagination || {
-        total: json.items?.length || 0,
+        total: json.items.length,
         page: params?.page || 1,
         pageSize: params?.pageSize || 20,
         totalPages: 1,
       },
     };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Network error';
     logger.error(
       'Failed to fetch action center communications',
-      { error: message },
-      'ACTION_CENTER_COMM_CLIENT'
+      { error: err instanceof Error ? err.message : 'Network error' },
+      ACTION_CENTER_COMM_LOG_CATEGORY
     );
     return {
       items: [],
-      pagination: { total: 0, page: 1, pageSize: 20, totalPages: 1 },
+      pagination: emptyPagination,
+      error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource }),
     };
   }
 }
-

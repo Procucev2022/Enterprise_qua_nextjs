@@ -1,3 +1,4 @@
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchScorecardData } from '@/lib/scorecardClient';
 import { authClient } from '@/lib/authClient';
 
@@ -39,7 +40,7 @@ describe('scorecardClient', () => {
       executiveId: 'exec-101',
     });
 
-    expect(result).toEqual(mockData);
+    expect(result).toEqual({ data: mockData });
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/scorecard?period=this_month&startDate=2026-10-01&endDate=2026-10-31&project=Project+Titan&pillar=operations&executiveId=exec-101'),
       expect.objectContaining({
@@ -72,13 +73,15 @@ describe('scorecardClient', () => {
   it('returns null on fetch failure', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
     const res = await fetchScorecardData();
-    expect(res).toBeNull();
+    expect(res.data).toBeNull();
+    expect(res.error).toBeTruthy();
   });
 
   it('returns null on non-200 HTTP response', async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
     const res = await fetchScorecardData();
-    expect(res).toBeNull();
+    expect(res.data).toBeNull();
+    expect(res.error).toBeTruthy();
   });
 
   it('works when token is null', async () => {

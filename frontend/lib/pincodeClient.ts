@@ -1,4 +1,7 @@
 import { isDummyPincode, PINCODE_PATTERN } from './validationSchemas';
+import { UI_STRINGS } from './uiStrings';
+
+const PINCODE_MESSAGES = UI_STRINGS.pincodeVerification;
 
 export interface PincodeLookupResult {
   valid: boolean;
@@ -17,7 +20,7 @@ export async function lookupPincode(pincode: string): Promise<PincodeLookupResul
       valid: false,
       pincode: clean,
       reason: 'EMPTY_PINCODE',
-      message: 'PIN code is required.',
+      message: PINCODE_MESSAGES.required,
     };
   }
 
@@ -26,7 +29,7 @@ export async function lookupPincode(pincode: string): Promise<PincodeLookupResul
       valid: false,
       pincode: clean,
       reason: 'INVALID_FORMAT',
-      message: 'PIN / ZIP Code must be 3 to 10 letters, digits, spaces or hyphens.',
+      message: PINCODE_MESSAGES.invalidFormat,
     };
   }
 
@@ -35,13 +38,15 @@ export async function lookupPincode(pincode: string): Promise<PincodeLookupResul
       valid: false,
       pincode: clean,
       reason: 'DUMMY_PINCODE',
-      message: 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.',
+      message: PINCODE_MESSAGES.dummy,
     };
   }
 
+  // Format and dummy-value checks only. No postal records are consulted, so the result
+  // says the format passed and does not claim the PIN exists.
   return {
     valid: true,
     pincode: clean,
-    message: 'PIN code is valid.',
+    message: UI_STRINGS.pincodeVerification.formatValid,
   };
 }

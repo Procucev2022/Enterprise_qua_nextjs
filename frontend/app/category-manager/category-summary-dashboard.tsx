@@ -26,6 +26,9 @@ import {
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
+// Shown wherever a value is missing from the record. Never a substitute value.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
+
 type TimeframeOption = '7d' | '30d' | '90d' | '180d' | '1y';
 
 const TIMEFRAME_DAYS: Record<TimeframeOption, number> = { '7d': 7, '30d': 30, '90d': 90, '180d': 180, '1y': 365 };
@@ -113,15 +116,17 @@ export interface ExtractedQuoteItem {
   rfq: RFQItem;
   quote: {
     vendorName: string;
-    unitPrice: number;
-    totalPrice: number;
-    leadTimeDays: number;
+    unitPrice: number | null;
+    totalPrice: number | null;
+    leadTimeDays: number | null;
     complianceStatus: string;
     vendorId?: string;
   };
 }
 
-export function extractQuotesFromRfqs(rfqList: RFQItem[], vendors: VendorEntry[]): ExtractedQuoteItem[] {
+// Quote rows come only from the quotes an RFQ record holds. A quote count with no rows adds no rows,
+// and a missing field stays null so the table shows a dash.
+export function extractQuotesFromRfqs(rfqList: RFQItem[]): ExtractedQuoteItem[] {
   const list: ExtractedQuoteItem[] = [];
 
   rfqList.forEach((r) => {
@@ -131,39 +136,23 @@ export function extractQuotesFromRfqs(rfqList: RFQItem[], vendors: VendorEntry[]
         list.push({
           rfq: r,
           quote: {
-            vendorName: q.vendorName || (r as any).bestQuoteVendor || 'Quoted Vendor',
-            unitPrice: q.unitPrice ?? (r as any).lowestQuote ?? 0,
-            totalPrice: q.totalPrice ?? q.unitPrice ?? (r as any).lowestQuote ?? 0,
-            leadTimeDays: q.leadTimeDays ?? 7,
-            complianceStatus: q.complianceStatus ?? 'Fully Compliant',
+            vendorName: q.vendorName || (r as any).bestQuoteVendor || '',
+            unitPrice: q.unitPrice ?? (r as any).lowestQuote ?? null,
+            totalPrice: q.totalPrice ?? q.unitPrice ?? (r as any).lowestQuote ?? null,
+            leadTimeDays: q.leadTimeDays ?? null,
+            complianceStatus: q.complianceStatus ?? '',
             vendorId: q.vendorId,
           },
         });
       });
-    } else if ((r.quotesCount || 0) > 0) {
-      const count = r.quotesCount || 1;
-      for (let i = 0; i < count; i++) {
-        const defaultVendor =
-          (r as any).bestQuoteVendor ||
-          (r.assignedVendors && r.assignedVendors[i]?.name) ||
-          (vendors.length > 0 ? vendors[i % vendors.length]?.name : undefined) ||
-          `Supplier Response #${i + 1}`;
-        const price = (r as any).lowestQuote || (r.budget ? Math.round(r.budget * (0.9 + i * 0.05)) : 50000);
-        list.push({
-          rfq: r,
-          quote: {
-            vendorName: defaultVendor,
-            unitPrice: price,
-            totalPrice: price,
-            leadTimeDays: 7 + i * 2,
-            complianceStatus: 'Fully Compliant',
-            vendorId: (r.assignedVendors && r.assignedVendors[i]?.id) || `v-${i + 1}`,
-          },
-        });
-      }
     }
   });
   return list;
+}
+
+// A rupee amount from the record, or a dash when the record does not hold one.
+export function formatAmountOrDash(amount: number | null | undefined): string {
+  return typeof amount === 'number' && Number.isFinite(amount) ? `₹${amount.toLocaleString('en-IN')}` : EMPTY_VALUE;
 }
 
 export function doesBuyerMatchRfq(account: BuyerAccount, rfq: RFQItem): boolean {
@@ -175,7 +164,7 @@ export function doesBuyerMatchRfq(account: BuyerAccount, rfq: RFQItem): boolean 
 }
 
 export function formatLocation(city?: string, state?: string): string {
-  if (!city) return 'National';
+  if (!city) return EMPTY_VALUE;
   return state ? `${city}, ${state}` : city;
 }
 
@@ -184,11 +173,11 @@ export function formatContactInfo(phone?: string, email?: string): string {
 }
 
 export function formatRating(rating?: number): string {
-  return typeof rating === 'number' && Number.isFinite(rating) ? String(rating) : '4.5';
+  return typeof rating === 'number' && Number.isFinite(rating) ? String(rating) : EMPTY_VALUE;
 }
 
 export function formatContactPerson(contactPerson?: string): string {
-  return contactPerson && contactPerson.trim() ? contactPerson.trim() : 'Sales Coordinator';
+  return contactPerson && contactPerson.trim() ? contactPerson.trim() : EMPTY_VALUE;
 }
 
 export default function CategorySummaryDashboard() {
@@ -220,8 +209,8 @@ export default function CategorySummaryDashboard() {
 
   // Quotes in selected timeframe
   const quotesInSelectedTimeframe = useMemo(() => {
-    return extractQuotesFromRfqs(rfqsInSelectedTimeframe, buyerVendors);
-  }, [rfqsInSelectedTimeframe, buyerVendors]);
+    return extractQuotesFromRfqs(rfqsInSelectedTimeframe);
+  }, [rfqsInSelectedTimeframe]);
 
   const categoryMetrics: CategoryMetric[] = useMemo(() => {
     return taxonomy.map((cat) => {
@@ -292,10 +281,12 @@ export default function CategorySummaryDashboard() {
   const buyersWithAnyRfq = buyerAccounts.filter((a) => rfqs.some((r) => doesBuyerMatchRfq(a, r))).length;
   const activeBuyerPercent = buyerAccounts.length > 0 ? Math.round((buyersWithAnyRfq / buyerAccounts.length) * 100) : 0;
 
+  // Averages only the suppliers that have a numeric rating. A supplier without one is left out, not counted as zero.
+  const ratedVendors = buyerVendors.filter((v) => typeof v.rating === 'number' && Number.isFinite(v.rating));
   const avgVendorRating =
-    buyerVendors.length > 0
-      ? (buyerVendors.reduce((sum, v) => sum + (v.rating || 0), 0) / buyerVendors.length).toFixed(1)
-      : '—';
+    ratedVendors.length > 0
+      ? (ratedVendors.reduce((sum, v) => sum + v.rating, 0) / ratedVendors.length).toFixed(1)
+      : EMPTY_VALUE;
 
   const totalMinorCategories = taxonomy.reduce((sum, c) => sum + c.minorCategories.length, 0);
 
@@ -319,8 +310,8 @@ export default function CategorySummaryDashboard() {
 
   const categoryQuotes = useMemo(() => {
     if (!selectedCategoryDetails) return [];
-    return extractQuotesFromRfqs(categoryRfqs, buyerVendors);
-  }, [categoryRfqs, selectedCategoryDetails, buyerVendors]);
+    return extractQuotesFromRfqs(categoryRfqs);
+  }, [categoryRfqs, selectedCategoryDetails]);
 
   const categoryVendors = useMemo(() => {
     if (!selectedCategoryDetails) return [];
@@ -784,13 +775,13 @@ export default function CategorySummaryDashboard() {
                               <span className="font-semibold text-slate-900 dark:text-white block truncate max-w-[200px]">{rfq.title}</span>
                               <span className="text-[10px] text-slate-400">{rfq.category}</span>
                             </td>
-                            <td className="p-2.5 font-medium">{rfq.buyerAccountName || 'Enterprise Buyer'}</td>
+                            <td className="p-2.5 font-medium">{rfq.buyerAccountName || EMPTY_VALUE}</td>
                             <td className="p-2.5 text-center">
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300">
                                 {rfq.status}
                               </span>
                             </td>
-                            <td className="p-2.5 text-center font-mono font-bold text-sky-600">{rfq.quotesCount || 0}</td>
+                            <td className="p-2.5 text-center font-mono font-bold text-sky-600">{rfq.quotesCount ?? EMPTY_VALUE}</td>
                             <td className="p-2.5 text-right text-slate-400 font-mono text-[11px]">{new Date(rfq.createdAt).toLocaleDateString()}</td>
                           </tr>
                         ))
@@ -823,13 +814,13 @@ export default function CategorySummaryDashboard() {
                         quotesInSelectedTimeframe.map((item, qIdx) => (
                           <tr key={qIdx} className="hover:bg-slate-50/50 dark:hover:bg-gray-950/50">
                             <td className="p-2.5 font-mono font-bold text-indigo-600 dark:text-indigo-400">{item.rfq.rfqNumber}</td>
-                            <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{item.quote.vendorName}</td>
-                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">₹{(item.quote.unitPrice || 0).toLocaleString('en-IN')}</td>
-                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">₹{(item.quote.totalPrice || 0).toLocaleString('en-IN')}</td>
-                            <td className="p-2.5 text-center font-mono">{item.quote.leadTimeDays || 7} Days</td>
+                            <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{item.quote.vendorName || EMPTY_VALUE}</td>
+                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">{formatAmountOrDash(item.quote.unitPrice)}</td>
+                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">{formatAmountOrDash(item.quote.totalPrice)}</td>
+                            <td className="p-2.5 text-center font-mono">{item.quote.leadTimeDays != null ? `${item.quote.leadTimeDays} Days` : EMPTY_VALUE}</td>
                             <td className="p-2.5 text-center">
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600">
-                                {item.quote.complianceStatus || 'Fully Compliant'}
+                                {item.quote.complianceStatus || EMPTY_VALUE}
                               </span>
                             </td>
                           </tr>
@@ -847,8 +838,8 @@ export default function CategorySummaryDashboard() {
                     <div className="col-span-3 p-6 text-center text-slate-400">No registered enterprise buyer accounts found.</div>
                   ) : (
                     buyerAccounts.map((account) => {
-                      const buyerDisplayName = account.contactPerson || account.organizationName || (account as any).name || 'Enterprise Buyer';
-                      const buyerOrg = account.organizationName || (account as any).department || 'Enterprise Procurement';
+                      const buyerDisplayName = account.contactPerson || account.organizationName || (account as any).name || EMPTY_VALUE;
+                      const buyerOrg = account.organizationName || (account as any).department || EMPTY_VALUE;
                       const buyerEmail = account.corporateEmail || (account as any).email || '—';
                       const buyerRfqs = rfqs.filter((r) => doesBuyerMatchRfq(account, r));
                       return (
@@ -899,7 +890,7 @@ export default function CategorySummaryDashboard() {
                                 {vendor.majorCategory}
                               </span>
                             </td>
-                            <td className="p-2.5 text-center font-mono font-bold text-emerald-600">★ {vendor.rating || 4.5}</td>
+                            <td className="p-2.5 text-center font-mono font-bold text-emerald-600">★ {formatRating(vendor.rating)}</td>
                             <td className="p-2.5 text-slate-600 dark:text-gray-400">{formatLocation(vendor.city, vendor.state)}</td>
                             <td className="p-2.5 text-slate-500 text-[11px] font-mono">{formatContactInfo(vendor.phone, vendor.email)}</td>
                             <td className="p-2.5 text-center">
@@ -1088,13 +1079,13 @@ export default function CategorySummaryDashboard() {
                           <tr key={rfq.rfqNumber} className="hover:bg-slate-50/50 dark:hover:bg-gray-950/50">
                             <td className="p-2.5 font-mono font-bold text-indigo-600 dark:text-indigo-400">{rfq.rfqNumber}</td>
                             <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{rfq.title}</td>
-                            <td className="p-2.5 font-medium">{rfq.buyerAccountName || 'Enterprise Buyer'}</td>
+                            <td className="p-2.5 font-medium">{rfq.buyerAccountName || EMPTY_VALUE}</td>
                             <td className="p-2.5 text-center">
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600">
                                 {rfq.status}
                               </span>
                             </td>
-                            <td className="p-2.5 text-center font-mono font-bold text-sky-600">{rfq.quotesCount || 0}</td>
+                            <td className="p-2.5 text-center font-mono font-bold text-sky-600">{rfq.quotesCount ?? EMPTY_VALUE}</td>
                             <td className="p-2.5 text-right font-mono text-slate-400 text-[11px]">
                               {new Date(rfq.createdAt).toLocaleDateString()}
                             </td>
@@ -1131,13 +1122,13 @@ export default function CategorySummaryDashboard() {
                         categoryQuotes.map((item, idx) => (
                           <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-gray-950/50">
                             <td className="p-2.5 font-mono font-bold text-indigo-600 dark:text-indigo-400">{item.rfq.rfqNumber}</td>
-                            <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{item.quote.vendorName}</td>
-                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">₹{(item.quote.unitPrice || 0).toLocaleString('en-IN')}</td>
-                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">₹{(item.quote.totalPrice || 0).toLocaleString('en-IN')}</td>
-                            <td className="p-2.5 text-center font-mono">{item.quote.leadTimeDays || 7} Days</td>
+                            <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{item.quote.vendorName || EMPTY_VALUE}</td>
+                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">{formatAmountOrDash(item.quote.unitPrice)}</td>
+                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">{formatAmountOrDash(item.quote.totalPrice)}</td>
+                            <td className="p-2.5 text-center font-mono">{item.quote.leadTimeDays != null ? `${item.quote.leadTimeDays} Days` : EMPTY_VALUE}</td>
                             <td className="p-2.5 text-center">
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600">
-                                {item.quote.complianceStatus || 'Fully Compliant'}
+                                {item.quote.complianceStatus || EMPTY_VALUE}
                               </span>
                             </td>
                           </tr>

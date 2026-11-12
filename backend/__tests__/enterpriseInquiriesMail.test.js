@@ -68,9 +68,28 @@ describe('Enterprise Inquiries Email Notification & Route', () => {
   });
 
   describe('mailerService enterprise inquiry helpers', () => {
-    test('getEnterpriseInquiryRecipient defaults to info@procucev.com when env is unset', () => {
+    test('getEnterpriseInquiryRecipient returns an empty recipient when env is unset (no built-in address)', () => {
       delete process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL;
-      expect(mailerService.getEnterpriseInquiryRecipient()).toBe('info@procucev.com');
+      expect(mailerService.getEnterpriseInquiryRecipient()).toBe('');
+    });
+
+    test('sendEnterpriseInquiryNotificationEmail is skipped, not sent, when no recipient is configured', async () => {
+      delete process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL;
+      // Under NODE_ENV=test every send short-circuits before the recipient check. Lift it for this
+      // one call so the missing-recipient guard runs. That guard returns before any transport.
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+      try {
+        await expect(mailerService.sendEnterpriseInquiryNotificationEmail({ id: 'ent-inq-skip' })).resolves.toEqual({
+          sent: false,
+          success: false,
+          status: 'skipped',
+          reason: 'missing recipient email',
+        });
+      } finally {
+        if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = previousNodeEnv;
+      }
     });
 
     test('getEnterpriseInquiryRecipient returns configured env email when set', () => {
@@ -127,7 +146,7 @@ describe('Enterprise Inquiries Email Notification & Route', () => {
         id: 'ent-inq-test',
         companyName: 'Test Corp',
         email: 'test@example.com',
-        mobile: '+919999999999',
+        mobile: '+919000000001',
       };
 
       const res = await mailerService.sendEnterpriseInquiryNotificationEmail(inquiry);
@@ -310,7 +329,7 @@ describe('Enterprise Inquiries Email Notification & Route', () => {
         .send({
           status: 'CONTACTED',
           notes: 'Called buyer today',
-          contactedBy: 'Navin Manager',
+          contactedBy: 'Test Manager',
         })
         .expect(200);
 

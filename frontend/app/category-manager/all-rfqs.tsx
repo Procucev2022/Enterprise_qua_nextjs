@@ -18,6 +18,8 @@ interface AllRFQsConsoleProps {
 }
 
 const S = UI_STRINGS.allRfqs;
+// Shown wherever a value is not recorded on the RFQ or quote.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 /** Every real RFQ status → badge tone. Covers all members of the union. */
 const STATUS_TONE: Record<RFQItem['status'], string> = {
@@ -54,6 +56,26 @@ function latestQuoteSubmittedAt(rfq: RFQItem): string | null {
     .filter((t): t is string => !!t && !Number.isNaN(Date.parse(t)));
   if (times.length === 0) return null;
   return times.reduce((latest, t) => (Date.parse(t) > Date.parse(latest) ? t : latest));
+}
+
+/**
+ * Name and id of an invited vendor, read from whichever field the API set.
+ * A value that is not present stays null, so the caller can show a dash.
+ */
+function invitedVendorIdentity(vendor: RFQAssignedVendor): { name: string | null; id: string | null } {
+  const raw: unknown = vendor;
+  if (typeof raw === 'string') {
+    return { name: raw.trim() || null, id: null };
+  }
+  const record = (raw || {}) as Record<string, unknown>;
+  const pick = (...keys: string[]): string | null => {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return null;
+  };
+  return { name: pick('name', 'vendorName', 'companyName'), id: pick('id', 'vendorId') };
 }
 
 /** Check if RFQ has any category signal in header or line items */
@@ -334,7 +356,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
             <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
               {filtered.map((rfq) => {
                 const isUncategorizedV0 =
-                  (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as any) === 'v0') &&
+                  (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as string) === 'v0') &&
                   !rfqHasCategorySignal(rfq) &&
                   (!rfq.assignedVendors || rfq.assignedVendors.length === 0);
                 const needsAssignment = Boolean(rfq.needsCategoryManagerAssignment || isUncategorizedV0);
@@ -427,8 +449,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {rfq.assignedVendors.slice(0, 2).map((av, idx) => {
-                            const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
-                            const vId = av.id || (av as any).vendorId || null;
+                            const identity = invitedVendorIdentity(av);
+                            const vName = identity.name ?? EMPTY_VALUE;
+                            const vId = identity.id;
                             return (
                               <button
                                 key={vId || idx}
@@ -603,8 +626,8 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         </div>
                         <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-gray-450 mt-1">
                           <span>Total: <strong className="text-slate-800 dark:text-gray-200">{formatCurrency(q.totalPrice)}</strong></span>
-                          <span>Lead: <strong>{q.leadTimeDays}d</strong></span>
-                          <span>Warranty: <strong>{q.warrantyYears || 0}y</strong></span>
+                          <span>Lead: <strong>{q.leadTimeDays != null ? `${q.leadTimeDays}d` : EMPTY_VALUE}</strong></span>
+                          <span>Warranty: <strong>{q.warrantyYears != null ? `${q.warrantyYears}y` : EMPTY_VALUE}</strong></span>
                         </div>
                       </div>
                       <button
@@ -626,8 +649,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   ))
                 : (vendorListModalData.rfq.assignedVendors || []).map((av, idx) => {
-                    const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
-                    const vId = av.id || (av as any).vendorId || null;
+                    const identity = invitedVendorIdentity(av);
+                    const vName = identity.name ?? EMPTY_VALUE;
+                    const vId = identity.id;
                     return (
                       <div
                         key={vId || idx}

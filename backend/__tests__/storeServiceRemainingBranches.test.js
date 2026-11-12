@@ -91,16 +91,23 @@ describe('Store Service — remaining branch coverage', () => {
       expect(vendor.isCategoryAligned).toBe(false);
     });
 
-    test('reviseVendorRating falls back previousScore/previousRating when the vendor has none set', () => {
+    test('reviseVendorRating keeps a recorded zero score and rating as the previous values', () => {
       const vendor = storeService.addVendor({ name: 'Scoreless Vendor', majorCategory: 'Mechanical', score: 0, rating: 0 });
       const { revisionRecord } = storeService.reviseVendorRating(vendor.id, { qualityScore: 80, costScore: 80, deliveryScore: 80 });
-      expect(revisionRecord.previousScore).toBe(85);
-      expect(revisionRecord.previousRating).toBe(4.5);
+      expect(revisionRecord.previousScore).toBe(0);
+      expect(revisionRecord.previousRating).toBe(0);
     });
 
-    test('createRFQ falls back title when omitted, and honors an explicit chasingActive:false', () => {
-      const rfq = storeService.createRFQ({ category: 'Mechanical', chasingActive: false });
-      expect(rfq.title).toBe('Untitled RFQ');
+    test('createRFQ refuses a missing title instead of inventing one, and honors an explicit chasingActive:false', () => {
+      let refusal = null;
+      try {
+        storeService.createRFQ({ category: 'Mechanical', chasingActive: false });
+      } catch (err) {
+        refusal = err;
+      }
+      expect(refusal).toMatchObject({ code: 'RFQ_TITLE_REQUIRED', statusCode: 422 });
+      const rfq = storeService.createRFQ({ title: 'Explicit chasing RFQ', category: 'Mechanical', chasingActive: false });
+      expect(rfq.title).toBe('Explicit chasing RFQ');
       expect(rfq.chasingActive).toBe(false);
     });
 
@@ -153,6 +160,19 @@ describe('Store Service — remaining branch coverage', () => {
       expect(imported.score).toBeNull();
       expect(imported.evaluated).toBe(false);
       expect(imported.status).toBe('PENDING EVALUATION');
+    });
+
+    test('addVendor gives an unevaluated supplier PENDING EVALUATION and attributes its audit entry to the signed-in actor', () => {
+      const added = storeService.addVendor({
+        name: 'Unrated Supplier Co',
+        email: 'unrated-supplier@supplier.test',
+        majorCategory: 'Industrial Hardware',
+      }, 'category.manager@procucev.com');
+
+      expect(added.status).toBe('PENDING EVALUATION');
+      expect(added.rating).toBeNull();
+      expect(added.score).toBeNull();
+      expect(storeService.getAuditLogs()[0].userEmail).toBe('category.manager@procucev.com');
     });
 
     test('handleSupportChat falls back an empty prompt safely', () => {
@@ -1644,7 +1664,7 @@ describe('Store Service — remaining branch coverage', () => {
         upsertRFQInDB: jest.fn().mockRejectedValue(new Error('boom')),
       });
 
-      freshStore.createRFQ({ rfqNumber: 'RFQ-PERSIST-TEST-1' });
+      freshStore.createRFQ({ rfqNumber: 'RFQ-PERSIST-TEST-1', title: 'Persist test RFQ 1' });
       await flush();
 
       expect(errorSpy).toHaveBeenCalledWith('Failed to persist RFQ', expect.any(Error), 'STORE_SERVICE');
@@ -1655,7 +1675,7 @@ describe('Store Service — remaining branch coverage', () => {
         deleteRFQInDB: jest.fn().mockRejectedValue(new Error('boom')),
       });
 
-      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-PERSIST-TEST-2' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-PERSIST-TEST-2', title: 'Persist test RFQ 2' });
       freshStore.deleteRFQ(rfq.id);
       await flush();
 
@@ -1664,7 +1684,7 @@ describe('Store Service — remaining branch coverage', () => {
 
     test('deleteRFQ persists by row ID when called with the public RFQ number', async () => {
       const { freshStore, domainQueries } = freshStoreWithFailingWrite();
-      const rfq = freshStore.createRFQ({ id: 'rfq-row-42', rfqNumber: 'RFQ-PUBLIC-42' });
+      const rfq = freshStore.createRFQ({ id: 'rfq-row-42', rfqNumber: 'RFQ-PUBLIC-42', title: 'Public number RFQ' });
 
       expect(freshStore.deleteRFQ(rfq.rfqNumber)).toBe(true);
       await flush();
@@ -1676,7 +1696,7 @@ describe('Store Service — remaining branch coverage', () => {
     test('deleteRFQDurably waits for configured storage before removing the cached RFQ', async () => {
       const deleteRFQInDB = jest.fn().mockResolvedValue(true);
       const { freshStore, domainQueries } = freshStoreWithFailingWrite({ deleteRFQInDB }, true);
-      const rfq = freshStore.createRFQ({ id: 'rfq-durable-43', rfqNumber: 'RFQ-DURABLE-43' });
+      const rfq = freshStore.createRFQ({ id: 'rfq-durable-43', rfqNumber: 'RFQ-DURABLE-43', title: 'Durable RFQ 43' });
 
       await expect(freshStore.deleteRFQDurably(rfq.rfqNumber)).resolves.toBe(true);
 
@@ -1688,7 +1708,7 @@ describe('Store Service — remaining branch coverage', () => {
       const { freshStore, errorSpy } = freshStoreWithFailingWrite({
         deleteRFQInDB: jest.fn().mockRejectedValue(new Error('database unavailable')),
       }, true);
-      const rfq = freshStore.createRFQ({ id: 'rfq-durable-failure', rfqNumber: 'RFQ-DURABLE-FAILURE' });
+      const rfq = freshStore.createRFQ({ id: 'rfq-durable-failure', rfqNumber: 'RFQ-DURABLE-FAILURE', title: 'Durable failure RFQ' });
 
       await expect(freshStore.deleteRFQDurably(rfq.id)).rejects.toMatchObject({
         statusCode: 503,
@@ -1702,7 +1722,7 @@ describe('Store Service — remaining branch coverage', () => {
     test('deleteRFQDurably returns false for a missing RFQ and permits explicitly unconfigured memory mode', async () => {
       const { freshStore } = freshStoreWithFailingWrite();
       expect(await freshStore.deleteRFQDurably('missing-rfq')).toBe(false);
-      const rfq = freshStore.createRFQ({ id: 'rfq-memory-delete', rfqNumber: 'RFQ-MEMORY-DELETE' });
+      const rfq = freshStore.createRFQ({ id: 'rfq-memory-delete', rfqNumber: 'RFQ-MEMORY-DELETE', title: 'Memory delete RFQ' });
 
       await expect(freshStore.deleteRFQDurably(rfq.id)).resolves.toBe(true);
 
@@ -1813,13 +1833,14 @@ describe('Store Service — remaining branch coverage', () => {
           .mockRejectedValueOnce(Object.assign(new Error('database down'), { statusCode: 500, code: 'DATABASE_DOWN' })),
       }, true);
 
-      await expect(freshStore.createRFQDurably({ id: persisted.id }, buyer))
+      const ownershipPayload = { id: persisted.id, title: 'Ownership check RFQ' };
+      await expect(freshStore.createRFQDurably(ownershipPayload, buyer))
         .rejects.toMatchObject({ statusCode: 403, code: 'FREE_RFQ_CREDITS_EXHAUSTED' });
-      await expect(freshStore.createRFQDurably({ id: persisted.id }, buyer))
+      await expect(freshStore.createRFQDurably(ownershipPayload, buyer))
         .rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
-      await expect(freshStore.createRFQDurably({ id: persisted.id }, buyer))
+      await expect(freshStore.createRFQDurably(ownershipPayload, buyer))
         .rejects.toMatchObject({ statusCode: 409, code: 'RFQ_CONFLICT' });
-      await expect(freshStore.createRFQDurably({ id: persisted.id }, buyer))
+      await expect(freshStore.createRFQDurably(ownershipPayload, buyer))
         .rejects.toMatchObject({ statusCode: 503, code: 'DATABASE_DOWN' });
       expect(domainQueries.createRFQWithCreditInDB).toHaveBeenCalledTimes(4);
     });
@@ -1833,6 +1854,7 @@ describe('Store Service — remaining branch coverage', () => {
       await expect(freshStore.createRFQDurably({
         id: 'rfq-durable-create-failure',
         rfqNumber: 'RFQ-DURABLE-CREATE-FAILURE',
+        title: 'Durable create failure RFQ',
       })).rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
 
       expect(freshStore.getRFQById('rfq-durable-create-failure')).toBeUndefined();
@@ -1844,7 +1866,7 @@ describe('Store Service — remaining branch coverage', () => {
       const { freshStore } = freshStoreWithFailingWrite();
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      const created = await freshStore.createRFQDurably({ id: 'rfq-memory-create', rfqNumber: 'RFQ-MEMORY-CREATE' });
+      const created = await freshStore.createRFQDurably({ id: 'rfq-memory-create', rfqNumber: 'RFQ-MEMORY-CREATE', title: 'Memory create RFQ' });
 
       expect(freshStore.getRFQById(created.id)).toEqual(created);
       expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -1861,7 +1883,7 @@ describe('Store Service — remaining branch coverage', () => {
         throw new Error('notification dispatcher unavailable');
       });
 
-      const created = await freshStore.createRFQDurably({ id: 'rfq-dispatch-failure', rfqNumber: 'RFQ-DISPATCH-FAILURE' });
+      const created = await freshStore.createRFQDurably({ id: 'rfq-dispatch-failure', rfqNumber: 'RFQ-DISPATCH-FAILURE', title: 'Dispatch failure RFQ' });
 
       expect(freshStore.getRFQById(created.id)).toEqual(created);
       expect(errorSpy).toHaveBeenCalledWith('RFQ persisted but post-create dispatch failed', expect.objectContaining({
@@ -1890,6 +1912,7 @@ describe('Store Service — remaining branch coverage', () => {
       const created = await freshStore.createRFQDurably({
         id: persistedRFQ.id,
         rfqNumber: persistedRFQ.rfqNumber,
+        title: 'Atomic credit RFQ',
         sourcingMode: 'mode_1',
       }, buyer);
 
@@ -1918,7 +1941,7 @@ describe('Store Service — remaining branch coverage', () => {
       freshStore.activeBuyerAccount = buyer;
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-no-credit', sourcingMode: 'mode_2' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-no-credit', title: 'No credit RFQ', sourcingMode: 'mode_2' }, buyer))
         .rejects.toMatchObject({ statusCode: 403, code: 'FREE_RFQ_CREDITS_EXHAUSTED', remaining: 0 });
 
       expect(freshStore.getRFQById('rfq-no-credit')).toBeUndefined();
@@ -1940,7 +1963,7 @@ describe('Store Service — remaining branch coverage', () => {
       }, true);
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: persistedRFQ.id, sourcingMode: 'mode_1' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: persistedRFQ.id, title: 'Persisted RFQ', sourcingMode: 'mode_1' }, buyer))
         .resolves.toEqual(persistedRFQ);
 
       expect(freshStore.buyerAccounts).toEqual([refreshedBuyer]);
@@ -1954,7 +1977,7 @@ describe('Store Service — remaining branch coverage', () => {
       }, true);
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-null-result' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-null-result', title: 'Null result RFQ' }, buyer))
         .rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
       expect(freshStore.getRFQById('rfq-null-result')).toBeUndefined();
       expect(dispatchSpy).not.toHaveBeenCalled();
@@ -1967,7 +1990,7 @@ describe('Store Service — remaining branch coverage', () => {
       }, true);
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-atomic-failure' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-atomic-failure', title: 'Atomic failure RFQ' }, buyer))
         .rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE', retryable: true });
 
       expect(freshStore.getRFQById('rfq-atomic-failure')).toBeUndefined();
@@ -1981,7 +2004,7 @@ describe('Store Service — remaining branch coverage', () => {
       freshStore.buyerAccounts = [buyer];
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-local-no-credit', sourcingMode: 'mode_1' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-local-no-credit', title: 'Local no credit RFQ', sourcingMode: 'mode_1' }, buyer))
         .rejects.toMatchObject({ statusCode: 403, code: 'FREE_RFQ_CREDITS_EXHAUSTED' });
       expect(freshStore.getRFQById('rfq-local-no-credit')).toBeUndefined();
       expect(dispatchSpy).not.toHaveBeenCalled();
@@ -1998,6 +2021,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       await expect(freshStore.createRFQDurably({
         id: 'rfq-local-refund',
+        title: 'Local refund RFQ',
         sourcingMode: 'mode_1',
       }, buyer)).rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
 
@@ -2590,7 +2614,7 @@ describe('Store Service — remaining branch coverage', () => {
         addedByBuyerCompany: 'Fanout Buyer',
       });
       freshStore.createRFQ(
-        { rfqNumber: 'RFQ-NTF-1', category: 'Fanout-Cat', sourcingMode: 'mode_1' },
+        { rfqNumber: 'RFQ-NTF-1', title: 'Fanout RFQ 1', category: 'Fanout-Cat', sourcingMode: 'mode_1' },
         { organizationName: 'Fanout Buyer' }
       );
       await flush();
@@ -2608,7 +2632,7 @@ describe('Store Service — remaining branch coverage', () => {
       });
 
       const buyer = freshStore.addBuyerAccount({ corporateEmail: 'ntf-buyer@x.com', organizationName: 'Ntf Buyer' });
-      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-2', category: 'X' }, buyer);
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-2', title: 'Notification RFQ 2', category: 'X' }, buyer);
       freshStore.addQuoteToRFQ(rfq.id, { vendorId: 'v-1', vendorName: 'B', unitPrice: 1 });
       await flush();
 
@@ -2625,7 +2649,7 @@ describe('Store Service — remaining branch coverage', () => {
       });
 
       const vendor = freshStore.addVendor({ name: 'Read Co', email: 'read@x.com', majorCategory: 'Read-Cat' });
-      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-3', category: 'Read-Cat' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-3', title: 'Notification RFQ 3', category: 'Read-Cat' });
       await freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
       const [n] = freshStore.getNotificationsFor('vendor', vendor.id);
       freshStore.markNotificationRead(n.id, 'vendor', vendor.id);
@@ -2640,7 +2664,7 @@ describe('Store Service — remaining branch coverage', () => {
       });
 
       const vendor = freshStore.addVendor({ name: 'BulkRead Co', email: 'bulkread@x.com', majorCategory: 'Bulk-Cat' });
-      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-4', category: 'Bulk-Cat' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-4', title: 'Notification RFQ 4', category: 'Bulk-Cat' });
       await freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
       freshStore.markAllNotificationsRead('vendor', vendor.id);
       await flush();
@@ -2664,7 +2688,7 @@ describe('Store Service — remaining branch coverage', () => {
     });
 
     test('approvePurchaseOrder maps rfq.extractedEntities into lineItems when present', () => {
-      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-LINEITEM-TEST' });
+      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-LINEITEM-TEST', title: 'Line item RFQ' });
       storeService.updateRFQ(rfq.id, {
         extractedEntities: [{ itemName: 'Bearing', quantity: 10, unit: 'pcs' }],
       });
@@ -2696,27 +2720,32 @@ describe('Store Service — remaining branch coverage', () => {
       expect(signals).toContain('MainCat');
     });
 
-    test('triggerBatchChaser returns error when assignedVendors is empty, and null when RFQ not found', () => {
-      expect(storeService.triggerBatchChaser('non-existent-rfq')).toBeNull();
+    test('triggerBatchChaser returns error when assignedVendors is empty, and null when RFQ not found', async () => {
+      expect(await storeService.triggerBatchChaser('non-existent-rfq')).toBeNull();
 
-      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-NO-VENDORS-CHASE' });
+      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-NO-VENDORS-CHASE', title: 'No vendors chase RFQ' });
       rfq.assignedVendors = [];
-      const res = storeService.triggerBatchChaser(rfq.id);
+      const res = await storeService.triggerBatchChaser(rfq.id);
       expect(res.success).toBe(false);
       expect(res.error).toContain('No vendors are assigned to this RFQ');
     });
 
-    test('triggerBatchChaser caps aiFeed at 100 items when length exceeds 100', () => {
-      const vendor = storeService.addVendor({ name: 'Assigned Vendor Co', email: 'avc@test.com' });
-      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-CHASE-100' });
+    test('triggerBatchChaser keeps aiFeed at 100 items or fewer after a real send', async () => {
+      const smsService = require('../src/services/smsService');
+      const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-cap' });
+      const vendor = storeService.addVendor({ name: 'Assigned Vendor Co', email: 'avc@test.com', phone: '9555555555' });
+      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-CHASE-100', title: 'Chase cap RFQ' });
       rfq.assignedVendors = [vendor];
       storeService.aiFeed = Array.from({ length: 99 }, (_, i) => ({ id: `feed-${i}`, message: 'dummy' }));
-      const res = storeService.triggerBatchChaser(rfq.id);
+
+      const res = await storeService.triggerBatchChaser(rfq.id, ['sms']);
+
       expect(res.success).toBe(true);
       expect(storeService.aiFeed.length).toBeLessThanOrEqual(100);
+      smsSpy.mockRestore();
     });
 
-    test('_reconcileRFQFollowUpStats covers null RFQ, empty vendors, draft status, and age stages', () => {
+    test('_reconcileRFQFollowUpStats covers null RFQ, empty vendors, draft status, and age independence', () => {
       expect(storeService._reconcileRFQFollowUpStats(null)).toBeNull();
 
       const rfqEmpty = { id: 'rfq-e', assignedVendors: [] };
@@ -2728,54 +2757,29 @@ describe('Store Service — remaining branch coverage', () => {
       const rfqParsing = { id: 'rfq-p', status: 'Parsing', assignedVendors: [{ id: 'v-1' }] };
       expect(storeService._reconcileRFQFollowUpStats(rfqParsing)).toBe(rfqParsing);
 
-      // Fresh RFQ (< 5 min)
-      const rfqFresh = {
-        id: 'rfq-fresh',
-        status: 'Quotes Pending',
-        createdAt: new Date().toISOString(),
-        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }, null]
-      };
-      const freshResult = storeService._reconcileRFQFollowUpStats(rfqFresh);
-      expect(freshResult.followUpData.smsStats.delivered).toBe(0);
-      expect(freshResult.followUpData.whatsappStats.delivered).toBe(0);
-      expect(freshResult.followUpData.emailStats.delivered).toBe(0);
-
-      // 5 min old RFQ (>= 300,000ms)
-      const rfq5m = {
-        id: 'rfq-5m',
-        status: 'Quotes Pending',
-        createdAt: new Date(Date.now() - 360000).toISOString(),
-        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }],
-        followUpData: { totalInvited: 1, vendors: [{ id: 'v-1' }] }
-      };
-      const res5m = storeService._reconcileRFQFollowUpStats(rfq5m);
-      expect(res5m.followUpData.smsStats.delivered).toBe(1);
-      expect(res5m.followUpData.whatsappStats.delivered).toBe(0);
-      expect(res5m.followUpData.emailStats.delivered).toBe(0);
-
-      // 12 hr old RFQ (>= 43,200,000ms)
-      const rfq12h = {
-        id: 'rfq-12h',
-        status: 'Quotes Pending',
-        createdAt: new Date(Date.now() - 44000000).toISOString(),
-        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }]
-      };
-      const res12h = storeService._reconcileRFQFollowUpStats(rfq12h);
-      expect(res12h.followUpData.smsStats.delivered).toBe(1);
-      expect(res12h.followUpData.whatsappStats.delivered).toBe(1);
-      expect(res12h.followUpData.emailStats.delivered).toBe(0);
-
-      // 24 hr old RFQ (>= 86,400,000ms)
-      const rfq24h = {
-        id: 'rfq-24h',
-        status: 'Quotes Pending',
-        createdAt: new Date(Date.now() - 90000000).toISOString(),
-        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }]
-      };
-      const res24h = storeService._reconcileRFQFollowUpStats(rfq24h);
-      expect(res24h.followUpData.smsStats.delivered).toBe(1);
-      expect(res24h.followUpData.whatsappStats.delivered).toBe(1);
-      expect(res24h.followUpData.emailStats.delivered).toBe(1);
+      // Age never produces a delivered count or a sent flag: fresh, 5 minutes, 12 hours
+      // and 24 hours old all stay at zero until a real send is recorded.
+      const ageCases = [
+        { id: 'rfq-fresh', createdAt: new Date().toISOString() },
+        { id: 'rfq-5m', createdAt: new Date(Date.now() - 360000).toISOString() },
+        { id: 'rfq-12h', createdAt: new Date(Date.now() - 44000000).toISOString() },
+        { id: 'rfq-24h', createdAt: new Date(Date.now() - 90000000).toISOString() },
+      ];
+      for (const aged of ageCases) {
+        const result = storeService._reconcileRFQFollowUpStats({
+          ...aged,
+          status: 'Quotes Pending',
+          assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }],
+        });
+        expect(result.followUpData.smsStats.delivered).toBe(0);
+        expect(result.followUpData.whatsappStats.delivered).toBe(0);
+        expect(result.followUpData.emailStats.delivered).toBe(0);
+        expect(result.followUpData.vendors[0]).toMatchObject({
+          emailSent: false,
+          sms: { status: 'pending' },
+          whatsapp: { status: 'pending' },
+        });
+      }
     });
 
     test('covers additional branch conditions in _reconcileRFQFollowUpStats, createRFQ, and consumeBuyerRFQCredit', async () => {
@@ -2895,5 +2899,35 @@ describe('Store Service — remaining branch coverage', () => {
       jest.spyOn(domainQueries, 'upsertRFQInDB').mockRejectedValueOnce(new Error('DB upsert failed'));
       await expect(storeService.confirmRfqPersisted({ id: 'rfq-confirm-branch-test' })).rejects.toThrow('DB upsert failed');
     });
+  });
+});
+
+describe('dispatchPendingQuoteNotifications without a buyer record', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('sends the quote notice without inventing a buyer name when no buyer account exists', async () => {
+    // A fresh module registry keeps this test independent of timers and queues left by other tests.
+    let isolatedStore;
+    let isolatedMailer;
+    jest.isolateModules(() => {
+      isolatedStore = require('../src/services/storeService');
+      isolatedMailer = require('../src/services/mailerService');
+    });
+    const sendSpy = jest.spyOn(isolatedMailer, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+    const buyerEmail = 'unrecorded.buyer@test.invalid';
+    const rfq = { id: 'rfq-no-buyer-record', rfqNumber: 'RFQ-NB-1', title: 'Pumps' };
+    const quote = { id: 'quote-nb-1', vendorId: 'v-nb-1', vendorName: 'Pump Co' };
+    isolatedStore.queuePendingQuoteNotification(buyerEmail, { rfq, quote });
+
+    const dispatched = await isolatedStore.dispatchPendingQuoteNotifications(buyerEmail);
+
+    // Other queued notices from earlier tests can still be sent in the background, so only
+    // the calls addressed to this buyer are checked.
+    const sentToBuyer = sendSpy.mock.calls.filter(([to]) => to === buyerEmail);
+    expect(dispatched).toHaveLength(1);
+    expect(sentToBuyer).toHaveLength(1);
+    expect(sentToBuyer[0][1].recipientName).toBeNull();
   });
 });

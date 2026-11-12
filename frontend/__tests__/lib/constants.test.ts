@@ -7,11 +7,7 @@ import {
   CURRENCY,
   formatCurrency,
   formatFileSize,
-  MANUAL_LINE_ITEM_DEFAULTS,
-  INITIAL_SYSTEM_CONFIG,
-  INITIAL_AZURE_HEALTH,
-  BUYER_SUBSCRIPTION_PLANS,
-  VENDOR_SUBSCRIPTION_PLANS,
+  STORE_MESSAGES,
   AES_CONFIG,
   FORM_SCHEMAS,
   validateFormData,
@@ -29,8 +25,6 @@ import {
   ALLOWED_EXTENSION_HOURS,
   DEFAULT_EXTENSION_HOURS,
   calculateExtendedDeadline,
-  hasUnlimitedAccess,
-  UNLIMITED_ACCESS_EMAILS,
 } from '@/lib/constants';
 
 
@@ -79,33 +73,27 @@ describe('lib/constants', () => {
     expect(mode3?.code).toBe('Mode 3');
   });
 
-  it('should export valid subscription plans', () => {
-    expect(Array.isArray(BUYER_SUBSCRIPTION_PLANS)).toBe(true);
-    expect(BUYER_SUBSCRIPTION_PLANS.length).toBeGreaterThan(0);
-    expect(Array.isArray(VENDOR_SUBSCRIPTION_PLANS)).toBe(true);
-    expect(VENDOR_SUBSCRIPTION_PLANS.length).toBeGreaterThan(0);
+  it('no longer exports seeded plans, placeholder system config, Azure rows, or allow-list bypasses', () => {
+    const constantsModule = require('@/lib/constants');
+    [
+      'INITIAL_SYSTEM_CONFIG',
+      'INITIAL_AZURE_HEALTH',
+      'BUYER_SUBSCRIPTION_PLANS',
+      'VENDOR_SUBSCRIPTION_PLANS',
+      'UNLIMITED_ACCESS_EMAILS',
+      'hasUnlimitedAccess',
+      'DEFAULT_INTERNAL_MEMBERS',
+      'DEFAULT_VENDOR_DIRECTORY_PASSKEY',
+    ].forEach((name) => {
+      expect(constantsModule).not.toHaveProperty(name);
+    });
   });
 
-  it('should export valid INITIAL_SYSTEM_CONFIG', () => {
-    expect(INITIAL_SYSTEM_CONFIG).toBeDefined();
-    expect(INITIAL_SYSTEM_CONFIG.ollamaModel).toBe('Llama 3 (8B Instruct)');
-    expect(INITIAL_SYSTEM_CONFIG.ollamaActive).toBe(true);
-    expect(INITIAL_SYSTEM_CONFIG.ocrExtractionThreshold).toBe(85);
-    expect(INITIAL_SYSTEM_CONFIG.escalationIntervalHours).toBe(24);
-    expect(INITIAL_SYSTEM_CONFIG.azureDbBackupFrequency).toBe('Daily');
-    expect(INITIAL_SYSTEM_CONFIG.rbacEnforced).toBe(true);
-  });
-
-  it('should export valid INITIAL_AZURE_HEALTH services', () => {
-    expect(Array.isArray(INITIAL_AZURE_HEALTH)).toBe(true);
-    expect(INITIAL_AZURE_HEALTH.length).toBeGreaterThanOrEqual(5);
-    
-    const services = INITIAL_AZURE_HEALTH.map(s => s.service);
-    expect(services.some(s => s.includes('PostgreSQL'))).toBe(true);
-    expect(services.some(s => s.includes('OpenAI'))).toBe(true);
-    expect(services.some(s => s.includes('Cosmos DB'))).toBe(true);
-    expect(services.some(s => s.includes('Communication Services'))).toBe(true);
-    expect(services.some(s => s.includes('Key Vault'))).toBe(true);
+  it('exports STORE_MESSAGES with the notices the store shows when a server call fails or confirms', () => {
+    expect(STORE_MESSAGES.chaserNotSentTitle).toBe('Chaser Not Sent');
+    expect(STORE_MESSAGES.aiFeedLoadFailed).toContain('AI activity feed');
+    expect(STORE_MESSAGES.vendorsRemovedMessage).toContain('{count}');
+    expect(STORE_MESSAGES.chaserSentMessage).toContain('{sent} of {total}');
   });
 
   it('should re-export validation schemas, regex patterns, and validation helpers', () => {
@@ -161,14 +149,6 @@ describe('CURRENCY and formatCurrency', () => {
     expect(formatCurrency(NaN)).toBe('₹0');
     expect(formatCurrency(Infinity)).toBe('₹0');
     expect(formatCurrency(undefined as unknown as number)).toBe('₹0');
-  });
-});
-
-describe('MANUAL_LINE_ITEM_DEFAULTS', () => {
-  // Mirrors DELIVERY_DATE_OFFSET_DAYS in RFQ_INGESTION_CONFIG on the backend so a
-  // keyed RFQ and an ingested one fall back to the same delivery date.
-  it('matches the backend delivery-date offset', () => {
-    expect(MANUAL_LINE_ITEM_DEFAULTS.TARGET_DATE_OFFSET_DAYS).toBe(5);
   });
 });
 
@@ -466,27 +446,6 @@ describe('normalizePoDate', () => {
     });
   });
 
-  describe('hasUnlimitedAccess', () => {
-    it('returns true for known unlimited email accounts', () => {
-      expect(hasUnlimitedAccess('procucevvendor@gmail.com')).toBe(true);
-      expect(hasUnlimitedAccess('sudheer.kangala@procucev.com')).toBe(true);
-      expect(hasUnlimitedAccess('  PROCUCEVVENDOR@GMAIL.COM  ')).toBe(true);
-      expect(hasUnlimitedAccess({ email: 'procucevvendor@gmail.com' })).toBe(true);
-    });
-
-    it('returns false for regular emails or null/undefined', () => {
-      expect(hasUnlimitedAccess('vendor@regular.com')).toBe(false);
-      expect(hasUnlimitedAccess(null)).toBe(false);
-      expect(hasUnlimitedAccess(undefined)).toBe(false);
-      expect(hasUnlimitedAccess({ email: '' })).toBe(false);
-    });
-
-    it('contains expected emails in UNLIMITED_ACCESS_EMAILS', () => {
-      expect(UNLIMITED_ACCESS_EMAILS.has('procucevvendor@gmail.com')).toBe(true);
-      expect(UNLIMITED_ACCESS_EMAILS.has('sudheer.kangala@procucev.com')).toBe(true);
-    });
-  });
-
   describe('VENDOR_ASSIGNMENT_LIMITS & resolveBuyerSourcingMode branch boosts', () => {
     it('evaluates VENDOR_ASSIGNMENT_LIMITS getters with and without environment overrides', () => {
       const { VENDOR_ASSIGNMENT_LIMITS } = require('@/lib/constants');
@@ -572,14 +531,18 @@ describe('getVendorCreditBalance', () => {
     expect(VENDOR_PLAN_RFQ_QUOTA).toEqual({ connect: 50, select: 100 });
     expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 9, freeQuotationCredits: 0 })).toBe(91);
     expect(getVendorCreditBalance({ subscriptionPlan: 'connect', rfqDownloadsUsed: 10 })).toBe(40);
-    expect(getVendorCreditBalance({ subscriptionPlan: 'select' })).toBe(100);
+    expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 0 })).toBe(100);
     expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 150 })).toBe(0);
+    // Without the downloads count the balance is unknown, so no full quota is shown in its place.
+    expect(getVendorCreditBalance({ subscriptionPlan: 'select' })).toBeNull();
+    expect(getVendorCreditBalance({ subscriptionPlan: 'connect', rfqDownloadsUsed: Number.NaN })).toBeNull();
   });
 
-  it('falls back to the free-tier balance, the default 5 when none is stored, for vendors without a subscription', () => {
+  it('uses the stored free-tier balance for vendors without a subscription, and null when none is stored', () => {
     expect(getVendorCreditBalance({ subscriptionPlan: 'premium', freeQuotationCredits: 3 })).toBe(3);
     expect(getVendorCreditBalance({ freeQuotationCredits: -2 })).toBe(0);
-    expect(getVendorCreditBalance({})).toBe(5);
     expect(getVendorCreditBalance({ freeQuotationCredits: 0 })).toBe(0);
+    expect(getVendorCreditBalance({})).toBeNull();
+    expect(getVendorCreditBalance({ subscriptionPlan: 'premium' })).toBeNull();
   });
 });

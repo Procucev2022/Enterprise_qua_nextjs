@@ -176,10 +176,10 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(profile.contactDesignation).toBe('legacy-designation');
     });
 
-    test('applies documented defaults for an unset constitution and country', () => {
+    test('leaves an unset constitution and country empty instead of inventing them', () => {
       const profile = buyerProfileQueries.mapRowToProfile({ ...row, type: null, country: null });
-      expect(profile.organizationType).toBe('Public Limited');
-      expect(profile.country).toBe('India');
+      expect(profile.organizationType).toBe('');
+      expect(profile.country).toBe('');
     });
 
     test('falls back to the account holder name when the organisation has no contact person', () => {

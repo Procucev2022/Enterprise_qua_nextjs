@@ -13,6 +13,7 @@ const storeService = require('../src/services/storeService');
 const dbPool = require('../src/db/pool');
 const optimizationMetrics = require('../src/db/optimizationMetrics');
 const buyerAccountResolver = require('../src/services/buyerAccountResolver');
+const { RFQ_CREATION_ERRORS } = require('../src/config/constants');
 
 function mockRes() {
   const res = {};
@@ -213,11 +214,13 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     await configController.getSystemConfig({}, res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(storeService, 'updateSystemConfig').mockImplementationOnce(() => {
-      throw new Error('Update cfg error');
-    });
-    await configController.updateSystemConfig({ body: {} }, res, next);
-    expect(next).toHaveBeenCalled();
+    // Writes are refused with 501 before any store call, so there is no error path to
+    // forward. The refusal itself must not reach next().
+    const writeNext = jest.fn();
+    const writeRes = mockRes();
+    await configController.updateSystemConfig({ body: { ocrExtractionThreshold: 90 } }, writeRes, writeNext);
+    expect(writeRes.status).toHaveBeenCalledWith(501);
+    expect(writeNext).not.toHaveBeenCalled();
   });
 
   test('DB Controller Error Branches', async () => {
@@ -305,7 +308,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
           deliveryLocation: 'Navi Mumbai',
           deliveryPincode: '400701',
           source: 'email_gateway',
-          targetGatewayEmail: 'navinchaudhary.dev@gmail.com',
+          targetGatewayEmail: 'intake-test@example.com',
           sourceEmail: 'requisition@buyer.com',
           extractedEntities: [{ itemName: 'Valve', quantity: 2, technicalSpecs: 'DN50' }],
         },
@@ -315,25 +318,47 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     );
     expect(emailRes.status).toHaveBeenCalledWith(201);
 
-    // Test createRFQ with targetGatewayEmail fallback to default recipient
-    const emailRes2 = mockRes();
-    await rfqController.createRFQ(
-      {
-        body: {
-          title: 'Gasket Requisition',
-          category: 'Piping',
-          budget: 5000,
-          targetDeliveryDate: '2028-10-15',
-          deliveryLocation: 'Navi Mumbai',
-          deliveryPincode: '400701',
-          source: 'email_gateway',
-          lineItems: [{ itemName: 'Gasket', quantity: 10 }],
-        },
-      },
-      emailRes2,
-      next
-    );
-    expect(emailRes2.status).toHaveBeenCalledWith(201);
+    // Without targetGatewayEmail, the intake mailbox comes only from EMAIL_GATEWAY_ADDRESS.
+    // No default address is invented, so the RFQ is refused before anything is saved.
+    const gatewayEnvKeys = ['EMAIL_GATEWAY_ADDRESS', 'EMAIL_GATEWAY_USER'];
+    const savedGatewayEnv = gatewayEnvKeys.map((key) => [key, process.env[key]]);
+    const gatewayRfqBody = {
+      title: 'Gasket Requisition',
+      category: 'Piping',
+      budget: 5000,
+      targetDeliveryDate: '2028-10-15',
+      deliveryLocation: 'Navi Mumbai',
+      deliveryPincode: '400701',
+      source: 'email_gateway',
+      lineItems: [{ itemName: 'Gasket', quantity: 10 }],
+    };
+    try {
+      gatewayEnvKeys.forEach((key) => {
+        delete process.env[key];
+      });
+      const unconfiguredGatewayRes = mockRes();
+      await rfqController.createRFQ({ body: gatewayRfqBody }, unconfiguredGatewayRes, next);
+      expect(unconfiguredGatewayRes.status).toHaveBeenCalledWith(503);
+      expect(unconfiguredGatewayRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        status: 'not_configured',
+        error: RFQ_CREATION_ERRORS.GATEWAY_ADDRESS_NOT_CONFIGURED,
+      }));
+
+      // With the address configured on the backend, the same request is accepted.
+      process.env.EMAIL_GATEWAY_ADDRESS = 'intake-test@example.com';
+      const emailRes2 = mockRes();
+      await rfqController.createRFQ({ body: gatewayRfqBody }, emailRes2, next);
+      expect(emailRes2.status).toHaveBeenCalledWith(201);
+    } finally {
+      savedGatewayEnv.forEach(([key, value]) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      });
+    }
 
     // ── Ingestion & summary error branches ──
     const rfqSummaryService = require('../src/services/rfqSummaryService');
@@ -430,14 +455,18 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     expect(next).toHaveBeenCalled();
 
     const notFoundChaser = mockRes();
-    jest.spyOn(storeService, 'triggerBatchChaser').mockReturnValueOnce(null);
-    await rfqController.triggerBatchChaser({ params: { id: 'rfq-99' }, body: {} }, notFoundChaser, next);
+    jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValueOnce(null);
+    await rfqController.triggerBatchChaser({ params: { id: 'rfq-99' }, body: {}, user: { email: 'buyer@procucev.com', role: 'buyer' } }, notFoundChaser, next);
     expect(notFoundChaser.status).toHaveBeenCalledWith(404);
 
+    // The buyer owns rfq-1, so the request reaches the store, which throws.
+    const chaserBuyerSpy = jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({ id: 'buyer-acc-chaser' });
+    jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValueOnce({ id: 'rfq-1', buyerAccountId: 'buyer-acc-chaser' });
     jest.spyOn(storeService, 'triggerBatchChaser').mockImplementationOnce(() => {
       throw new Error('Chaser error');
     });
-    await rfqController.triggerBatchChaser({ params: { id: 'rfq-1' }, body: {} }, res, next);
+    await rfqController.triggerBatchChaser({ params: { id: 'rfq-1' }, body: {}, user: { email: 'buyer@procucev.com', role: 'buyer' } }, res, next);
+    chaserBuyerSpy.mockRestore();
     expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'approvePurchaseOrder').mockImplementationOnce(() => {

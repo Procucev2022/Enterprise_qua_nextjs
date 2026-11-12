@@ -8,15 +8,22 @@ const { logger } = require('../services/loggerService');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const actionCenterNotificationService = require('../services/actionCenterNotificationService');
 const paymentDuesQueries = require('../db/paymentDuesQueries');
+const { SYSTEM_ACTOR_EMAIL } = require('../config/constants');
+
+// Messages stay in this module until they move to backend/src/config/constants.js.
+const ACTION_CENTER_CONTROLLER_MESSAGES = Object.freeze({
+  AUTHENTICATED_SESSION_REQUIRED: 'An authenticated session is required to dispatch an Action Center communication.',
+});
 
 /**
- * Resolves verified actor strictly from authenticated session.
+ * Resolves the actor strictly from the authenticated session (req.user).
+ * Returns null fields when there is no session; callers must reject those requests.
  */
 function resolveActor(req) {
   const user = req?.user;
   return {
     id: user?.id || user?.uuid || user?.sub || null,
-    name: user?.fullName || user?.name || user?.email || 'Category Manager',
+    name: user?.fullName || user?.name || user?.email || null,
     email: user?.email || null,
   };
 }
@@ -86,6 +93,14 @@ async function dispatchCommunication(req, res) {
   try {
     const actor = resolveActor(req);
 
+    // The route mounts optionalAuthenticate, so the session is checked here.
+    if (!req?.user || !(actor.email || actor.id)) {
+      return res.status(401).json({
+        success: false,
+        error: ACTION_CENTER_CONTROLLER_MESSAGES.AUTHENTICATED_SESSION_REQUIRED,
+      });
+    }
+
     const validation = validatePayload(
       VALIDATION_SCHEMAS.actionCenterCommunicationSend,
       req.body
@@ -139,11 +154,12 @@ async function dispatchCommunication(req, res) {
       actor
     );
 
+    const actorLabel = actor.email || actor.id;
     logger.audit(
-      `[ACTION_CENTER_COMM] ${result.queued ? 'Queued' : 'Dispatched'} ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actor.email}`,
-      actor.email,
+      `[ACTION_CENTER_COMM] ${result.queued ? 'Queued' : 'Dispatched'} ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actorLabel}`,
+      actorLabel,
       {
-        actor: actor.email,
+        actor: actorLabel,
         channel,
         recipientEmail,
         recipientPhone,
@@ -245,7 +261,8 @@ async function handleDeliveryWebhook(req, res) {
 
     const updatePayload = {
       communicationId: effectiveCommId,
-      updatedBy: 'Category Manager',
+      // Webhooks are authenticated by a shared secret, not a user session, so the write is attributed to the system account.
+      updatedBy: SYSTEM_ACTOR_EMAIL,
       notes: notes || (deliveryStatus ? `Webhook delivery status: ${deliveryStatus}` : `Webhook acknowledgement status: ${acknowledgementStatus || 'Acknowledged'}`),
     };
     if (accountId) {
@@ -272,7 +289,7 @@ async function handleDeliveryWebhook(req, res) {
 
     logger.audit(
       `[ACTION_CENTER_WEBHOOK] Updated status for communication ${effectiveCommId}: delivery=${updatePayload.deliveryStatus || 'unchanged'}, ack=${updatePayload.acknowledgementStatus || 'unchanged'}`,
-      null,
+      SYSTEM_ACTOR_EMAIL,
       { communicationId: effectiveCommId, deliveryStatus: updatePayload.deliveryStatus, acknowledgementStatus: updatePayload.acknowledgementStatus }
     );
 

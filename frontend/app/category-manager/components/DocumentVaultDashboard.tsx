@@ -23,7 +23,7 @@ import {
   GripVertical,
   X,
 } from 'lucide-react';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
 import type { DocumentVaultItem, DocumentVaultSummary } from '@/lib/types';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
@@ -51,12 +51,10 @@ export default function DocumentVaultDashboard() {
   const strings = UI_STRINGS.actionCenter.documentVault;
 
   const [documents, setDocuments] = useState<DocumentVaultItem[]>([]);
-  const [summary, setSummary] = useState<DocumentVaultSummary>({
-    totalDocuments: 0,
-    activeDocuments: 0,
-    totalSizeBytes: 0,
-    categoriesCount: 0,
-  });
+  // Null until the summary loads, and when it fails. The cards show a dash, never a zero.
+  const [summary, setSummary] = useState<DocumentVaultSummary | null>(null);
+  // Set when the document list or its summary could not be loaded. The table shows it instead of "no documents".
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -105,6 +103,7 @@ export default function DocumentVaultDashboard() {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const [docsData, summaryData] = await Promise.all([
         fetchDocuments({
@@ -117,12 +116,18 @@ export default function DocumentVaultDashboard() {
       setDocuments(docsData);
       setSummary(summaryData);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to load document vault';
-      showToast(msg, 'error');
+      // The list and the counts are unavailable. Results from an earlier load are not kept on screen.
+      setDocuments([]);
+      setSummary(null);
+      setLoadError(
+        err instanceof Error && err.message
+          ? err.message
+          : formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.documentVault })
+      );
     } finally {
       setIsLoading(false);
     }
-  }, [selectedCategory, selectedSource, searchQuery, showToast]);
+  }, [selectedCategory, selectedSource, searchQuery]);
 
   useEffect(() => {
     loadData();
@@ -352,7 +357,7 @@ export default function DocumentVaultDashboard() {
             <FileText size={14} className="text-indigo-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-documents">
-            {summary.totalDocuments}
+            {summary ? summary.totalDocuments : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
 
@@ -362,7 +367,7 @@ export default function DocumentVaultDashboard() {
             <FileCheck size={14} className="text-emerald-500" />
           </div>
           <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="stat-active-documents">
-            {summary.activeDocuments}
+            {summary ? summary.activeDocuments : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
 
@@ -372,7 +377,7 @@ export default function DocumentVaultDashboard() {
             <HardDrive size={14} className="text-amber-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-storage">
-            {formatFileSize(summary.totalSizeBytes)}
+            {summary ? formatFileSize(summary.totalSizeBytes) : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
 
@@ -382,7 +387,7 @@ export default function DocumentVaultDashboard() {
             <Layers size={14} className="text-sky-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-categories-count">
-            {summary.categoriesCount}
+            {summary ? summary.categoriesCount : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
       </div>
@@ -492,6 +497,10 @@ export default function DocumentVaultDashboard() {
         {isLoading ? (
           <div className="py-16 text-center text-xs text-slate-500" data-testid="vault-loading">
             Loading collateral documents...
+          </div>
+        ) : loadError ? (
+          <div role="alert" className="py-16 px-4 text-center text-xs font-medium text-rose-700 dark:text-rose-300" data-testid="vault-load-error">
+            {loadError}
           </div>
         ) : filteredDocuments.length === 0 ? (
           <div className="py-16 text-center" data-testid="vault-empty">

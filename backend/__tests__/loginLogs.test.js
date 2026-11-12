@@ -23,9 +23,37 @@ app.use((req, res, next) => {
 });
 app.use('/api/login-logs', loginLogsRoutes);
 
+// Test-only fixture sessions. They are written directly into the process store so
+// each test controls its own telemetry. Production code ships with an empty store.
+function seedFixtureSessions() {
+  loginLogsQueries.inMemoryLogs.clear();
+  const now = Date.now();
+  [
+    { id: 'log_fixture_1', userId: 'buyer-fixture-1', userName: 'Tata Fixture Buyer', email: 'buyer1@test.local', phoneNumber: '+910000000001', companyName: 'Tata Fixture Co', userType: 'buyer', minutesAgo: 15, durationSeconds: 900, status: 'ACTIVE' },
+    { id: 'log_fixture_2', userId: 'vendor-fixture-1', userName: 'Vendor Fixture', email: 'vendor1@test.local', phoneNumber: '+910000000002', companyName: 'Vendor Fixture Co', userType: 'vendor', minutesAgo: 45, durationSeconds: 2700, status: 'ACTIVE' },
+    { id: 'log_fixture_3', userId: 'buyer-fixture-2', userName: 'Buyer Two', email: 'buyer2@test.local', phoneNumber: '+910000000003', companyName: 'Buyer Two Co', userType: 'buyer', minutesAgo: 180, durationSeconds: 3600, status: 'LOGGED_OUT' },
+    { id: 'log_fixture_4', userId: 'vendor-fixture-2', userName: 'Vendor Two', email: 'vendor2@test.local', phoneNumber: '+910000000004', companyName: 'Vendor Two Co', userType: 'vendor', minutesAgo: 240, durationSeconds: 3600, status: 'LOGGED_OUT' },
+    { id: 'log_fixture_5', userId: 'buyer-fixture-3', userName: 'Buyer Three', email: 'buyer3@test.local', phoneNumber: '+910000000005', companyName: 'Buyer Three Co', userType: 'buyer', minutesAgo: 360, durationSeconds: 1800, status: 'TIMED_OUT' },
+  ].forEach((fixture) => {
+    const loginAt = new Date(now - fixture.minutesAgo * 60 * 1000).toISOString();
+    loginLogsQueries.inMemoryLogs.set(fixture.id, {
+      ...fixture,
+      loginAt,
+      logoutAt: fixture.status === 'ACTIVE' ? null : new Date(new Date(loginAt).getTime() + fixture.durationSeconds * 1000).toISOString(),
+      ipAddress: '203.0.113.10',
+      deviceInfo: 'Test Browser',
+      location: 'Test City',
+      userAgent: 'test-agent',
+      createdAt: loginAt,
+      updatedAt: loginAt,
+    });
+  });
+}
+
 describe('Login Logs API & Controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    seedFixtureSessions();
   });
 
   describe('Authentication & Authorization Gate', () => {
@@ -153,11 +181,37 @@ describe('Login Logs API & Controller', () => {
         ipAddress: '103.20.10.5',
       };
 
-      const res = await request(app).post('/api/login-logs/event').send(payload);
+      const sessionToken = authService.generateSessionToken({
+        id: 'buyer-vikram',
+        email: 'vikram.m@jsw.in',
+        name: 'Vikram Malhotra',
+        role: 'buyer',
+      });
+      const res = await request(app)
+        .post('/api/login-logs/event')
+        .set('Authorization', `Bearer ${sessionToken}`)
+        .send(payload);
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.entry.email).toBe('vikram.m@jsw.in');
+      expect(res.body.entry.userType).toBe('buyer');
       expect(res.body.entry.status).toBe('ACTIVE');
+    });
+
+    test('ignores identity sent in the body and records the session user', async () => {
+      const sessionToken = authService.generateSessionToken({
+        id: 'buyer-session',
+        email: 'session-user@test.local',
+        role: 'buyer',
+      });
+      const res = await request(app)
+        .post('/api/login-logs/event')
+        .set('Authorization', `Bearer ${sessionToken}`)
+        .send({ email: 'spoofed@test.local', userName: 'Spoofed Name', userType: 'vendor' });
+      expect(res.status).toBe(201);
+      expect(res.body.entry.email).toBe('session-user@test.local');
+      expect(res.body.entry.userName).toBeNull();
+      expect(res.body.entry.userType).toBe('buyer');
     });
 
     test('records a logout event and sets status to LOGGED_OUT', async () => {
@@ -374,17 +428,17 @@ describe('Login Logs API & Controller', () => {
     });
 
     test('recordEvent handles empty body object defaults', async () => {
-      const req = {};
+      const req = { body: {} };
       const res = {
         status: jest.fn().mockReturnThis(),
         json: jest.fn(),
       };
 
       await loginLogsController.recordEvent(req, res);
-      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          success: true,
+          success: false,
         })
       );
     });
@@ -418,8 +472,8 @@ describe('Login Logs API & Controller', () => {
         duration_seconds: 180,
       });
       expect(row1.userName).toBe('Name 1');
-      expect(row1.userType).toBe('buyer');
-      expect(row1.status).toBe('ACTIVE');
+      expect(row1.userType).toBeNull();
+      expect(row1.status).toBeNull();
       expect(row1.durationSeconds).toBe(180);
       expect(row1.logoutAt).toBe('2026-11-05T12:00:00.000Z');
 
@@ -443,11 +497,13 @@ describe('Login Logs API & Controller', () => {
       expect(row2.ipAddress).toBe('1.2.3.4');
 
       const row3 = loginLogsQueries.mapRow({});
-      expect(row3.id).toBe('');
-      expect(row3.userId).toBe('');
-      expect(row3.userName).toBe('');
-      expect(row3.email).toBe('');
+      expect(row3.id).toBeNull();
+      expect(row3.userId).toBeNull();
+      expect(row3.userName).toBeNull();
+      expect(row3.email).toBeNull();
       expect(row3.logoutAt).toBeNull();
+      expect(row3.ipAddress).toBeNull();
+      expect(row3.loginAt).toBeNull();
     });
 
     test('recordLogoutLog finds and updates session matching userUuid', async () => {

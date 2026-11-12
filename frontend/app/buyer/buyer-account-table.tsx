@@ -7,33 +7,20 @@ import { UI_STRINGS } from '@/lib/uiStrings';
 import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
 import {
   Building2,
-  Users,
-  Mail,
-  Phone,
-  Search,
   Plus,
   Download,
-  UploadCloud,
-  CheckCircle2,
-  Sparkles,
-  ShieldCheck,
+  Search,
+  Layers,
+  MapPin,
+  Database,
   Globe,
-  SlidersHorizontal,
+  ShieldCheck,
   Edit3,
   Trash2,
   X,
   Save,
-  Layers,
-  MapPin,
-  FileCheck,
-  RefreshCw,
-  Zap,
-  Check,
-  AlertCircle,
-  ExternalLink,
-  ChevronRight,
-  Database,
   Link2,
+  Check,
 } from 'lucide-react';
 
 export default function BuyerAccountTable() {
@@ -44,7 +31,6 @@ export default function BuyerAccountTable() {
     updateBuyerAccount,
     deleteBuyerAccount,
     alignActiveBuyerAccount,
-    importPublicBuyerDatabase,
     showToast,
     // The category master, read from the database. Empty until it loads, and
     // empty for good if the read failed — there is no bundled copy to fall back
@@ -56,58 +42,49 @@ export default function BuyerAccountTable() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'public_system' | 'web_registration' | 'enterprise_sso'>('ALL');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE_VERIFIED' | 'SYNCED_LEGACY' | 'PENDING_ALIGNMENT'>('ALL');
+  const [statusFilter] = useState<'ALL' | 'ACTIVE_VERIFIED' | 'SYNCED_LEGACY' | 'PENDING_ALIGNMENT'>('ALL');
 
   // Modal States
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [selectedBuyerForEdit, setSelectedBuyerForEdit] = useState<BuyerAccount | null>(null);
-  const [isSyncingPublicDb, setIsSyncingPublicDb] = useState(false);
 
-  // Form State for Add / Edit
+  // Form state for Add / Edit. Every field starts empty: nothing is pre-filled,
+  // and only what the user types or selects is sent to the server.
   const [orgName, setOrgName] = useState('');
   const [brandName, setBrandName] = useState('');
   const [corpEmail, setCorpEmail] = useState('');
   const [contactName, setContactName] = useState('');
-  const [contactDesig, setContactDesig] = useState('Procurement Lead');
-  const [phone, setPhone] = useState('+91 ');
+  const [contactDesig, setContactDesig] = useState('');
+  const [phone, setPhone] = useState('');
   const [gstin, setGstin] = useState('');
   const [pan, setPan] = useState('');
   const [cin, setCin] = useState('');
-  const [industry, setIndustry] = useState('Heavy Engineering & Manufacturing');
-  const [plantLocation, setPlantLocation] = useState('Navi Mumbai Hub, MH');
-  const [sourcingMode, setSourcingMode] = useState<SourcingMode>('mode_2');
-  const [plan, setPlan] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited'>('version_2');
-  const [freeRfqs, setFreeRfqs] = useState(5);
-  const [accountSource, setAccountSource] = useState<'public_system' | 'web_registration' | 'enterprise_sso'>('public_system');
-  const [selectedMajors, setSelectedMajors] = useState<string[]>([
-    'Engineering Spares - Mechanical',
-    'Engineering Spares - Electrical',
-    'Civil Works',
-  ]);
+  const [industry, setIndustry] = useState('');
+  const [plantLocation, setPlantLocation] = useState('');
+  const [sourcingMode, setSourcingMode] = useState<SourcingMode | ''>('');
+  const [plan, setPlan] = useState<BuyerAccount['subscriptionPlan'] | ''>('');
+  const [freeRfqs, setFreeRfqs] = useState('');
+  const [accountSource, setAccountSource] = useState<BuyerAccount['accountSource'] | ''>('');
+  const [selectedMajors, setSelectedMajors] = useState<string[]>([]);
 
   const resetForm = () => {
     setOrgName('');
     setBrandName('');
     setCorpEmail('');
     setContactName('');
-    setContactDesig('Procurement Lead');
-    setPhone('+91 ');
+    setContactDesig('');
+    setPhone('');
     setGstin('');
     setPan('');
     setCin('');
-    setIndustry('Heavy Engineering & Manufacturing');
-    setPlantLocation('Navi Mumbai Hub, MH');
-    setSourcingMode('mode_2');
-    setPlan('version_2');
-    setFreeRfqs(5);
-    setAccountSource('public_system');
-    setSelectedMajors([
-      'Engineering Spares - Mechanical',
-      'Engineering Spares - Electrical',
-      'Civil Works',
-    ]);
+    setIndustry('');
+    setPlantLocation('');
+    setSourcingMode('');
+    setPlan('');
+    setFreeRfqs('');
+    setAccountSource('');
+    setSelectedMajors([]);
   };
 
   const handleOpenAddModal = () => {
@@ -115,24 +92,14 @@ export default function BuyerAccountTable() {
     setAddModalOpen(true);
   };
 
+  // The edit dialog only exposes these four fields, so only these are loaded and
+  // saved. Other account fields (plan, RFQ balance, categories) are not edited here.
   const handleOpenEditModal = (buyer: BuyerAccount) => {
     setSelectedBuyerForEdit(buyer);
     setOrgName(buyer.organizationName);
     setBrandName(buyer.brandName || '');
     setCorpEmail(buyer.corporateEmail);
-    setContactName(buyer.contactPerson);
-    setContactDesig(buyer.contactDesignation || 'Procurement Lead');
     setPhone(buyer.mobileNumber);
-    setGstin(buyer.gstin);
-    setPan(buyer.panNumber || '');
-    setCin(buyer.cinNumber || '');
-    setIndustry(buyer.industrySector);
-    setPlantLocation(buyer.primaryPlantLocation);
-    setSourcingMode(buyer.sourcingMode);
-    setPlan(buyer.subscriptionPlan);
-    setFreeRfqs(buyer.remainingFreeRFQs);
-    setAccountSource(buyer.accountSource);
-    setSelectedMajors(buyer.supportedMajorCategories || []);
     setEditModalOpen(true);
   };
 
@@ -144,32 +111,60 @@ export default function BuyerAccountTable() {
     }
   };
 
+  // Minor categories are the minors of the majors the user selected, read from the
+  // category master. Nothing is preset.
+  const minorCategoriesForSelection = (majors: string[]): string[] => {
+    const minors = categoryTaxonomy
+      .filter((entry) => majors.includes(entry.majorCategory))
+      .flatMap((entry) => entry.minorCategories);
+    return Array.from(new Set(minors));
+  };
+
+  const getMissingAddFields = (): string[] => {
+    const missing: string[] = [];
+    if (!orgName.trim()) missing.push('Organization legal name');
+    if (!corpEmail.trim()) missing.push('Corporate email');
+    if (!phone.trim()) missing.push('Mobile number');
+    if (!contactName.trim()) missing.push('Contact person name');
+    if (!gstin.trim()) missing.push('GSTIN');
+    if (!sourcingMode) missing.push('Sourcing mode');
+    if (!plan) missing.push('Subscription tier');
+    if (!accountSource) missing.push('Account source');
+    const remaining = Number(freeRfqs);
+    if (freeRfqs.trim() === '' || !Number.isInteger(remaining) || remaining < 0) {
+      missing.push('Free RFQs remaining (a whole number, 0 or more)');
+    }
+    if (selectedMajors.length === 0) missing.push('At least one major category');
+    return missing;
+  };
+
   const handleAddBuyerSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!orgName.trim() || !corpEmail.trim() || !contactName.trim() || !gstin.trim()) {
-      showToast('Validation Error', 'Organization Name, Email, Contact Person, and GSTIN are required.', 'warning');
+    const missing = getMissingAddFields();
+    if (missing.length > 0 || sourcingMode === '' || plan === '' || accountSource === '') {
+      showToast('Validation Error', `Complete the required fields: ${missing.join(', ')}.`, 'warning');
       return;
     }
 
     addBuyerAccount({
       organizationName: orgName.trim(),
-      brandName: brandName.trim() || orgName.trim(),
+      ...(brandName.trim() ? { brandName: brandName.trim() } : {}),
       corporateEmail: corpEmail.trim().toLowerCase(),
       contactPerson: contactName.trim(),
-      contactDesignation: contactDesig.trim(),
+      ...(contactDesig.trim() ? { contactDesignation: contactDesig.trim() } : {}),
       mobileNumber: phone.trim(),
       gstin: gstin.trim().toUpperCase(),
-      panNumber: pan.trim().toUpperCase() || gstin.trim().substring(2, 12).toUpperCase(),
-      cinNumber: cin.trim().toUpperCase(),
+      ...(pan.trim() ? { panNumber: pan.trim().toUpperCase() } : {}),
+      ...(cin.trim() ? { cinNumber: cin.trim().toUpperCase() } : {}),
       industrySector: industry,
       sourcingMode,
       subscriptionPlan: plan,
-      remainingFreeRFQs: freeRfqs,
+      remainingFreeRFQs: Number(freeRfqs),
       accountSource,
       status: accountSource === 'public_system' ? 'SYNCED_LEGACY' : 'ACTIVE_VERIFIED',
       primaryPlantLocation: plantLocation.trim(),
-      supportedMajorCategories: selectedMajors.length > 0 ? selectedMajors : ['Engineering Spares - Mechanical'],
-      supportedMinorCategories: ['Pumps & Accessories', 'Hoses, Valves & Fittings', 'Panels'],
+      supportedMajorCategories: selectedMajors,
+      supportedMinorCategories: minorCategoriesForSelection(selectedMajors),
       totalRFQsCreated: 0,
       totalSpend: formatCurrency(0),
     });
@@ -182,104 +177,24 @@ export default function BuyerAccountTable() {
     e.preventDefault();
     if (!selectedBuyerForEdit) return;
 
+    const missing: string[] = [];
+    if (!orgName.trim()) missing.push('Organization legal name');
+    if (!corpEmail.trim()) missing.push('Corporate email');
+    if (!phone.trim()) missing.push('Mobile number');
+    if (missing.length > 0) {
+      showToast('Validation Error', `Complete the required fields: ${missing.join(', ')}.`, 'warning');
+      return;
+    }
+
     updateBuyerAccount(selectedBuyerForEdit.id, {
       organizationName: orgName.trim(),
       brandName: brandName.trim(),
       corporateEmail: corpEmail.trim().toLowerCase(),
-      contactPerson: contactName.trim(),
-      contactDesignation: contactDesig.trim(),
       mobileNumber: phone.trim(),
-      gstin: gstin.trim().toUpperCase(),
-      panNumber: pan.trim().toUpperCase(),
-      cinNumber: cin.trim().toUpperCase(),
-      industrySector: industry,
-      sourcingMode,
-      subscriptionPlan: plan,
-      remainingFreeRFQs: freeRfqs,
-      primaryPlantLocation: plantLocation.trim(),
-      supportedMajorCategories: selectedMajors,
     });
 
     setEditModalOpen(false);
     setSelectedBuyerForEdit(null);
-  };
-
-  const handleBatchSyncPublicDB = () => {
-    setIsSyncingPublicDb(true);
-    setTimeout(() => {
-      const legacyBatch: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>[] = [
-        {
-          organizationName: 'Adani Power & Infra Ltd',
-          brandName: 'Adani Thermal & Renewable Energy SCM',
-          corporateEmail: 'infra.purchase@adani.com',
-          contactPerson: 'Sanjay Rawat',
-          contactDesignation: 'Head Central Procurement',
-          mobileNumber: '+91 98790 33441',
-          gstin: '24AAACA3412P1Z3',
-          panNumber: 'AAACA3412P',
-          cinNumber: 'L40100GJ1996PLC030533',
-          industrySector: 'Power Generation & Renewable Energy',
-          sourcingMode: 'mode_3',
-          subscriptionPlan: 'version_3',
-          remainingFreeRFQs: 0,
-          accountSource: 'public_system',
-          status: 'SYNCED_LEGACY',
-          primaryPlantLocation: 'Mundra Mega Power Facility, GJ',
-          supportedMajorCategories: ['Engineering Spares - Electrical', 'CAPEX - Equipment & Machinery', 'Civil Works'],
-          supportedMinorCategories: ['Transformers', 'Panels', 'Turbines', 'PEB Structure'],
-          totalRFQsCreated: 31,
-          totalSpend: '₹4.12 Cr',
-        },
-        {
-          organizationName: 'BHEL Heavy Electricals',
-          brandName: 'Bharat Heavy Electricals Plant Sourcing',
-          corporateEmail: 'procurement@bhel.in',
-          contactPerson: 'Alok Sengupta',
-          contactDesignation: 'Executive Director (Commercial)',
-          mobileNumber: '+91 94120 77890',
-          gstin: '05AAACB1209K1Z5',
-          panNumber: 'AAACB1209K',
-          cinNumber: 'L74899DL1964GOI004281',
-          industrySector: 'Heavy Electricals & Power Turbines',
-          sourcingMode: 'mode_2',
-          subscriptionPlan: 'version_2',
-          remainingFreeRFQs: 4,
-          accountSource: 'public_system',
-          status: 'SYNCED_LEGACY',
-          primaryPlantLocation: 'Haridwar Manufacturing Unit, UK',
-          supportedMajorCategories: ['Engineering Spares - Electrical', 'Engineering Spares - Mechanical', 'Raw Materials'],
-          supportedMinorCategories: ['Panels', 'Motors', 'Circuit Breakers', 'Die Casting'],
-          totalRFQsCreated: 18,
-          totalSpend: '₹2.80 Cr',
-        },
-        {
-          organizationName: 'Vedanta Resources & SCM',
-          brandName: 'Sterlite Copper & Aluminium Division',
-          corporateEmail: 'sourcing.metals@vedanta.co.in',
-          contactPerson: 'Kavita Chawla',
-          contactDesignation: 'VP Supply Chain & Logistics',
-          mobileNumber: '+91 98205 11998',
-          gstin: '24AAACV1298H1Z8',
-          panNumber: 'AAACV1298H',
-          cinNumber: 'L13209GA1965PLC000044',
-          industrySector: 'Mining & Metallurgy Extraction',
-          sourcingMode: 'mode_1',
-          subscriptionPlan: 'version_1',
-          remainingFreeRFQs: 5,
-          accountSource: 'public_system',
-          status: 'SYNCED_LEGACY',
-          primaryPlantLocation: 'Jharsuguda Smelter Complex, OD',
-          supportedMajorCategories: ['Engineering Spares - Mechanical', 'Raw Materials', 'Lubricants, Greases & Oils'],
-          supportedMinorCategories: ['Bearings & Accessories', 'Compressors & Accessories', 'Hydraulic Oils'],
-          totalRFQsCreated: 8,
-          totalSpend: '₹94 L',
-        },
-      ];
-
-      importPublicBuyerDatabase(legacyBatch);
-      setIsSyncingPublicDb(false);
-      setSyncModalOpen(false);
-    }, 1400);
   };
 
   const handleExportCSV = () => {
@@ -350,11 +265,13 @@ export default function BuyerAccountTable() {
   const getStatusBadge = (status: BuyerAccount['status']) => {
     switch (status) {
       case 'ACTIVE_VERIFIED':
-        return <span className="badge badge-emerald">Active & Verified</span>;
+        return <span className="badge badge-emerald">Active &amp; Verified</span>;
       case 'SYNCED_LEGACY':
-        return <span className="badge badge-amber">Synced from Public DB</span>;
+        return <span className="badge badge-amber">Legacy Public Record</span>;
       case 'PENDING_ALIGNMENT':
         return <span className="badge badge-blue">Pending Alignment</span>;
+      default:
+        return <span className="badge badge-blue">{status}</span>;
     }
   };
 
@@ -365,40 +282,20 @@ export default function BuyerAccountTable() {
         <button onClick={handleOpenAddModal} className="btn btn-primary btn-sm font-bold shadow-sm flex items-center gap-1.5">
           <Plus size={14} /> Add Existing Public Buyer
         </button>
-        <button onClick={() => setSyncModalOpen(true)} className="btn btn-secondary btn-sm flex items-center gap-1.5 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60">
-          <RefreshCw size={13} /> Sync Public DB
-        </button>
         <button onClick={handleExportCSV} className="btn btn-secondary btn-sm flex items-center gap-1">
           <Download size={13} /> Export Master
         </button>
       </div>
 
-      {/* ── Gateway Health & Sync Banner ── */}
-      <div className="glass-panel p-4 rounded-2xl border border-amber-200/50 dark:border-amber-900/40 bg-gradient-to-r from-amber-50/60 via-orange-50/40 to-indigo-50/40 dark:from-amber-950/20 dark:via-orange-950/10 dark:to-indigo-950/20 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
-            <Database size={20} />
-          </div>
-          <div>
-            <div className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2">
-              <span>Public System Central Database Gateway: Connected</span>
-              <span className="live-dot" style={{ width: 6, height: 6 }} />
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
-                100% In Sync
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-              Buyers can register directly or align existing enterprise profiles from the central public database. Opening backend integration enables seamless 1-click requisitioning across all modes.
-            </p>
-          </div>
+      {/* ── Current Session Buyer ── */}
+      <div className="glass-panel p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 flex items-center gap-3 shadow-xs">
+        <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+          <Database size={20} />
         </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="text-right hidden sm:block">
-            <div className="text-[10px] uppercase font-bold text-slate-400">Current Session Buyer</div>
-            <div className="text-xs font-bold text-indigo-600 dark:text-indigo-400 mono">
-              {activeBuyerAccount?.organizationName || 'Larsen & Toubro'}
-            </div>
+        <div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">Current Session Buyer</div>
+          <div className="text-xs font-bold text-indigo-600 dark:text-indigo-400 mono">
+            {activeBuyerAccount?.organizationName || '—'}
           </div>
         </div>
       </div>
@@ -424,7 +321,7 @@ export default function BuyerAccountTable() {
         {/* Aligned from Public System */}
         <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 shadow-xs flex flex-col justify-between min-h-[110px] relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Public System Synced</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Public System Accounts</span>
             <Database size={16} className="text-amber-600 dark:text-amber-400" />
           </div>
           <div className="flex items-baseline gap-2 mt-2">
@@ -435,7 +332,7 @@ export default function BuyerAccountTable() {
               {Math.round((buyerAccounts.filter((b) => b.accountSource === 'public_system').length / (buyerAccounts.length || 1)) * 100)}% Legacy
             </span>
           </div>
-          <span className="text-[10px] text-slate-400">Aligned from central public database</span>
+          <span className="text-[10px] text-slate-400">Accounts added from the public system</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-orange-500" />
         </div>
 
@@ -546,7 +443,7 @@ export default function BuyerAccountTable() {
                 <th className="py-3.5 px-4">Tax Identity (GST / PAN)</th>
                 <th className="py-3.5 px-4">Sourcing Plan &amp; Mode</th>
                 <th className="py-3.5 px-4">Plant Hub &amp; Categories</th>
-                <th className="py-3.5 px-4">Sync Status</th>
+                <th className="py-3.5 px-4">Record Status</th>
                 <th className="py-3.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -638,7 +535,7 @@ export default function BuyerAccountTable() {
                           </div>
                           {buyer.subscriptionPlan === 'free_trial' && (
                             <div className="text-[9px] text-amber-700 dark:text-amber-300 font-semibold">
-                              {buyer.remainingFreeRFQs} of 5 free RFQs (V1/V2/V3)
+                              {buyer.remainingFreeRFQs} free RFQs remaining
                             </div>
                           )}
                         </div>
@@ -650,11 +547,11 @@ export default function BuyerAccountTable() {
                           <div className="flex items-center gap-1 text-[11px] text-slate-700 dark:text-gray-300 font-medium">
                             <MapPin size={11} className="text-slate-400 shrink-0" />
                             <span className="truncate" title={buyer.primaryPlantLocation}>
-                              {buyer.primaryPlantLocation}
+                              {buyer.primaryPlantLocation || '—'}
                             </span>
                           </div>
                           <div className="text-[10px] text-slate-400">
-                            Industry: <strong className="text-slate-600 dark:text-gray-300">{buyer.industrySector}</strong>
+                            Industry: <strong className="text-slate-600 dark:text-gray-300">{buyer.industrySector || '—'}</strong>
                           </div>
                           <div className="flex items-center gap-1 flex-wrap pt-0.5">
                             {(buyer.supportedMajorCategories || []).slice(0, 2).map((cat, idx) => (
@@ -671,11 +568,11 @@ export default function BuyerAccountTable() {
                         </div>
                       </td>
 
-                      {/* Col 6: Sync Status & Spend */}
+                      {/* Col 6: Record Status & Spend */}
                       <td className="py-3 px-4">
                         <div className="space-y-1">
                           {getStatusBadge(buyer.status)}
-                          <div className="text-[9px] text-slate-400 mono">Synced: {buyer.syncTimestamp}</div>
+                          <div className="text-[9px] text-slate-400 mono">Last saved: {buyer.syncTimestamp || '—'}</div>
                           <div className="text-[10px] text-slate-600 dark:text-gray-400">
                             {buyer.totalRFQsCreated} RFQs • <strong className="text-emerald-600 dark:text-emerald-400">{buyer.totalSpend}</strong>
                           </div>
@@ -741,7 +638,7 @@ export default function BuyerAccountTable() {
                     Add / Align Existing Public Buyer Account
                   </h3>
                   <p className="text-[10px] text-slate-400">
-                    Input existing public system organization credentials and assign sourcing scope.
+                    Enter the organization details and assign its sourcing scope. Fields marked * are required.
                   </p>
                 </div>
               </div>
@@ -760,7 +657,7 @@ export default function BuyerAccountTable() {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Larsen & Toubro Limited"
+                    placeholder="Legal name of the organization"
                     value={orgName}
                     onChange={(e) => setOrgName(e.target.value)}
                     className="w-full text-xs font-semibold"
@@ -772,7 +669,7 @@ export default function BuyerAccountTable() {
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. L&T Heavy Engineering Division"
+                    placeholder="Brand or division, if different"
                     value={brandName}
                     onChange={(e) => setBrandName(e.target.value)}
                     className="w-full text-xs"
@@ -802,7 +699,7 @@ export default function BuyerAccountTable() {
                   <input
                     type="tel"
                     required
-                    placeholder="+91 98201 44820"
+                    placeholder="+91 XXXXX XXXXX"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     className="w-full text-xs font-mono"
@@ -819,7 +716,7 @@ export default function BuyerAccountTable() {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Rajesh Sharma"
+                    placeholder="Full name"
                     value={contactName}
                     onChange={(e) => setContactName(e.target.value)}
                     className="w-full text-xs"
@@ -839,7 +736,7 @@ export default function BuyerAccountTable() {
                 </div>
               </div>
 
-              {/* Row 4: Statutory GSTIN, PAN, CIN */}
+              {/* Row 4: Statutory GSTIN, PAN, Industry */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
@@ -848,7 +745,7 @@ export default function BuyerAccountTable() {
                   <input
                     type="text"
                     required
-                    placeholder="27AAACL1234F1Z5"
+                    placeholder="15-character GSTIN"
                     value={gstin}
                     onChange={(e) => setGstin(e.target.value)}
                     className="w-full text-xs font-mono font-bold"
@@ -860,7 +757,7 @@ export default function BuyerAccountTable() {
                   </label>
                   <input
                     type="text"
-                    placeholder="AAACL1234F"
+                    placeholder="10-character PAN"
                     value={pan}
                     onChange={(e) => setPan(e.target.value)}
                     className="w-full text-xs font-mono"
@@ -875,6 +772,7 @@ export default function BuyerAccountTable() {
                     onChange={(e) => setIndustry(e.target.value)}
                     className="w-full text-xs"
                   >
+                    <option value="">Select industry sector</option>
                     <option value="Heavy Engineering & Manufacturing">Heavy Engineering</option>
                     <option value="EPC & Infrastructure Projects">EPC & Infrastructure</option>
                     <option value="Steel & Metallurgy Manufacturing">Steel & Metallurgy</option>
@@ -885,17 +783,47 @@ export default function BuyerAccountTable() {
                 </div>
               </div>
 
-              {/* Row 5: Sourcing Mode, Plan & Account Source */}
+              {/* Row 5: Plant location, sourcing mode, tier, account source & free RFQs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Primary Plant Location
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="City or plant, state"
+                    value={plantLocation}
+                    onChange={(e) => setPlantLocation(e.target.value)}
+                    className="w-full text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Free RFQs Remaining *
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    placeholder="0 or more"
+                    value={freeRfqs}
+                    onChange={(e) => setFreeRfqs(e.target.value)}
+                    className="w-full text-xs font-mono"
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-gray-800/40 border border-slate-200 dark:border-gray-800">
                 <div>
                   <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
-                    Sourcing Mode
+                    Sourcing Mode *
                   </label>
                   <select
                     value={sourcingMode}
-                    onChange={(e) => setSourcingMode(e.target.value as SourcingMode)}
+                    onChange={(e) => setSourcingMode(e.target.value as SourcingMode | '')}
                     className="w-full text-xs"
                   >
+                    <option value="">Select sourcing mode</option>
                     <option value="mode_1">Mode 1: Client Roster Only</option>
                     <option value="mode_2">Mode 2: Hybrid Sourcing</option>
                     <option value="mode_3">Mode 3: AI Autonomous Sourcing</option>
@@ -903,14 +831,15 @@ export default function BuyerAccountTable() {
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
-                    Subscription Tier
+                    Subscription Tier *
                   </label>
                   <select
                     value={plan}
-                    onChange={(e) => setPlan(e.target.value as any)}
+                    onChange={(e) => setPlan(e.target.value as BuyerAccount['subscriptionPlan'] | '')}
                     className="w-full text-xs"
                   >
-                    <option value="free_trial">Free Trial (5 RFQs)</option>
+                    <option value="">Select subscription tier</option>
+                    <option value="free_trial">Free Trial</option>
                     <option value="version_1">Mode 1</option>
                     <option value="version_2">Mode 2</option>
                     <option value="version_3">Mode 3</option>
@@ -918,13 +847,14 @@ export default function BuyerAccountTable() {
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
-                    Account Source
+                    Account Source *
                   </label>
                   <select
                     value={accountSource}
-                    onChange={(e) => setAccountSource(e.target.value as any)}
+                    onChange={(e) => setAccountSource(e.target.value as BuyerAccount['accountSource'] | '')}
                     className="w-full text-xs"
                   >
+                    <option value="">Select account source</option>
                     <option value="public_system">Public System Integration</option>
                     <option value="web_registration">Web Direct Signup</option>
                     <option value="enterprise_sso">Enterprise SSO Gateway</option>
@@ -935,7 +865,7 @@ export default function BuyerAccountTable() {
               {/* Major Category Scope Selector */}
               <div>
                 <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5">
-                  Supported Procurement Major Categories:
+                  Supported Procurement Major Categories: *
                 </label>
                 <div className="flex flex-wrap gap-1.5 max-h-[140px] overflow-y-auto p-2 bg-slate-50 dark:bg-gray-800/40 rounded-xl border border-slate-200 dark:border-gray-800">
                   {categoryTaxonomy.length === 0 && (
@@ -983,71 +913,7 @@ export default function BuyerAccountTable() {
       )}
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* MODAL 2: SYNC PUBLIC DATABASE BATCH */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {syncModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-gray-900 border border-amber-300 dark:border-amber-500/40 rounded-3xl p-6 shadow-2xl space-y-4 animate-scale-in">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center">
-                  <RefreshCw size={18} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    Sync Public System Buyer Database
-                  </h3>
-                  <p className="text-[10px] text-slate-400">
-                    Import existing public system buyer accounts directly into this workspace.
-                  </p>
-                </div>
-              </div>
-              <button aria-label="Close Sync Modal" onClick={() => setSyncModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-900 dark:text-amber-200 space-y-2">
-              <div className="font-bold flex items-center gap-1.5">
-                <Database size={14} className="text-amber-600" />
-                Live Central Gateway Integration:
-              </div>
-              <p className="text-[11px] text-slate-600 dark:text-gray-300 leading-relaxed">
-                Click below to simulate syncing 3 verified public system buyer accounts (Adani Power, BHEL Electricals, Vedanta Resources) with verified GSTIN, categories, and pre-configured sourcing access.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setSyncModalOpen(false)}
-                className="btn btn-secondary text-xs"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleBatchSyncPublicDB}
-                disabled={isSyncingPublicDb}
-                className="btn btn-primary font-black text-xs flex items-center gap-1.5 bg-gradient-to-r from-amber-600 to-orange-600 text-white"
-              >
-                {isSyncingPublicDb ? (
-                  <>
-                    <RefreshCw size={13} className="animate-spin" /> Syncing Central DB...
-                  </>
-                ) : (
-                  <>
-                    <Zap size={14} /> Sync 3 Public System Buyers Now
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* MODAL 3: EDIT BUYER ACCOUNT SPECIFICATIONS */}
+      {/* MODAL 2: EDIT BUYER ACCOUNT SPECIFICATIONS */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {editModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1062,7 +928,7 @@ export default function BuyerAccountTable() {
                     Edit Buyer Account Specifications
                   </h3>
                   <p className="text-[10px] text-slate-400">
-                    Update organization specifications, sourcing tier, and category mapping.
+                    Update the organization name, brand, corporate email, and mobile number.
                   </p>
                 </div>
               </div>

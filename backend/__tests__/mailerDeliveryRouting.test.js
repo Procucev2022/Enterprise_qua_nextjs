@@ -19,6 +19,8 @@ const ROUTING_ENV = [
   'VENDOR_GMAIL_REFRESH_TOKEN',
   'VENDOR_GMAIL_SENDER_EMAIL',
   'VENDOR_EMAIL_GATEWAY_ADDRESS',
+  'EMAIL_GATEWAY_ADDRESS',
+  'EMAIL_GATEWAY_USER',
   'QUOTE_ALERT_GMAIL_REFRESH_TOKEN',
   'QUOTE_ALERT_GMAIL_SENDER_EMAIL',
   'GMAIL_POOL_REFRESH_TOKENS',
@@ -29,6 +31,9 @@ const ROUTING_ENV = [
   'VENDOR_SMTP_USER',
   'VENDOR_SMTP_PASSWORD',
 ];
+
+// A required count for the RFQ acknowledgement template. Supplied on every acknowledgement send.
+const ACK = { suppliersInvited: 3, rfqNumber: 'RFQ-ROUTE', rfqTitle: 'Routing check' };
 
 /**
  * Load a fresh mailer whose Gmail API double decides each send by the refresh
@@ -101,13 +106,13 @@ describe('mailerService delivery routing', () => {
       { buyer: rateLimited }
     );
 
-    const first = await mailer.sendRfqAcknowledgementEmail({ to: 'buyer@example.com', rfqNumber: 'RFQ1', rfqTitle: 'T' });
-    expect(first).toEqual({ sent: true, messageId: 'id-pool-a' });
+    const first = await mailer.sendRfqAcknowledgementEmail({ to: 'buyer@example.com', ...ACK, rfqNumber: 'RFQ1' });
+    expect(first).toEqual({ sent: true, success: true, status: 'sent', messageId: 'id-pool-a' });
     expect(sends.map((s) => s.token)).toEqual(['buyer', 'pool-a']);
     expect(sends[1].raw).toContain('From: "Procucev Enterprise" <a@procucev.com>');
 
     // The buyer mailbox is now cooling down: the next send goes straight to the pool.
-    await mailer.sendRfqAcknowledgementEmail({ to: 'buyer@example.com', rfqNumber: 'RFQ2', rfqTitle: 'T' });
+    await mailer.sendRfqAcknowledgementEmail({ to: 'buyer@example.com', ...ACK, rfqNumber: 'RFQ2' });
     expect(sends.map((s) => s.token)).toEqual(['buyer', 'pool-a', 'pool-a']);
 
     const health = mailer.getDeliveryHealth();
@@ -131,7 +136,7 @@ describe('mailerService delivery routing', () => {
     );
 
     const res = await mailer.sendOtpEmail('user@example.com', '123456', 600);
-    expect(res).toEqual({ sent: true, messageId: 'id-vendor' });
+    expect(res).toEqual({ sent: true, success: true, status: 'sent', messageId: 'id-vendor' });
     expect(sends.map((s) => s.token)).toEqual(['otp', 'buyer', 'vendor']);
     expect(sends[0].raw).toContain('From: "Procucev Enterprise" <otp@procucev.com>');
     // Spam-safe: a security code with no remote images, links or forged Message-ID.
@@ -144,7 +149,7 @@ describe('mailerService delivery routing', () => {
       { GMAIL_REFRESH_TOKEN: 'buyer', VENDOR_GMAIL_REFRESH_TOKEN: 'vendor' },
       { buyer: rateLimited }
     );
-    await expect(mailer.sendRfqAcknowledgementEmail({ to: 'b@example.com', rfqNumber: 'R', rfqTitle: 'T' })).rejects.toThrow(
+    await expect(mailer.sendRfqAcknowledgementEmail({ to: 'b@example.com', ...ACK, rfqNumber: 'R' })).rejects.toThrow(
       'User-rate limit exceeded'
     );
     expect(sends.map((s) => s.token)).toEqual(['buyer']);
@@ -158,15 +163,24 @@ describe('mailerService delivery routing', () => {
         VENDOR_GMAIL_REFRESH_TOKEN: 'vendor',
         QUOTE_ALERT_GMAIL_REFRESH_TOKEN: 'quote',
         QUOTE_ALERT_GMAIL_SENDER_EMAIL: 'alerts@procucev.com',
+        EMAIL_GATEWAY_ADDRESS: 'intake.test@supplier.test',
       },
       { buyer: rateLimited }
     );
-    const res = await mailer.sendRfqAcknowledgementEmail({ to: 'b@example.com', rfqNumber: 'R', rfqTitle: 'T' });
-    expect(res).toEqual({ sent: true, messageId: 'id-quote' });
+    const res = await mailer.sendRfqAcknowledgementEmail({ to: 'b@example.com', ...ACK, rfqNumber: 'R' });
+    expect(res).toEqual({ sent: true, success: true, status: 'sent', messageId: 'id-quote' });
     expect(sends.map((s) => s.token)).toEqual(['buyer', 'quote']);
     expect(sends[1].raw).toContain('From: "Procucev Enterprise" <alerts@procucev.com>');
-    // The acknowledgement's own Reply-To (the RFQ intake address) is kept.
-    expect(sends[1].raw).toMatch(/Reply-To: RFQ@procucev\.com/i);
+    // The acknowledgement's own Reply-To (the configured RFQ intake address) is kept.
+    expect(sends[1].raw).toMatch(/Reply-To: intake\.test@supplier\.test/i);
+  });
+
+  test('an RFQ acknowledgement sets no Reply-To when no gateway address is configured', async () => {
+    const { mailer, sends } = loadMailer({ GMAIL_REFRESH_TOKEN: 'buyer', GMAIL_SENDER_EMAIL: 'buyer@procucev.com' });
+    const res = await mailer.sendRfqAcknowledgementEmail({ to: 'b@example.com', ...ACK, rfqNumber: 'R' });
+    expect(res).toMatchObject({ sent: true, success: true, status: 'sent' });
+    expect(sends).toHaveLength(1);
+    expect(sends[0].raw).not.toMatch(/Reply-To: RFQ@procucev\.com/i);
   });
 
   test('a borrowed send with no reply-to of its own replies to the buyer mailbox', async () => {
@@ -178,9 +192,10 @@ describe('mailerService delivery routing', () => {
     expect(withSender.sends.map((s) => s.token)).toEqual(['buyer', 'quote']);
     expect(withSender.sends[1].raw).toMatch(/Reply-To: buyer@procucev\.com/i);
 
+    // With no sender configured, no personal mailbox is substituted anywhere in the message.
     const withoutSender = loadMailer({ GMAIL_REFRESH_TOKEN: 'buyer', QUOTE_ALERT_GMAIL_REFRESH_TOKEN: 'quote' }, { buyer: rateLimited });
     await withoutSender.mailer.sendRfqNotCreatedEmail({ to: 'b@example.com', reason: 'NO_LINE_ITEMS' });
-    expect(withoutSender.sends[1].raw).toMatch(/Reply-To: .*manav\.procucev@gmail\.com/i);
+    expect(withoutSender.sends[1].raw).not.toMatch(/@gmail\.com/i);
   });
 
   test('vendor mail sent from a borrowed mailbox keeps CC and replies to the vendor gateway', async () => {
@@ -194,7 +209,7 @@ describe('mailerService delivery routing', () => {
       reason: 'Missing price',
       cc: 'buyer@example.com, support@procucev.com',
     });
-    expect(res).toEqual({ sent: true, messageId: 'id-buyer' });
+    expect(res).toEqual({ sent: true, success: true, status: 'sent', messageId: 'id-buyer' });
     const raw = sends[1].raw;
     expect(raw).toContain('Cc: buyer@example.com, support@procucev.com');
     expect(raw).toContain('Reply-To: quotes@procucev.com');
@@ -214,7 +229,7 @@ describe('mailerService delivery routing', () => {
       { quote: rateLimited }
     );
     const res = await mailer.sendQuoteReceivedEmail('buyer@example.com', { rfq: { rfqNumber: 'RFQ1' }, quote: { vendorName: 'V' } });
-    expect(res).toEqual({ sent: true, messageId: 'id-buyer' });
+    expect(res).toEqual({ sent: true, success: true, status: 'sent', messageId: 'id-buyer' });
     expect(sends.map((s) => s.token)).toEqual(['quote', 'buyer']);
     expect(mailer.isQuoteAlertGmailApiConfigured()).toBe(true);
   });
@@ -231,8 +246,10 @@ describe('mailerService delivery routing', () => {
         },
       }
     );
-    await expect(mailer.sendRfqAcknowledgementEmail({ to: 'b@example.com', rfqNumber: 'R', rfqTitle: 'T' })).resolves.toEqual({
+    await expect(mailer.sendRfqAcknowledgementEmail({ to: 'b@example.com', ...ACK, rfqNumber: 'R' })).resolves.toEqual({
       sent: true,
+      success: true,
+      status: 'sent',
       messageId: 'retried',
     });
     expect(sends).toHaveLength(2);
@@ -241,7 +258,12 @@ describe('mailerService delivery routing', () => {
   test('falls back to an HTTP provider when every Gmail identity fails', async () => {
     const { mailer } = loadMailer({ GMAIL_REFRESH_TOKEN: 'buyer', RESEND_API_KEY: 'rk' }, { buyer: rateLimited });
     global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'resend-ok' }) });
-    await expect(mailer.sendOtpEmail('u@example.com', '111111', 600)).resolves.toEqual({ sent: true, messageId: 'resend-ok' });
+    await expect(mailer.sendOtpEmail('u@example.com', '111111', 600)).resolves.toEqual({
+      sent: true,
+      success: true,
+      status: 'sent',
+      messageId: 'resend-ok',
+    });
     expect(mailer.isConfigured()).toBe(true);
   });
 
@@ -280,6 +302,8 @@ describe('mailerService delivery routing', () => {
     );
     await expect(mailer.deliverVendor({ to: 'v@example.com', subject: 's', html: 'h' }, 'vendor mail')).resolves.toEqual({
       sent: true,
+      success: true,
+      status: 'sent',
       messageId: 'smtp-1',
     });
     expect(sends.map((s) => s.token)).toEqual(['vendor']);
@@ -292,6 +316,8 @@ describe('mailerService delivery routing', () => {
     expect(mailer.getVendorGmailOAuthClient()).toBeUndefined();
     await expect(mailer.deliver({ to: 'a@b.com', subject: 's', html: 'h' }, 'x')).resolves.toEqual({
       sent: false,
+      success: false,
+      status: 'not_configured',
       reason: 'SMTP not configured',
     });
   });

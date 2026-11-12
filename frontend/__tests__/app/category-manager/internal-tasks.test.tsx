@@ -23,26 +23,30 @@ jest.mock('@/app/category-manager/components/ApprovalsDashboard', () => {
 jest.mock('@/app/category-manager/components/ScorecardDashboard', () => ({
   ScorecardDashboard: () => <div data-testid="scorecard-dashboard">Scorecard Dashboard Mock</div>,
 }));
-jest.mock('@/app/category-manager/buyers-directory', () => () => (
-  <div data-testid="buyers-directory">Buyers Directory Mock</div>
-));
-jest.mock('@/app/category-manager/sellers-directory', () => () => (
-  <div data-testid="sellers-directory">Sellers Directory Mock</div>
-));
-jest.mock('@/app/category-manager/components/RegistrationsDashboard', () => () => (
-  <div data-testid="registrations-dashboard">Registrations Dashboard Mock</div>
-));
+jest.mock('@/app/category-manager/buyers-directory', () => function BuyersDirectoryMock() {
+  return <div data-testid="buyers-directory">Buyers Directory Mock</div>;
+});
+jest.mock('@/app/category-manager/sellers-directory', () => function SellersDirectoryMock() {
+  return <div data-testid="sellers-directory">Sellers Directory Mock</div>;
+});
+jest.mock('@/app/category-manager/components/RegistrationsDashboard', () => function RegistrationsDashboardMock() {
+  return <div data-testid="registrations-dashboard">Registrations Dashboard Mock</div>;
+});
 jest.mock('@/app/category-manager/components/PaymentDuesDashboard', () => ({
   PaymentDuesDashboard: () => <div data-testid="payment-dues-dashboard">Payment Dues Dashboard Mock</div>,
 }));
-jest.mock('@/app/category-manager/components/LoginLogsDashboard', () => () => (
-  <div data-testid="login-logs-dashboard">Login Logs Dashboard Mock</div>
-));
+jest.mock('@/app/category-manager/components/LoginLogsDashboard', () => function LoginLogsDashboardMock() {
+  return <div data-testid="login-logs-dashboard">Login Logs Dashboard Mock</div>;
+});
 jest.mock('@/lib/ticketClient', () => ({
-  fetchTicketSummary: jest.fn().mockResolvedValue({ total: 5, pending: 2, inProgress: 1, escalated: 1, completed: 1, criticalCount: 1 }),
+  fetchTicketSummary: jest.fn().mockResolvedValue({
+    summary: { total: 5, pending: 2, inProgress: 1, escalated: 1, completed: 1, criticalCount: 1 },
+  }),
 }));
 jest.mock('@/lib/approvalClient', () => ({
-  fetchApprovalSummary: jest.fn().mockResolvedValue({ total: 4, pending: 1, approved: 2, rejected: 1 }),
+  fetchApprovalSummary: jest.fn().mockResolvedValue({
+    summary: { total: 4, pending: 1, approved: 2, rejected: 1 },
+  }),
 }));
 
 jest.mock('@/lib/internalTaskClient', () => {
@@ -59,11 +63,11 @@ jest.mock('@/lib/internalTaskClient', () => {
     deleteInternalTask: jest.fn(),
     searchRelatedEntities: jest.fn(),
     getExportTasksUrl: jest.fn(),
-    fetchInternalAssignees: jest.fn().mockResolvedValue([
+    fetchInternalAssignees: jest.fn().mockResolvedValue({ assignees: [
       { id: 'exec-1', name: 'Pavani', role: 'CRM Executive' },
       { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist' },
       { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead' },
-    ]),
+    ] }),
     completeInternalTask: jest.fn(),
     approveCreditTask: jest.fn(),
     rejectCreditTask: jest.fn(),
@@ -219,18 +223,18 @@ describe('Action Center & Internal Tasks Redesign', () => {
       email: 'navin@procucev.com',
       role: 'category_manager',
     });
-    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValue([
+    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValue({ assignees: [
       { id: 'exec-1', name: 'Pavani', role: 'CRM Executive' },
       { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist' },
       { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead' },
-    ]);
+    ] });
     jest.clearAllMocks();
     (internalTaskClient.updateInternalTask as jest.Mock).mockReset();
     (internalTaskClient.completeInternalTask as jest.Mock).mockReset();
     (internalTaskClient.createInternalTask as jest.Mock).mockReset();
     (internalTaskClient.fetchTaskById as jest.Mock).mockReset();
     (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(null);
-    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValue(mockTaskTypes);
+    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValue({ taskTypes: mockTaskTypes });
     (internalTaskClient.fetchTaskSummary as jest.Mock).mockResolvedValue({
       total: 5,
       pending: 1,
@@ -849,7 +853,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
   });
 
   test('handles loadTaskTypes when fetchTaskTypes returns empty array', async () => {
-    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValueOnce([]);
+    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValueOnce({ taskTypes: [] });
 
     render(<InternalTasksDashboard />);
 
@@ -1271,9 +1275,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const { fetchApprovalSummary } = require('@/lib/approvalClient');
     const { authClient } = require('@/lib/authClient');
 
-    (fetchTicketSummary as jest.Mock).mockResolvedValueOnce(null);
-    (fetchApprovalSummary as jest.Mock).mockResolvedValueOnce(null);
-    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce([]);
+    (fetchTicketSummary as jest.Mock).mockResolvedValueOnce({ summary: null, error: 'Ticket summary unavailable.' });
+    (fetchApprovalSummary as jest.Mock).mockResolvedValueOnce({ summary: null, error: 'Approval summary unavailable.' });
+    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce({ assignees: [] });
     (authClient.getSessionUser as jest.Mock).mockReturnValueOnce(null);
 
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
@@ -1299,6 +1303,8 @@ describe('Action Center & Internal Tasks Redesign', () => {
     await waitFor(() => {
       expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
+    // A failed count is reported in the banner. The first failure is shown.
+    expect(screen.getByText('Ticket summary unavailable.')).toBeInTheDocument();
 
     // Dispatch event with null detail to cover customEvent.detail falsy branch
     act(() => {
@@ -1406,9 +1412,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
   });
 
   test('covers assignee dropdown with member having no id and no role, plus custom type null return', async () => {
-    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce([
+    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce({ assignees: [
       { id: '', name: 'Special Ops User', role: '' },
-    ]);
+    ] });
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
       tasks: mockTasks,
       total: mockTasks.length,

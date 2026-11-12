@@ -782,7 +782,12 @@ describe('WhatsApp agent-bot bridge', () => {
     expect(bare.html).toContain('Hello,');
     expect(bare.html).not.toContain('Temporary Password');
     // NODE_ENV=test: delivery is refused before any transport is touched.
-    expect(await mailerService.sendBuyerCredentialsEmail({ to: 'b@x.com', tempPassword: 'x' })).toEqual({ sent: false, reason: 'test environment' });
+    expect(await mailerService.sendBuyerCredentialsEmail({ to: 'b@x.com', tempPassword: 'x' })).toEqual({
+      sent: false,
+      success: false,
+      status: 'skipped',
+      reason: 'test environment',
+    });
   });
 
   test('listVendorPlans returns the paid plans with what the payment link charges', () => {

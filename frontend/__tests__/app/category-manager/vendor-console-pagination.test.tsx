@@ -4,6 +4,7 @@ import VendorConsole from '@/app/category-manager/vendor-console';
 import * as storeModule from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import type { RFQVendorCandidate } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
 jest.mock('@/lib/rfqClient', () => ({
@@ -182,7 +183,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     expect(screen.getByText('Fully Compliant')).toBeInTheDocument();
   });
 
-  test('falls back to a placeholder avatar/label when a vendor has no name, and shows the amber badge for a non-Fully-Compliant quote', async () => {
+  test('shows a dash, not an invented label, for a vendor with no name, and shows the amber badge for a non-Fully-Compliant quote', async () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       rfqs: [
         {
@@ -199,9 +200,11 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
       page([{ ...makeVendor(0), id: 'v-noname', name: '' }], 1, 1)
     );
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getAllByText('Unnamed Vendor').length).toBeGreaterThan(0));
+    // The vendor card renders after the first page load. Wait for its control rather than any dash on the page.
+    const reviewButton = await screen.findByRole('button', { name: UI_STRINGS.actions.reviewVendorPerformance });
+    expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByText(/Review Performance/i));
+    fireEvent.click(reviewButton);
     expect(screen.getByText('Partially Compliant')).toBeInTheDocument();
   });
 

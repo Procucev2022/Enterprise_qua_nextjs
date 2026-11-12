@@ -52,7 +52,6 @@ import {
   TaskEntityType,
   TaskFilterParams,
   TaskSummary,
-  DEFAULT_TASK_TYPES,
   fetchInternalTasks,
   fetchTaskTypes,
   createNewTaskType,
@@ -72,7 +71,6 @@ import {
   type InternalTeamMember,
 } from '@/lib/internalTaskClient';
 import {
-  DEFAULT_INTERNAL_MEMBERS,
   INTERNAL_TASK_CATEGORIES,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,
@@ -132,7 +130,9 @@ export default function InternalTasksDashboard() {
   // Data state
   const [tasks, setTasks] = useState<InternalTask[]>([]);
   const [totalTasks, setTotalTasks] = useState<number>(0);
-  const [assignees, setAssignees] = useState<InternalTeamMember[]>(DEFAULT_INTERNAL_MEMBERS);
+  const [assignees, setAssignees] = useState<InternalTeamMember[]>([]);
+  const [assigneesError, setAssigneesError] = useState<string | null>(null);
+  const [taskTypesError, setTaskTypesError] = useState<string | null>(null);
   const [sessionUser, setSessionUser] = useState<UserSession | null>(null);
   const [isMyTasksActive, setIsMyTasksActive] = useState<boolean>(false);
   const [isCustomAssignee, setIsCustomAssignee] = useState<boolean>(false);
@@ -141,19 +141,12 @@ export default function InternalTasksDashboard() {
   const [completionRemarks, setCompletionRemarks] = useState<string>('');
   const [completionConfirmed, setCompletionConfirmed] = useState<boolean>(false);
   const [isCompleting, setIsCompleting] = useState<boolean>(false);
-  const [taskTypes, setTaskTypes] = useState<TaskType[]>(DEFAULT_TASK_TYPES);
-  const [summary, setSummary] = useState<TaskSummary>({
-    total: 0,
-    newTasks: 0,
-    assigned: 0,
-    inProgress: 0,
-    pendingApproval: 0,
-    completed: 0,
-    rejected: 0,
-    cancelled: 0,
-    overdueCount: 0,
-    criticalCount: 0,
-  });
+  const [taskTypes, setTaskTypes] = useState<TaskType[]>([]);
+  // Null until the summary loads, and when it fails. No count is substituted.
+  const [summary, setSummary] = useState<TaskSummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  // Set when a sub-nav count (tickets, approvals, payment dues) could not be loaded. The badge is then hidden.
+  const [badgeSummaryError, setBadgeSummaryError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -307,29 +300,43 @@ export default function InternalTasksDashboard() {
   }, []);
 
   useEffect(() => {
+    // A failed count stays null, so its sub-nav badge is hidden rather than shown as zero.
+    // The first failure message is kept so the banner always names a real problem.
+    const surfaceBadgeError = (message: string) => setBadgeSummaryError((prev) => prev ?? message);
+    const badgeLoadFailed = (resource: string) =>
+      surfaceBadgeError(formatString(UI_STRINGS.dataLoad.networkFailed, { resource }));
+
     fetchTicketSummary()
       .then((res) => {
-        if (res) setTicketSummary(res);
+        setTicketSummary(res.summary);
+        if (res.error) surfaceBadgeError(res.error);
       })
-      .catch(() => {});
+      .catch(() => badgeLoadFailed(UI_STRINGS.dataLoad.resources.ticketSummary));
 
     fetchApprovalSummary()
       .then((res) => {
-        if (res) setApprovalSummary(res);
+        setApprovalSummary(res.summary);
+        if (res.error) surfaceBadgeError(res.error);
       })
-      .catch(() => {});
+      .catch(() => badgeLoadFailed(UI_STRINGS.dataLoad.resources.approvalSummary));
 
     fetchPaymentDuesSummary()
       .then((res) => {
-        if (res) setPaymentDuesSummary(res);
+        setPaymentDuesSummary(res.summary);
+        if (res.error) surfaceBadgeError(res.error);
       })
-      .catch(() => {});
+      .catch(() => badgeLoadFailed(UI_STRINGS.dataLoad.resources.paymentDuesSummary));
 
     fetchInternalAssignees()
       .then((res) => {
-        if (res && res.length > 0) setAssignees(res);
+        setAssignees(res.assignees);
+        setAssigneesError(res.error ?? null);
       })
-      .catch(() => {});
+      .catch(() => {
+        setAssigneesError(
+          formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.assignees })
+        );
+      });
 
     const currentUser = authClient.getSessionUser();
     if (currentUser) {
@@ -399,7 +406,7 @@ export default function InternalTasksDashboard() {
   const [newTaskType, setNewTaskType] = useState<string>('Phone Call');
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  const [newTaskTypeId, setNewTaskTypeId] = useState<string>(DEFAULT_TASK_TYPES[0]?.id || '');
+  const [newTaskTypeId, setNewTaskTypeId] = useState<string>('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('Medium');
   const [newStatus, setNewStatus] = useState<TaskStatus>('Pending');
   const [newAssignedToName, setNewAssignedToName] = useState('');
@@ -442,10 +449,11 @@ export default function InternalTasksDashboard() {
 
   // Load Task Types
   const loadTaskTypes = useCallback(async () => {
-    const types = await fetchTaskTypes();
-    if (types && types.length > 0) {
-      setTaskTypes(types);
-      setNewTaskTypeId((prev) => prev || types[0].id);
+    const res = await fetchTaskTypes();
+    setTaskTypes(res.taskTypes);
+    setTaskTypesError(res.error ?? null);
+    if (res.taskTypes.length > 0) {
+      setNewTaskTypeId((prev) => prev || res.taskTypes[0].id);
     }
   }, []);
 
@@ -458,8 +466,9 @@ export default function InternalTasksDashboard() {
       if (catVal && catVal !== 'all') {
         params.taskCategory = catVal;
       }
-      const sum = await fetchTaskSummary(params);
-      setSummary(sum);
+      const summaryResult = await fetchTaskSummary(params);
+      setSummary(summaryResult.summary);
+      setSummaryError(summaryResult.error ?? null);
     },
     [activeFilters.assignedTo, activeFilters.taskCategory]
   );
@@ -1197,10 +1206,10 @@ export default function InternalTasksDashboard() {
       <ActionCenterSubNav
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
-        tasksCount={summary.newTasks || summary.pending || 0}
-        ticketsCount={ticketSummary?.pending || 0}
-        approvalsCount={approvalSummary?.pending || 0}
-        paymentDuesCount={paymentDuesSummary?.totalLowCreditAccounts || 0}
+        tasksCount={summary ? summary.newTasks || summary.pending : undefined}
+        ticketsCount={ticketSummary ? ticketSummary.pending : undefined}
+        approvalsCount={approvalSummary ? approvalSummary.pending : undefined}
+        paymentDuesCount={paymentDuesSummary ? paymentDuesSummary.totalLowCreditAccounts : undefined}
       />
 
       {activeTab === 'tickets' && <TicketsDashboard />}
@@ -1252,7 +1261,7 @@ export default function InternalTasksDashboard() {
               }`}>
                 Total Tasks
               </p>
-              <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary.total}</p>
+              <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary?.total ?? UI_STRINGS.dataLoad.emptyCell}</p>
               <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${
                 activeFilters.status === 'all' ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
               }`}>
@@ -1282,7 +1291,7 @@ export default function InternalTasksDashboard() {
                 New Tasks
               </p>
               <p className="text-base sm:text-lg font-bold text-blue-600 dark:text-blue-400 leading-none mt-1">
-                {summary.newTasks ?? summary.pending ?? 0}
+                {summary?.newTasks ?? summary?.pending ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Awaiting action
@@ -1311,7 +1320,7 @@ export default function InternalTasksDashboard() {
                 In Progress
               </p>
               <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
-                {summary.inProgress}
+                {summary?.inProgress ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Active work
@@ -1340,7 +1349,7 @@ export default function InternalTasksDashboard() {
                 Pending Approval
               </p>
               <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
-                {summary.pendingApproval ?? 0}
+                {summary?.pendingApproval ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Requires review
@@ -1369,7 +1378,7 @@ export default function InternalTasksDashboard() {
                 Completed
               </p>
               <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
-                {summary.completed}
+                {summary?.completed ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Resolved
@@ -1398,7 +1407,7 @@ export default function InternalTasksDashboard() {
                 Overdue
               </p>
               <p className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none mt-1">
-                {summary.overdueCount ?? 0}
+                {summary?.overdueCount ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Past deadline
@@ -1595,6 +1604,11 @@ export default function InternalTasksDashboard() {
           {/* ============================================================== */}
           {/* DATA TABLE VIEW / EMPTY STATE / LOADING                        */}
           {/* ============================================================== */}
+          {(assigneesError || taskTypesError || summaryError || badgeSummaryError) && (
+            <div role="alert" className="mb-3 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300">
+              {[assigneesError, taskTypesError, summaryError, badgeSummaryError].filter(Boolean).join(' ')}
+            </div>
+          )}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
             {errorMessage && (
               <div className="p-4 bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300 flex items-center justify-between">

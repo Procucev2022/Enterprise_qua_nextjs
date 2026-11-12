@@ -40,8 +40,10 @@ interface AccountDocumentsTabProps {
   onDocumentCountChange?: (count: number) => void;
 }
 
-export function formatFileSize(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 B';
+/** Returns a dash when the size is not recorded. A recorded 0 bytes is shown as 0 B. */
+export function formatFileSize(bytes: number | null | undefined): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return UI_STRINGS.dataLoad.emptyCell;
+  if (bytes === 0) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
@@ -118,27 +120,32 @@ export default function AccountDocumentsTab({
     return () => clearTimeout(timer);
   }, []);
 
-  // Fetch documents
+  // Fetch documents. A failed load is reported in `error`, so the list is cleared and the error state is shown.
   const loadDocuments = useCallback(async () => {
     setLoading(true);
     setErrorMessage(null);
     try {
-      const docs = await fetchAccountDocuments(accountType, accountId, {
+      const result = await fetchAccountDocuments(accountType, accountId, {
         category: selectedCategory,
         type: selectedType,
         search: searchQuery,
         sortOrder,
       });
-      setDocuments(docs);
-      if (onDocumentCountChange) {
-        onDocumentCountChange(docs.length);
+      setDocuments(result.documents);
+      if (result.error) {
+        setErrorMessage(result.error);
+      } else if (onDocumentCountChange) {
+        onDocumentCountChange(result.documents.length);
       }
     } catch {
-      setErrorMessage(strings.toastUploadError);
+      setDocuments([]);
+      setErrorMessage(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.accountDocuments })
+      );
     } finally {
       setLoading(false);
     }
-  }, [accountType, accountId, selectedCategory, selectedType, searchQuery, sortOrder, onDocumentCountChange, strings.toastUploadError]);
+  }, [accountType, accountId, selectedCategory, selectedType, searchQuery, sortOrder, onDocumentCountChange]);
 
   useEffect(() => {
     loadDocuments();
@@ -157,7 +164,7 @@ export default function AccountDocumentsTab({
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       if (file.size > 25 * 1024 * 1024) {
-        setUploadError('File exceeds maximum size limit of 25MB.');
+        setUploadError(strings.fileTooLarge);
         return;
       }
       setSelectedFile(file);
@@ -173,11 +180,11 @@ export default function AccountDocumentsTab({
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadName.trim()) {
-      setUploadError('Please provide a document name.');
+      setUploadError(strings.uploadNameRequired);
       return;
     }
     if (!selectedFile) {
-      setUploadError('Please select a file to upload.');
+      setUploadError(strings.uploadFileRequired);
       return;
     }
 
@@ -227,7 +234,7 @@ export default function AccountDocumentsTab({
 
   // Formatted date helper
   const formatDate = (iso: string) => {
-    if (!iso) return 'N/A';
+    if (!iso) return UI_STRINGS.dataLoad.emptyCell;
     try {
       const d = new Date(iso);
       return d.toLocaleDateString('en-IN', {
@@ -357,7 +364,10 @@ export default function AccountDocumentsTab({
           )}
 
           <div className="ml-auto text-xs text-slate-500 dark:text-slate-400">
-            Total Documents: <span className="font-semibold text-slate-800 dark:text-slate-200">{documents.length}</span>
+            {strings.totalDocuments}:{' '}
+            <span className="font-semibold text-slate-800 dark:text-slate-200">
+              {loading || errorMessage ? UI_STRINGS.dataLoad.emptyCell : documents.length}
+            </span>
           </div>
         </div>
       </div>
@@ -366,7 +376,7 @@ export default function AccountDocumentsTab({
       {loading ? (
         <div className="flex flex-col items-center justify-center py-16 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
           <Loader2 className="w-8 h-8 text-emerald-600 dark:text-emerald-400 animate-spin mb-3" />
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Loading associated documents...</p>
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.loadingDocuments}</p>
         </div>
       ) : errorMessage ? (
         <div className="p-6 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-xl text-center">
@@ -377,7 +387,7 @@ export default function AccountDocumentsTab({
             onClick={loadDocuments}
             className="px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition"
           >
-            Retry
+            {strings.retryBtn}
           </button>
         </div>
       ) : documents.length === 0 ? (
@@ -385,7 +395,7 @@ export default function AccountDocumentsTab({
           <FileText className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
           <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-1">{strings.noDocuments}</h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto mb-4">
-            No compliance or workflow records have been attached to this {accountType} account yet.
+            {formatString(strings.noAccountDocuments, { accountType })}
           </p>
           <button
             type="button"
@@ -447,13 +457,13 @@ export default function AccountDocumentsTab({
                       {/* Category */}
                       <td className="py-3 px-3">
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                          {doc.category || 'Other'}
+                          {doc.category || UI_STRINGS.dataLoad.emptyCell}
                         </span>
                       </td>
 
                       {/* Uploaded By */}
                       <td className="py-3 px-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                        {doc.uploadedBy || 'Category Manager'}
+                        {doc.uploadedBy || UI_STRINGS.dataLoad.emptyCell}
                       </td>
 
                       {/* Upload Date */}
@@ -497,15 +507,17 @@ export default function AccountDocumentsTab({
                             </a>
                           )}
 
-                          {/* Download Action */}
-                          <a
-                            href={doc.fileUrl || '#'}
-                            download={doc.fileName}
-                            className="p-1.5 text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition"
-                            title={strings.actionDownload}
-                          >
-                            <Download className="w-4 h-4" />
-                          </a>
+                          {/* Download Action. Shown only when the record has a file link. */}
+                          {doc.fileUrl && (
+                            <a
+                              href={doc.fileUrl}
+                              download={doc.fileName}
+                              className="p-1.5 text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition"
+                              title={strings.actionDownload}
+                            >
+                              <Download className="w-4 h-4" />
+                            </a>
+                          )}
 
                           {/* Delete Action */}
                           <button
@@ -598,7 +610,7 @@ export default function AccountDocumentsTab({
               {/* File Dropzone */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  File Attachment <span className="text-rose-500">*</span>
+                  {strings.fileAttachmentLabel} <span className="text-rose-500">*</span>
                 </label>
                 <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-4 text-center hover:border-emerald-500 transition bg-slate-50/50 dark:bg-slate-800/40">
                   <input
@@ -615,7 +627,9 @@ export default function AccountDocumentsTab({
                       {selectedFile ? selectedFile.name : strings.dropzoneText}
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      {selectedFile ? `${formatFileSize(selectedFile.size)} selected` : strings.dropzoneHint}
+                      {selectedFile
+                        ? formatString(strings.fileSelectedSize, { size: formatFileSize(selectedFile.size) })
+                        : strings.dropzoneHint}
                     </p>
                   </label>
                 </div>

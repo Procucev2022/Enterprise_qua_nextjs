@@ -17,7 +17,7 @@ import {
 import PasswordInput from '@/app/components/PasswordInput';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { PASSWORD_MIN_LENGTH, ROLE_LANDING_ROUTE } from '@/lib/constants';
+import { PASSWORD_MIN_LENGTH, PLACEHOLDER_MOBILE_NUMBER, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import {
   INDIAN_MOBILE_PATTERN,
   INDIAN_PINCODE_PATTERN,
@@ -36,6 +36,29 @@ function sanitizeRedirect(url: string | null | undefined): string {
   return url;
 }
 
+/** True for the placeholder number some auto-created buyer records carry. */
+function isPlaceholderMobile(digits: string): boolean {
+  return digits.endsWith(PLACEHOLDER_MOBILE_NUMBER);
+}
+
+/**
+ * The buyer's own registered mobile, taken from the session and then the buyer
+ * profile. Returns '' when neither holds a real 10-digit number, so no placeholder
+ * is ever sent for OTP dispatch.
+ */
+function resolveRegisteredMobile(sources: (string | null | undefined)[]): string {
+  for (const source of sources) {
+    const local = (source ?? '').replace(/\D/g, '').slice(-10);
+    if (INDIAN_MOBILE_PATTERN.test(local) && !isPlaceholderMobile(local)) return local;
+  }
+  return '';
+}
+
+/** Error text for a failed OTP send: the server's reason, then what the user can do. */
+function otpSendFailure(reason: string | undefined, fallback: string): string {
+  return `${reason || fallback} ${UI_STRINGS.auth.otpSendFailureGuidance}`;
+}
+
 function BuyerFirstLoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -50,7 +73,7 @@ function BuyerFirstLoginContent() {
     }
   }
   const redirectParam = sanitizeRedirect(hookRedirect || windowRedirect);
-  const { currentUserSession, setCurrentUserSession, setIsLoggedIn, showToast } = useApp();
+  const { currentUserSession, setCurrentUserSession, setIsLoggedIn, showToast, activeBuyerAccount } = useApp();
 
   const [emailOtp, setEmailOtp] = useState('');
   const [mobile, setMobile] = useState('');
@@ -164,18 +187,30 @@ function BuyerFirstLoginContent() {
 
   const handleSendEmailOtp = async () => {
     if (!currentUserSession?.email) return;
+    // The email code is issued against the account's own email and mobile pair, so
+    // only the registered number can be used here. With none on record, stop.
+    const registeredMobile = resolveRegisteredMobile([currentUserSession.mobile, activeBuyerAccount?.mobileNumber]);
+    if (!registeredMobile) {
+      setError(UI_STRINGS.auth.buyerOnboarding.placeholderPhoneWarning);
+      return;
+    }
     setSendingEmailOtp(true);
     setError('');
     try {
-      const res = await authClient.requestOtp(currentUserSession.email, '9999999999', 'buyer');
+      const res = await authClient.requestOtp(currentUserSession.email, registeredMobile, 'buyer');
       if (res.success) {
         setEmailOtpSent(true);
-        showToast(UI_STRINGS.auth.buyerOnboarding.title, UI_STRINGS.auth.buyerOnboarding.otpSentMessage, 'info');
+        const partial = [res.delivery?.email, res.delivery?.sms].includes('failed');
+        showToast(
+          UI_STRINGS.auth.buyerOnboarding.title,
+          res.message || UI_STRINGS.auth.buyerOnboarding.otpSentMessage,
+          partial ? 'warning' : 'info'
+        );
       } else {
-        setError(res.error || 'Failed to dispatch email verification OTP.');
+        setError(otpSendFailure(res.error, UI_STRINGS.auth.buyerOnboarding.emailOtpSendFailed));
       }
     } catch {
-      setError('Failed to dispatch email verification OTP.');
+      setError(otpSendFailure(undefined, UI_STRINGS.auth.buyerOnboarding.emailOtpSendFailed));
     } finally {
       setSendingEmailOtp(false);
     }
@@ -183,7 +218,7 @@ function BuyerFirstLoginContent() {
 
   const handleSendSmsOtp = async () => {
     const cleaned = mobile.replace(/\D/g, '');
-    if (!cleaned || cleaned.endsWith('9999999999') || cleaned === '9999999999') {
+    if (!cleaned || isPlaceholderMobile(cleaned)) {
       setError(UI_STRINGS.auth.buyerOnboarding.placeholderPhoneWarning);
       return;
     }
@@ -198,12 +233,17 @@ function BuyerFirstLoginContent() {
       const res = await authClient.requestOtp(currentUserSession?.email || '', cleaned, 'buyer', true);
       if (res.success) {
         setSmsOtpSent(true);
-        showToast(UI_STRINGS.auth.buyerOnboarding.title, UI_STRINGS.auth.buyerOnboarding.otpSentMessage, 'info');
+        const partial = [res.delivery?.email, res.delivery?.sms].includes('failed');
+        showToast(
+          UI_STRINGS.auth.buyerOnboarding.title,
+          res.message || UI_STRINGS.auth.buyerOnboarding.otpSentMessage,
+          partial ? 'warning' : 'info'
+        );
       } else {
-        setError(res.error || 'Failed to dispatch SMS verification OTP.');
+        setError(otpSendFailure(res.error, UI_STRINGS.auth.buyerOnboarding.smsOtpSendFailed));
       }
     } catch {
-      setError('Failed to dispatch SMS verification OTP.');
+      setError(otpSendFailure(undefined, UI_STRINGS.auth.buyerOnboarding.smsOtpSendFailed));
     } finally {
       setSendingSmsOtp(false);
     }
@@ -215,7 +255,7 @@ function BuyerFirstLoginContent() {
     setError('');
 
     const cleaned = mobile.replace(/\D/g, '');
-    if (!cleaned || cleaned.endsWith('9999999999') || cleaned === '9999999999') {
+    if (!cleaned || isPlaceholderMobile(cleaned)) {
       setError(UI_STRINGS.auth.buyerOnboarding.placeholderPhoneWarning);
       return;
     }

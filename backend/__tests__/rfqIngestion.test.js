@@ -367,8 +367,8 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(ingestion.normalizeQuantity(input)).toBe(expected);
     });
 
-    test.each([0, -5, 'abc', null, undefined, ''])('defaults the unusable quantity %p to 1', (input) => {
-      expect(ingestion.normalizeQuantity(input)).toBe(RFQ_INGESTION_CONFIG.DEFAULT_QUANTITY);
+    test.each([0, -5, 'abc', null, undefined, ''])('leaves the unusable quantity %p missing (null), never 1', (input) => {
+      expect(ingestion.normalizeQuantity(input)).toBeNull();
     });
   });
 
@@ -446,18 +446,21 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
   });
 
   describe('normalizeLineItems', () => {
-    test('applies the documented defaults for quantity, unit and target date', () => {
-      const { entities } = ingestion.normalizeLineItems([
-        { description: 'Centrifugal Pump', quantity: 0 },
+    test('leaves an unusable quantity and a blank unit missing (null) instead of defaulting them', () => {
+      const { entities, lineValues } = ingestion.normalizeLineItems([
+        { description: 'Centrifugal Pump', quantity: 0, unitPrice: 500 },
       ]);
       expect(entities).toHaveLength(1);
       expect(entities[0]).toMatchObject({
         itemName: 'Centrifugal Pump',
-        quantity: RFQ_INGESTION_CONFIG.DEFAULT_QUANTITY,
-        unit: RFQ_INGESTION_CONFIG.DEFAULT_UNIT,
+        quantity: null,
+        unit: null,
         minorCategory: 'Pumps & Accessories',
       });
-      expect(entities[0].targetDate).toBe(ingestion.defaultTargetDate());
+      // A rate with no quantity cannot be valued, so the line stays unvalued.
+      expect(lineValues).toEqual([null]);
+      // No delivery date was stated, so none is invented: the line keeps an empty date.
+      expect(entities[0].targetDate).toBe('');
     });
 
     test('drops rows with no description rather than surfacing blank lines', () => {

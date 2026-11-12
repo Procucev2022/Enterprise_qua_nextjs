@@ -475,7 +475,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     const contactPerson = newVendorContactPerson.trim();
     const email = newVendorEmail.trim().toLowerCase();
     const phone = newVendorPhone.trim();
-    const majorCategory = newVendorMajorCategory.trim() || rfq?.category || 'General';
+    const majorCategory = newVendorMajorCategory.trim() || rfq?.category || '';
 
     if (!name || !contactPerson || !email || !phone || !majorCategory) {
       setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Major Category).');
@@ -506,7 +506,6 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
           city: newVendorCity.trim() || undefined,
           state: newVendorState.trim() || undefined,
           pincode: newVendorPincode.trim() || undefined,
-          source: 'procucev_network',
         }),
       });
 
@@ -527,7 +526,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       }
 
       const created = data.vendor || data.data;
-      const candidateId = created?.id || String(created?._id) || `cand-created-${Date.now()}`;
+      const candidateId = created?.id || (created?._id ? String(created._id) : `cand-created-${Date.now()}`);
       const newCandidate: RFQVendorCandidate = {
         id: candidateId,
         name: created?.name || name,
@@ -539,9 +538,10 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         city: newVendorCity.trim() || undefined,
         state: newVendorState.trim() || undefined,
         pincode: newVendorPincode.trim() || undefined,
-        location: [newVendorCity.trim(), newVendorState.trim()].filter(Boolean).join(', ') || 'India',
-        rating: 4.8,
-        source: 'procucev_network',
+        // Taken from the saved record only. A value the record does not hold stays empty and renders as a dash.
+        location: created?.location ?? '',
+        rating: created?.rating,
+        source: created?.source,
         alreadyInvited: false,
       };
 
@@ -661,7 +661,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 setNewVendorContactPerson('');
                 setNewVendorEmail('');
                 setNewVendorPhone('');
-                setNewVendorMajorCategory(rfq?.category || effectiveCategoryOptions[0] || 'Mechanical & Fluid Equipment');
+                setNewVendorMajorCategory(rfq?.category || '');
                 setNewVendorMinorCategory(rfq?.extractedEntities?.[0]?.minorCategory || '');
                 setNewVendorCity('');
                 setNewVendorState('');

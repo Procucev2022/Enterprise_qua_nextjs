@@ -3,105 +3,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
-import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { FORM_SCHEMAS, validateFormData } from '@/lib/validationSchemas';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
+import {
+  getBuyerGstPercent,
+  getBuyerPlanPrice,
+  getTwelveMonthSavingPercent,
+  type BillingDuration,
+  type BuyerPlanId,
+} from '@/app/buyer/buyerPlanPricing';
 import { Sparkles, ShieldCheck, Check, Zap, Calendar, CheckCircle2, Building2, X, Shield, Crown, Gem } from 'lucide-react';
 
-export type BillingDuration = '6_months' | '12_months';
+export type { BillingDuration } from '@/app/buyer/buyerPlanPricing';
 
 export const PLAN_LABEL: Record<string, string> = {
   version_1: 'Silver Plan',
   version_2: 'Gold Plan',
   version_3: 'Diamond Plan',
-};
-
-// Must match the actual GST-inclusive amount Zoho charges
-// (computeZohoBuyerPlanAmount in backend/src/config/constants.js), so the
-// checkout modal and cards never promise a different amount than what's billed.
-// 12-month: ₹4,999/mo (₹59,988 for 12m) + 18% GST = ₹70,785.84.
-// 6-month: ₹5,499/mo (₹32,994 for 6m) + 18% GST = ₹38,932.92.
-export const BUYER_PRICING: Record<
-  BillingDuration,
-  Record<
-    'version_1' | 'version_2' | 'version_3',
-    {
-      originalPrice: string;
-      price: string;
-      amount: number;
-      label: string;
-      baseDurationLabel: string;
-      gstAmount: string;
-      totalPriceWithGst: string;
-      totalAmountWithGst: number;
-    }
-  >
-> = {
-  '12_months': {
-    version_1: {
-      originalPrice: '₹50,000',
-      price: '₹4,999',
-      amount: 4999,
-      label: 'per month',
-      baseDurationLabel: '₹59,988 (₹4,999 × 12 months)',
-      gstAmount: '₹10,797.84',
-      totalPriceWithGst: '₹70,785.84',
-      totalAmountWithGst: 70785.84,
-    },
-    version_2: {
-      originalPrice: '₹75,000',
-      price: '₹7,499',
-      amount: 7499,
-      label: 'per month',
-      baseDurationLabel: '₹89,988 (₹7,499 × 12 months)',
-      gstAmount: '₹16,197.84',
-      totalPriceWithGst: '₹1,06,185.84',
-      totalAmountWithGst: 106185.84,
-    },
-    version_3: {
-      originalPrice: '₹1,00,000',
-      price: '₹9,999',
-      amount: 9999,
-      label: 'per month',
-      baseDurationLabel: '₹1,19,988 (₹9,999 × 12 months)',
-      gstAmount: '₹21,597.84',
-      totalPriceWithGst: '₹1,41,585.84',
-      totalAmountWithGst: 141585.84,
-    },
-  },
-  '6_months': {
-    version_1: {
-      originalPrice: '₹50,000',
-      price: '₹5,499',
-      amount: 5499,
-      label: 'per month',
-      baseDurationLabel: '₹32,994 (₹5,499 × 6 months)',
-      gstAmount: '₹5,938.92',
-      totalPriceWithGst: '₹38,932.92',
-      totalAmountWithGst: 38932.92,
-    },
-    version_2: {
-      originalPrice: '₹75,000',
-      price: '₹7,999',
-      amount: 7999,
-      label: 'per month',
-      baseDurationLabel: '₹47,994 (₹7,999 × 6 months)',
-      gstAmount: '₹8,638.92',
-      totalPriceWithGst: '₹56,632.92',
-      totalAmountWithGst: 56632.92,
-    },
-    version_3: {
-      originalPrice: '₹1,00,000',
-      price: '₹10,499',
-      amount: 10499,
-      label: 'per month',
-      baseDurationLabel: '₹62,994 (₹10,499 × 6 months)',
-      gstAmount: '₹11,338.92',
-      totalPriceWithGst: '₹74,332.92',
-      totalAmountWithGst: 74332.92,
-    },
-  },
 };
 
 export default function SubscriptionCenter() {
@@ -117,35 +37,23 @@ export default function SubscriptionCenter() {
   } = useApp();
 
   const [billingDuration, setBillingDuration] = useState<BillingDuration>('12_months');
-  const [buyerPricing, setBuyerPricing] = useState(BUYER_PRICING);
-  const [pendingPayment, setPendingPayment] = useState<{ planId: 'version_1' | 'version_2' | 'version_3' } | null>(null);
+  // Prices come only from GET /api/subscriptions/pricing. Until that answers,
+  // and when it cannot answer, no plan shows a price and no checkout can open.
+  const [pricingConfig, setPricingConfig] = useState<SubscriptionPricingResponse | null>(null);
+  const [pricingStatus, setPricingStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [pendingPayment, setPendingPayment] = useState<{ planId: BuyerPlanId } | null>(null);
 
   useEffect(() => {
     let isMounted = true;
     void fetchSubscriptionPricing().then((config) => {
-      if (!isMounted || !config?.buyer) return;
-      const formatINR = (val: number) => `₹${Math.round(val).toLocaleString('en-IN')}`;
-      const formatINRDecimal = (val: number) => `₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-      const newPricing: typeof BUYER_PRICING = JSON.parse(JSON.stringify(BUYER_PRICING));
-      (['6_months', '12_months'] as const).forEach((dur) => {
-        (['version_1', 'version_2', 'version_3'] as const).forEach((planKey) => {
-          const planData = config.buyer[planKey]?.[dur];
-          if (planData) {
-            const months = dur === '6_months' ? 6 : 12;
-            newPricing[dur][planKey] = {
-              ...newPricing[dur][planKey],
-              price: formatINR(planData.price),
-              amount: planData.price,
-              baseDurationLabel: `${formatINR(planData.baseDurationPrice)} (${formatINR(planData.price)} × ${months} months)`,
-              gstAmount: formatINRDecimal(planData.gstAmount),
-              totalPriceWithGst: formatINRDecimal(planData.totalWithGst),
-              totalAmountWithGst: planData.totalWithGst,
-            };
-          }
-        });
-      });
-      setBuyerPricing(newPricing);
+      if (!isMounted) return;
+      if (config?.buyer) {
+        setPricingConfig(config);
+        setPricingStatus('ready');
+      } else {
+        setPricingConfig(null);
+        setPricingStatus('unavailable');
+      }
     });
     return () => {
       isMounted = false;
@@ -173,9 +81,7 @@ export default function SubscriptionCenter() {
       currentUserSession?.email ||
       '';
     const mobile =
-      (activeBuyerAccount as any)?.mobileNumber ||
-      (activeBuyerAccount as any)?.mobile ||
-      (activeBuyerAccount as any)?.phone ||
+      activeBuyerAccount?.mobileNumber ||
       currentUserSession?.mobile ||
       '';
     return { company, email, mobile };
@@ -282,12 +188,15 @@ export default function SubscriptionCenter() {
     })();
   }, [activeBuyerAccount?.id, checkBuyerPaymentLinkStatus, refreshActiveBuyerAccount, showToast]);
 
+  const gstPercent = getBuyerGstPercent(pricingConfig);
+  const unpricedLabel = pricingStatus === 'loading' ? 'Loading price…' : 'Price unavailable';
+  const pendingPriceInfo = pendingPayment ? getBuyerPlanPrice(pricingConfig, pendingPayment.planId, billingDuration) : null;
+
   const plans = [
     {
       id: 'version_1' as const,
       name: 'Silver Plan',
       subtext: 'Features of Silver (Mode 1)',
-      originalPrice: '₹50,000',
       description: 'Streamline procurement across your private pre-approved vendor roster (Mode 1 only) with working-hour multi-channel follow-ups.',
       badge: 'Silver Tier',
       cardStyle: {
@@ -297,7 +206,6 @@ export default function SubscriptionCenter() {
         badge: 'bg-gradient-to-r from-slate-600 via-slate-500 to-slate-700 text-white',
         priceBox: 'bg-gradient-to-br from-slate-100/90 via-slate-50 to-slate-200/60 dark:from-slate-800/60 dark:via-slate-900/70 dark:to-slate-800/40 border-slate-300/80 dark:border-slate-700',
         priceText: 'text-slate-900 dark:text-slate-100',
-        strikethroughText: 'text-slate-400 dark:text-slate-500',
         icon: 'Shield' as const,
         iconBg: 'bg-gradient-to-br from-slate-200 via-slate-100 to-slate-300 dark:from-slate-700 dark:to-slate-800 border-slate-300/80 dark:border-slate-600 text-slate-700 dark:text-slate-200',
         iconColor: 'text-slate-700 dark:text-slate-300',
@@ -318,7 +226,6 @@ export default function SubscriptionCenter() {
       id: 'version_2' as const,
       name: 'Gold Plan',
       subtext: 'Features of Silver & Mode 2 Included',
-      originalPrice: '₹75,000',
       description: 'Cumulative plan giving you full access to BOTH Silver and Gold (Mode 1 & Mode 2) with hybrid platform network discovery.',
       badge: '⭐ Most Popular (Gold Tier)',
       isRecommended: true,
@@ -329,7 +236,6 @@ export default function SubscriptionCenter() {
         badge: 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600 text-slate-950 font-black tracking-wide',
         priceBox: 'bg-gradient-to-br from-amber-100/90 via-yellow-50 to-amber-100/60 dark:from-amber-950/60 dark:via-yellow-950/40 dark:to-amber-950/30 border-amber-300 dark:border-amber-700/80',
         priceText: 'text-amber-950 dark:text-yellow-100',
-        strikethroughText: 'text-amber-700/70 dark:text-amber-400/60',
         icon: 'Crown' as const,
         iconBg: 'bg-gradient-to-br from-amber-200 via-yellow-300 to-amber-400 dark:from-amber-600 dark:to-yellow-700 border-amber-300 dark:border-amber-500 text-amber-950 dark:text-yellow-100',
         iconColor: 'text-amber-600 dark:text-yellow-400',
@@ -340,7 +246,7 @@ export default function SubscriptionCenter() {
         '✓ CUMULATIVE: Full access to BOTH Silver AND Gold features',
         'Silver Tier: Private approved roster sourcing & automated working-hour chasers',
         'Gold Tier: AI Hybrid Sourcing with Procucev verified network matching',
-        'Intelligent RFQ Minor Category matching (280+ taxonomy) & proximity filter',
+        'Intelligent RFQ minor category matching & proximity filter',
         'Automatic classification of Buyer Upload vs. Network Pool',
         'Post-bid vendor evaluation surveys to verify quality metrics',
         '🛡️ Zero Repetition: Cross-roster deduplication prevents duplicate emails',
@@ -350,7 +256,6 @@ export default function SubscriptionCenter() {
       id: 'version_3' as const,
       name: 'Diamond Plan',
       subtext: 'Features of Silver, Gold & Diamond Included',
-      originalPrice: '₹1,00,000',
       description: 'Ultimate all-inclusive tier giving you full access to Silver, Gold, AND Diamond (Mode 1, Mode 2 & Mode 3) with autonomous AI governance.',
       badge: '🏆 Diamond Tier Unlocked',
       cardStyle: {
@@ -360,7 +265,6 @@ export default function SubscriptionCenter() {
         badge: 'bg-gradient-to-r from-cyan-500 via-sky-500 to-blue-600 text-white font-black tracking-wide',
         priceBox: 'bg-gradient-to-br from-cyan-100/80 via-sky-50 to-blue-100/50 dark:from-cyan-950/60 dark:via-sky-950/40 dark:to-blue-950/30 border-cyan-300 dark:border-cyan-700/80',
         priceText: 'text-cyan-950 dark:text-cyan-100',
-        strikethroughText: 'text-cyan-700/70 dark:text-cyan-400/60',
         icon: 'Gem' as const,
         iconBg: 'bg-gradient-to-br from-cyan-200 via-sky-200 to-blue-300 dark:from-cyan-700 dark:to-blue-800 border-cyan-300 dark:border-cyan-500 text-cyan-950 dark:text-white',
         iconColor: 'text-cyan-600 dark:text-cyan-400',
@@ -371,7 +275,7 @@ export default function SubscriptionCenter() {
         '✓ ALL-INCLUSIVE: Full access to Silver, Gold, AND Diamond features',
         'Silver Tier: Private buyer roster sourcing & automated working-hour chasers',
         'Gold Tier: AI Hybrid Verified Supplier matching & post-bid evaluations',
-        'Diamond Tier: Autonomous Category Desk & AI Discovery (Select Max 5 out of 10)',
+        'Diamond Tier: Autonomous Category Desk & AI Discovery',
         'Pre-bid 360° Vendor Audits & "Evaluate & Send RFQ" for unrated suppliers',
         'Interactive Comparative Quote Evaluation Matrices & PO generation',
         '🛡️ Zero Repetition: Unified single-email dispatch per unique supplier',
@@ -382,32 +286,23 @@ export default function SubscriptionCenter() {
   return (
     <div className="space-y-4 animate-fade-in pb-6">
 
-      {/* Free Starter Account Quota Alert */}
+      {/* Free Starter Account balance (from the buyer account) */}
       {activeSubscription === 'free_trial' ? (
         <div className="p-3.5 sm:p-4 rounded-xl bg-gradient-to-r from-amber-50/80 via-orange-50/60 to-indigo-50/80 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-indigo-950/30 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200 space-y-2 shadow-sm">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2 font-black text-xs sm:text-sm">
               <Sparkles className="text-amber-600 dark:text-amber-400 shrink-0" size={16} />
-              <span>🎁 Free Starter Account — 5 Free RFQs Included</span>
+              <span>🎁 Free Starter Account</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-mono font-bold bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-100 border border-amber-300">
-                Used: {Math.max(0, 5 - remainingFreeRFQs)} / 5
-              </span>
               <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-mono font-bold bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-100 border border-emerald-300">
-                Remaining: {remainingFreeRFQs} / 5
+                Remaining: {remainingFreeRFQs} free RFQs
               </span>
             </div>
           </div>
           <p className="text-xs leading-relaxed text-slate-700 dark:text-gray-300">
-            Every new buyer account receives <strong>5 Free RFQs</strong> for paid modes (<strong>Silver, Gold, or Diamond</strong>). RFQs created through <strong>Version 0 (V0: Free Starter)</strong> consume <strong>0 credits</strong> and are always free & unlimited to verified Procucev network suppliers. Once your 5 free credits are exhausted, V0 remains available, while Silver/Gold/Diamond require an active plan subscription.
+            Free RFQs for paid modes (<strong>Silver, Gold, or Diamond</strong>) are counted from the remaining balance shown here. RFQs created through <strong>Version 0 (V0: Free Starter)</strong> consume <strong>0 credits</strong> and are always free & unlimited to verified Procucev network suppliers. Once your free RFQs are used up, V0 remains available, while Silver/Gold/Diamond require an active plan subscription.
           </p>
-          <div className="w-full bg-amber-200/50 dark:bg-gray-800 rounded-full h-2 overflow-hidden mt-0.5">
-            <div
-              className="bg-gradient-to-r from-amber-500 to-emerald-500 h-full transition-all duration-300"
-              style={{ width: `${(remainingFreeRFQs / 5) * 100}%` }}
-            />
-          </div>
         </div>
       ) : (
         <div className="p-3 sm:p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/60 text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-2.5 shadow-sm">
@@ -420,6 +315,12 @@ export default function SubscriptionCenter() {
               Thank you for subscribing! Your platform Sourcing Mode is now active. All dispatches, follow-up chasers, and evaluation matrices associated with this plan are unlocked.
             </p>
           </div>
+        </div>
+      )}
+
+      {pricingStatus === 'unavailable' && (
+        <div role="alert" className="p-3 sm:p-3.5 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 text-xs text-rose-900 dark:text-rose-100">
+          Plan prices could not be loaded from the server, so no price is shown and checkout is unavailable. Reload this page to try again.
         </div>
       )}
 
@@ -478,7 +379,8 @@ export default function SubscriptionCenter() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {plans.map((p) => {
           const isActive = activeSubscription === p.id;
-          const priceInfo = buyerPricing[billingDuration][p.id];
+          const priceInfo = getBuyerPlanPrice(pricingConfig, p.id, billingDuration);
+          const savingPercent = getTwelveMonthSavingPercent(pricingConfig, p.id);
           const isRec = p.isRecommended;
 
           return (
@@ -524,24 +426,34 @@ export default function SubscriptionCenter() {
                   </div>
                 </div>
 
-                {/* Price Display */}
-                <div className={`p-3.5 rounded-xl border flex items-baseline justify-between gap-2 shadow-xs ${p.cardStyle.priceBox}`}>
-                  <div className="flex items-baseline gap-1.5 flex-wrap">
-                    {(priceInfo.originalPrice || p.originalPrice) && (
-                      <span className={`text-sm font-semibold line-through ${p.cardStyle.strikethroughText}`}>
-                        {priceInfo.originalPrice || p.originalPrice}
+                {/* Price Display (server-priced only) */}
+                <div className={`p-3.5 rounded-xl border space-y-1 shadow-xs ${p.cardStyle.priceBox}`}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-baseline gap-1.5 flex-wrap">
+                      {priceInfo ? (
+                        <>
+                          <span className={`text-2xl sm:text-3xl font-black ${p.cardStyle.priceText}`}>
+                            {priceInfo.price}
+                          </span>
+                          <span className="text-xs font-bold text-slate-500 dark:text-gray-400">
+                            {priceInfo.label}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-xs font-bold text-rose-700 dark:text-rose-300">{unpricedLabel}</span>
+                      )}
+                    </div>
+                    {gstPercent !== null && (
+                      <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 shrink-0">
+                        + {gstPercent}% GST
                       </span>
                     )}
-                    <span className={`text-2xl sm:text-3xl font-black ${p.cardStyle.priceText}`}>
-                      {priceInfo.price}
-                    </span>
-                    <span className="text-xs font-bold text-slate-500 dark:text-gray-400">
-                      {priceInfo.label}
-                    </span>
                   </div>
-                  <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 shrink-0">
-                    + 18% GST
-                  </span>
+                  {billingDuration === '12_months' && savingPercent !== null && (
+                    <span className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
+                      Save {savingPercent}% per month vs 6 months
+                    </span>
+                  )}
                 </div>
 
                 <p className="text-xs text-slate-600 dark:text-gray-400 leading-relaxed min-h-[48px]">
@@ -572,7 +484,7 @@ export default function SubscriptionCenter() {
                   type="button"
                   data-testid={`subscribe-btn-${p.id}`}
                   onClick={() => setPendingPayment({ planId: p.id })}
-                  disabled={isActive}
+                  disabled={isActive || !priceInfo}
                   className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 rounded-xl transition-all ${
                     isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'
@@ -580,7 +492,7 @@ export default function SubscriptionCenter() {
                   }`}
                 >
                   {isActive ? <ShieldCheck size={14} /> : <Zap size={14} />}
-                  <span>{isActive ? 'Active Subscription' : 'Subscribe Now'}</span>
+                  <span>{isActive ? 'Active Subscription' : priceInfo ? 'Subscribe Now' : unpricedLabel}</span>
                 </button>
               </div>
             </div>
@@ -706,7 +618,7 @@ export default function SubscriptionCenter() {
                     onChange={(e) =>
                       setEnterpriseForm((prev) => ({ ...prev, companyName: e.target.value }))
                     }
-                    placeholder="e.g. Acme Corporation Pvt Ltd"
+                    placeholder="Legal company name"
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
@@ -726,7 +638,7 @@ export default function SubscriptionCenter() {
                     onChange={(e) =>
                       setEnterpriseForm((prev) => ({ ...prev, email: e.target.value }))
                     }
-                    placeholder="e.g. procurement@company.com"
+                    placeholder="procurement@company.com"
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
@@ -746,7 +658,7 @@ export default function SubscriptionCenter() {
                     onChange={(e) =>
                       setEnterpriseForm((prev) => ({ ...prev, mobile: e.target.value }))
                     }
-                    placeholder="e.g. +91 98765 43210"
+                    placeholder="+91 XXXXX XXXXX"
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
@@ -778,13 +690,13 @@ export default function SubscriptionCenter() {
         onClose={() => setPendingPayment(null)}
         planId={pendingPayment?.planId || 'version_1'}
         planName={pendingPayment ? PLAN_LABEL[pendingPayment.planId] : ''}
-        price={pendingPayment ? buyerPricing[billingDuration][pendingPayment.planId].totalPriceWithGst : ''}
+        price={pendingPriceInfo?.totalPriceWithGst ?? ''}
         billingDurationLabel={billingDuration === '12_months' ? '12 Months (Recommended)' : '6 Months'}
         breakdown={
-          pendingPayment
+          pendingPriceInfo
             ? {
-                basePrice: buyerPricing[billingDuration][pendingPayment.planId].baseDurationLabel,
-                gstAmount: buyerPricing[billingDuration][pendingPayment.planId].gstAmount,
+                basePrice: pendingPriceInfo.baseDurationLabel,
+                gstAmount: pendingPriceInfo.gstAmount,
               }
             : undefined
         }

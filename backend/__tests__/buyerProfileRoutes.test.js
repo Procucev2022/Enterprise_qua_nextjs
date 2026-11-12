@@ -316,7 +316,7 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
       expect(
         buyerProfileController.getClientIp({ headers: { 'x-forwarded-for': '5.6.7.8' } })
       ).toBe('5.6.7.8');
-      expect(buyerProfileController.getClientIp({ headers: {} })).toBe('127.0.0.1');
+      expect(buyerProfileController.getClientIp({ headers: {} })).toBeNull();
     });
 
     test('respondWithError delegates a non-profile error to next()', () => {

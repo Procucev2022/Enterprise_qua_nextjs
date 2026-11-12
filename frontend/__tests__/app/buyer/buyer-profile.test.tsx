@@ -1117,6 +1117,17 @@ describe('app/buyer/buyer-profile.tsx', () => {
       'Taxonomy server unreachable',
       'warning'
     );
+    expect(screen.getByText(UI_STRINGS.buyerProfile.taxonomyUnavailable)).toBeInTheDocument();
+  });
+
+  it('shows the empty-master message and no bundled categories when the database returns no taxonomy rows', async () => {
+    mockLoad(PROFILE, []);
+    await renderLoaded();
+
+    expect(screen.getByText(UI_STRINGS.buyerProfile.taxonomyEmpty)).toBeInTheDocument();
+    TAXONOMY.forEach((cat) => {
+      expect(screen.queryByText(cat.majorCategory)).not.toBeInTheDocument();
+    });
   });
 
   it('covers activeBuyerAccount backfilling branches with address1, zip_code, and derived PAN', async () => {

@@ -287,18 +287,18 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       fireEvent.click(confirmDeleteBtn);
     }
 
-    // View 360 Evaluation
+    // View 360 Evaluation. The status filter is reset first so the evaluated vendor is listed.
+    if (statusSelect) {
+      fireEvent.change(statusSelect, { target: { value: 'ALL' } });
+    }
     const view360Btns = screen.getAllByRole('button', { name: /View 360° Evaluation/i });
     if (view360Btns.length > 0) {
       fireEvent.click(view360Btns[0]);
       expect(mockOnViewEvaluation).toHaveBeenCalled();
     }
 
-    // Trigger Evaluation
-    const triggerBtns = screen.getAllByRole('button', { name: /Trigger Evaluation/i });
-    if (triggerBtns.length > 0) {
-      fireEvent.click(triggerBtns[0]);
-    }
+    // The roster has no trigger action: no evaluation is started without a real endpoint behind it.
+    expect(screen.queryAllByRole('button', { name: /Trigger Evaluation/i })).toHaveLength(0);
 
     // Upload Vendor button
     const uploadBtn = screen.getByRole('button', { name: /Upload Vendor/i });
@@ -394,7 +394,8 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     fireEvent.click(extractBtn);
     await waitFor(() => expect(extractLineItemsFromDocument).toHaveBeenCalled());
 
-    // Submit form
+    // Submit form. Nothing is preselected, and Mode 0 is the entitled mode on this tier that needs no private roster.
+    fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_0'));
     const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
     fireEvent.change(screen.getByPlaceholderText(/Plant, warehouse or site address/i), {
       target: { value: 'Hazira Plant' },

@@ -7,10 +7,13 @@
 
 const approvalQueries = require('../db/approvalQueries');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
-const { APPROVAL_MESSAGES } = require('../config/constants');
+const { APPROVAL_MESSAGES, AUTH_MESSAGES } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
 function sendApprovalError(res, error, fallbackMessage) {
+  if (error?.code === 'ACTOR_REQUIRED') {
+    return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN, retryable: false });
+  }
   if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
     return res.status(503).json({
       success: false,
@@ -34,21 +37,20 @@ function sendApprovalError(res, error, fallbackMessage) {
   return res.status(500).json({ success: false, error: fallbackMessage });
 }
 
+/**
+ * Builds the acting approver from the authenticated session only. Request headers
+ * are never used as identity. Returns null when the session does not identify a user.
+ */
 function extractActor(req) {
-  if (req.user) {
-    return {
-      uuid: req.user.uuid || req.user.id || null,
-      name: req.user.fullName || req.user.name || req.user.email || 'Management Authority',
-      email: req.user.email || null,
-      role: req.user.role || 'admin',
-    };
-  }
-  return {
-    uuid: null,
-    name: req.headers['x-user-name'] || 'Management Authority',
-    email: req.headers['x-user-email'] || 'admin@procucev.com',
-    role: 'admin',
+  const user = req.user;
+  if (!user) return null;
+  const actor = {
+    uuid: user.uuid || user.id || null,
+    name: user.fullName || user.name || user.email || null,
+    email: user.email || null,
+    role: user.role || null,
   };
+  return actor.uuid || actor.name ? actor : null;
 }
 
 /**
@@ -110,6 +112,9 @@ async function processAction(req, res) {
     }
 
     const actor = extractActor(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
     const updated = await approvalQueries.processApprovalAction(id, validation.sanitizedData, actor);
     if (!updated) {
       return res.status(404).json({ success: false, error: `Approval request "${id}" not found.` });

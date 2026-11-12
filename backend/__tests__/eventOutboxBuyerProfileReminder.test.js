@@ -110,7 +110,7 @@ describe('durable buyer profile completion reminders', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  test('uses the generic recipient name when persisted and queued names are empty', async () => {
+  test('sends no invented recipient name when persisted and queued names are empty', async () => {
     claim({ ...payload, recipientName: null });
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(persistedRfq);
     jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockResolvedValue({
@@ -122,9 +122,8 @@ describe('durable buyer profile completion reminders', () => {
 
     await eventOutboxService.dispatchDueEventOutboxJobs(1);
 
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({
-      recipientName: 'Buyer',
-    }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].recipientName).toBeFalsy();
   });
 
   test('dead-letters a reminder with an invalid current buyer email', async () => {

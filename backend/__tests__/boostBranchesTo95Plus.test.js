@@ -1,4 +1,3 @@
-const aiChaserService = require('../src/services/aiChaserService');
 const emailService = require('../src/services/emailService');
 const auditService = require('../src/services/auditService');
 const evaluationService = require('../src/services/evaluationService');
@@ -13,6 +12,7 @@ const rfqController = require('../src/controllers/rfqController');
 const vendorController = require('../src/controllers/vendorController');
 const catalogueController = require('../src/controllers/catalogueController');
 const domainQueries = require('../src/db/domainQueries');
+const { SYSTEM_ACTOR_EMAIL } = require('../src/config/constants');
 
 function mockRes() {
   const res = {};
@@ -57,20 +57,14 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 
-  test('aiChaserService fallback default parameters', () => {
-    const itemDefault = aiChaserService.generateAIFeedItem({ title: 'T', message: 'M' });
-    expect(itemDefault.type).toBe('call');
-    expect(itemDefault.recipient).toBe('Vendor Partner');
-    expect(itemDefault.rfqNumber).toBeNull();
+  test('emailService shows "Not specified" for missing data, refuses an RFQ without a number, and withholds a missing vendor address', () => {
+    expect(() => emailService.generateStandardRFQEmail({ lineItems: [{ itemName: 'Orphan' }] }, null)).toThrow(
+      'An RFQ number is required to generate the RFQ invitation email.'
+    );
 
-    const emptyOutreach = aiChaserService.simulateChaserOutreach({}, {});
-    expect(emptyOutreach).toHaveLength(4);
-    expect(emptyOutreach[0].recipient).toContain('Sales Head');
-  });
-
-  test('emailService fallback default parameters', () => {
     const rfqEmailEmpty = emailService.generateStandardRFQEmail(
       {
+        rfqNumber: 'RFQ-BOOST-1',
         lineItems: [
           { description: 'Fallback Item', quantity: 5, unit: 'kg', technicalSpecs: 'Specs' },
           { itemName: 'Named Item' },
@@ -79,19 +73,24 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       },
       null
     );
-    expect(rfqEmailEmpty.subject).toContain('RFQ-2026');
-    expect(rfqEmailEmpty.to).toBe('navinchaudhary.dev@gmail.com');
+    expect(rfqEmailEmpty.subject).toContain('RFQ-BOOST-1');
+    expect(rfqEmailEmpty.to).toBeNull();
+    expect(rfqEmailEmpty.error).toBeDefined();
+    expect(rfqEmailEmpty.htmlBody).toContain('1. Fallback Item');
+    expect(rfqEmailEmpty.htmlBody).toContain('3. Not specified');
 
     const vendorEmailEmpty = emailService.generateVendorOnboardingEmail({});
-    expect(vendorEmailEmpty.recipientName).toBe('Vendor Partner');
+    expect(vendorEmailEmpty.recipientName).toBe('Not specified');
+    expect(vendorEmailEmpty.to).toBeNull();
     expect(vendorEmailEmpty).not.toHaveProperty('tempPassword');
   });
 
   test('auditService fallback default parameters', () => {
     const defaultEntry = auditService.createAuditEntry({ action: 'DEFAULT_TEST' });
-    expect(defaultEntry.userEmail).toBe('system@procucev.ai');
+    expect(defaultEntry.userEmail).toBe(SYSTEM_ACTOR_EMAIL);
     expect(defaultEntry.rfqNumber).toBeNull();
-    expect(defaultEntry.ipAddress).toContain('10.0.4.12');
+    // No request IP means the entry says so, rather than naming a fixed network.
+    expect(defaultEntry.ipAddress).toBe('unknown');
 
     const emptyHash = auditService.generateShaHash('');
     expect(emptyHash.length).toBe(64);
@@ -179,8 +178,8 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     // Test createRFQ with assigned vendors
     const rfqWithVendors = storeService.createRFQ({
       title: 'Outreach RFQ',
-      assignedVendors: [{ name: 'Apex', phone: '+919999999999' }],
-      quotes: [{ vendorName: 'Apex', totalPrice: 1000 }],
+      assignedVendors: [{ name: 'Vendor Alpha', phone: '+919999999999' }],
+      quotes: [{ vendorName: 'Vendor Alpha', totalPrice: 1000 }],
     });
     expect(rfqWithVendors.quotesCount).toBe(1);
 
@@ -663,7 +662,10 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       rfqNumber: 'RFQ-META-FAIL',
       rfqTitle: 'Meta Fail Test',
     });
-    expect(metaFail.success).toBe(true); // Falls back to deep-link
+    expect(metaFail.success).toBe(false); // Meta rejected: no provider accepted, so the deep-link is returned as link_only
+    expect(metaFail.status).toBe('link_only');
+    expect(metaFail.error).toBe('HTTP 500');
+    expect(metaFail.link).toContain('https://wa.me/');
 
     // Fetch throws in Meta API
     global.fetch = jest.fn().mockRejectedValue(new Error('Meta Network Down'));
@@ -674,7 +676,9 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       rfqNumber: 'RFQ-META-THROW',
       rfqTitle: 'Meta Throw Test',
     });
-    expect(metaThrow.success).toBe(true); // Falls back to deep-link
+    expect(metaThrow.success).toBe(false); // Meta threw: no provider accepted, so the deep-link is returned as link_only
+    expect(metaThrow.status).toBe('link_only');
+    expect(metaThrow.error).toBe('Meta Network Down');
 
     global.fetch = oldFetch;
     process.env.NODE_ENV = oldNodeEnv;
@@ -830,7 +834,11 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     const resCommEmail = mockRes();
     const mailerService = require('../src/services/mailerService');
-    const deliverSpy = jest.spyOn(mailerService, 'deliver').mockImplementation(() => Promise.resolve({ success: true }));
+    const paymentDuesQueriesForComm = require('../src/db/paymentDuesQueries');
+    const internalTaskQueriesForComm = require('../src/db/internalTaskQueries');
+    const recordCommSpy = jest.spyOn(paymentDuesQueriesForComm, 'recordCommunication').mockResolvedValue({ id: 'comm-boost-1' });
+    const taskCommSpy = jest.spyOn(internalTaskQueriesForComm, 'createInternalTask').mockResolvedValue({ id: 'task-boost-1' });
+    const deliverSpy = jest.spyOn(mailerService, 'deliver').mockImplementation(() => Promise.resolve({ sent: true, success: true, status: 'sent' }));
     await buyerAccountController.recordBuyerCommunication(
       {
         user: { role: 'admin', email: 'admin@corp.com' },
@@ -857,6 +865,8 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     );
     expect(resCommSms.status).toHaveBeenCalledWith(201);
     smsSpy.mockRestore();
+    recordCommSpy.mockRestore();
+    taskCommSpy.mockRestore();
 
     // 3. catalogueController with limit and invalid limit
     const resCat = mockRes();
@@ -1174,9 +1184,15 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     storeService.buyerAccounts = [{ id: 'ba-1' }, { id: 'ba-2' }, { id: 'ba-3' }];
     const resBA = mockRes();
+    const baStorageSpy = jest.spyOn(require('../src/db/pool'), 'hasStorage').mockReturnValue(true);
+    const baPersistedSpy = jest.spyOn(domainQueries, 'getBuyerAccountsFromDB')
+      .mockResolvedValueOnce({ accounts: [{ id: 'ba-1' }, { id: 'ba-2' }], activeId: null });
     await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: { limit: '2' } }, resBA, jest.fn());
+    baStorageSpy.mockRestore();
+    expect(baPersistedSpy).toHaveBeenCalledWith(2);
     expect(resBA.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
+      source: 'persisted',
       data: [{ id: 'ba-1' }, { id: 'ba-2' }],
     }));
 
@@ -1577,16 +1593,18 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     // whatsapp stats already present
     scheduler._updateLiveFollowUpStats('RFQ-FUP-BOOST', 'whatsapp', { id: 'v-101' });
-    expect(mockRfq.followUpData.whatsappStats.delivered).toBe(2);
+    expect(mockRfq.followUpData.whatsappStats.sent).toBe(1);
+    expect(mockRfq.followUpData.whatsappStats.delivered).toBe(1);
 
     // sms stats where delivered > total
-    mockRfq.followUpData.smsStats = { delivered: 5, total: 5 };
+    mockRfq.followUpData.smsStats = { sent: 5, delivered: 0, total: 5 };
     scheduler._updateLiveFollowUpStats('RFQ-FUP-BOOST', 'sms', { name: 'Vendor 102' });
     expect(mockRfq.followUpData.smsStats.total).toBe(6);
 
     // email stats already present
     scheduler._updateLiveFollowUpStats('RFQ-FUP-BOOST', 'email', { id: 'v-101' });
-    expect(mockRfq.followUpData.emailStats.delivered).toBe(2);
+    expect(mockRfq.followUpData.emailStats.sent24h).toBe(2);
+    expect(mockRfq.followUpData.emailStats.delivered).toBe(1);
 
     // 2. Dispatch helpers in non-test NODE_ENV
     const oldNodeEnv = process.env.NODE_ENV;
@@ -2197,7 +2215,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
     const resDlVendor = mockRes();
     const vendorReqUser = { role: 'vendor', id: 'v-dl-test', email: 'vdl@test.com' };
-    const rfqDl = { id: 'rfq-dl-ok', sourcingMode: 'mode_0', quotes: [{ vendorId: 'v-dl-test' }] };
+    const rfqDl = { id: 'rfq-dl-ok', rfqNumber: 'RFQ-DL-OK', sourcingMode: 'mode_0', quotes: [{ vendorId: 'v-dl-test' }] };
     const spyGetDl = jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValueOnce(rfqDl);
     const spyUnlock = jest.spyOn(storeService, 'unlockRFQForVendor').mockResolvedValueOnce({ success: true, creditBalance: 10, freeCreditsRemaining: 2 });
     await rfqController.downloadRFQ({ params: { id: 'rfq-dl-ok' }, user: vendorReqUser }, resDlVendor, jest.fn());
@@ -2215,7 +2233,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     // triggerBatchChaser 404 (lines 2163-2164)
     const resChaser404 = mockRes();
     const spyTrigger = jest.spyOn(storeService, 'triggerBatchChaser').mockReturnValueOnce(null);
-    rfqController.triggerBatchChaser({ params: { id: 'rfq-no-chaser' }, body: {} }, resChaser404, jest.fn());
+    await rfqController.triggerBatchChaser({ params: { id: 'rfq-no-chaser' }, body: {}, user: { email: 'buyer@procucev.com', role: 'buyer' } }, resChaser404, jest.fn());
     expect(resChaser404.status).toHaveBeenCalledWith(404);
     spyTrigger.mockRestore();
 

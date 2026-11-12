@@ -2,8 +2,9 @@
 // REGISTRATION QUERIES
 // ==============================================================================
 // Queries and state management for Registered Clients in Action Center.
-// Provides persistent storage via the "user" & "organization" identity tables
-// with in-memory fallback to support offline, test, and standalone execution.
+// Provides persistent storage via the "user" & "organization" identity tables.
+// Missing storage throws a PERSISTENCE_UNAVAILABLE (503) error; no client data is
+// kept in or served from memory.
 // ==============================================================================
 
 const pool = require('./pool');
@@ -22,578 +23,23 @@ const REGISTRATION_VENDOR_ROLE_NAMES = Object.freeze(
   Object.keys(IDENTITY_ROLE_MAP).filter((roleName) => IDENTITY_ROLE_MAP[roleName] === 'vendor')
 );
 
-const INITIAL_CLIENTS = [
-  {
-    id: 'reg-client-101',
-    userName: 'verababu',
-    companyName: 'Verababu eneterprises',
-    phoneNumber: '+919381877013',
-    userEmail: 'veerababuv2002@gmail.com',
-    regDate: '2026-06-30T10:30:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-102',
-    userName: 'GOVARDHAN PVT LTD',
-    companyName: 'GOVARDHAN PVT LTD',
-    phoneNumber: '+917780755357',
-    userEmail: 'govardhjan.kilari@procucev.com',
-    regDate: '2026-06-30T09:15:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-103',
-    userName: 'Kishore Plywood',
-    companyName: 'Kishore Plywood',
-    phoneNumber: '+917780755357',
-    userEmail: 'kishore.yerramsetti@procucev.com',
-    regDate: '2026-06-30T08:45:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-104',
-    userName: 'Kishore New Enterprize',
-    companyName: 'Kishore New Enterprize',
-    phoneNumber: '+919966766905',
-    userEmail: 'kishore.yerramsetti@procucev.com',
-    regDate: '2026-06-30T07:20:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-105',
-    userName: 'Kishore Furnitures',
-    companyName: 'Kishore Furnitures',
-    phoneNumber: '+919983890689',
-    userEmail: 'kishore.yerramsetti@procucev.com',
-    regDate: '2026-06-30T06:10:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-106',
-    userName: 'Kishore Yerramsetti',
-    companyName: 'Kishore New Enterprize',
-    phoneNumber: '+917780755359',
-    userEmail: 'kishore.yerramsetti@procucev.com',
-    regDate: '2026-05-21T11:00:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-107',
-    userName: 'Raghavendra',
-    companyName: 'Raghavendra Solutions Pvt Ltd',
-    phoneNumber: '+917981186190',
-    userEmail: 'raghureddy2488975@gmail.com',
-    regDate: '2026-05-20T14:30:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-108',
-    userName: 'Vanshika',
-    companyName: 'Pvt Ltd',
-    phoneNumber: '+919084381486',
-    userEmail: 'vanshikabhardwaj29@gmail.com',
-    regDate: '2026-05-18T16:15:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-109',
-    userName: 'Venkata Kishore',
-    companyName: 'Procucev',
-    phoneNumber: '+917780755351',
-    userEmail: 'kishore.yerramsetti@procucev.com',
-    regDate: '2026-05-11T12:00:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-110',
-    userName: 'Chandan',
-    companyName: 'Procucev',
-    phoneNumber: '+918984483769',
-    userEmail: 'chandan.behera@procucev.com',
-    regDate: '2026-04-15T10:45:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-111',
-    userName: 'suneel',
-    companyName: 'test Construction Co Pvt Ltd',
-    phoneNumber: '+919505224821',
-    userEmail: 'harshitha.vantipally@procucev.com',
-    regDate: '2026-03-13T09:20:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-112',
-    userName: 'Pavan',
-    companyName: 'Procucev Enterprise Solutions',
-    phoneNumber: '+917996170801',
-    userEmail: 'mn.rao@procucev.com',
-    regDate: '2026-02-25T15:10:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-113',
-    userName: 'Navin Kumar',
-    companyName: 'Kumar Infrastructure & Buildcon',
-    phoneNumber: '+919845012345',
-    userEmail: 'navin.kumar@kumarinfra.in',
-    regDate: '2026-02-18T10:00:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Email',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-114',
-    userName: 'Meenakshi Sundaram',
-    companyName: 'Sundaram Tech Components',
-    phoneNumber: '+919444098765',
-    userEmail: 'meenakshi@sundaramtech.com',
-    regDate: '2026-02-12T11:45:00.000Z',
-    status: 'New',
-    sourceType: 'Email',
-    isApproved: false,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-115',
-    userName: 'Rameshwar Lal',
-    companyName: 'Lal Agro Equipment Pvt Ltd',
-    phoneNumber: '+919829011223',
-    userEmail: 'rlal@lalagro.co.in',
-    regDate: '2026-02-05T14:20:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-116',
-    userName: 'Anita Deshmukh',
-    companyName: 'Deshmukh Heavy Engineering',
-    phoneNumber: '+919820033445',
-    userEmail: 'anita@deshmukheng.com',
-    regDate: '2026-01-29T16:00:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-117',
-    userName: 'Deepak Patel',
-    companyName: 'Gujarat Precision Bearings',
-    phoneNumber: '+919879044556',
-    userEmail: 'deepak.patel@gujaratprecision.in',
-    regDate: '2026-01-22T08:30:00.000Z',
-    status: 'New',
-    sourceType: 'WhatsApp',
-    isApproved: false,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-118',
-    userName: 'Vikramaditya Roy',
-    companyName: 'Bengal Steels & Alloys Ltd',
-    phoneNumber: '+919830055667',
-    userEmail: 'vikram.roy@bengalsteels.com',
-    regDate: '2026-01-15T13:40:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-119',
-    userName: 'Sunita Sharma',
-    companyName: 'Apex Electrical Solutions',
-    phoneNumber: '+919811066778',
-    userEmail: 'sunita.sharma@apexelectrical.com',
-    regDate: '2026-01-10T10:15:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Email',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-120',
-    userName: 'Karthik Raja',
-    companyName: 'Coimbatore Foundry & Motors',
-    phoneNumber: '+919443077889',
-    userEmail: 'karthik@coimbatorefoundry.com',
-    regDate: '2026-01-04T12:00:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-121',
-    userName: 'Harish Chandra',
-    companyName: 'Northern Power Controls',
-    phoneNumber: '+919810088990',
-    userEmail: 'harish@northernpower.in',
-    regDate: '2025-12-28T14:50:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-122',
-    userName: 'Pooja Bhatt',
-    companyName: 'Himalayan Polymer Tech',
-    phoneNumber: '+919819099001',
-    userEmail: 'pooja.bhatt@himalayanpoly.com',
-    regDate: '2025-12-20T09:10:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-123',
-    userName: 'Santosh Hegde',
-    companyName: 'Canara Pumps & Valves',
-    phoneNumber: '+919844011234',
-    userEmail: 'santosh@canarapumps.com',
-    regDate: '2025-12-15T15:30:00.000Z',
-    status: 'New',
-    sourceType: 'Email',
-    isApproved: false,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-124',
-    userName: 'Mohit Agarwal',
-    companyName: 'Agarwal Metal Fabricators',
-    phoneNumber: '+919829022345',
-    userEmail: 'mohit@agarwalmetals.in',
-    regDate: '2025-12-08T11:25:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-125',
-    userName: 'Bhavna Joshi',
-    companyName: 'Sterling Fasteners India',
-    phoneNumber: '+919825033456',
-    userEmail: 'bhavna@sterlingfasteners.com',
-    regDate: '2025-12-01T10:00:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-126',
-    userName: 'Anand Kulkarni',
-    companyName: 'Pune Hydraulic Systems',
-    phoneNumber: '+919822044567',
-    userEmail: 'anand@punehydraulics.in',
-    regDate: '2025-11-24T16:40:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-127',
-    userName: 'Shalini Verma',
-    companyName: 'Zenith Scientific Instruments',
-    phoneNumber: '+919818055678',
-    userEmail: 'shalini@zenithinstruments.com',
-    regDate: '2025-11-18T13:15:00.000Z',
-    status: 'New',
-    sourceType: 'Email',
-    isApproved: false,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-128',
-    userName: 'Rajesh Goud',
-    companyName: 'Telangana Minerals & Ores',
-    phoneNumber: '+919849066789',
-    userEmail: 'rajesh@telanganaminerals.com',
-    regDate: '2025-11-10T12:00:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-129',
-    userName: 'Priyanka Das',
-    companyName: 'Eastern Refractories Ltd',
-    phoneNumber: '+919831077890',
-    userEmail: 'p.das@easternrefractories.in',
-    regDate: '2025-11-03T14:20:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-130',
-    userName: 'Manish Tiwari',
-    companyName: 'Central India Automations',
-    phoneNumber: '+919827088901',
-    userEmail: 'manish@centralindiaauto.com',
-    regDate: '2025-10-27T09:30:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-131',
-    userName: 'Lalit Somani',
-    companyName: 'Somani Cable Corporation',
-    phoneNumber: '+919829099012',
-    userEmail: 'lalit@somanicables.com',
-    regDate: '2025-10-20T10:45:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-132',
-    userName: 'Kavita Menon',
-    companyName: 'Malabar Logistics & Freight',
-    phoneNumber: '+919847012346',
-    userEmail: 'kavita@malabarfreight.in',
-    regDate: '2025-10-14T11:50:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-133',
-    userName: 'Girish Prabhu',
-    companyName: 'Prabhu Industrial Seals',
-    phoneNumber: '+919845023457',
-    userEmail: 'girish@prabhuseals.com',
-    regDate: '2025-10-07T15:10:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Email',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-134',
-    userName: 'Tanya Sengupta',
-    companyName: 'Kolkata Heavy Machine Tools',
-    phoneNumber: '+919830034568',
-    userEmail: 'tanya@kolkatamachinetools.in',
-    regDate: '2025-09-30T14:00:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-135',
-    userName: 'Farhan Akhtar',
-    companyName: 'Deccan Boiler Systems',
-    phoneNumber: '+919849045679',
-    userEmail: 'farhan@deccanboilers.com',
-    regDate: '2025-09-22T08:40:00.000Z',
-    status: 'New',
-    sourceType: 'WhatsApp',
-    isApproved: false,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-136',
-    userName: 'Smita Kadam',
-    companyName: 'Kadam Industrial Coatings',
-    phoneNumber: '+919821056780',
-    userEmail: 'smita@kadamcoatings.com',
-    regDate: '2025-09-15T12:15:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-137',
-    userName: 'Ashwin Nair',
-    companyName: 'Cochin Maritime Equipment',
-    phoneNumber: '+919846067891',
-    userEmail: 'ashwin@cochinmaritime.in',
-    regDate: '2025-09-08T10:30:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-138',
-    userName: 'Dinesh Singhania',
-    companyName: 'Singhania Gears & Pinions',
-    phoneNumber: '+919810078902',
-    userEmail: 'dinesh@singhaniagears.com',
-    regDate: '2025-09-01T16:20:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Email',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-139',
-    userName: 'Rekha Pillai',
-    companyName: 'Pillai Agro Chemicals Ltd',
-    phoneNumber: '+919847089013',
-    userEmail: 'rekha@pillaiagro.com',
-    regDate: '2025-08-25T11:00:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-140',
-    userName: 'Umesh Yadav',
-    companyName: 'Yadav Construction Earthmovers',
-    phoneNumber: '+919829090124',
-    userEmail: 'umesh@yadavconstruction.in',
-    regDate: '2025-08-18T13:45:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-141',
-    userName: 'Geeta Subramaniam',
-    companyName: 'Subramaniam Transformer Works',
-    phoneNumber: '+919444001235',
-    userEmail: 'geeta@subramaniamtransformers.com',
-    regDate: '2025-08-10T14:10:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Web App',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-142',
-    userName: 'Rohit Bansal',
-    companyName: 'Bansal Wire Industries',
-    phoneNumber: '+919811012346',
-    userEmail: 'rohit@bansalwires.in',
-    regDate: '2025-08-04T09:25:00.000Z',
-    status: 'Accepted',
-    sourceType: 'Email',
-    isApproved: true,
-    clientType: 'Seller',
-  },
-  {
-    id: 'reg-client-143',
-    userName: 'Nandini Sen',
-    companyName: 'Sen Engineering Instruments',
-    phoneNumber: '+919831023457',
-    userEmail: 'nandini@seninstruments.com',
-    regDate: '2025-07-28T15:00:00.000Z',
-    status: 'New',
-    sourceType: 'Web App',
-    isApproved: false,
-    clientType: 'Buyer',
-  },
-  {
-    id: 'reg-client-144',
-    userName: 'Kalyan Chakravarthy',
-    companyName: 'Chakravarthy Forge & Precision',
-    phoneNumber: '+919849034568',
-    userEmail: 'kalyan@chakravarthyforge.com',
-    regDate: '2025-07-20T10:15:00.000Z',
-    status: 'Accepted',
-    sourceType: 'WhatsApp',
-    isApproved: true,
-    clientType: 'Buyer',
-  },
-];
-
-let memoryClients = JSON.parse(JSON.stringify(INITIAL_CLIENTS));
-
-function resetMemoryClients() {
-  memoryClients = JSON.parse(JSON.stringify(INITIAL_CLIENTS));
-}
-
 function normalizeSourceType(source) {
   const s = String(source || '').toLowerCase().trim();
+  if (!s) return null;
   if (s.includes('whatsapp') || s.includes('whats_app')) return 'WhatsApp';
   if (s.includes('email')) return 'Email';
   return 'Web App';
 }
 
-function normalizeClientType(val, companyName = '', userEmail = '') {
-  if (val) {
-    const s = String(val).toLowerCase().trim();
-    if (s.includes('seller') || s.includes('vendor') || s.includes('supplier')) return 'Seller';
-    if (s.includes('buyer')) return 'Buyer';
-  }
-  const check = `${companyName} ${userEmail}`.toLowerCase();
-  if (
-    check.includes('supplier') ||
-    check.includes('seller') ||
-    check.includes('vendor') ||
-    check.includes('fasteners') ||
-    check.includes('steel') ||
-    check.includes('foundry') ||
-    check.includes('polymer') ||
-    check.includes('pumps') ||
-    check.includes('metals') ||
-    check.includes('hydraulics') ||
-    check.includes('wire') ||
-    check.includes('components') ||
-    check.includes('bearing') ||
-    check.includes('transformer') ||
-    check.includes('cables') ||
-    check.includes('plywood') ||
-    check.includes('furnitures')
-  ) {
-    return 'Seller';
-  }
+/**
+ * Maps a role name to the client type. This matches the SQL classification used
+ * for filtering: vendor and supplier roles are sellers, and other roles are buyers.
+ * A missing role has no classification, so the result is null.
+ */
+function normalizeClientType(roleName) {
+  const s = String(roleName || '').toLowerCase().trim();
+  if (!s) return null;
+  if (s.includes('seller') || s.includes('vendor') || s.includes('supplier')) return 'Seller';
   return 'Buyer';
 }
 
@@ -619,6 +65,14 @@ function createPersistenceError(error, operation, id = undefined, action = undef
   return unavailable;
 }
 
+const REGISTRATION_QUERY_ERRORS = Object.freeze({
+  ACTOR_REQUIRED: 'A signed-in user is required to decide a client registration.',
+});
+
+function storageUnavailable(operation) {
+  return createPersistenceError(new Error('Registration storage is not configured.'), operation);
+}
+
 function registrationConflict() {
   const conflict = new Error('This registration has already been processed. Refresh the list before taking another action.');
   conflict.code = 'REGISTRATION_ALREADY_PROCESSED';
@@ -630,18 +84,18 @@ function registrationConflict() {
 function normalizeClientRow(row) {
   const source = row.isWhatsApp ? 'WhatsApp' : normalizeSourceType(row.sourceTypeRaw);
   const computedStatus = normalizeStatus(row.isApproved, row.verificationStatus);
-  const registeredAt = row.regDate ? new Date(row.regDate) : new Date();
+  const registeredAt = row.regDate ? new Date(row.regDate) : null;
   return {
     id: row.id,
-    userName: row.userName || 'Enterprise User',
-    companyName: row.companyName || 'Enterprise Client',
-    phoneNumber: row.phoneNumber || '',
-    userEmail: row.userEmail || '',
-    regDate: Number.isNaN(registeredAt.getTime()) ? new Date().toISOString() : registeredAt.toISOString(),
+    userName: row.userName || null,
+    companyName: row.companyName || null,
+    phoneNumber: row.phoneNumber || null,
+    userEmail: row.userEmail || null,
+    regDate: registeredAt && !Number.isNaN(registeredAt.getTime()) ? registeredAt.toISOString() : null,
     status: computedStatus,
     sourceType: source,
     isApproved: Boolean(row.isApproved),
-    clientType: normalizeClientType(row.roleName, row.companyName, row.userEmail),
+    clientType: normalizeClientType(row.roleName),
   };
 }
 
@@ -653,8 +107,8 @@ function buildRegistrationRolePredicate(startIndex) {
 function buildRegistrationSelect(whereClause) {
   return `SELECT u.uuid AS id,
       COALESCE(u.full_name, u.first_name, u.username) AS "userName",
-      COALESCE(o.organization_name, 'Enterprise Client') AS "companyName",
-      COALESCE(u.phone, '') AS "phoneNumber",
+      o.organization_name AS "companyName",
+      u.phone AS "phoneNumber",
       COALESCE(u.email, u.username) AS "userEmail",
       u.created_ts AS "regDate",
       u.is_approved AS "isApproved",
@@ -706,6 +160,7 @@ async function getRegisteredClients({
         addFilter(sourceType.toLowerCase(), (index) => `(CASE
           WHEN u.is_whats_app = true OR LOWER(COALESCE(u.source_type, '')) LIKE '%whatsapp%' THEN 'whatsapp'
           WHEN LOWER(COALESCE(u.source_type, '')) LIKE '%email%' THEN 'email'
+          WHEN COALESCE(u.source_type, '') = '' AND COALESCE(u.is_whats_app, false) = false THEN NULL
           ELSE 'web app' END) = $${index}`);
       }
       if (status && status.toLowerCase() !== 'all') {
@@ -757,49 +212,7 @@ async function getRegisteredClients({
     }
   }
 
-  let clients = memoryClients;
-
-  // Filter in memory
-  let filtered = clients;
-
-  if (sourceType && sourceType.toLowerCase() !== 'all') {
-    const targetSource = sourceType.toLowerCase();
-    filtered = filtered.filter((c) => c.sourceType.toLowerCase() === targetSource);
-  }
-
-  if (status && status.toLowerCase() !== 'all') {
-    const targetStatus = status.toLowerCase();
-    filtered = filtered.filter((c) => c.status.toLowerCase() === targetStatus);
-  }
-
-  if (clientType && clientType.toLowerCase() !== 'all') {
-    const targetType = clientType.toLowerCase();
-    filtered = filtered.filter((c) => (c.clientType || 'Buyer').toLowerCase() === targetType);
-  }
-
-
-  if (search && search.trim()) {
-    const q = search.toLowerCase().trim();
-    filtered = filtered.filter(
-      (c) =>
-        (c.userName && c.userName.toLowerCase().includes(q)) ||
-        (c.companyName && c.companyName.toLowerCase().includes(q)) ||
-        (c.phoneNumber && c.phoneNumber.toLowerCase().includes(q)) ||
-        (c.userEmail && c.userEmail.toLowerCase().includes(q))
-    );
-  }
-
-  const total = filtered.length;
-  const numLimit = Math.min(Math.max(parseInt(String(limit), 10) || 100, 1), 200);
-  const numOffset = Math.max(0, parseInt(String(offset), 10) || 0);
-  const paginated = filtered.slice(numOffset, numOffset + numLimit);
-
-  return {
-    total,
-    clients: paginated,
-    limit: numLimit,
-    offset: numOffset,
-  };
+  throw storageUnavailable('list-registrations');
 }
 
 /**
@@ -818,8 +231,14 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
   const verificationStatus = isAccept ? 'VERIFIED' : 'REJECTED';
   const normalizedRemarks = String(remarks || '');
   const actorId = actor.uuid || actor.id || actor.sub || null;
-  const actorName = actor.fullName || actor.name || actor.email || 'Management Authority';
+  const actorName = actor.fullName || actor.name || actor.email || null;
   const actorEmail = actor.email || null;
+  if (!actorId && !actorName && !actorEmail) {
+    const unauthenticated = new Error(REGISTRATION_QUERY_ERRORS.ACTOR_REQUIRED);
+    unauthenticated.code = 'ACTOR_REQUIRED';
+    unauthenticated.statusCode = 401;
+    throw unauthenticated;
+  }
 
   if (pool.hasStorage()) {
     try {
@@ -862,7 +281,7 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
                   SELECT json_object(
                     'registrationId', u.uuid,
                     'recipientEmail', COALESCE(u.email, u.username),
-                    'recipientName', COALESCE(u.full_name, u.first_name, u.username, 'Enterprise User'),
+                    'recipientName', COALESCE(u.full_name, u.first_name, u.username, u.email),
                     'accountType', CASE
                       WHEN LOWER(REPLACE(r.role_name, ' ', '')) IN (${vendorRolePlaceholders}) THEN 'Vendor'
                       ELSE 'Buyer'
@@ -945,13 +364,13 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
               VALUES ($1, $2, $3, $4, 'New', $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)`,
             [eventId, saved.id, saved.userEmail, newStatus, actorId, actorName, actorEmail, normalizedRemarks]
           );
-          const accountType = normalizeClientType(current.roleName, current.companyName, current.userEmail) === 'Seller'
+          const accountType = normalizeClientType(current.roleName) === 'Seller'
             ? 'Vendor'
             : 'Buyer';
           const notificationPayload = {
             registrationId: saved.id,
             recipientEmail: saved.userEmail,
-            recipientName: saved.userName || 'Enterprise User',
+            recipientName: saved.userName || saved.userEmail,
             accountType,
             decision: newStatus.toLowerCase(),
           };
@@ -974,9 +393,9 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
         throw registrationConflict();
       }
 
-      const updated = normalizeClientRow({ ...updatedRow, companyName: updatedRow.companyName || 'Enterprise Client' });
+      const updated = normalizeClientRow(updatedRow);
       syncBuyerAccountCache(id, updated.userEmail, newStatus, isApproved, verificationStatus);
-      logger.audit(`Client registration ${newStatus.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+      logger.audit(`Client registration ${newStatus.toLowerCase()}`, actorEmail || actorId || actorName, {
         registrationId: id,
         actorId,
         eventId,
@@ -995,24 +414,7 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
     }
   }
 
-  const client = memoryClients.find((candidate) => candidate.id === id);
-  if (!client) return null;
-  if (client.status !== 'New') throw registrationConflict();
-  client.status = newStatus;
-  client.isApproved = isApproved;
-  client.verificationStatus = verificationStatus;
-  if (normalizedRemarks) client.remarks = normalizedRemarks;
-  logger.warn('Registration decision used in-memory storage; no durable email notification was queued', {
-    registrationId: id,
-    accountType: client.clientType === 'Seller' ? 'Vendor' : 'Buyer',
-    decision: newStatus.toLowerCase(),
-  }, 'REGISTRATION_QUERIES');
-  syncBuyerAccountCache(id, client.userEmail, newStatus, isApproved, verificationStatus);
-  logger.audit(`Client registration ${newStatus.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
-    registrationId: id,
-    actorId,
-  });
-  return client;
+  throw storageUnavailable('update-registration-status');
 }
 
 function syncBuyerAccountCache(id, email, status, isApproved, verificationStatus) {
@@ -1036,8 +438,6 @@ function syncBuyerAccountCache(id, email, status, isApproved, verificationStatus
 }
 
 module.exports = {
-  INITIAL_CLIENTS,
-  resetMemoryClients,
   normalizeClientType,
   getRegisteredClients,
   updateClientRegistrationStatus,

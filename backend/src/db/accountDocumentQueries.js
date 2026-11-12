@@ -1,8 +1,12 @@
 // ==============================================================================
-// ACCOUNT DOCUMENT QUERIES (PostgreSQL & Relational Pool with in-memory fallback)
+// ACCOUNT DOCUMENT QUERIES (PostgreSQL & Relational Pool)
 // ==============================================================================
 // Durable repository for Buyer & Seller Dossier associated documents:
 // Registration, Company Profile, GST, PAN, RFQ attachments, and Quotations.
+// Persisted documents live in account_documents. Workflow documents (RFQ
+// attachments, evaluation documents, quotations) are read from the workflow
+// records and are never copied into memory. Query failures and missing storage
+// throw a PERSISTENCE_UNAVAILABLE error.
 // ==============================================================================
 
 const pool = require('./pool');
@@ -10,42 +14,98 @@ const crypto = require('crypto');
 const { logger } = require('../services/loggerService');
 const storeService = require('../services/storeService');
 
+const ACCOUNT_DOCUMENT_ERRORS = Object.freeze({
+  ACCOUNT_REQUIRED: 'Account type and account id are required for an account document.',
+  ACTOR_REQUIRED: 'A signed-in user is required to change account documents.',
+  WORKFLOW_NOT_DELETABLE: 'This document is generated from an RFQ, evaluation, or quotation record and cannot be removed from the dossier. Change the source record instead.',
+});
+
+const WORKFLOW_DOCUMENT_ID_PREFIXES = Object.freeze(['rfq_doc_', 'eval_doc_', 'quote_doc_']);
+
 function escapeLikeWildcards(str) {
   if (typeof str !== 'string') return '';
   return str.replace(/([%_\\])/g, '\\$1');
 }
 
+function stringOrNull(value) {
+  return value === undefined || value === null || value === '' ? null : String(value);
+}
+
+function lowerOrNull(value) {
+  const text = stringOrNull(value);
+  return text === null ? null : text.toLowerCase();
+}
+
+function boolOrNull(value) {
+  return value === undefined || value === null ? null : Boolean(value);
+}
+
+function toNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toIsoOrNull(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function toTime(value) {
+  if (!value) return 0;
+  return new Date(value).getTime() || 0;
+}
+
 function mapRow(row) {
   if (!row) return null;
   const isDb = 'account_type' in row || 'document_name' in row;
-  const dateVal = (isDb ? row.created_at : row.createdAt) || '2026-01-01T00:00:00.000Z';
-  const iso = new Date(dateVal).toISOString();
+  const createdAt = toIsoOrNull(isDb ? row.created_at : row.createdAt);
   return {
-    id: String(row.id),
-    accountType: String(isDb ? row.account_type : row.accountType).toLowerCase(),
-    accountId: String(isDb ? row.account_id : row.accountId),
-    documentName: String(isDb ? row.document_name : row.documentName),
-    fileName: String(isDb ? row.file_name : row.fileName),
-    fileSize: Number((isDb ? row.file_size : row.fileSize) || 0),
-    mimeType: String((isDb ? row.mime_type : row.mimeType) || 'application/pdf'),
-    category: String(row.category || 'Other'),
-    fileUrl: String((isDb ? row.file_url : row.fileUrl) || ''),
-    description: String(row.description || ''),
-    uploadedBy: String((isDb ? row.uploaded_by : row.uploadedBy) || 'Category Manager'),
-    isActive: isDb ? Boolean(row.is_active) : (row.isActive !== false),
-    uploadDate: iso,
-    createdAt: iso,
-    updatedAt: new Date(((isDb ? row.updated_at : row.updatedAt) || dateVal)).toISOString(),
-    sourceWorkflow: String(row.sourceWorkflow || 'Direct Upload'),
+    id: row.id != null ? String(row.id) : null,
+    accountType: lowerOrNull(isDb ? row.account_type : row.accountType),
+    accountId: stringOrNull(isDb ? row.account_id : row.accountId),
+    documentName: stringOrNull(isDb ? row.document_name : row.documentName),
+    fileName: stringOrNull(isDb ? row.file_name : row.fileName),
+    fileSize: toNumberOrNull(isDb ? row.file_size : row.fileSize),
+    mimeType: stringOrNull(isDb ? row.mime_type : row.mimeType),
+    category: stringOrNull(row.category),
+    fileUrl: stringOrNull(isDb ? row.file_url : row.fileUrl),
+    description: stringOrNull(row.description),
+    uploadedBy: stringOrNull(isDb ? row.uploaded_by : row.uploadedBy),
+    isActive: boolOrNull(isDb ? row.is_active : row.isActive),
+    uploadDate: createdAt,
+    createdAt,
+    updatedAt: toIsoOrNull(isDb ? row.updated_at : row.updatedAt) || createdAt,
+    sourceWorkflow: row.sourceWorkflow || (isDb ? 'Direct Upload' : null),
   };
 }
 
-let inMemoryAccountDocuments = [];
-const suppressedWorkflowDocIds = new Set();
+function persistenceUnavailable(operation, cause) {
+  const error = new Error(`Account document ${operation} failed because configured database persistence is unavailable.`);
+  error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.cause = cause;
+  logger.error('Account document persistence failed', { operation, error: cause }, 'ACCOUNT_DOCUMENT_QUERIES');
+  return error;
+}
 
-function resetInMemoryStore() {
-  inMemoryAccountDocuments = [];
-  suppressedWorkflowDocIds.clear();
+function coded(message, code, statusCode) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
+
+function requireText(value, field) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) throw coded(`Account document ${field} is required.`, 'VALIDATION_FAILED', 400);
+  return text;
+}
+
+function resolveUploaderName(actor) {
+  if (typeof actor === 'string') return actor.trim() || null;
+  if (!actor || typeof actor !== 'object') return null;
+  return actor.fullName || actor.name || actor.email || null;
 }
 
 /**
@@ -72,6 +132,119 @@ function matchesDocumentType(doc, requestedType) {
   return true;
 }
 
+function isWorkflowDocumentId(id) {
+  return WORKFLOW_DOCUMENT_ID_PREFIXES.some((prefix) => String(id).startsWith(prefix));
+}
+
+/**
+ * Workflow documents for a buyer: RFQ attachments. Fields the source record does
+ * not hold are null.
+ */
+function buildBuyerWorkflowDocuments(normId) {
+  const documents = [];
+  const allRfqs = storeService.rfqs || [];
+  const buyerRfqs = allRfqs.filter((r) => r.buyerId === normId || r.buyer === normId).slice(0, 100);
+
+  buyerRfqs.forEach((rfq) => {
+    const attList = Array.isArray(rfq.attachments) ? rfq.attachments : [];
+    attList.forEach((att, idx) => {
+      const recordedAt = rfq.createdAt || null;
+      documents.push({
+        id: `rfq_doc_${rfq.id}_${att.id || idx}`,
+        accountType: 'buyer',
+        accountId: normId,
+        documentName: `RFQ Specification - ${rfq.rfqNumber || rfq.id}`,
+        fileName: att.fileName || att.name || null,
+        fileSize: toNumberOrNull(att.fileSize ?? att.size),
+        mimeType: att.mimeType || null,
+        category: 'RFQ',
+        fileUrl: att.fileUrl || att.url || null,
+        description: `Technical requisition specifications for RFQ ${rfq.rfqNumber || rfq.id}`,
+        uploadedBy: att.uploadedBy || null,
+        isActive: true,
+        uploadDate: recordedAt,
+        createdAt: recordedAt,
+        updatedAt: recordedAt,
+        sourceWorkflow: 'RFQ Requisition',
+      });
+    });
+  });
+
+  return documents;
+}
+
+/**
+ * Workflow documents for a seller: evaluation documents and quotations submitted by the vendor.
+ */
+function buildSellerWorkflowDocuments(normId) {
+  const documents = [];
+  const evaluations = storeService.evaluations || [];
+  const vendorEval = evaluations.find((e) => e.vendorId === normId || e.id === normId);
+
+  if (vendorEval && Array.isArray(vendorEval.documents)) {
+    vendorEval.documents.forEach((doc, idx) => {
+      const fileName = doc.name || null;
+      const lowerName = (fileName || '').toLowerCase();
+      // A document whose name carries no category keyword stays unclassified (null).
+      let cat = null;
+      if (lowerName.includes('gst')) cat = 'GST';
+      else if (/(^|[^a-z])pan([^a-z]|$)/i.test(lowerName)) cat = 'PAN';
+      else if (lowerName.includes('profile')) cat = 'Company Profile';
+
+      const recordedAt = doc.uploadDate || null;
+      documents.push({
+        id: `eval_doc_${normId}_${doc.id || idx}`,
+        accountType: 'seller',
+        accountId: normId,
+        documentName: doc.name || 'Compliance audit document',
+        fileName,
+        fileSize: null,
+        mimeType: null,
+        category: cat,
+        fileUrl: null,
+        description: doc.name ? `Statutory verification and onboarding document: ${doc.name}` : null,
+        uploadedBy: null,
+        isActive: true,
+        uploadDate: recordedAt,
+        createdAt: recordedAt,
+        updatedAt: recordedAt,
+        sourceWorkflow: 'Vendor Evaluation',
+      });
+    });
+  }
+
+  const allRfqs = storeService.rfqs || [];
+  for (let i = 0; i < allRfqs.length && documents.length < 100; i++) {
+    const rfq = allRfqs[i];
+    const quotes = Array.isArray(rfq.quotes) ? rfq.quotes : [];
+    for (const q of quotes) {
+      if (q.vendorId === normId) {
+        const recordedAt = q.submittedAt || rfq.createdAt || null;
+        documents.push({
+          id: `quote_doc_${rfq.id}_${normId}`,
+          accountType: 'seller',
+          accountId: normId,
+          documentName: `Quotation Bid Submission - ${rfq.rfqNumber || rfq.id}`,
+          fileName: `Quotation_Bid_${rfq.rfqNumber || rfq.id}.pdf`,
+          fileSize: null,
+          mimeType: null,
+          category: 'Quotation',
+          fileUrl: null,
+          description: `Itemized commercial bid and technical SLA offer for RFQ ${rfq.rfqNumber || rfq.id}`,
+          uploadedBy: q.vendorName || null,
+          isActive: true,
+          uploadDate: recordedAt,
+          createdAt: recordedAt,
+          updatedAt: recordedAt,
+          sourceWorkflow: 'Quotation Submission',
+        });
+      }
+    }
+  }
+
+  return documents;
+}
+
 /**
  * List all documents associated with a buyer or seller account.
  * Merges persisted account_documents with workflow documents (RFQs, Evaluations, Quotes).
@@ -87,169 +260,51 @@ async function listAccountDocuments(filters = {}) {
   } = filters;
 
   if (!accountType || !accountId) {
-    return [];
+    throw coded(ACCOUNT_DOCUMENT_ERRORS.ACCOUNT_REQUIRED, 'VALIDATION_FAILED', 400);
   }
+  if (!pool.hasStorage()) throw persistenceUnavailable('list', null);
 
   const normType = String(accountType).toLowerCase();
   const normId = String(accountId);
+  const isAsc = String(sortOrder).toLowerCase() === 'asc';
 
-  let persistedDocs = [];
-
-  if (pool.hasStorage()) {
-    try {
-      const isAsc = String(sortOrder).toLowerCase() === 'asc';
-      const orderClause = isAsc ? 'ASC' : 'DESC';
-      const queryText = `
-        SELECT id, account_type, account_id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at
-        FROM account_documents
-        WHERE account_type = $1 AND account_id = $2 AND is_active = 1
-        ORDER BY created_at ${orderClause}
-      `;
-
-      const result = await pool.query(queryText, [normType, normId]);
-      persistedDocs = (result?.rows || []).map(mapRow);
-    } catch (err) {
-      logger.error('accountDocumentQueries: PostgreSQL listAccountDocuments query failed, falling back to memory', { error: err.message });
-      persistedDocs = inMemoryAccountDocuments
-        .filter((d) => d.accountType === normType && d.accountId === normId && d.isActive)
-        .map(mapRow);
-    }
-  } else {
-    persistedDocs = inMemoryAccountDocuments
-      .filter((d) => d.accountType === normType && d.accountId === normId && d.isActive)
-      .map(mapRow);
+  let persistedDocs;
+  try {
+    const orderClause = isAsc ? 'ASC' : 'DESC';
+    const queryText = `
+      SELECT id, account_type, account_id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at
+      FROM account_documents
+      WHERE account_type = $1 AND account_id = $2 AND is_active = 1
+      ORDER BY created_at ${orderClause}
+    `;
+    const result = await pool.query(queryText, [normType, normId]);
+    persistedDocs = (result?.rows || []).map(mapRow);
+  } catch (err) {
+    throw persistenceUnavailable('list', err);
   }
 
-  // ---------------------------------------------------------------------------
-  // Aggregate Workflow Documents (RFQ Attachments, Evaluations, Quotes)
-  // ---------------------------------------------------------------------------
-  const workflowDocs = [];
-
-  if (normType === 'buyer') {
-    try {
-      const allRfqs = storeService.rfqs || [];
-      const buyerRfqs = allRfqs.filter((r) => r.buyerId === normId || r.buyer === normId).slice(0, 100);
-
-      buyerRfqs.forEach((rfq) => {
-        const attList = Array.isArray(rfq.attachments) ? rfq.attachments : [];
-        attList.forEach((att, idx) => {
-          const docId = `rfq_doc_${rfq.id}_${att.id || idx}`;
-          if (suppressedWorkflowDocIds.has(docId)) return;
-
-          const fileName = att.fileName || att.name || 'RFQ_spec.pdf';
-          workflowDocs.push({
-            id: docId,
-            accountType: 'buyer',
-            accountId: normId,
-            documentName: `RFQ Specification - ${rfq.rfqNumber || rfq.id}`,
-            fileName,
-            fileSize: att.fileSize || att.size || 145000,
-            mimeType: att.mimeType || 'application/pdf',
-            category: 'RFQ',
-            fileUrl: att.fileUrl || att.url || `/documents/${fileName}`,
-            description: `Technical requisition specifications for RFQ ${rfq.rfqNumber || rfq.id}`,
-            uploadedBy: att.uploadedBy || 'Buyer Operations',
-            isActive: true,
-            uploadDate: rfq.createdAt || new Date().toISOString(),
-            createdAt: rfq.createdAt || new Date().toISOString(),
-            updatedAt: rfq.createdAt || new Date().toISOString(),
-            sourceWorkflow: 'RFQ Requisition',
-          });
-        });
-      });
-    } catch (error) {
-      logger.error('Buyer RFQ workflow documents could not be aggregated for the account dossier', {
-        error,
-        operation: 'aggregate-buyer-rfq-documents',
-        accountType: normType,
-        accountIdPresent: Boolean(normId),
-      }, 'ACCOUNT_DOCUMENT_QUERIES');
+  let workflowDocs = [];
+  try {
+    if (normType === 'buyer') {
+      workflowDocs = buildBuyerWorkflowDocuments(normId);
+    } else if (normType === 'seller') {
+      workflowDocs = buildSellerWorkflowDocuments(normId);
     }
-  } else if (normType === 'seller') {
-    try {
-      const evaluations = storeService.evaluations || [];
-      const vendorEval = evaluations.find((e) => e.vendorId === normId || e.id === normId);
-      if (vendorEval && Array.isArray(vendorEval.documents)) {
-        vendorEval.documents.forEach((doc, idx) => {
-          const docId = `eval_doc_${normId}_${doc.id || idx}`;
-          if (suppressedWorkflowDocIds.has(docId)) return;
-
-          const fileName = doc.name || `Vendor_${normId}_compliance.pdf`;
-          let cat = 'Registration';
-          const lowerName = fileName.toLowerCase();
-          if (lowerName.includes('gst')) cat = 'GST';
-          else if (/(^|[^a-z])pan([^a-z]|$)/i.test(fileName)) cat = 'PAN';
-          else if (lowerName.includes('profile')) cat = 'Company Profile';
-
-          workflowDocs.push({
-            id: docId,
-            accountType: 'seller',
-            accountId: normId,
-            documentName: doc.name || `Compliance Audit Document - ${cat}`,
-            fileName,
-            fileSize: 220000,
-            mimeType: 'application/pdf',
-            category: cat,
-            fileUrl: `/documents/${fileName}`,
-            description: `Statutory verification and onboarding document: ${doc.name}`,
-            uploadedBy: 'Vendor Onboarding',
-            isActive: true,
-            uploadDate: doc.uploadDate || new Date().toISOString(),
-            createdAt: doc.uploadDate || new Date().toISOString(),
-            updatedAt: doc.uploadDate || new Date().toISOString(),
-            sourceWorkflow: 'Vendor Evaluation',
-          });
-        });
-      }
-
-      // Find quotes submitted by vendor
-      const allRfqs = storeService.rfqs || [];
-      for (let i = 0; i < allRfqs.length && workflowDocs.length < 100; i++) {
-        const rfq = allRfqs[i];
-        const quotes = Array.isArray(rfq.quotes) ? rfq.quotes : [];
-        for (const q of quotes) {
-          if (q.vendorId === normId) {
-            const docId = `quote_doc_${rfq.id}_${normId}`;
-            if (suppressedWorkflowDocIds.has(docId)) continue;
-
-            const fileName = `Quotation_Bid_${rfq.rfqNumber || rfq.id}.pdf`;
-            workflowDocs.push({
-              id: docId,
-              accountType: 'seller',
-              accountId: normId,
-              documentName: `Quotation Bid Submission - ${rfq.rfqNumber || rfq.id}`,
-              fileName,
-              fileSize: 185000,
-              mimeType: 'application/pdf',
-              category: 'Quotation',
-              fileUrl: `/documents/${fileName}`,
-              description: `Itemized commercial bid and technical SLA offer for RFQ ${rfq.rfqNumber || rfq.id}`,
-              uploadedBy: q.vendorName || 'Supplier Representative',
-              isActive: true,
-              uploadDate: q.submittedAt || rfq.createdAt || new Date().toISOString(),
-              createdAt: q.submittedAt || rfq.createdAt || new Date().toISOString(),
-              updatedAt: q.submittedAt || rfq.createdAt || new Date().toISOString(),
-              sourceWorkflow: 'Quotation Submission',
-            });
-          }
-        }
-      }
-    } catch (error) {
-      logger.error('Seller evaluation and quotation workflow documents could not be aggregated for the account dossier', {
-        error,
-        operation: 'aggregate-seller-workflow-documents',
-        accountType: normType,
-        accountIdPresent: Boolean(normId),
-      }, 'ACCOUNT_DOCUMENT_QUERIES');
-    }
+  } catch (error) {
+    logger.error('Workflow documents could not be aggregated for the account dossier', {
+      error,
+      operation: 'aggregate-workflow-documents',
+      accountType: normType,
+      accountIdPresent: Boolean(normId),
+    }, 'ACCOUNT_DOCUMENT_QUERIES');
   }
 
-  // De-duplicate documents by file_name and id
+  // De-duplicate documents by file name and category, and by id
   const combined = [];
   const seenKeys = new Set();
 
   [...persistedDocs, ...workflowDocs].forEach((d) => {
-    const key = `${d.fileName.toLowerCase()}_${d.category.toLowerCase()}`;
+    const key = `${String(d.fileName || '').toLowerCase()}_${String(d.category || '').toLowerCase()}`;
     if (!seenKeys.has(key) && !seenKeys.has(d.id)) {
       seenKeys.add(key);
       seenKeys.add(d.id);
@@ -282,10 +337,9 @@ async function listAccountDocuments(filters = {}) {
   }
 
   // Sort by date
-  const isAsc = String(sortOrder).toLowerCase() === 'asc';
   filtered.sort((a, b) => {
-    const timeA = new Date(a.uploadDate || a.createdAt).getTime();
-    const timeB = new Date(b.uploadDate || b.createdAt).getTime();
+    const timeA = toTime(a.uploadDate || a.createdAt);
+    const timeB = toTime(b.uploadDate || b.createdAt);
     return isAsc ? timeA - timeB : timeB - timeA;
   });
 
@@ -296,126 +350,84 @@ async function listAccountDocuments(filters = {}) {
  * Create/upload a new document for a buyer or seller.
  */
 async function createAccountDocument(payload = {}, actor = {}) {
-  const id = 'adoc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-  const now = new Date();
   const accountType = String(payload.accountType || '').toLowerCase();
   const accountId = String(payload.accountId || '');
-  const documentName = payload.documentName || 'Untitled Document';
-  const fileName = payload.fileName || 'document.pdf';
-  const fileSize = Number(payload.fileSize || 0);
-  const mimeType = payload.mimeType || 'application/pdf';
-  const category = payload.category || 'Other';
-  const fileUrl = payload.fileUrl || `/documents/${encodeURIComponent(fileName)}`;
-  const description = payload.description || '';
-  
-  let uploadedBy = 'Category Manager';
-  if (typeof actor === 'string') {
-    uploadedBy = actor;
-  } else if (actor && typeof actor === 'object') {
-    uploadedBy = actor.fullName || actor.name || actor.email || 'Category Manager';
+  if (!accountType || !accountId) {
+    throw coded(ACCOUNT_DOCUMENT_ERRORS.ACCOUNT_REQUIRED, 'VALIDATION_FAILED', 400);
   }
+  const documentName = requireText(payload.documentName, 'name');
+  const fileName = requireText(payload.fileName, 'file name');
+  const category = requireText(payload.category, 'category');
+  const uploadedBy = resolveUploaderName(actor);
+  if (!uploadedBy) throw coded(ACCOUNT_DOCUMENT_ERRORS.ACTOR_REQUIRED, 'ACTOR_REQUIRED', 401);
+  if (!pool.hasStorage()) throw persistenceUnavailable('create', null);
+
+  const id = 'adoc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const now = new Date();
+  // file_url is NOT NULL in the schema. An empty string records "no file location".
+  const fileUrl = payload.fileUrl || '';
   const isActive = payload.isActive !== false;
 
-  if (pool.hasStorage()) {
-    try {
-      const result = await pool.query(
-        `INSERT INTO account_documents (
-           id, account_type, account_id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-         RETURNING id, account_type, account_id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at`,
-        [
-          id,
-          accountType,
-          accountId,
-          documentName,
-          fileName,
-          fileSize,
-          mimeType,
-          category,
-          fileUrl,
-          description,
-          uploadedBy,
-          isActive ? 1 : 0,
-          now,
-          now,
-        ]
-      );
-      if (result?.rows?.[0]) {
-        return mapRow(result.rows[0]);
-      }
-    } catch (err) {
-      logger.error('accountDocumentQueries: PostgreSQL createAccountDocument insert failed, falling back to memory', { error: err.message });
-    }
+  let result;
+  try {
+    result = await pool.query(
+      `INSERT INTO account_documents (
+         id, account_type, account_id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       RETURNING id, account_type, account_id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at`,
+      [
+        id,
+        accountType,
+        accountId,
+        documentName,
+        fileName,
+        toNumberOrNull(payload.fileSize),
+        payload.mimeType || null,
+        category,
+        fileUrl,
+        payload.description || '',
+        uploadedBy,
+        isActive ? 1 : 0,
+        now,
+        now,
+      ]
+    );
+  } catch (err) {
+    throw persistenceUnavailable('create', err);
   }
 
-  const newDoc = {
-    id,
-    accountType,
-    accountId,
-    documentName,
-    fileName,
-    fileSize,
-    mimeType,
-    category,
-    fileUrl,
-    description,
-    uploadedBy,
-    isActive,
-    uploadDate: now.toISOString(),
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-    sourceWorkflow: 'Direct Upload',
-  };
-
-  inMemoryAccountDocuments.push(newDoc);
-  return mapRow(newDoc);
+  if (!result?.rows?.[0]) throw persistenceUnavailable('create', new Error('Insert returned no row.'));
+  return mapRow(result.rows[0]);
 }
 
 /**
- * Delete a document by ID.
- * If it's a persisted account_document, marks inactive / removes.
- * If it's a workflow document ID, suppresses it from future listings.
+ * Delete a persisted account document by ID (marks it inactive).
+ * Workflow documents are generated from RFQ, evaluation, or quotation records, so
+ * they cannot be removed here. The request is refused rather than acknowledged.
  */
-async function deleteAccountDocument(id, accountType, accountId, actor = {}) {
+async function deleteAccountDocument(id, accountType, accountId) {
   if (!id) return false;
+  if (isWorkflowDocumentId(id)) {
+    throw coded(ACCOUNT_DOCUMENT_ERRORS.WORKFLOW_NOT_DELETABLE, 'WORKFLOW_DOCUMENT_NOT_DELETABLE', 409);
+  }
+  if (!pool.hasStorage()) throw persistenceUnavailable('delete', null);
 
   const normType = String(accountType || '').toLowerCase();
   const normId = String(accountId || '');
 
-  // If this is a workflow document, record in suppressed set
-  if (id.startsWith('rfq_doc_') || id.startsWith('eval_doc_') || id.startsWith('quote_doc_')) {
-    suppressedWorkflowDocIds.add(id);
-    return true;
+  try {
+    const result = await pool.query(
+      `UPDATE account_documents
+       SET is_active = 0, updated_at = now()
+       WHERE id = $1 AND account_type = $2 AND account_id = $3
+       RETURNING id`,
+      [id, normType, normId]
+    );
+    return Boolean(result?.rows?.length);
+  } catch (err) {
+    throw persistenceUnavailable('delete', err);
   }
-
-  if (pool.hasStorage()) {
-    try {
-      const result = await pool.query(
-        `UPDATE account_documents
-         SET is_active = 0, updated_at = now()
-         WHERE id = $1 AND account_type = $2 AND account_id = $3
-         RETURNING id`,
-        [id, normType, normId]
-      );
-      if (result?.rows?.length) {
-        return true;
-      }
-    } catch (err) {
-      logger.error('accountDocumentQueries: PostgreSQL deleteAccountDocument failed, falling back to memory', { error: err.message, id });
-    }
-  }
-
-  const idx = inMemoryAccountDocuments.findIndex(
-    (d) => d.id === id && d.accountType === normType && d.accountId === normId
-  );
-  if (idx !== -1) {
-    inMemoryAccountDocuments[idx].isActive = false;
-    inMemoryAccountDocuments.splice(idx, 1);
-    return true;
-  }
-
-  return false;
 }
 
 /**
@@ -423,76 +435,48 @@ async function deleteAccountDocument(id, accountType, accountId, actor = {}) {
  */
 async function getAllAccountDocuments(filters = {}) {
   const { accountType, category, search, activeOnly } = filters;
-  let persistedDocs = [];
+  if (!pool.hasStorage()) throw persistenceUnavailable('vault list', null);
 
-  if (pool.hasStorage()) {
-    try {
-      const conditions = [];
-      const values = [];
+  const conditions = [];
+  const values = [];
 
-      if (activeOnly) {
-        conditions.push('is_active = 1');
-      }
-
-      if (accountType && accountType !== 'all') {
-        values.push(String(accountType).toLowerCase());
-        conditions.push(`account_type = $${values.length}`);
-      }
-
-      if (category && category !== 'all') {
-        values.push(category);
-        conditions.push(`category = $${values.length}`);
-      }
-
-      if (search && search.trim()) {
-        values.push(`%${escapeLikeWildcards(search.trim())}%`);
-        const pIndex = values.length;
-        conditions.push(`(document_name ILIKE $${pIndex} OR file_name ILIKE $${pIndex} OR description ILIKE $${pIndex})`);
-      }
-
-      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      const queryText = `
-        SELECT id, account_type, account_id, document_name, file_name, file_size, mime_type,
-               category, file_url, description, uploaded_by, is_active, created_at, updated_at
-          FROM account_documents
-         ${whereClause}
-         ORDER BY created_at DESC
-      `;
-      const result = await pool.query(queryText, values, { d1: true });
-      persistedDocs = result.rows.map(mapRow);
-    } catch (err) {
-      logger.error('accountDocumentQueries: PostgreSQL getAllAccountDocuments failed, falling back to memory', { error: err.message });
-      persistedDocs = inMemoryAccountDocuments.slice();
-    }
-  } else {
-    persistedDocs = inMemoryAccountDocuments.slice();
-  }
-
-  let list = persistedDocs;
   if (activeOnly) {
-    list = list.filter((d) => d.isActive !== false);
+    conditions.push('is_active = 1');
   }
+
   if (accountType && accountType !== 'all') {
-    list = list.filter((d) => d.accountType === String(accountType).toLowerCase());
+    values.push(String(accountType).toLowerCase());
+    conditions.push(`account_type = $${values.length}`);
   }
+
   if (category && category !== 'all') {
-    list = list.filter((d) => d.category === category);
+    values.push(category);
+    conditions.push(`category = $${values.length}`);
   }
+
   if (search && search.trim()) {
-    const term = search.trim().toLowerCase();
-    list = list.filter((d) => {
-      const name = (d.documentName || '').toLowerCase();
-      const file = (d.fileName || '').toLowerCase();
-      const desc = (d.description || '').toLowerCase();
-      return name.includes(term) || file.includes(term) || desc.includes(term);
-    });
+    values.push(`%${escapeLikeWildcards(search.trim())}%`);
+    const pIndex = values.length;
+    conditions.push(`(document_name ILIKE $${pIndex} OR file_name ILIKE $${pIndex} OR description ILIKE $${pIndex})`);
+  }
+
+  let list;
+  try {
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const queryText = `
+      SELECT id, account_type, account_id, document_name, file_name, file_size, mime_type,
+             category, file_url, description, uploaded_by, is_active, created_at, updated_at
+        FROM account_documents
+       ${whereClause}
+       ORDER BY created_at DESC
+    `;
+    const result = await pool.query(queryText, values, { d1: true });
+    list = result.rows.map(mapRow);
+  } catch (err) {
+    throw persistenceUnavailable('vault list', err);
   }
 
   return list;
-}
-
-function getInMemoryDocuments() {
-  return inMemoryAccountDocuments.map(mapRow);
 }
 
 module.exports = {
@@ -500,8 +484,6 @@ module.exports = {
   createAccountDocument,
   deleteAccountDocument,
   getAllAccountDocuments,
-  getInMemoryDocuments,
-  resetInMemoryStore,
   mapRow,
   matchesDocumentType,
   escapeLikeWildcards,

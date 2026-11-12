@@ -385,7 +385,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useRealTimers();
   });
 
-  it('handles excel file uploads, column aliases, empty values, errors, and cross-category AI parsing', () => {
+  it('handles excel file uploads, column aliases, empty values, errors, and cross-category AI parsing', async () => {
     // 1. Create valid Vendor Master workbook with alternate column aliases and empty fallbacks
     const wsVendors = XLSX.utils.json_to_sheet([
       {
@@ -519,7 +519,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         unit: '',
         unitprice: '',
         totalspend: '',
-        division: 'General',
+        division: '',
       },
     ]);
     const wbPO = XLSX.utils.book_new();
@@ -583,6 +583,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(vInput, { target: { files: [vendorFile] } });
     }
 
+    // The vendor master is parsed asynchronously, and Step 3 opens only once vendors are stored.
+    await screen.findByText(/suppliers parsed and loaded into vendor master/i);
+
     // Go to Step 3 (PO Dump)
     fireEvent.click(screen.getByText('3. PO Dump'));
 
@@ -596,7 +599,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    const pChooseBtns = screen.getAllByText('Choose Another File');
+    // The PO dump is accepted through the step's file input, which is what offers Choose Another File.
+    const poUploadInput = container.querySelector('input[type="file"]');
+    if (poUploadInput) {
+      fireEvent.change(poUploadInput, { target: { files: [poFile] } });
+    }
+
+    // Offered only once the PO dump has parsed into records. The click is an optional branch, so it runs if the button is present.
+    const pChooseBtns = screen.queryAllByText('Choose Another File');
     if (pChooseBtns[0]) fireEvent.click(pChooseBtns[0]);
 
     const badTypeFile: any = new File(['not a spreadsheet'], 'resume.pdf', { type: 'application/pdf' });
@@ -773,6 +783,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     const wsPOs = XLSX.utils.json_to_sheet([
       {
         'PO Number': 'PO-7001',
+        'PO Date': '2025-02-01',
         'Vendor Name': 'CloudTech Solutions',
         'Item Name': 'Microsoft 365 workspace license subscription renewal, Azure cloud storage credits, BigQuery analytics data platform, Datacenter infrastructure server',
         Quantity: 1,
@@ -781,6 +792,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       },
       {
         'PO Number': 'PO-7002',
+        'PO Date': '2025-02-02',
         'Vendor Name': 'Zenith Traders',
         'Item Name': 'Office stationery and miscellaneous supplies',
         Quantity: 5,
@@ -792,6 +804,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // minor-category keywords (cloud/license/bigquery/datacenter/etc.),
         // forcing the empty-secondSetMinors fallback.
         'PO Number': 'PO-7003',
+        'PO Date': '2025-02-03',
         'Vendor Name': 'Plain Software House',
         'Item Name': 'Generic software',
         Quantity: 1,
@@ -2262,8 +2275,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    // Verify PO table displays default Department 'General' and fallback '—'
-    expect(screen.getAllByText('General').length).toBeGreaterThan(0);
+    // Department is not defaulted. Rows that omit it show a dash.
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 
@@ -2837,11 +2849,16 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [diversePoFile] } });
     }
 
-    // Verify fallback '—' rendered for empty date and zero price
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    // An empty PO date rejects the file. The message names the row and the missing field, and no row is inserted.
+    expect(screen.getByText(/Row 2: PO Date/)).toBeInTheDocument();
+
+    // A valid dump replaces the rejected one, so the reset control below is rendered.
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [createValidPoDumpFile()] } });
+    }
 
     // Test Reset PO data button (lines 1150-1160, 2363)
-    const resetPoBtn = screen.getByTitle('Reset PO data to default sample');
+    const resetPoBtn = screen.getByTitle('Reset PO data');
     fireEvent.click(resetPoBtn);
     expect(mockShowToast).toHaveBeenCalledWith('Reset Complete', expect.stringContaining('cleared'), 'info');
   });
@@ -2885,6 +2902,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Mech: pump, globe, gate, valve, hose, compressor, motor (lines 1213-1219)
         {
           'PO Number': 'PO-M1',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Centrifugal pump and valve with hydraulic hose',
           Quantity: 2,
@@ -2893,6 +2911,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         },
         {
           'PO Number': 'PO-M2',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Rotary compressor and electric motor',
           Quantity: 1,
@@ -2901,6 +2920,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         },
         {
           'PO Number': 'PO-M3',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Gate unit with hydraulic hose',
           Quantity: 1,
@@ -2909,6 +2929,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         },
         {
           'PO Number': 'PO-M4',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Globe component with compressor',
           Quantity: 1,
@@ -2918,6 +2939,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Elec: panel + breaker, and switchgear + mccb without panel/breaker (lines 1220-1223)
         {
           'PO Number': 'PO-E1',
+          'PO Date': '2025-05-02',
           'Vendor Name': 'Volt Panels Electricals',
           'Item Name': 'Electrical panel and circuit breaker with armored cable',
           Quantity: 3,
@@ -2926,6 +2948,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         },
         {
           'PO Number': 'PO-E2',
+          'PO Date': '2025-05-03',
           'Vendor Name': 'Switchgear Only Ltd',
           'Item Name': 'Switchgear and mccb unit with armored cable',
           Quantity: 2,
@@ -2935,6 +2958,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Civil: peb + tmt, and plain civil steel without peb/tmt (lines 1224-1228)
         {
           'PO Number': 'PO-C1',
+          'PO Date': '2025-05-04',
           'Vendor Name': 'Infra Civil Structures',
           'Item Name': 'Civil works peb structure and tmt steel reinforcement bars',
           Quantity: 10,
@@ -2943,6 +2967,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         },
         {
           'PO Number': 'PO-C2',
+          'PO Date': '2025-05-05',
           'Vendor Name': 'Plain Civil Works Ltd',
           'Item Name': 'Civil industrial steel structure',
           Quantity: 5,
@@ -2952,6 +2977,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Gen: no special keywords -> lines 1230-1232
         {
           'PO Number': 'PO-G1',
+          'PO Date': '2025-05-06',
           'Vendor Name': 'General Hardware Works',
           'Item Name': 'Standard fasteners and office hardware supplies',
           Quantity: 50,
@@ -2961,6 +2987,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Cloud: cloud, azure, gcp, compute, storage, license, subscription, renewal, 365, bigquery, power bi, datacenter (lines 1184-1208)
         {
           'PO Number': 'PO-CL1',
+          'PO Date': '2025-05-07',
           'Vendor Name': 'Cloud Tech Corp',
           'Item Name': 'Azure cloud storage compute credits and office 365 subscription renewal with power bi data analytics in datacenter',
           Quantity: 1,
@@ -2970,6 +2997,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Min IT: matches microsoft/software but none of cloud/license/analytics/datacenter -> lines 1210-1211 (secondSetMinors.length === 0)
         {
           'PO Number': 'PO-MIT1',
+          'PO Date': '2025-05-08',
           'Vendor Name': 'Minimal Software Corp',
           'Item Name': 'Microsoft custom software utility',
           Quantity: 1,
@@ -3102,4 +3130,4 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(/2 Supplier Records Missing Required Fields/i)).toBeInTheDocument();
   });
 });
-
+

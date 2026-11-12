@@ -244,7 +244,9 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
         { id: 'v-dispatch', name: 'Dispatch Vendor', email: 'dispatch@example.com', source: 'procucev_network', category: 'Tools' },
       ]);
       jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
-      jest.spyOn(storeService, 'addAIFeedItem').mockImplementation(() => {
+      // Synchronous failure inside the dispatch loop. Feed writes now run in the background
+      // (_recordChannelFeedItem), so a throw from _buildNotification is what reaches the catch.
+      jest.spyOn(storeService, '_buildNotification').mockImplementation(() => {
         throw dispatchError;
       });
       const errorSpy = jest.spyOn(logger, 'error');

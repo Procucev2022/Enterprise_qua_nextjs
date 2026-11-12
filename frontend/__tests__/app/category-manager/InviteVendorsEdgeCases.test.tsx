@@ -122,7 +122,7 @@ test('creates a sparse API vendor on the all-vendors tab and selects the returne
   expect(global.fetch).toHaveBeenCalledWith('/api/vendors', expect.objectContaining({
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'New supplier', contactPerson: 'New contact', email: 'contact@example.com', phone: '9876543210',
-      majorCategory: 'Cables', minorCategories: ['Custom Minor'], source: 'procucev_network' }),
+      majorCategory: 'Cables', minorCategories: ['Custom Minor'] }),
   }));
   expect(screen.getByText('New supplier')).toBeInTheDocument();
   expect(screen.getByRole('checkbox')).toBeChecked();

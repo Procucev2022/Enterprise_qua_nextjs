@@ -69,11 +69,26 @@ const DIRECT_HVAC_QUOTED: RFQFixture = {
   rfqNumber: 'RFQ-2026-00901',
   title: 'HVAC Control Retrofit',
   sourcingMode: 'mode_1',
+  category: 'Building & Infrastructure',
   // No ceiling published, so the card must say "Not Disclosed" rather than ₹0.
   budget: 0,
   targetDeliveryDate: '2026-10-01',
   deliveryLocation: 'Chennai',
   buyerAccountName: 'Tata Motors Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-hvac',
+      itemName: 'HVAC control panel',
+      quantity: 1,
+      unit: 'Nos',
+      targetDate: '2026-10-01',
+      technicalSpecs: 'DDC panel',
+      confidence: 90,
+      category: 'Building Automation & HVAC',
+      majorCategory: 'Building & Infrastructure',
+      minorCategory: 'Building Automation & HVAC',
+    },
+  ],
   quotes: [A_QUOTE],
 };
 
@@ -86,6 +101,20 @@ const DIRECT_STEEL: RFQFixture = {
   targetDeliveryDate: '2026-11-20',
   deliveryLocation: 'Surat',
   buyerAccountName: 'Tata Motors Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-steel',
+      itemName: 'Girder section',
+      quantity: 6,
+      unit: 'Nos',
+      targetDate: '2026-11-20',
+      technicalSpecs: 'IS 2062',
+      confidence: 90,
+      category: 'Structural Steel & Beams',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Structural Steel & Beams',
+    },
+  ],
 };
 
 const NETWORK_OWN: RFQFixture = {
@@ -118,10 +147,25 @@ const NETWORK_HVAC_QUOTED: RFQFixture = {
   rfqNumber: 'RFQ-2026-00903',
   title: 'HVAC control ducting',
   sourcingMode: 'mode_3',
+  category: 'Building & Infrastructure',
   budget: 0,
   targetDeliveryDate: '2026-10-15',
   deliveryLocation: 'Mumbai',
   buyerAccountName: 'Adani Enterprises Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-ducting',
+      itemName: 'Galvanised ducting section',
+      quantity: 10,
+      unit: 'Rft',
+      targetDate: '2026-10-15',
+      technicalSpecs: 'GI 24 gauge',
+      confidence: 85,
+      category: 'Building Automation & HVAC',
+      majorCategory: 'Building & Infrastructure',
+      minorCategory: 'Building Automation & HVAC',
+    },
+  ],
   quotes: [A_QUOTE],
 };
 
@@ -134,6 +178,20 @@ const NETWORK_STEEL: RFQFixture = {
   targetDeliveryDate: '2026-12-05',
   deliveryLocation: 'Kandla',
   buyerAccountName: 'Adani Enterprises Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-plate',
+      itemName: 'Carbon steel plate',
+      quantity: 2,
+      unit: 'Nos',
+      targetDate: '2026-12-05',
+      technicalSpecs: 'IS 2062 Gr B',
+      confidence: 85,
+      category: 'Structural Steel & Beams',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Structural Steel & Beams',
+    },
+  ],
 };
 
 const ALL_FIXTURES = [
@@ -144,6 +202,29 @@ const ALL_FIXTURES = [
   NETWORK_HVAC_QUOTED,
   NETWORK_STEEL,
 ];
+
+/**
+ * Shape of `GET /api/subscriptions/pricing` (the `data` payload). The 12-month seller
+ * totals are GST-inclusive at 18%, which is what the payment modal charges.
+ */
+const SUBSCRIPTION_PRICING_FIXTURE = {
+  gstPercent: 18,
+  gstRate: 0.18,
+  buyer: {},
+  seller: {
+    premium: { id: 'premium', name: 'Premium Model', free: true, price: 'Free' },
+    connect: {
+      id: 'connect',
+      name: 'Connect Model',
+      '12_months': { price: 8848.82, baseDurationPrice: 7499, gstAmount: 1349.82, totalWithGst: 8848.82 },
+    },
+    select: {
+      id: 'select',
+      name: 'Select Model',
+      '12_months': { price: 17698.82, baseDurationPrice: 14999, gstAmount: 2699.82, totalWithGst: 17698.82 },
+    },
+  },
+};
 
 // This vendor's own bootstrap record: `addedByBuyerCompany` is what
 // `isOwnBuyerRfq` in the component actually checks against `opp.buyer`
@@ -294,6 +375,34 @@ async function renderFeed(props: HarnessProps = {}) {
         json: async () => ({
           success: true,
           data: { paymentUrl: `https://payments.zoho.in/mock/${body.plan}`, paymentLinkId: `pl-${body.plan}`, status: 'CREATED' },
+        }),
+      });
+    }
+    if (typeof url === 'string' && /\/api\/subscriptions\/pricing$/.test(url)) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: SUBSCRIPTION_PRICING_FIXTURE }),
+      });
+    }
+    if (typeof url === 'string' && /\/api\/vendors\/rfq-credits$/.test(url)) {
+      // The backend's own balance: the plan quota less the downloads used. Free vendors keep 5 credits.
+      const quota = props.subscription === 'connect' ? 50 : props.subscription === 'select' ? 100 : 5;
+      const used = props.downloadsUsed ?? 0;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: {
+            vendorId: 'v-self',
+            freeCreditsAllocated: quota,
+            freeCreditsUsed: Math.min(used, quota),
+            freeCreditsRemaining: Math.max(0, quota - used),
+            isSubscribed: props.subscription === 'connect' || props.subscription === 'select',
+            subscriptionPlan: props.subscription ?? 'premium',
+            unlockedRfqIds: [],
+          },
         }),
       });
     }
@@ -528,11 +637,11 @@ describe('OpportunityFeed: direct invitation filters', () => {
     expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
 
     // Switching the major must clear the now-invalid minor rather than filter to nothing.
-    fireEvent.change(selects().directMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    fireEvent.change(selects().directMajor, { target: { value: 'Engineering Spares - Mechanical' } });
     expect(selects().directMinor.value).toBe('all');
     expect(screen.getByText('2 Targeted RFQs')).toBeInTheDocument();
 
-    fireEvent.change(selects().directMinor, { target: { value: 'Pumps & Valves' } });
+    fireEvent.change(selects().directMinor, { target: { value: 'Pumps & Accessories' } });
     expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
 
     fireEvent.change(selects().directMinor, { target: { value: 'Structural Steel & Beams' } });
@@ -570,18 +679,20 @@ describe('OpportunityFeed: direct invitation filters', () => {
     expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
   });
 
-  test('counts catalogue matches and filters the list down to them', async () => {
+  test('counts only the RFQs a catalogue product matches by keyword, and filters the list down to them', async () => {
+    // Only "Centrifugal Water Pumps & Valves" shares a keyword with the pump product. The other two
+    // targeted RFQs share none, so they are not counted as matches.
     await renderFeed({ catalogue: CATALOGUE_TWO });
 
     const toggle = directCatalogueToggle();
-    expect(within(toggle).getByText(/3 Catalogue Matches/)).toBeInTheDocument();
+    expect(within(toggle).getByText(/1 Catalogue Match/)).toBeInTheDocument();
     expect(within(toggle).getByText(/Filter RFQs/)).toBeInTheDocument();
 
     fireEvent.click(toggle);
     expect(within(toggle).getByText(/Filtered \(Click to show all\)/)).toBeInTheDocument();
-    expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
-    // Two catalogue items, so the per-card badge is plural.
-    expect(screen.getAllByText('2 Catalogue Matches').length).toBeGreaterThan(0);
+    expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
+    // One matching product on that RFQ, so the per-card badge is singular.
+    expect(screen.getAllByText('1 Catalogue Match').length).toBeGreaterThan(0);
 
     fireEvent.click(toggle);
     expect(within(toggle).getByText(/Filter RFQs/)).toBeInTheDocument();
@@ -590,9 +701,18 @@ describe('OpportunityFeed: direct invitation filters', () => {
   test('uses the singular labels when one RFQ and one catalogue item match', async () => {
     await renderFeed({ catalogue: CATALOGUE_ONE });
 
-    fireEvent.change(selects().directMajor, { target: { value: 'Building & Infrastructure' } });
-    expect(within(directCatalogueToggle()).getByText(/1 Catalogue Match$/)).toBeInTheDocument();
+    expect(within(directCatalogueToggle()).getByText(/1 Catalogue Match/)).toBeInTheDocument();
     expect(screen.getAllByText('1 Catalogue Match').length).toBeGreaterThan(0);
+  });
+
+  test('never shows a catalogue match count for an RFQ that shares no keyword with the catalogue', async () => {
+    await renderFeed({ catalogue: CATALOGUE_TWO });
+
+    fireEvent.change(selects().directMajor, { target: { value: 'Building & Infrastructure' } });
+    expect(screen.getByText('HVAC Control Retrofit')).toBeInTheDocument();
+    expect(within(directCatalogueToggle()).getByText(/0 Catalogue Matches/)).toBeInTheDocument();
+    const card = screen.getByText('HVAC Control Retrofit').closest('div.p-4') as HTMLElement;
+    expect(card).not.toHaveTextContent('Catalogue Match');
   });
 
   test('empties the list when the catalogue filter is on and the catalogue is empty', async () => {
@@ -621,13 +741,13 @@ describe('OpportunityFeed: open network filters', () => {
     fireEvent.change(selects().netMinor, { target: { value: 'Building Automation & HVAC' } });
     expect(screen.getByText(NETWORK_HVAC_QUOTED.title as string)).toBeInTheDocument();
 
-    fireEvent.change(selects().netMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    fireEvent.change(selects().netMajor, { target: { value: 'Engineering Spares - Mechanical' } });
     expect(selects().netMinor.value).toBe('all');
 
     fireEvent.change(selects().netMinor, { target: { value: 'Structural Steel & Beams' } });
     expect(screen.getByText(NETWORK_STEEL.title as string)).toBeInTheDocument();
 
-    fireEvent.change(selects().netMinor, { target: { value: 'Pumps & Valves' } });
+    fireEvent.change(selects().netMinor, { target: { value: 'Hoses, Valves & Fittings' } });
     expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
 
     fireEvent.change(selects().netMajor, { target: { value: 'all' } });
@@ -663,8 +783,9 @@ describe('OpportunityFeed: open network filters', () => {
   test('counts and filters marketplace catalogue matches', async () => {
     await renderFeed({ catalogue: CATALOGUE_TWO });
 
+    // Only the steel plate RFQ shares a keyword with the steel connector product.
     const toggle = netCatalogueToggle();
-    expect(within(toggle).getByText(/3 Catalogue Matches/)).toBeInTheDocument();
+    expect(within(toggle).getByText(/1 Catalogue Match/)).toBeInTheDocument();
     fireEvent.click(toggle);
     expect(within(toggle).getByText(/Filtered \(Click to show all\)/)).toBeInTheDocument();
     fireEvent.click(toggle);
@@ -786,8 +907,8 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
 
     fireEvent.click(downloadButtons()[1]);
-    expect(screen.getByText('Quarterly Quota Reached')).toBeInTheDocument();
-    expect(screen.getByText(/50 RFQ download limit reached/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.downloadQuotaReachedTitle)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.downloadQuotaReachedMessage)).toBeInTheDocument();
   });
 
   test('allows a marketplace download while the Connect quota remains', async () => {
@@ -803,7 +924,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     await renderFeed({ subscription: 'select', downloadsUsed: 100 });
 
     fireEvent.click(downloadButtons()[1]);
-    expect(screen.getByText(/100 RFQ download limit reached/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.downloadQuotaReachedMessage)).toBeInTheDocument();
   });
 
   test('allows a marketplace download while the Select quota remains', async () => {
@@ -845,6 +966,8 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     // within one render — each is exercised from its own fresh render.
     const r1 = await renderFeed({ subscription: 'premium' });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    // Upgrade buttons stay disabled until the plan prices have loaded from the pricing API.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[0]).toBeEnabled());
     // Connect is the first actionable row while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
     await act(async () => {
@@ -859,6 +982,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
 
     const r2 = await renderFeed({ subscription: 'premium' });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[1]).toBeEnabled());
     // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[1]);
     await act(async () => {
@@ -935,7 +1059,9 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(lockedBtns.length).toBeGreaterThan(0);
     fireEvent.click(lockedBtns[0]);
 
-    // Both Connect and Select plan buttons are labeled "Upgrade" — Connect is first
+    // Both Connect and Select plan buttons are labeled "Upgrade" — Connect is first.
+    // They stay disabled until the plan prices have loaded from the pricing API.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Upgrade$/i })[0]).toBeEnabled());
     const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
     fireEvent.click(connectBtn); // Connect plan — opens the real Zoho checkout modal
     expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
@@ -992,8 +1118,8 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     const s = selects();
 
     // Select a real major category so the minor options populate.
-    fireEvent.change(s.directMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
-    expect(s.directMajor.value).toBe('Mechanical & Fluid Equipment');
+    fireEvent.change(s.directMajor, { target: { value: 'Engineering Spares - Mechanical' } });
+    expect(s.directMajor.value).toBe('Engineering Spares - Mechanical');
     // Changing major must force minor back to 'all' (handleMajorCategoryDirect).
     expect(s.directMinor.value).toBe('all');
   });
@@ -1002,7 +1128,7 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     await renderFeed();
     const s = selects();
 
-    fireEvent.change(s.directMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    fireEvent.change(s.directMajor, { target: { value: 'Engineering Spares - Mechanical' } });
     // The minor options depend on the chosen major; whatever the second option is,
     // selecting it should stick (handleMinorCategoryDirect).
     const minorOptions = Array.from(s.directMinor.options).map((o) => o.value);
@@ -1031,8 +1157,8 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     await renderFeed();
     const s = selects();
 
-    fireEvent.change(s.netMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
-    expect(s.netMajor.value).toBe('Mechanical & Fluid Equipment');
+    fireEvent.change(s.netMajor, { target: { value: 'Engineering Spares - Mechanical' } });
+    expect(s.netMajor.value).toBe('Engineering Spares - Mechanical');
     // handleMajorCategoryNet forces the network minor back to 'all'.
     expect(s.netMinor.value).toBe('all');
 
@@ -1219,6 +1345,7 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     await renderFeed({ subscription: 'premium' });
     const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
     fireEvent.click(lockedBtns[0]);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Upgrade$/i })[0]).toBeEnabled());
     const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
     fireEvent.click(connectBtn);
     expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();

@@ -5264,3 +5264,44 @@ Seems like logs are getting stored in database, in localhost running it should b
 ```text
 Check if there is any logs getting saved in database, remove those as well
 ```
+---
+
+### Prompt 142
+
+**Timestamp**: 2026-11-11T21:32:26+05:30
+
+```text
+A lot of mock data in codebase, remove any mock data in codebase, make sure all data is fetched from database only. Seed the mock data in current database if required but all data should be fetched from database, Do not stop till all mock data's are removed. Also confirm in the end if any mock data is still left. ideally it should not be
+```
+
+---
+
+### Prompt 143
+
+**Timestamp**: 2026-11-12T08:19:32+05:30
+
+```text
+Can you get the values of database ID from codebase & share me
+```
+
+---
+### Prompt 144
+**Timestamp**: 2026-11-12T09:34:52+05:30
+```text
+Please keep commiting the changes as soon as you achieve something, for now, please commit all the changes done so far & pause for now & wait for me to ask for resuming
+```
+---
+### Prompt 145
+**Timestamp**: 2026-11-12T09:42:41+05:30
+```text
+Please fix the pre-commit issues, & commit the current changes done so far.
+```
+---
+### Prompt 146
+**Timestamp**: 2026-11-12T13:10:21+05:30
+```text
+Please fix the pre-commit issues, & commit all the current changes done so far.
+
+Please keep commiting the changes as soon as you achieve something, for now, please commit all the changes done so far & pause for now & wait for me to ask for resuming
+```
+---

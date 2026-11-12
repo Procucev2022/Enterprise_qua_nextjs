@@ -129,6 +129,7 @@ export const UI_STRINGS = {
         followupNotesPlaceholder: 'Action items for next scheduled interaction...',
         successToast: 'Communication recorded, completed task created, and follow-up scheduled.',
         errorToast: 'Failed to record communication.',
+        loadFailure: 'Communication history could not be loaded. Check your connection, then reopen this dossier to try again.',
       },
       credit: {
         totalAllocated: 'Total Credits Allocated',
@@ -144,6 +145,7 @@ export const UI_STRINGS = {
         creditAmount: 'Credit Amount',
         reason: 'Reason / Remarks',
         confirmAddCredit: 'Confirm Credit Allocation',
+        loadFailure: 'Credit history could not be loaded. Check your connection, then reopen this dossier to try again.',
       },
       payments: {
         loadFailure: 'Payment history could not be loaded from storage. Check your connection and retry.',
@@ -218,10 +220,19 @@ export const UI_STRINGS = {
         toastUploadError: 'Failed to upload document.',
         toastDeleteSuccess: 'Document deleted successfully.',
         toastDeleteError: 'Failed to delete document.',
+        totalDocuments: 'Total Documents',
+        loadingDocuments: 'Loading associated documents...',
+        retryBtn: 'Retry',
+        fileAttachmentLabel: 'File Attachment',
+        uploadNameRequired: 'Enter a name for this document before uploading.',
+        uploadFileRequired: 'Select a file to upload.',
+        fileTooLarge: 'This file is larger than the 25 MB limit. Choose a smaller file.',
+        fileSelectedSize: '{size} selected',
+        noAccountDocuments: 'No compliance or workflow records have been attached to this {accountType} account yet.',
       },
       creditApproval: {
         modalTitle: 'Request Buyer Credit Approval',
-        modalSubtitle: 'Submit credit addition for authorization by senior approvers (Srinu Sir / Sudheer Sir).',
+        modalSubtitle: 'Submit credit addition for authorization by the approver you select below.',
         buyerNameLabel: 'Buyer Name',
         availableCreditsLabel: 'Available Credits',
         requestedCreditsLabel: 'Requested Credits',
@@ -239,12 +250,14 @@ export const UI_STRINGS = {
         toastSuccess: 'Credit request submitted for approval to {approverName}. Status: Pending Approval.',
         invalidAmount: 'Please enter a valid credit amount greater than 0.',
         statusPending: 'Pending Approval',
+        approverPlaceholder: 'Enter the approver name',
+        approverRequired: 'Enter the approver name before submitting this request.',
       },
     },
 
   },
 
-  sellerDirectory: {
+sellerDirectory: {
     title: 'Sellers Directory',
     searchPlaceholder: 'Search company, contact, email, category, city...',
     allSources: 'All Sources',
@@ -314,6 +327,7 @@ export const UI_STRINGS = {
         followupNotesPlaceholder: 'Action items for next scheduled interaction...',
         successToast: 'Communication recorded and dispatched successfully.',
         errorToast: 'Error recording communication',
+        loadFailure: 'Communication history could not be loaded. Check your connection, then reopen this dossier to try again.',
       },
       quoteModal: {
         quoteDetails: 'Quotation Details',
@@ -330,9 +344,11 @@ export const UI_STRINGS = {
         purchased: 'Purchased Credits',
         adjusted: 'Adjusted Credits',
         currentBalance: 'Current Credit Balance',
+        loadFailure: 'Credit history could not be loaded. Check your connection, then reopen this dossier to try again.',
         subscriptionPlan: 'Current Subscription Plan',
       },
       payments: {
+        loadFailure: 'Payment history could not be loaded. Check your connection, then reopen this dossier to try again.',
         totalPaid: 'Total Amount Paid',
         successful: 'Total Successful Payments',
         pending: 'Pending Payments',
@@ -348,7 +364,7 @@ export const UI_STRINGS = {
       sellerQuoteCredits: {
         addCreditsBtn: '+ Add Quote Credits',
         modalTitle: 'Request Seller Quote Credit Approval',
-        modalSubtitle: 'Submit quote credit addition for authorization by senior approvers (Srinu Sir / Sudheer Sir).',
+        modalSubtitle: 'Submit quote credit addition for authorization by the approver you select below.',
         sellerNameLabel: 'Seller Name',
         currentBalanceLabel: 'Available Credits',
         currentCreditsLabel: 'Available Credits',
@@ -372,6 +388,8 @@ export const UI_STRINGS = {
         toastError: 'Failed to submit quote credit approval request.',
         errorToast: 'Failed to submit quote credit approval request.',
         invalidCreditsError: 'Please enter a valid credit amount greater than 0.',
+        approverPlaceholder: 'Enter the approver name',
+        approverRequired: 'Enter the approver name before submitting this request.',
         invalidAmount: 'Please enter a valid credit amount greater than 0.',
       },
 
@@ -397,6 +415,8 @@ export const UI_STRINGS = {
       title: 'Comparative Quote Evaluation Matrix',
       screenTag: 'Screen 1.4',
       subtitle: 'Side-by-side parametric evaluation of line-item vendor bids synthesized by QUA AI.',
+      quotesPendingTitle: 'Quotes Pending for this RFQ',
+      quotesPendingBody: 'No supplier quote has been recorded yet. The comparative evaluation matrix appears here once the first quote is received.',
     },
     vendorEvaluation: {
       title: 'Vendor Comprehensive Evaluation Summary',
@@ -673,6 +693,7 @@ export const UI_STRINGS = {
    */
   manualRfq: {
     defaultStatus: 'Quotes Pending',
+    sourcingModeRequired: 'Choose a sourcing mode before saving this RFQ. No mode is selected by default.',
 
     // Line item
     itemNameRequired: 'Describe the item. Vendors quote against this text, so it cannot be blank.',
@@ -717,6 +738,7 @@ export const UI_STRINGS = {
     deliveryPincodePlaceholder: 'e.g. 400701',
     targetDateLabel: 'Target Delivery Date',
     sourcingModeLabel: 'Sourcing Mode',
+    sourcingModePlaceholder: 'Choose a sourcing mode',
 
     lineItemsHeading: 'Line Items ({count})',
     addItemAction: 'Add Line Item',
@@ -1324,6 +1346,30 @@ export const UI_STRINGS = {
     signedInAs: 'Signed in as {userName} ({userRole}) — {orgName}.',
     otpDispatched:
       'A {codeLength}-digit verification code has been emailed to {email}. It expires in {expiryMinutes} minutes.',
+    // OTP requests. The server's own message is shown whenever it is present; these
+    // strings supply the titles and fallbacks. "Requested" is the accurate word: a
+    // code can still be pending, or only partly delivered, when the response arrives.
+    otpRequestedTitle: 'Verification Code Requested',
+    registrationCodesTitle: 'Verification Codes Requested',
+    registrationCodesFallback:
+      'Verification codes were requested for {email} (email) and +91 {mobile} (SMS). Enter both once they arrive.',
+    otpSendFailureGuidance:
+      'Check the email address and mobile number, wait a few minutes, and try again. If it keeps failing, ask your administrator to check the SMTP and SMS provider settings.',
+    bothOtpsRequiredTitle: 'Both OTPs Required',
+    bothOtpsRequiredMessage: 'Please enter both the 6-digit Email OTP and the 6-digit Mobile SMS OTP.',
+    // Input placeholders. Neutral hints only: no sample names, companies, emails or numbers.
+    fieldPlaceholders: {
+      corporateEmail: 'Corporate email address',
+      mobileNumber: '10-digit mobile number',
+      legalCompanyName: 'Legal company name',
+      fullName: 'Full name',
+      gstin: '15-character GSTIN',
+      pincode: '6-digit PIN code',
+      city: 'City',
+      state: 'State',
+      password: 'Enter password',
+      newPassword: 'At least {minLength} characters',
+    },
     loggedOutMessage: 'Successfully signed out of the secure workspace.',
     sessionExpired: 'Your session has expired. Sign in again to continue.',
     redirecting: 'Redirecting to your workspace…',
@@ -1339,7 +1385,7 @@ export const UI_STRINGS = {
       step1Title: 'Email Verification',
       step1Desc: 'Enter the 6-digit OTP sent to your registered email address.',
       step2Title: 'Phone Verification',
-      step2Desc: 'Replace the placeholder 9999999999 with your active mobile number and verify via SMS OTP.',
+      step2Desc: 'Replace the placeholder phone number with your active mobile number and verify via SMS OTP.',
       step3Title: 'Change Temporary Password',
       step3Desc: 'Replace your temporary password with a secure new permanent password.',
       step4Title: 'Organisation & Statutory Profile',
@@ -1360,13 +1406,13 @@ export const UI_STRINGS = {
       addressLabel: 'Address / Street Location',
       gstinLabel: 'GSTIN / GST Number',
       panLabel: 'PAN Number',
-      companyNamePlaceholder: 'e.g. Larsen & Toubro Procurement',
-      contactNamePlaceholder: 'e.g. Navin Chaudhary',
-      gstinPlaceholder: 'e.g. 27AAAAA0000A1Z5',
-      pincodePlaceholder: 'e.g. 411001',
-      cityPlaceholder: 'e.g. Pune',
-      statePlaceholder: 'e.g. Maharashtra',
-      addressPlaceholder: 'e.g. MIDC Industrial Area, Phase II',
+      companyNamePlaceholder: 'Legal company name',
+      contactNamePlaceholder: 'Full name of the contact person',
+      gstinPlaceholder: '15-character GSTIN',
+      pincodePlaceholder: '6-digit PIN code',
+      cityPlaceholder: 'City',
+      statePlaceholder: 'State',
+      addressPlaceholder: 'Street address',
       companyNameRequired: 'Company Name / Legal Name is required.',
       gstinRequired: 'GSTIN / GST Number is required.',
       gstinInvalid: 'GSTIN must be 15 characters in the format 99AAAAA9999A9Z9, for example 27AAAAA0000A1Z5.',
@@ -1377,10 +1423,12 @@ export const UI_STRINGS = {
       submitBtn: 'Complete Verification & Enter Portal',
       submittingBtn: 'Verifying & Setting Up Account…',
       successTitle: 'Profile Verification Complete',
-      successMessage: 'Your buyer profile is active and verified. Any pending quotes have been delivered.',
-      placeholderPhoneWarning: 'Placeholder phone 9999999999 must be replaced with your real mobile number.',
+      successMessage: 'Your buyer profile is active and verified.',
+      placeholderPhoneWarning: 'The phone number on this account is a placeholder. Replace it with your real mobile number.',
       passwordMismatch: 'New password and confirmation do not match.',
-      otpSentMessage: 'Verification code has been dispatched.',
+      otpSentMessage: 'Verification code requested. Check your email or SMS for it.',
+      emailOtpSendFailed: 'Failed to dispatch email verification OTP.',
+      smsOtpSendFailed: 'Failed to dispatch SMS verification OTP.',
     },
   },
 
@@ -1662,6 +1710,13 @@ export const UI_STRINGS = {
     confidenceLabel: 'Avg. extraction confidence',
     reviewAction: 'Open & Review Categories',
     needsCategoryReview: '{count} need category',
+    noPendingBatchTitle: 'No RFQs Awaiting Quotes',
+    noPendingBatchMessage: 'There are no RFQs in Quotes Pending to batch-chase.',
+    batchNotSentTitle: 'Batch follow-up not sent',
+    batchNotSentMessage: 'No provider accepted a follow-up message for the pending RFQs. Check the channel setup and try again.',
+    batchSentTitle: 'Batch follow-up sent',
+    batchSentMessage: 'A provider accepted follow-up messages for {accepted} of {total} pending RFQ(s).',
+    avgQuotesHint: 'Avg {average} / RFQ',
     sourceLabels: {
       email_gateway: 'via Email Upload',
       email_upload: 'Email File Upload',
@@ -1753,10 +1808,6 @@ export const UI_STRINGS = {
     connectionErrorLabel: 'Last error',
 
     // Requisition composer form & submission
-    sampleSelectorTitle: 'Select Incoming Email Requisition Sample:',
-    samplePumps: 'Mechanical Pumps & Valves',
-    sampleElectrical: 'Electrical Switchgear',
-    sampleSteel: 'Civil & PEB Steel',
     fromPlantEngineerLabel: 'FROM (PLANT ENGINEER)',
     toGatewayLabel: 'TO (ENTERPRISE GATEWAY)',
     subjectInputLabel: 'SUBJECT',
@@ -2118,19 +2169,72 @@ export const UI_STRINGS = {
 
   vendorSubscriptionModal: {
     upgradeTitle: '🔒 Upgrade Plan to Submit Quotations',
-    creditsExhaustedWarning: '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
-    connectTitle: 'Connect Model (₹7,499 + 18% GST / yr)',
-    connectDesc: 'Quote and download up to 50 RFQs in 3 months from Marketplace.',
-    selectTitle: 'Select Model (₹14,999 + 18% GST / yr)',
-    selectDesc: 'Item Catalogue (100 products) + 100 RFQs / 3 months.',
+    creditsExhaustedWarning: '⚠️ Free Quotation Credits Exhausted: You have used your free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
     activeBadge: 'Active',
     upgradeAction: 'Upgrade',
     closeAction: 'Close',
     upgradeToBidAction: '🔒 Upgrade to Bid',
     subscriptionRequiredToastTitle: 'Subscription Required',
-    subscriptionRequiredToastDesc: 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+    subscriptionRequiredToastDesc: 'Your free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
     creditsExhaustedToastTitle: 'Quotation Credits Exhausted',
-    creditsExhaustedToastDesc: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+    creditsExhaustedToastDesc: 'Your free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+  },
+
+  /**
+   * Copy for the vendor workspace (subscription, opportunity feed, quotation form, catalogue,
+   * profile, RFQ details) and the public vendor directory. Plan limits are formatted from values
+   * the pricing API returns. When a limit is not returned, the copy names no number.
+   */
+  vendorWorkspace: {
+    notAvailable: 'Not available',
+    downloadsLabel: 'RFQ Downloads:',
+    downloadsLabelThreeMonth: '3-Month Downloads:',
+    priceLoading: 'loading price…',
+    priceUnavailable: 'price unavailable',
+    pricesUnavailableNotice:
+      'Plan prices could not be loaded from the pricing service, so Connect and Select cannot be purchased right now. Retry, or reload the page if the problem continues.',
+    pricesRetryAction: 'Retry pricing',
+    pricingUnavailableTitle: 'Pricing Unavailable',
+    pricingUnavailableMessage: 'Plan prices have not loaded yet. Try again in a moment.',
+    connectPlanName: 'Connect Model',
+    connectPlanNameWithCount: 'Connect Model ({count} RFQs / 3 Months)',
+    selectPlanName: 'Select Model',
+    selectPlanNameWithCount: 'Select Model (Catalogue & {count} RFQs / 3 Months)',
+    connectQuotaWithCount: 'Quote and download up to {count} RFQs in 3 months from the Marketplace.',
+    connectQuotaWithoutCount: 'Quote and download Marketplace RFQs within the 3-month plan quota.',
+    selectQuotaWithCount: 'Item Catalogue + {count} RFQs / 3 months.',
+    selectQuotaWithoutCount: 'Item Catalogue + RFQ downloads within the 3-month plan quota.',
+    rfqQuotaFeatureWithCount: 'Download up to {count} RFQs within 3 months (90-day period)',
+    rfqQuotaFeatureWithoutCount: 'Download RFQs within the 3-month plan quota (90-day period)',
+    catalogueFeatureWithCount: 'Vendor Item Catalogue: Host up to {count} products (SKUs, MOQs & Specs)',
+    catalogueFeatureWithoutCount: 'Vendor Item Catalogue: Host products (SKUs, MOQs & Specs) within the plan limit',
+    connectActiveDescription: 'Marketplace access enabled: download open marketplace RFQs within the 3-month plan quota.',
+    selectActiveDescription: 'Full tier active: Item Catalogue unlocked and open marketplace RFQ downloads within the 3-month plan quota.',
+    downloadsUsedOfAllocated: '{used} / {allocated}',
+    downloadsRemaining: '{count} downloads remaining',
+    downloadQuotaReachedTitle: 'Download Quota Reached',
+    downloadQuotaReachedMessage: 'The RFQ download quota for this 3-month period is used up.',
+    catalogueUnavailable: 'Your product catalogue could not be loaded. Reload the page to try again.',
+    catalogueFullMessage: 'Unable to add product. The catalogue has reached its product limit.',
+    catalogueCapacityWithLimit: 'Catalogue Capacity (Limit: {limit} Products)',
+    catalogueCapacityWithoutLimit: 'Catalogue Capacity',
+    catalogueProductsWithLimit: '{count} / {limit} Products Ingested',
+    catalogueProductsWithoutLimit: '{count} Products Ingested',
+    catalogueRemainingWithLimit: 'Catalogue capacity remaining: {count}.',
+    catalogueSelectBannerWithLimit: 'Vendors on the Select Model can publish up to {limit} products with MOQs and download RFQs within the plan quota.',
+    catalogueSelectBannerWithoutLimit: 'Vendors on the Select Model can publish products with MOQs and download RFQs within the plan quota.',
+    leadTimeRequiredMessage: 'Enter the lead time in days before submitting the quotation.',
+    rfqNotInEnquiriesTitle: 'RFQ Not Available',
+    rfqNotInEnquiriesMessage: 'RFQ {rfqNumber} is not in your enquiry list. Check the RFQ number, or open your enquiries to see the RFQs assigned to your supplier account.',
+    viewAllEnquiriesAction: 'View all enquiries',
+    evaluationSavedNotice: 'Your answers and the names of attached evidence files are saved to your vendor record. The files themselves are not uploaded.',
+    rfqProfileLoadFailed: 'Your supplier profile could not be loaded, so your quotation for this RFQ cannot be shown. Try again in a moment.',
+    publicDirectory: {
+      filterOptionsUnavailable: 'Filter options could not be loaded, so the category and state lists are empty. Reload the page to try again.',
+      locationNotAvailable: 'Location not available',
+      gstinRecorded: 'GSTIN recorded',
+      gstinNotChecked: 'A GSTIN is recorded for this supplier. It has not been checked against the GST portal.',
+    },
   },
 
   vendorQuotationPage: {
@@ -2212,6 +2316,8 @@ export const UI_STRINGS = {
     signIn: 'Sign In',
     support: 'Support',
     needSupport: 'Need Support?',
+    /** Shown in place of a sourcing credit balance the server has not reported. */
+    creditBalanceUnknown: '—',
   },
 
   vendorDirectoryLogin: {
@@ -2219,15 +2325,13 @@ export const UI_STRINGS = {
     title: 'Vendor Directory Login',
     subtitle: 'Enter your Procucev corporate email address to receive a single-use verification code and access verified supplier profiles.',
     passkeyLabel: 'Directory Access Passkey',
-    passkeyPlaceholder: 'Enter directory passkey (e.g. Procucev@Vendors2026)',
+    passkeyPlaceholder: 'Enter the directory access passkey',
     submitButton: 'Authenticate & Enter Directory',
     authenticating: 'Verifying credentials...',
     exitDirectory: 'Exit Directory',
     sessionActive: 'Directory Session Active',
     invalidPasskey: 'Invalid directory access key. Please enter the valid passkey provided by Procucev.',
     emptyPasskey: 'Please enter the directory passkey to proceed.',
-    quickAccessHint: 'Enterprise Directory Key:',
-    useDemoKey: 'Use Demo Key',
     backToMainLogin: 'Platform Main Login (Buyer / Admin)',
     mainLoginDesc: 'Are you an Enterprise Buyer or Category Manager?',
     securedAccess: 'AES-256 Authenticated Gateway',
@@ -2236,7 +2340,7 @@ export const UI_STRINGS = {
     emailStepTitle: 'Company Employee Directory Sign In',
     emailStepSubtitle: 'Enter your official @procucev.com email address to receive a single-use verification code.',
     emailLabel: 'Procucev Corporate Email',
-    emailPlaceholder: 'e.g. name@procucev.com',
+    emailPlaceholder: 'Enter your corporate email address',
     sendOtpButton: 'Send Verification Code',
     sendingOtp: 'Sending verification code...',
     otpStepTitle: 'Enter Verification Code',
@@ -2654,6 +2758,10 @@ export const UI_STRINGS = {
       columnSettingsTooltip: 'Table Column Settings',
       exportCsvBtn: 'Export CSV',
       exportCsvSuccess: 'Approval records exported successfully.',
+      projectFilterPlaceholder: 'Filter by project name',
+      approverInputPlaceholder: 'Enter the approver name',
+      approverRequired: 'Enter the approver name before confirming this decision.',
+      columnSettingsSaved: 'Column settings saved.',
 
       // Table Headers & Actions
       colRequestId: 'Request ID',
@@ -2872,6 +2980,7 @@ export const UI_STRINGS = {
         ackSubmit: 'Save Status',
         historyTitle: 'Communication & Acknowledgement Audit Trail',
         noHistoryFound: 'No communication attempts recorded for this account yet.',
+        whatsAppSendFailed: 'Failed to initiate WhatsApp notification',
         cancel: 'Cancel',
         close: 'Close',
       },
@@ -2879,7 +2988,146 @@ export const UI_STRINGS = {
     },
   },
 
+  /** Load and send failures reported by the lib clients. Pages show these in their error state. */
+  dataLoad: {
+    failedWithStatus: 'Could not load {resource} (HTTP {status}). Try again in a moment.',
+    networkFailed: 'Could not reach the server to load {resource}. Check your connection and try again.',
+    requestNetworkFailed: 'Could not reach the server. Check your connection and try again.',
+    secureIdUnavailable: 'This browser cannot create a secure request ID, so the request was not sent. Use an up-to-date browser and try again.',
+    documentFileRequired: 'Choose a file, or enter its file name, before recording this document.',
+    notConfirmed: 'The server did not confirm that the change was saved. Refresh the list and check before trying again.',
+    requestFailedWithStatus: 'The request failed (HTTP {status}). Try again in a moment.',
+    inviteCountMissing: 'The server did not report how many vendors were invited. Refresh the RFQ to see the current invitations before trying again.',
+    categoryUpdateNotConfirmed: 'The server did not confirm that the category update email was sent or queued.',
+    whatsAppLinkOnly: 'WhatsApp was not sent by a provider. Open the link to send the message from your own WhatsApp.',
+    unexpectedResponse: 'The server returned an unexpected response while loading {resource}. Try again.',
+    // Shown in exported spreadsheets where a value is not recorded. Never a substitute value.
+    emptyCell: '—',
+    /** Names of the data sets a failure message refers to, as they appear in "Could not load {resource}". */
+    resources: {
+      taskTypes: 'task types',
+      internalTasks: 'internal tasks',
+      taskSummary: 'task summary',
+      assignees: 'task assignees',
+      relatedRecords: 'related records',
+      paymentDuesSummary: 'payment dues summary',
+      paymentDues: 'payment dues accounts',
+      paymentDuesHistory: 'communication history',
+      loginLogs: 'login logs',
+      loginLogsSummary: 'login log summary',
+      approvals: 'approval requests',
+      approvalSummary: 'approval summary',
+      tickets: 'tickets',
+      ticketSummary: 'ticket summary',
+      accountDocuments: 'account documents',
+      actionCenterCommunications: 'communication log',
+      vendorPresence: 'vendor presence',
+      scorecard: 'scorecard',
+      documentVault: 'document vault',
+      documentVaultSummary: 'document vault summary',
+      report: 'the report',
+      supplierDetails: 'supplier details',
+    },
+  },
 
+  /** PIN code checks against the postal records service. */
+  pincodeVerification: {
+    unverified: 'Could not verify this PIN code with the postal records service. Check your connection and try again.',
+    formatValid: 'PIN code format is valid. It has not been checked against postal records.',
+    notFound: 'PIN Code is not found or invalid in postal records.',
+    required: 'PIN code is required.',
+    invalidFormat: 'PIN / ZIP Code must be 3 to 10 letters, digits, spaces or hyphens.',
+    dummy: 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.',
+  },
+
+  /** Labels for vendor ranking results where the vendor location is not known. */
+  vendorRanking: {
+    locationNotConfirmed: 'Location not confirmed',
+  },
+
+  /** Mode 3 survey dialog. No survey endpoint is connected, so the dialog only states that and sends nothing. */
+  vendorSurvey: {
+    notConnected: 'The Mode 3 survey cannot be sent from this screen because no survey dispatch service is connected. Nothing has been sent to any supplier.',
+    closeButton: 'Close',
+  },
+
+  /** Shown in place of a value that a record does not hold. Never a substitute value. */
+  recordPlaceholders: {
+    notRecorded: 'Not recorded',
+    notAvailable: 'Not available',
+  },
+
+  /** Admin infrastructure and system configuration screen. Each value comes from the server or is marked not available. */
+  infraControl: {
+    title: 'Infrastructure & System Configuration',
+    notAvailable: 'Not available',
+    auditTrailButton: 'Immutable Audit Trail',
+    healthTitle: 'Infrastructure Health',
+    healthEmpty: 'No infrastructure health result has been received from the server.',
+    latencyLabel: 'Latency',
+    statusOnline: 'Online',
+    statusUnreachable: 'Unreachable',
+    statusNotConfigured: 'Not configured',
+    statusChecking: 'Checking',
+    configTitle: 'AI Engine Configuration',
+    configReadOnlyNote: 'Read-only. The server stores no editable settings, so these values cannot be changed on this screen.',
+    configModelLabel: 'Model',
+    configTemperatureLabel: 'Temperature',
+    configEmpty: 'The system configuration has not been received from the server.',
+    databaseTitle: 'Database Connection',
+    databaseChecking: 'Checking...',
+    databaseConnected: 'Connected ({latencyMs} ms)',
+    databaseConnectedNoLatency: 'Connected',
+    databaseConnectionError: 'Connection error',
+    databaseNotConfigured: 'Not configured',
+    databaseStatusUnavailable: 'Status unavailable',
+    databaseStatusFailed: 'The database status could not be read. Check that the server is running, then select Test Connection to try again.',
+    loadedBuyerAccounts: 'Buyer accounts loaded',
+    loadedVendors: 'Vendors loaded',
+    loadedRfqs: 'RFQs loaded',
+    testConnection: 'Test Connection',
+    testingConnection: 'Testing...',
+    connectedToastTitle: 'Database connected',
+    connectedToastMessage: 'Connected to {provider} with {latencyMs} ms latency.',
+    connectedToastMessageNoLatency: 'Connected to {provider}.',
+    notConnectedToastTitle: 'Database not connected',
+    statusFailedToastTitle: 'Database status unavailable',
+  },
+
+  /** Support chat widget. The only source of replies is the support chat endpoint, so no answer is written in the app. */
+  supportChat: {
+    triggerLabel: 'Open support chat',
+    triggerTitle: 'Support chat',
+    hoverPrompt: 'Need help? Open support chat',
+    headerTitle: 'Support chat',
+    closeTitle: 'Close chat',
+    restartTitle: 'Restart conversation',
+    maximizeTitle: 'Maximize view',
+    restoreTitle: 'Restore compact view',
+    intro: 'Messages are sent to the support chat service. A reply appears here only when that service answers.',
+    roleBuyer: 'Buyer workspace',
+    roleVendor: 'Vendor portal',
+    roleCategoryManager: 'Category manager workspace',
+    roleAdmin: 'Admin workspace',
+    inputPlaceholder: 'Ask a question...',
+    clearInputLabel: 'Clear message',
+    sendTitle: 'Send',
+    copyTitle: 'Copy response',
+    waitingForReply: 'Waiting for the support chat service',
+    footerHint: 'Press Enter to send',
+    unreachable: 'The support chat service could not be reached. Your message was not answered. Check your connection and try again.',
+    unexpectedResponse: 'The support chat service returned an unexpected response. Your message was not answered.',
+    quickSubscriptionsLabel: '📦 Subscriptions',
+    quickSubscriptionsPrompt: 'Explain vendor subscription plans and RFQ quotas.',
+    quickSourcingModesLabel: '⚡ Sourcing Modes',
+    quickSourcingModesPrompt: 'What is the difference between Mode 1, 2, and 3?',
+    quickRfqDownloadLabel: '📄 RFQ Download',
+    quickRfqDownloadPrompt: 'How do vendors download RFQs and submit quotes?',
+    quickAgentLabel: '🎧 Agent Support',
+    quickAgentPrompt: 'Connect me with a support agent.',
+  },
+
+  
 };
 
 /**

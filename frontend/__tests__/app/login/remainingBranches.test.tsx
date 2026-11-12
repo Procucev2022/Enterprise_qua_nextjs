@@ -217,19 +217,23 @@ describe('registration validation and OTP retry boundaries', () => {
     expect(showToast).toHaveBeenCalledWith(UI_STRINGS.auth.missingFieldsTitle, expect.any(String), 'warning');
   });
 
-  test('resends separate development codes and preserves typed codes when a resend omits them', async () => {
+  test('never fills verification codes from the server and keeps the codes typed before a resend', async () => {
+    // The middle response still carries legacy code fields. Neither input may take them.
+    const legacyCodes = { success: true, demoEmailCode: '111222', demoMobileCode: '333444' };
     jest.mocked(authClient.requestOtp)
-      .mockResolvedValueOnce({ success: true })
-      .mockResolvedValueOnce({ success: true, demoEmailCode: '111222', demoMobileCode: '333444' })
-      .mockResolvedValueOnce({ success: true });
+      .mockResolvedValueOnce({ success: true, message: 'Verification codes requested' })
+      .mockResolvedValueOnce(legacyCodes)
+      .mockResolvedValueOnce({ success: true, message: 'Verification codes requested again' });
     const { container } = render(<LoginPage />);
     openRegister();
     fillRegistration();
     await act(async () => { submit(container); });
     const resendButton = screen.getByRole('button', { name: /Resend Verification Codes/ });
+    expect(document.getElementById('reg-email-otp')).toHaveValue('');
+    expect(document.getElementById('reg-mobile-otp')).toHaveValue('');
     await act(async () => { fireEvent.click(resendButton); });
-    expect(document.getElementById('reg-email-otp')).toHaveValue('111222');
-    expect(document.getElementById('reg-mobile-otp')).toHaveValue('333444');
+    expect(document.getElementById('reg-email-otp')).toHaveValue('');
+    expect(document.getElementById('reg-mobile-otp')).toHaveValue('');
     change('reg-email-otp', '555666');
     change('reg-mobile-otp', '777888');
     await act(async () => { fireEvent.click(resendButton); });
@@ -238,13 +242,16 @@ describe('registration validation and OTP retry boundaries', () => {
   });
 
   test('does not create a session for a successful registration response missing its user', async () => {
-    jest.mocked(authClient.requestOtp).mockResolvedValue({ success: true, demoCode: '123456' });
+    jest.mocked(authClient.requestOtp).mockResolvedValue({ success: true });
     jest.mocked(authClient.register).mockResolvedValue({ success: true });
     const { container } = render(<LoginPage />);
     openRegister();
     fillRegistration();
     change('reg-gstin', 'SHORT');
     await act(async () => { submit(container); });
+    // The codes are typed by the user; the server does not supply them.
+    change('reg-email-otp', '123456');
+    change('reg-mobile-otp', '654321');
     await act(async () => { submit(container); });
     expect(authClient.register).toHaveBeenCalledWith(expect.objectContaining({ pan: '', gstin: 'SHORT' }));
     expect(setCurrentUserSession).not.toHaveBeenCalled();

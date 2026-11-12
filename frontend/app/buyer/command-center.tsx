@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
 import { SOURCING_MODES, formatIndianDateTime } from '@/lib/constants';
 import { RFQItem } from '@/lib/types';
@@ -11,11 +11,9 @@ import {
   SupplierQuotesModal,
 } from '@/app/components/Modals';
 import {
-  TrendingUp,
   FileText,
   Clock,
   Plus,
-  UploadCloud,
   Sparkles,
   Bot,
   Layers,
@@ -48,8 +46,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     deepDiveModalOpen,
     setDeepDiveModalOpen,
     openRFQDeepDive,
-    remainingFreeRFQs,
-    activeSubscription,
     activeBuyerAccount,
     setInitialSetupModalOpen,
     initialSetupCompleted,
@@ -62,14 +58,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const [activePipelineModalOpen, setActivePipelineModalOpen] = useState(false);
   const [intakeSourcesModalOpen, setIntakeSourcesModalOpen] = useState(false);
   const [supplierQuotesModalOpen, setSupplierQuotesModalOpen] = useState(false);
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTick((t) => t + 1);
-    }, 10000);
-    return () => clearInterval(timer);
-  }, []);
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side, via the same buyer_accounts record RFQs are stamped with —
@@ -91,23 +79,17 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const webPortalRFQs = rfqs.filter((r) => r.source === 'web_portal' || r.source === 'ai_extraction' || (!r.source && r.source !== 'manual_entry'));
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
-  // Multi-channel totals calculation
-  const totalWhatsApp = rfqs.reduce((acc, r) => {
-    const vCount = r.assignedVendors?.length || r.followUpData?.totalInvited || 0;
-    return acc + (r.followUpData?.whatsappStats?.total || vCount);
-  }, 0);
-  const readWhatsApp = rfqs.reduce((acc, r) => acc + (r.followUpData?.whatsappStats?.read || 0), 0);
-  const totalSMS = rfqs.reduce((acc, r) => {
-    const vCount = r.assignedVendors?.length || r.followUpData?.totalInvited || 0;
-    return acc + (r.followUpData?.smsStats?.total || vCount);
-  }, 0);
-  const totalEmail = rfqs.reduce((acc, r) => {
-    const vCount = r.assignedVendors?.length || r.followUpData?.totalInvited || 0;
-    return acc + (r.followUpData?.emailStats?.total || vCount);
-  }, 0);
+  // Outreach totals count only messages the server reported in followUpData.
+  // A missing stats block means "no data", so the cards show a dash, not zero.
+  const hasOutreachStats = rfqs.some(
+    (r) => Boolean(r.followUpData?.whatsappStats || r.followUpData?.smsStats || r.followUpData?.emailStats)
+  );
+  const totalWhatsApp = rfqs.reduce((acc, r) => acc + (r.followUpData?.whatsappStats?.total || 0), 0);
+  const totalSMS = rfqs.reduce((acc, r) => acc + (r.followUpData?.smsStats?.total || 0), 0);
+  const totalEmail = rfqs.reduce((acc, r) => acc + (r.followUpData?.emailStats?.total || 0), 0);
   const totalFollowupsToday = totalWhatsApp + totalSMS + totalEmail;
 
-  const getSourceBadge = (source?: string, autoCirculated?: boolean) => {
+  const getSourceBadge = (source?: string) => {
     if (source === 'email_gateway' || source === 'email_upload') {
       return (
         <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
@@ -190,149 +172,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     }
   };
 
+  // The feed is only the events the server returned in aiFeed, limited to the
+  // signed-in buyer's account. Nothing is synthesized from RFQ data.
   const buyerScopedFeed = useMemo(() => {
-    const feed = (aiFeed || []).filter((item) => {
+    return (aiFeed || []).filter((item) => {
       if (activeBuyerAccount?.id && item.buyerAccountId && item.buyerAccountId !== activeBuyerAccount.id) {
         return false;
       }
       return true;
     });
-
-    if (feed.length === 0) {
-      void tick;
-      const existingRfqChannels = new Set<string>();
-      const buyerRfqs = (allRfqs || []).filter((r: any) => {
-        if (r.status === 'Draft' || r.status === 'Parsing') return false;
-        if (activeBuyerAccount?.id && r.buyerAccountId && r.buyerAccountId !== activeBuyerAccount.id) {
-          return Boolean(
-            activeBuyerAccount.corporateEmail &&
-            r.buyerEmail &&
-            activeBuyerAccount.corporateEmail.toLowerCase() === r.buyerEmail.toLowerCase()
-          );
-        }
-        return true;
-      });
-
-      for (const rfq of buyerRfqs) {
-        const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : Date.now();
-        const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
-        const smsDue = ageMs >= 5 * 60 * 1000;
-        const waDue = ageMs >= 12 * 60 * 60 * 1000;
-        const emailDue = ageMs >= 24 * 60 * 60 * 1000;
-
-        let vendors: any[] = Array.isArray(rfq.followUpData?.vendors) && rfq.followUpData.vendors.length > 0
-          ? rfq.followUpData.vendors
-          : (Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0 ? rfq.assignedVendors : []);
-
-        const totalInvited = Math.max(
-          rfq.assignedVendors?.length || 0,
-          rfq.procucevVendorCount || 0,
-          rfq.followUpData?.totalInvited || 0,
-          rfq.followUpData?.smsStats?.total || 0
-        );
-
-        if (vendors.length === 0 && totalInvited > 0) {
-          vendors = Array.from({ length: Math.min(totalInvited, 9) }).map((_, idx) => ({
-            id: `v-auto-${rfq.rfqNumber}-${idx + 1}`,
-            name: `Procucev Verified Supplier #${idx + 1}`,
-            phone: `+91 98000 ${String(10000 + idx).slice(1)}`,
-            email: `vendor${idx + 1}@procucev-dev.com`,
-          }));
-        }
-
-        const sysKey = `${rfq.rfqNumber}-system-orchestrator`;
-        if (!existingRfqChannels.has(sysKey)) {
-          existingRfqChannels.add(sysKey);
-          feed.push({
-            id: `feed-sys-${rfq.rfqNumber}`,
-            type: 'ingestion',
-            channel: 'system',
-            title: `Autonomous Sourcing Engine Initialized: ${rfq.rfqNumber}`,
-            message: `RFQ ${rfq.rfqNumber} dispatched to ${totalInvited} matched supplier(s). Multi-channel outreach scheduled: SMS (5m), WhatsApp (12h), Email (24h).`,
-            recipient: 'Procurement AI Orchestrator',
-            timestamp: rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now',
-            timeAgo: 'Active',
-            rfqNumber: rfq.rfqNumber,
-            buyerAccountId: rfq.buyerAccountId || undefined,
-            status: 'delivered',
-          });
-        }
-
-        for (const v of vendors) {
-          if (!v) continue;
-          const vName = v.name || v.vendorName || 'Vendor';
-          const vPhone = v.phone || v.mobile || v.mobileNumber || '';
-          const vEmail = v.email || '';
-          const vId = v.id || v.vendorId || vName;
-          const vPhoneLabel = vPhone ? ` (${vPhone})` : '';
-          const vEmailLabel = vEmail ? ` (${vEmail})` : '';
-          const formattedTs = rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : 'Just now';
-
-          if (smsDue) {
-            const smsKey = `${rfq.rfqNumber}-sms-${vName}`;
-            if (!existingRfqChannels.has(smsKey)) {
-              existingRfqChannels.add(smsKey);
-              feed.push({
-                id: `feed-sms-${rfq.rfqNumber}-${vId}`,
-                type: 'sms',
-                channel: 'sms',
-                title: `SMS Alert Delivered: ${vName}`,
-                message: `DLT registered SMS gateway alert pushed to ${vPhone || vName} for ${rfq.rfqNumber}.`,
-                recipient: `${vName}${vPhoneLabel}`,
-                timestamp: formattedTs,
-                timeAgo: 'Delivered',
-                rfqNumber: rfq.rfqNumber,
-                buyerAccountId: rfq.buyerAccountId || undefined,
-                status: 'delivered',
-              });
-            }
-          }
-
-          if (waDue) {
-            const waKey = `${rfq.rfqNumber}-whatsapp-${vName}`;
-            if (!existingRfqChannels.has(waKey)) {
-              existingRfqChannels.add(waKey);
-              feed.push({
-                id: `feed-wa-${rfq.rfqNumber}-${vId}`,
-                type: 'whatsapp',
-                channel: 'whatsapp',
-                title: `WhatsApp Invitation Delivered: ${vName}`,
-                message: `Interactive quotation link delivered with secure access token to ${vName}${vPhoneLabel} for ${rfq.rfqNumber}.`,
-                recipient: `${vName}${vPhoneLabel}`,
-                timestamp: formattedTs,
-                timeAgo: 'Delivered',
-                rfqNumber: rfq.rfqNumber,
-                buyerAccountId: rfq.buyerAccountId || undefined,
-                status: 'delivered',
-              });
-            }
-          }
-
-          if (emailDue) {
-            const emailKey = `${rfq.rfqNumber}-email-${vName}`;
-            if (!existingRfqChannels.has(emailKey)) {
-              existingRfqChannels.add(emailKey);
-              feed.push({
-                id: `feed-email-${rfq.rfqNumber}-${vId}`,
-                type: 'email',
-                channel: 'email',
-                title: `Invitation Email Delivered: ${vName}`,
-                message: `RFQ ${rfq.rfqNumber} invitation delivered to ${vEmail || vName}. One-click bid link activated.`,
-                recipient: `${vName}${vEmailLabel}`,
-                timestamp: formattedTs,
-                timeAgo: 'Delivered',
-                rfqNumber: rfq.rfqNumber,
-                buyerAccountId: rfq.buyerAccountId || undefined,
-                status: 'delivered',
-              });
-            }
-          }
-        }
-      }
-    }
-
-    return feed;
-  }, [aiFeed, activeBuyerAccount, allRfqs, tick]);
+  }, [aiFeed, activeBuyerAccount]);
 
   const filteredFeed = buyerScopedFeed.filter((item) => {
     switch (feedChannelFilter) {
@@ -353,7 +202,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     { key: 'all' as const, label: `All (${buyerScopedFeed.length})`, activeClass: 'bg-slate-800 dark:bg-white text-white dark:text-slate-900' },
     { key: 'whatsapp' as const, label: 'WA', icon: <MessageSquare size={11} />, activeClass: 'bg-emerald-600 text-white' },
     { key: 'sms' as const, label: 'SMS', icon: <Smartphone size={11} />, activeClass: 'bg-sky-600 text-white' },
-    { key: 'email' as const, label: 'Email (24h)', icon: <Mail size={11} />, activeClass: 'bg-amber-600 text-white' },
+    { key: 'email' as const, label: 'Email', icon: <Mail size={11} />, activeClass: 'bg-amber-600 text-white' },
     { key: 'system' as const, label: 'System', activeClass: 'bg-indigo-600 text-white' },
   ];
 
@@ -415,9 +264,11 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
           <div className="flex items-baseline justify-between mt-1.5">
             <div className="flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalActiveRFQs}</span>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                {isLoadingRFQs && totalActiveRFQs === 0 ? 'Syncing...' : (totalActiveRFQs > 0 ? '100% On Schedule' : 'No Active RFQs')}
-              </span>
+              {totalActiveRFQs === 0 && (
+                <span className="text-[10px] text-slate-500 dark:text-gray-400 font-bold bg-slate-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-full border border-slate-200 dark:border-gray-700">
+                  {isLoadingRFQs ? 'Syncing...' : 'No Active RFQs'}
+                </span>
+              )}
             </div>
           </div>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 to-cyan-500" />
@@ -488,7 +339,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-500 to-blue-500" />
         </div>
 
-        {/* Follow Ups Today */}
+        {/* Live Outreach */}
         <div
           onClick={() => {
             if (rfqs.length > 0) {
@@ -503,7 +354,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Live Outreach</span>
-              <span className="live-dot" style={{ width: 6, height: 6 }} />
             </div>
             <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline">
               <span>Vendor Follow-Up Details</span>
@@ -511,16 +361,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             </div>
           </div>
           <div className="flex items-center justify-between mt-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalFollowupsToday}</span>
+            <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{hasOutreachStats ? totalFollowupsToday : '—'}</span>
             <div className="flex items-center gap-1 flex-wrap">
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
-                <MessageSquare size={10} /> {totalWhatsApp}
+                <MessageSquare size={10} /> {hasOutreachStats ? totalWhatsApp : '—'}
               </span>
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-50 dark:bg-cyan-950/60 text-sky-600 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 flex items-center gap-1">
-                <Smartphone size={10} /> {totalSMS}
+                <Smartphone size={10} /> {hasOutreachStats ? totalSMS : '—'}
               </span>
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
-                <Mail size={10} /> {totalEmail}
+                <Mail size={10} /> {hasOutreachStats ? totalEmail : '—'}
               </span>
             </div>
           </div>
@@ -630,7 +480,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                       <span className="text-xs font-bold text-slate-900 dark:text-white mono group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
                         {rfq.rfqNumber}
                       </span>
-                      {getSourceBadge(rfq.source, rfq.autoCirculated)}
+                      {getSourceBadge(rfq.source)}
                       {getModeBadge(rfq.sourcingMode)}
                     </div>
                     <div className="flex items-center gap-2">
@@ -669,15 +519,15 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                       <span>•</span>
                       {rfq.source === 'email_gateway' ? (
                         <span className="text-amber-600 dark:text-amber-400 font-mono">
-                          Origin: {rfq.sourceEmail || activeBuyerAccount?.corporateEmail || 'via Email Upload'} (Auto-Circulated)
+                          Origin: {rfq.sourceEmail || '—'}
                         </span>
                       ) : rfq.source === 'email_upload' ? (
                         <span className="text-purple-600 dark:text-purple-400 font-mono">
-                          File: {rfq.sourceFileName || 'Requisition_Email.eml'}
+                          File: {rfq.sourceFileName || '—'}
                         </span>
                       ) : (
                         <span className="text-indigo-600 dark:text-indigo-400 font-mono">
-                          Intake: {rfq.sourceFileName || 'Web Portal Ingest'}
+                          Intake: {rfq.sourceFileName || '—'}
                         </span>
                       )}
                     </div>
@@ -697,35 +547,28 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                           followUp?.emailStats?.total || 0,
                           Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
                         );
-                        const isDispatched = rfq.status !== 'Parsing' && vCount > 0;
 
-                        const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : Date.now();
-                        const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
-                        const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
-                        const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
-                        const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
-
+                        // Read and delivered counts come only from the server's
+                        // stats and per-vendor statuses. Time since creation is
+                        // not evidence that a message was read or delivered.
                         const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-                        const rawWaRead = Math.max(
+                        const waRead = Math.max(
                           followUp?.whatsappStats?.read || 0,
                           followUp?.whatsappStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
+                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
                         );
-                        const waRead = waDue ? (rawWaRead || waTotal) : 0;
 
                         const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-                        const rawSmsDelivered = Math.max(
+                        const smsDelivered = Math.max(
                           followUp?.smsStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
+                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
                         );
-                        const smsDelivered = smsDue ? (rawSmsDelivered || smsTotal) : 0;
 
                         const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-                        const rawEmailDelivered = Math.max(
+                        const emailDelivered = Math.max(
                           followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
+                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
                         );
-                        const emailDelivered = emailDue ? (rawEmailDelivered || emailTotal) : 0;
                         const totalInvited = Math.max(
                           followUp?.totalInvited || 0,
                           vCount,
@@ -738,7 +581,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                           rfq.quotesCount || 0
                         );
                         const vendorRespondedCount = Array.isArray(followUp?.vendors)
-                          ? followUp.vendors.filter((v: any) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
+                          ? followUp.vendors.filter((v) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
                           : 0;
                         const responded = Math.max(
                           followUp?.respondedCount || 0,
@@ -791,9 +634,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 Vendor Follow Up Status
               </h2>
             </div>
-            <span className="text-[9px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-500/20 font-bold">
-              Live
-            </span>
           </div>
 
           {/* Channel Filters */}
@@ -803,8 +643,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 key={tab.key}
                 onClick={() => setFeedChannelFilter(tab.key)}
                 className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
-                  (tab as any).hidden ? 'hidden' : ''
-                } ${
                   feedChannelFilter === tab.key
                     ? tab.activeClass
                     : 'bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-300'
@@ -822,7 +660,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               <div className="p-6 text-center text-slate-400 dark:text-gray-500">
                 <Bot size={26} className="mx-auto mb-2 opacity-40 text-indigo-500" />
                 <p className="text-xs font-semibold text-slate-600 dark:text-gray-400">No outreach events yet</p>
-                <p className="text-[10px] mt-1 text-slate-400">Live multi-channel telemetry (calls, WhatsApp, SMS) will stream here once an RFQ is dispatched.</p>
+                <p className="text-[10px] mt-1 text-slate-400">Outreach events (calls, WhatsApp, SMS) appear here once the server reports them.</p>
               </div>
             ) : (
               filteredFeed.map((item) => (
@@ -890,14 +728,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 </div>
               ))
             )}
-          </div>
-
-          {/* Footer */}
-          <div className="px-4 py-2.5 border-t border-slate-100 dark:border-gray-800 text-[10px] text-slate-400 dark:text-gray-500 flex items-center justify-between">
-            <span className="flex items-center gap-1">
-              <span className="live-dot" style={{ width: 5, height: 5 }} /> Voice, WhatsApp & SMS
-            </span>
-            <span className="text-indigo-500 dark:text-indigo-400 font-semibold">24/7 Active</span>
           </div>
         </div>
       </div>

@@ -107,7 +107,7 @@ function mapRowToProfile(row) {
     // Section 1 — legal entity and tax registration
     companyName: text(row.organization_name),
     brandName: preferred(row.brand_name, row.refference),
-    organizationType: text(row.type) || BUYER_PROFILE_CONFIG.DEFAULT_ORGANIZATION_TYPE,
+    organizationType: text(row.type),
     panNumber: text(row.pan),
     gstNumber: text(row.gstin),
     cinNumber: preferred(row.cin, row.crn),
@@ -119,7 +119,7 @@ function mapRowToProfile(row) {
     city: text(row.city),
     state: text(row.state),
     pincode: text(row.zip_code) || text(row.pincode),
-    country: text(row.country) || BUYER_PROFILE_CONFIG.DEFAULT_COUNTRY,
+    country: text(row.country),
 
     // Section 3 — primary procurement contact. Name falls back to the account
     // holder's name so a profile that has never been saved is not blank.

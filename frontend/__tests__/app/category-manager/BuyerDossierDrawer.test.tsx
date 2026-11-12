@@ -5,6 +5,7 @@ import type { BuyerAccount, RFQItem } from '@/lib/types';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import * as accountDocsClient from '@/lib/accountDocumentsClient';
+import { authClient } from '@/lib/authClient';
 jest.mock('@/lib/accountDocumentsClient', () => ({
   createCreditApprovalIdempotencyKey: jest.fn(() => '00000000-0000-4000-8000-000000000001'),
   requestBuyerCreditApproval: jest.fn().mockResolvedValue({ success: true, message: 'Request submitted' }),
@@ -20,6 +21,25 @@ jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerCommunications: jest.fn(),
   fetchBuyerPaymentHistory: jest.fn(),
   recordBuyerCommunication: jest.fn(),
+  fetchCategoryTaxonomy: jest.fn().mockResolvedValue({
+    success: true,
+    data: [
+      { majorCategory: 'General Procurement', minorCategories: [] },
+      { majorCategory: 'Raw Materials', minorCategories: [] },
+      { majorCategory: 'Spares', minorCategories: [] },
+      { majorCategory: 'Capital Equipment', minorCategories: [] },
+      { majorCategory: 'IT & Telecom', minorCategories: [] },
+    ],
+  }),
+}));
+
+jest.mock('@/lib/internalTaskClient', () => ({
+  fetchInternalAssignees: jest.fn().mockResolvedValue({
+    assignees: [
+      { id: 'exec-1', name: 'Test Assignee', role: 'Category Specialist' },
+      { id: 'exec-2', name: 'Second Assignee', role: 'Account Manager' },
+    ],
+  }),
 }));
 
 jest.mock('@/lib/documentVaultClient', () => ({
@@ -173,6 +193,19 @@ describe('BuyerDossierDrawer', () => {
   const onCloseMock = jest.fn();
   const onSelectRFQMock = jest.fn();
   let clickSpy: jest.SpyInstance;
+  let sessionSpy: jest.SpyInstance | undefined;
+
+  // The credit initiator comes from the session. The approver name is typed. Both must be set before a
+  // credit request can be submitted.
+  const signInAndChooseApprover = () => {
+    sessionSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      id: 'session-user-1',
+      name: 'Session Initiator',
+      email: 'initiator@example.com',
+    } as unknown as ReturnType<typeof authClient.getSessionUser>);
+    const approverInput = document.getElementById('credit-approver') as HTMLInputElement;
+    fireEvent.change(approverInput, { target: { value: 'Test Approver' } });
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -262,6 +295,8 @@ describe('BuyerDossierDrawer', () => {
 
   afterEach(() => {
     clickSpy?.mockRestore();
+    sessionSpy?.mockRestore();
+    sessionSpy = undefined;
   });
 
   test('1. Renders Buyer Profile Header without Buyer ID, with Company Name, Sourcing Mode, Add Credit button, and registration date', () => {
@@ -327,7 +362,8 @@ describe('BuyerDossierDrawer', () => {
     if (creditForm) fireEvent.submit(creditForm);
     expect(accountDocsClient.requestBuyerCreditApproval).not.toHaveBeenCalled();
 
-    // Reopen and change values with empty reason to test default reason fallback (line 212)
+    // Reopen with a valid amount and no reason. The reason is sent exactly as entered, which is blank.
+    signInAndChooseApprover();
     fireEvent.change(amountInput, { target: { value: '10' } });
     fireEvent.click(submitBtn);
 
@@ -336,9 +372,9 @@ describe('BuyerDossierDrawer', () => {
         'buyer-acc-1789811073812-ux3',
         expect.objectContaining({
           amount: 10,
-          reason: 'Enterprise sourcing credit allocation request',
+          reason: '',
           approverName: expect.any(String),
-          initiatorName: expect.any(String),
+          initiatorName: 'Session Initiator',
           idempotencyKey: expect.any(String),
         })
       );
@@ -361,6 +397,8 @@ describe('BuyerDossierDrawer', () => {
     );
 
     fireEvent.click(screen.getByText('Add Credit'));
+    signInAndChooseApprover();
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
 
     await waitFor(() => {
@@ -417,7 +455,7 @@ describe('BuyerDossierDrawer', () => {
     if (removeBtn) fireEvent.click(removeBtn);
 
     // Toggle a category on then off using taxonomy buttons (line 1368)
-    const defaultCatBtn = screen.getByText('+ Capital Equipment');
+    const defaultCatBtn = await screen.findByText('+ Capital Equipment');
     fireEvent.click(defaultCatBtn); // selects it
     const selectedBadge = screen.getByText('✓ Capital Equipment');
     fireEvent.click(selectedBadge); // deselects it
@@ -980,11 +1018,13 @@ describe('BuyerDossierDrawer', () => {
     );
 
     // Profile fallbacks
-    expect(screen.getByText('Procurement Executive')).toBeInTheDocument();
-    expect(screen.getByText('+91 Not provided')).toBeInTheDocument();
-    expect(screen.getByText('Enterprise Trial')).toBeInTheDocument();
-    expect(screen.getByText('ACTIVE')).toBeInTheDocument();
-    expect(screen.getByText('Real-time')).toBeInTheDocument();
+    // Missing record values show a dash. They are not replaced by stand-in text.
+    expect(screen.queryByText('Procurement Executive')).toBeNull();
+    expect(screen.queryByText('+91 Not provided')).toBeNull();
+    expect(screen.queryByText('Enterprise Trial')).toBeNull();
+    expect(screen.queryByText('ACTIVE')).toBeNull();
+    expect(screen.queryByText('Real-time')).toBeNull();
+    expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
 
     // RFQ tab with sparse RFQ modal and Escape (line 375)
     fireEvent.click(screen.getByRole('button', { name: /RFQs/i }));
@@ -992,7 +1032,7 @@ describe('BuyerDossierDrawer', () => {
     fireEvent.click(screen.getByText('RFQ-SPARSE'));
     expect(screen.getByText('Open Budget')).toBeInTheDocument();
     expect(screen.getByText('Minimal Item')).toBeInTheDocument();
-    expect(screen.getByText('Vendor 1')).toBeInTheDocument();
+    expect(screen.queryByText('Vendor 1')).toBeNull();
     // Test Escape key closes RFQ modal (line 375)
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByText('Open Budget')).toBeNull();
@@ -1354,7 +1394,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     const viewRfqBtn = screen.getByTitle('View RFQ Popup');
     fireEvent.click(viewRfqBtn);
     expect(screen.getAllByText('RFQ-DETAILED-001').length).toBeGreaterThan(0);
-    expect(screen.getByText('Standard')).toBeInTheDocument();
+    expect(screen.queryByText('Standard')).toBeNull();
     expect(screen.getByText('Special Steel Rods')).toBeInTheDocument();
     expect(screen.getByText('100 units')).toBeInTheDocument();
     expect(screen.getByText('Apex Steel Corp')).toBeInTheDocument();
@@ -1402,7 +1442,8 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     fireEvent.click(submitBtn);
     expect(accountDocsClient.requestBuyerCreditApproval).not.toHaveBeenCalled();
 
-    // Fill valid amount, empty reason -> uses fallback reason
+    // Fill a valid amount and choose an approver. A blank reason is sent as entered.
+    signInAndChooseApprover();
     fireEvent.change(creditAmountInput, { target: { value: '10' } });
     const reasonTextarea = screen.getByPlaceholderText(/Reason for credit addition|business justification/i);
     fireEvent.change(reasonTextarea, { target: { value: '' } });
@@ -1514,7 +1555,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     if (callModalBtn) fireEvent.click(callModalBtn);
 
     // Call outcome and duration inputs
-    const outcomeSelect = screen.getByDisplayValue('Connected');
+    const outcomeSelect = screen.getByDisplayValue(UI_STRINGS.dataLoad.emptyCell);
     fireEvent.change(outcomeSelect, { target: { value: 'Left Voicemail' } });
 
     const durationInput = screen.getByPlaceholderText(/e\.g\. 10 mins/i);
@@ -1530,9 +1571,9 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     fireEvent.change(prioritySelect, { target: { value: 'Critical' } });
 
     // Assignee change - test both matching member and non-matching member
-    const assigneeSelect = screen.getByDisplayValue(/Pavani/i);
+    const assigneeSelect = screen.getByDisplayValue(/Select Assignee/i);
     fireEvent.change(assigneeSelect, { target: { value: 'exec-2' } });
-    expect(screen.getByDisplayValue(/Navin Chaudhary/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue(/Second Assignee/i)).toBeInTheDocument();
     fireEvent.change(assigneeSelect, { target: { value: 'NON_EXISTENT_ID' } });
 
     // Followup objective
@@ -1635,7 +1676,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
 
     // Verify subject and message were interpolated
     const subjectInput = within(composeDialog).getByPlaceholderText(/Price negotiation|Brief summary/i) as HTMLInputElement;
-    expect(subjectInput.value).toContain('Exclusive Enterprise Sourcing Plan');
+    expect(subjectInput.value).toContain('Enterprise Sourcing Plan Overview - Veera Babu Buyer Org');
 
     // Change to Conversion Followup
     fireEvent.change(scenarioSelect, { target: { value: 'buyer_conversion_followup' } });
@@ -1806,6 +1847,136 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     // Select non-matching scenario
     const scenarioSelect = within(composeDialog).getByText(/Select Conversion Scenario/i).closest('div')?.querySelector('select') as HTMLSelectElement;
     fireEvent.change(scenarioSelect, { target: { value: 'NON_EXISTENT_SCENARIO' } });
+  });
+
+  it('requires an approver name before a buyer credit request is submitted', async () => {
+    render(
+      <BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} onSelectRFQ={onSelectRFQMock} buyerRfqs={mockRfqs} />
+    );
+    jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      id: 'session-user-1',
+      name: 'Session Initiator',
+      email: 'initiator@example.com',
+    } as unknown as ReturnType<typeof authClient.getSessionUser>);
+
+    fireEvent.click(screen.getByText('Add Credit'));
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
+    const form = screen.getByRole('button', { name: /Submit for Approval/i }).closest('form') as HTMLFormElement;
+    fireEvent.submit(form);
+
+    expect(
+      await screen.findByText(UI_STRINGS.buyerDirectory.dossier.creditApproval.approverRequired)
+    ).toBeInTheDocument();
+    expect(accountDocsClient.requestBuyerCreditApproval).not.toHaveBeenCalled();
+  });
+
+  it('shows the server reason when the buyer credit history reports a failure', async () => {
+    (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Credit ledger is unavailable.',
+    });
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={mockRfqs}
+        initialTab="credits"
+      />
+    );
+
+    expect(await screen.findByText('Credit ledger is unavailable.')).toBeInTheDocument();
+  });
+
+  it('shows the credit load message when the buyer credit history request throws', async () => {
+    (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockRejectedValueOnce(new Error('Socket closed'));
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={mockRfqs}
+        initialTab="credits"
+      />
+    );
+
+    expect(await screen.findByText(UI_STRINGS.buyerDirectory.dossier.credit.loadFailure)).toBeInTheDocument();
+  });
+
+  it('shows the server reason when the buyer payment history reports a failure', async () => {
+    (buyerProfileClient.fetchBuyerPaymentHistory as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Payment gateway timed out.',
+    });
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={mockRfqs}
+        initialTab="payments"
+      />
+    );
+
+    expect(await screen.findByText('Payment gateway timed out.')).toBeInTheDocument();
+  });
+
+  it('opens the RFQ matrix from the RFQs tab', () => {
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={mockRfqs}
+        initialTab="rfqs"
+      />
+    );
+
+    fireEvent.click(screen.getAllByTitle('Open RFQ Matrix')[0]);
+    expect(onSelectRFQMock).toHaveBeenCalledWith(mockRfqs[0]);
+  });
+
+  it('gives a local compose attachment an id from crypto.randomUUID, removes it, and refuses files when that API is missing', async () => {
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={mockRfqs}
+        initialTab="communications"
+      />
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Record Communication/i }));
+    const composeDialog = (await screen.findByPlaceholderText(/Price negotiation|Brief summary/i)).closest(
+      '[role="dialog"]'
+    ) as HTMLElement;
+    const fileInput = composeDialog.querySelector('input[type="file"]') as HTMLInputElement;
+
+    const randomUUID = jest
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValue('00000000-0000-4000-8000-0000000000aa');
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['spec'], 'spec sheet.pdf', { type: 'application/pdf' })] },
+    });
+    expect(await within(composeDialog).findByText(/spec sheet \(Local Upload\)/i)).toBeInTheDocument();
+    expect(randomUUID).toHaveBeenCalled();
+    randomUUID.mockRestore();
+
+    fireEvent.click(
+      screen.getByText(/spec sheet \(Local Upload\)/i).parentElement?.querySelector('button') as HTMLButtonElement
+    );
+    expect(within(composeDialog).queryByText(/spec sheet \(Local Upload\)/i)).not.toBeInTheDocument();
+
+    Object.defineProperty(globalThis.crypto, 'randomUUID', { value: undefined, configurable: true });
+    try {
+      fireEvent.change(fileInput, {
+        target: { files: [new File(['other'], 'other.pdf', { type: 'application/pdf' })] },
+      });
+      expect(await screen.findByText(UI_STRINGS.dataLoad.secureIdUnavailable)).toBeInTheDocument();
+      expect(within(composeDialog).queryByText(/other \(Local Upload\)/i)).not.toBeInTheDocument();
+    } finally {
+      delete (globalThis.crypto as { randomUUID?: unknown }).randomUUID;
+    }
   });
 
 });

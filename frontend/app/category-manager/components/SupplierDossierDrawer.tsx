@@ -51,18 +51,16 @@ import type {
   SupplierCommunicationItem,
   SupplierPaymentSummary,
   SupplierPaymentTransaction,
+  InternalTeamMember,
 } from '@/lib/types';
 import {
   formatCurrency,
   formatIndianDateTime,
-  DEFAULT_INTERNAL_MEMBERS,
   CALL_OUTCOMES,
   FOLLOWUP_PRIORITIES,
   getVendorCreditBalance,
   VENDOR_PLAN_RFQ_QUOTA,
   SELLER_QUOTE_CREDITS_ALLOWED,
-  CREDIT_APPROVAL_INITIATORS,
-  CREDIT_APPROVAL_APPROVERS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -72,6 +70,11 @@ import {
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
 } from '@/lib/supplierProfileClient';
+import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
+import { fetchInternalAssignees } from '@/lib/internalTaskClient';
+import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 import {
   addSellerQuoteCredits,
   createCreditApprovalIdempotencyKey,
@@ -119,18 +122,8 @@ export interface SupplierDossierDrawerProps {
   onTabChange?: (tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents') => void;
 }
 
-const DEFAULT_SUPPLIER_CATEGORIES = [
-  'Engineering Spares - Electrical',
-  'Industrial Supplies',
-  'Mechanical & Fluid Power',
-  'Raw Materials & Metallurgy',
-  'Instrumentation & Controls',
-  'Safety & PPE Equipment',
-  'IT & Telecom Infrastructure',
-  'Packaging Materials',
-  'Chemicals & Solvents',
-  'Logistics & Material Handling',
-];
+// Shown wherever a value is missing from the record. Never a substitute value.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 export default function SupplierDossierDrawer({
   seller,
@@ -153,10 +146,11 @@ export default function SupplierDossierDrawer({
   }, [onTabChange]);
   const [docCount, setDocCount] = useState<number>(0);
   const [isAddQuoteCreditsModalOpen, setIsAddQuoteCreditsModalOpen] = useState<boolean>(false);
-  const [selectedQuoteCredits, setSelectedQuoteCredits] = useState<number>(1);
-  const [requestedQuoteCredits, setRequestedQuoteCredits] = useState<number>(5);
-  const [quoteCreditInitiator, setQuoteCreditInitiator] = useState<string>(CREDIT_APPROVAL_INITIATORS[0]);
-  const [quoteCreditApprover, setQuoteCreditApprover] = useState<string>(CREDIT_APPROVAL_APPROVERS[0]);
+  const [selectedQuoteCredits, setSelectedQuoteCredits] = useState<number>(0);
+  const [requestedQuoteCredits, setRequestedQuoteCredits] = useState<number>(0);
+  // The initiator is the signed-in user. The name comes from the session, never from a list.
+  const quoteCreditInitiator = authClient.getSessionUser()?.name ?? '';
+  const [quoteCreditApprover, setQuoteCreditApprover] = useState<string>('');
   const [quoteCreditsReason, setQuoteCreditsReason] = useState<string>('');
   const [isSubmittingQuoteCredits, setIsSubmittingQuoteCredits] = useState<boolean>(false);
 
@@ -177,7 +171,8 @@ export default function SupplierDossierDrawer({
     if (seller.categories && seller.categories.length > 0) return seller.categories;
     const cat = seller.majorCategory || seller.category;
     if (cat) return [cat];
-    return ['Engineering Spares - Electrical'];
+    // No category is recorded for this supplier. The list stays empty rather than showing a placeholder category.
+    return [];
   });
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
   const [editingCategories, setEditingCategories] = useState<string[]>([]);
@@ -290,7 +285,7 @@ export default function SupplierDossierDrawer({
         !q ||
         rfq.rfqNumber.toLowerCase().includes(q) ||
         rfq.title.toLowerCase().includes(q);
-      const st = quote ? quote.status || 'QUOTED' : rfq.status;
+      const st = quote ? quote.status : rfq.status;
       const matchStatus = quoteStatusFilter === 'all' || st === quoteStatusFilter;
       return matchSearch && matchStatus;
     });
@@ -302,6 +297,7 @@ export default function SupplierDossierDrawer({
   const [creditSummary, setCreditSummary] = useState<SupplierCreditSummary | null>(null);
   const [creditTransactions, setCreditTransactions] = useState<SupplierCreditTransaction[]>([]);
   const [loadingCredit, setLoadingCredit] = useState<boolean>(false);
+  const [creditHistoryError, setCreditHistoryError] = useState<string | null>(null);
   const [creditSearch, setCreditSearch] = useState<string>('');
   const [creditTypeFilter, setCreditTypeFilter] = useState<string>('all');
   const [creditSortOrder, setCreditSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -309,12 +305,17 @@ export default function SupplierDossierDrawer({
   const creditPageSize = 10;
   const creditApprovalRequestKey = useRef<string>('');
   const creditApprovalRequestFingerprint = useRef<string>('');
+  const localAttachmentSeqRef = useRef<number>(0);
 
   const handleAddQuoteCreditsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
     if (amount <= 0) {
       showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
+      return;
+    }
+    if (!quoteCreditApprover.trim() || !quoteCreditInitiator) {
+      showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverRequired, 'error');
       return;
     }
     setIsSubmittingQuoteCredits(true);
@@ -333,8 +334,8 @@ export default function SupplierDossierDrawer({
     try {
       const res = await requestSellerQuoteCreditApproval(seller.id, {
         amount,
-        reason: quoteCreditsReason || 'Authorized quote credit top-up',
-        approverName: quoteCreditApprover,
+        reason: quoteCreditsReason.trim(),
+        approverName: quoteCreditApprover.trim(),
         initiatorName: quoteCreditInitiator,
         idempotencyKey: creditApprovalRequestKey.current,
       });
@@ -351,8 +352,8 @@ export default function SupplierDossierDrawer({
           'success'
         );
         setIsAddQuoteCreditsModalOpen(false);
-        setRequestedQuoteCredits(5);
-        setSelectedQuoteCredits(1);
+        setRequestedQuoteCredits(0);
+        setSelectedQuoteCredits(0);
         setQuoteCreditsReason('');
         loadCreditHistory();
       } else {
@@ -367,14 +368,22 @@ export default function SupplierDossierDrawer({
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
+    setCreditHistoryError(null);
     try {
       const res = await fetchSupplierCreditHistory(seller.id);
       if (res.success) {
         setCreditSummary(res.summary || null);
         setCreditTransactions(res.transactions || []);
+      } else {
+        setCreditSummary(null);
+        setCreditTransactions([]);
+        setCreditHistoryError(res.error || UI_STRINGS.sellerDirectory.dossier.credit.loadFailure);
       }
-    } catch {
-      // Baseline fallback
+    } catch (error) {
+      logger.error('Supplier credit history request failed', { sellerId: seller.id, error }, 'SUPPLIER_DOSSIER');
+      setCreditSummary(null);
+      setCreditTransactions([]);
+      setCreditHistoryError(UI_STRINGS.sellerDirectory.dossier.credit.loadFailure);
     } finally {
       setLoadingCredit(false);
     }
@@ -438,7 +447,7 @@ export default function SupplierDossierDrawer({
       t.creditsConsumed,
       t.previousBalance,
       t.updatedBalance,
-      t.relatedRfqId || 'N/A',
+      t.relatedRfqId || EMPTY_VALUE,
       t.status,
     ]);
     const csvContent =
@@ -459,6 +468,7 @@ export default function SupplierDossierDrawer({
   // ---------------------------------------------------------------------------
   const [communications, setCommunications] = useState<SupplierCommunicationItem[]>([]);
   const [loadingComms, setLoadingComms] = useState<boolean>(false);
+  const [communicationsError, setCommunicationsError] = useState<string | null>(null);
   const [commSearch, setCommSearch] = useState<string>('');
   const [selectedCommForModal, setSelectedCommForModal] = useState<SupplierCommunicationItem | null>(null);
 
@@ -468,12 +478,16 @@ export default function SupplierDossierDrawer({
   const [composeRecipient, setComposeRecipient] = useState<string>(seller.email || seller.phone || '');
   const [composeSubject, setComposeSubject] = useState<string>('');
   const [composeMessage, setComposeMessage] = useState<string>('');
-  const [composeCallOutcome, setComposeCallOutcome] = useState<string>('Connected');
+  const [composeCallOutcome, setComposeCallOutcome] = useState<string>('');
   const [composeDuration, setComposeDuration] = useState<string>('');
   const [composeNextFollowupDate, setComposeNextFollowupDate] = useState<string>('');
   const [composeFollowupPriority, setComposeFollowupPriority] = useState<'Low' | 'Medium' | 'High' | 'Critical'>('Medium');
-  const [composeFollowupAssigneeId, setComposeFollowupAssigneeId] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].id);
-  const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].name);
+  const [composeFollowupAssigneeId, setComposeFollowupAssigneeId] = useState<string>('');
+  const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>('');
+  const [assignees, setAssignees] = useState<InternalTeamMember[]>([]);
+  const [assigneesError, setAssigneesError] = useState<string | null>(null);
+  const [majorCategoryOptions, setMajorCategoryOptions] = useState<string[]>(() => getMajorCategories());
+  const [majorCategoryError, setMajorCategoryError] = useState<string | null>(null);
   const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
   const [composeScenarioId, setComposeScenarioId] = useState<string>('');
   const [availableVaultDocs, setAvailableVaultDocs] = useState<DocumentVaultItem[]>([]);
@@ -492,27 +506,50 @@ export default function SupplierDossierDrawer({
     };
   }, []);
 
+  // Follow-up assignees and the major category list come from the API. Nothing is preselected.
+  useEffect(() => {
+    let isSubscribed = true;
+    void fetchInternalAssignees().then((result) => {
+      if (!isSubscribed) return;
+      setAssignees(result.assignees);
+      setAssigneesError(result.error ?? null);
+    });
+    void fetchCategoryTaxonomy()
+      .then((result) => {
+        if (!isSubscribed) return;
+        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          setMajorCategoryOptions(result.data.map((c) => c.majorCategory).filter(Boolean));
+          setMajorCategoryError(null);
+        } else {
+          setMajorCategoryError(result.error || UI_STRINGS.buyerProfile.taxonomyEmpty);
+        }
+      })
+      .catch(() => {
+        if (isSubscribed) setMajorCategoryError(UI_STRINGS.buyerProfile.taxonomyEmpty);
+      });
+    return () => {
+      isSubscribed = false;
+    };
+  }, []);
+
   const handleSellerScenarioChange = useCallback((scId: string) => {
     setComposeScenarioId(scId);
     if (!scId || scId === 'custom') return;
     const scenarios = getScenariosForEntityType('SELLER');
     const sc = scenarios.find((s) => s.id === scId);
     if (!sc) return;
-    const defaultDateStr = new Date(Date.now() + 86400000 * (sc.defaultFollowupDays || 3)).toISOString().slice(0, 10);
+    // Each token holds only what the supplier record, the user, or the form supplies.
+    // A token without a value renders as an empty string in the template.
     const tokens: Record<string, string | number | undefined> = {
-      contactName: seller.contactPerson || seller.name || 'Vendor Partner',
-      companyName: seller.name || seller.id,
+      contactName: seller.contactPerson,
+      companyName: seller.name,
       entityId: seller.id,
-      followupDate: composeNextFollowupDate || defaultDateStr,
-      followupTime: '11:00 AM',
-      followupNotes: composeFollowupNotes || 'Vendor capability and catalog alignment',
-      assigneeName: composeFollowupAssigneeName || 'Category Specialist',
-      senderName: 'Category Manager',
-      dueDate: composeNextFollowupDate || defaultDateStr,
-      rfqNumber: 'RFQ-ACTIVE',
-      rfqTitle: 'Annual Enterprise Procurement Requisition',
-      notes: composeMessage || 'Please review the attached growth details',
-      scoreGrade: 'Grade A (94/100)',
+      followupDate: composeNextFollowupDate,
+      followupNotes: composeFollowupNotes,
+      assigneeName: composeFollowupAssigneeName,
+      senderName: authClient.getSessionUser()?.name,
+      dueDate: composeNextFollowupDate,
+      notes: composeMessage,
     };
     if (sc.subjectTemplate) setComposeSubject(interpolateScenarioTemplate(sc.subjectTemplate, tokens));
     if (sc.bodyTemplate) setComposeMessage(interpolateScenarioTemplate(sc.bodyTemplate, tokens));
@@ -537,7 +574,7 @@ export default function SupplierDossierDrawer({
 
   const handleDraftEmailForCallOutcome = useCallback((outcome: string) => {
     setComposeChannel('EMAIL');
-    setComposeRecipient(seller.email || seller.vendorName || '');
+    setComposeRecipient(seller.email || '');
     setCommSubTab('email');
     const matchedScenario = getScenarioForCallOutcome('SELLER', outcome);
     if (matchedScenario) {
@@ -545,7 +582,7 @@ export default function SupplierDossierDrawer({
     } else {
       handleSellerScenarioChange('seller_conversion_followup');
     }
-  }, [seller.email, seller.vendorName, handleSellerScenarioChange]);
+  }, [seller.email, handleSellerScenarioChange]);
 
   const handleConvertCallToFollowupEmail = useCallback(() => {
     setComposeChannel('EMAIL');
@@ -558,12 +595,13 @@ export default function SupplierDossierDrawer({
     const file = e.target.files?.[0];
     if (file) {
       const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+      localAttachmentSeqRef.current += 1;
       const newAtt: ActionCenterAttachment = {
-        id: `local_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        id: `local_${Date.now()}_${localAttachmentSeqRef.current}`,
         documentName: `${cleanName} (Local Upload)`,
         fileName: file.name,
         fileSize: file.size,
-        mimeType: file.type || 'application/pdf',
+        mimeType: file.type || 'application/octet-stream',
         category: 'local_upload',
       };
       setComposeAttachments((prev) => [...prev, newAtt]);
@@ -586,13 +624,17 @@ export default function SupplierDossierDrawer({
 
   const loadCommunications = useCallback(async () => {
     setLoadingComms(true);
+    setCommunicationsError(null);
     try {
       const res = await fetchSupplierCommunications(seller.id);
       if (res.success && res.data) {
         setCommunications(res.data);
+      } else {
+        setCommunicationsError(res.error || UI_STRINGS.sellerDirectory.dossier.compose.loadFailure);
       }
-    } catch {
-      // Baseline fallback
+    } catch (error) {
+      logger.error('Supplier communications request failed', { sellerId: seller.id, error }, 'SUPPLIER_DOSSIER');
+      setCommunicationsError(UI_STRINGS.sellerDirectory.dossier.compose.loadFailure);
     } finally {
       setLoadingComms(false);
     }
@@ -672,6 +714,7 @@ export default function SupplierDossierDrawer({
   const [paymentSummary, setPaymentSummary] = useState<SupplierPaymentSummary | null>(null);
   const [payments, setPayments] = useState<SupplierPaymentTransaction[]>([]);
   const [loadingPayments, setLoadingPayments] = useState<boolean>(false);
+  const [paymentHistoryError, setPaymentHistoryError] = useState<string | null>(null);
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<string>('all');
   const [paymentSearch, setPaymentSearch] = useState<string>('');
   const [paymentPage, setPaymentPage] = useState<number>(1);
@@ -679,14 +722,22 @@ export default function SupplierDossierDrawer({
 
   const loadPaymentHistory = useCallback(async () => {
     setLoadingPayments(true);
+    setPaymentHistoryError(null);
     try {
       const res = await fetchSupplierPaymentHistory(seller.id);
       if (res.success) {
         setPaymentSummary(res.summary || null);
         setPayments(res.payments || []);
+      } else {
+        setPaymentSummary(null);
+        setPayments([]);
+        setPaymentHistoryError(res.error || UI_STRINGS.sellerDirectory.dossier.payments.loadFailure);
       }
-    } catch {
-      // Baseline fallback
+    } catch (error) {
+      logger.error('Supplier payment history request failed', { sellerId: seller.id, error }, 'SUPPLIER_DOSSIER');
+      setPaymentSummary(null);
+      setPayments([]);
+      setPaymentHistoryError(UI_STRINGS.sellerDirectory.dossier.payments.loadFailure);
     } finally {
       setLoadingPayments(false);
     }
@@ -746,11 +797,11 @@ export default function SupplierDossierDrawer({
     showToast('Payment history exported successfully.', 'success');
   };
 
-  const displayName = seller.companyName || seller.name || 'Supplier Organization';
+  const displayName = seller.companyName || seller.name || EMPTY_VALUE;
   const isNetwork = seller.source === 'procucev_network' || String(seller.id).startsWith('v-net-') || Boolean((seller as any).isNetwork);
-  const ratingVal = seller.rating ?? 4.5;
-  const scoreVal = seller.score360 ?? seller.score ?? 88;
-  const regDate = seller.createdAt || seller.created_at || '19 Sept 2026';
+  const ratingVal = seller.rating ?? null;
+  const scoreVal = seller.score360 ?? seller.score ?? null;
+  const regDate = seller.createdAt || seller.created_at || null;
 
   return (
     <div
@@ -796,11 +847,11 @@ export default function SupplierDossierDrawer({
                 </span>
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
                   <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                  {`${strings.score360Label}: ${scoreVal}/100`}
+                  {scoreVal === null ? `${strings.score360Label}: ${EMPTY_VALUE}` : `${strings.score360Label}: ${scoreVal}/100`}
                 </span>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
                   <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                  {`${strings.ratingLabel}: ★ ${ratingVal}`}
+                  {ratingVal === null ? `${strings.ratingLabel}: ${EMPTY_VALUE}` : `${strings.ratingLabel}: ★ ${ratingVal}`}
                 </span>
                 <button
                   type="button"
@@ -813,7 +864,7 @@ export default function SupplierDossierDrawer({
                 </button>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {formatString(strings.registered, { date: formatIndianDateTime(regDate) })}
+                {formatString(strings.registered, { date: regDate ? formatIndianDateTime(regDate) : EMPTY_VALUE })}
               </p>
             </div>
           </div>
@@ -925,23 +976,23 @@ export default function SupplierDossierDrawer({
                 <div className="space-y-2 text-xs">
                   <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
                     <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span className="font-semibold">{seller.contactPerson || seller.name || 'Primary Contact'}</span>
+                    <span className="font-semibold">{seller.contactPerson || seller.name || EMPTY_VALUE}</span>
                   </div>
                   <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
                     <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{seller.email || 'supplier@procucev.com'}</span>
+                    <span>{seller.email || EMPTY_VALUE}</span>
                   </div>
                   <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
                     <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{seller.phone || '+91 98765 43210'}</span>
+                    <span>{seller.phone || EMPTY_VALUE}</span>
                   </div>
                   <div className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
                     <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                    <span>Company Location: {seller.location || 'India'}</span>
+                    <span>Company Location: {seller.location || EMPTY_VALUE}</span>
                   </div>
                   <div className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
                     <Truck className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                    <span>Delivery Location: {seller.deliveryLocation || seller.location || 'India'}</span>
+                    <span>Delivery Location: {seller.deliveryLocation || seller.location || EMPTY_VALUE}</span>
                   </div>
                   <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800">
                     <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -960,25 +1011,25 @@ export default function SupplierDossierDrawer({
                   <div>
                     <span className="text-slate-400">GSTIN:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {seller.gstin || seller.gstNumber || '27AAACG0000A1Z5'}
+                      {seller.gstin || seller.gstNumber || EMPTY_VALUE}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-400">PAN:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {seller.pan || seller.panNumber || 'AAACG0000A'}
+                      {seller.pan || seller.panNumber || EMPTY_VALUE}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-400">Subscription Tier:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200 capitalize">
-                      {seller.subscriptionPlan || 'Preferred Partner'}
+                      {seller.subscriptionPlan || EMPTY_VALUE}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 pt-1">
                     <span className="text-slate-400">Verification Status:</span>
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
-                      {seller.verificationStatus || seller.status || 'PENDING EVALUATION'}
+                      {seller.verificationStatus || seller.status || EMPTY_VALUE}
                     </span>
                   </div>
                 </div>
@@ -1077,19 +1128,19 @@ export default function SupplierDossierDrawer({
                             <div className="text-[11px] text-slate-500 truncate max-w-xs">{rfq.title}</div>
                           </td>
                           <td className="px-3.5 py-2.5 text-slate-700 dark:text-slate-300">
-                            {(rfq as any).buyerCompanyName || (rfq as any).buyerCompany || 'Procucev Buyer'}
+                            {(rfq as any).buyerCompanyName || (rfq as any).buyerCompany || EMPTY_VALUE}
                           </td>
                           <td className="px-3.5 py-2.5">
                             <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800 capitalize">
-                              {rfq.sourcingMode || 'Mode 1'}
+                              {rfq.sourcingMode || EMPTY_VALUE}
                             </span>
                           </td>
                           <td className="px-3.5 py-2.5 font-semibold text-slate-800 dark:text-slate-200">
-                            {formatCurrency(quote?.totalPrice || quote?.amount || 0)}
+                            {(quote?.totalPrice || quote?.amount) ? formatCurrency(quote.totalPrice || quote.amount || 0) : EMPTY_VALUE}
                           </td>
                           <td className="px-3.5 py-2.5">
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
-                              {quote?.status || 'Active Quote'}
+                              {quote?.status || EMPTY_VALUE}
                             </span>
                           </td>
                           <td className="px-3.5 py-2.5 text-right">
@@ -1124,31 +1175,31 @@ export default function SupplierDossierDrawer({
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.credit.totalAllocated}</span>
                 <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                  {creditSummary?.totalCreditsAllocated ?? (VENDOR_PLAN_RFQ_QUOTA[seller.subscriptionPlan || ''] ?? getVendorCreditBalance(seller))}
+                  {creditSummary?.totalCreditsAllocated ?? EMPTY_VALUE}
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">Enterprise quota</p>
+                
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.credit.totalConsumed}</span>
                 <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                  {creditSummary?.totalCreditsConsumed ?? 0}
+                  {creditSummary?.totalCreditsConsumed ?? EMPTY_VALUE}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Quotation unlocks</p>
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.credit.remainingFree}</span>
                 <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller)}
+                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Active quote balance</p>
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.credit.currentBalance}</span>
                 <div className="text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1">
-                  {creditSummary?.currentCreditBalance ?? getVendorCreditBalance(seller)}
+                  {creditSummary?.currentCreditBalance ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5 capitalize">
-                  {creditSummary?.subscriptionPlan || seller.subscriptionPlan || 'Preferred Partner'}
+                  {creditSummary?.subscriptionPlan || seller.subscriptionPlan || EMPTY_VALUE}
                 </p>
               </div>
             </div>
@@ -1223,6 +1274,13 @@ export default function SupplierDossierDrawer({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {creditHistoryError && (
+                      <tr>
+                        <td colSpan={8} role="alert" className="px-4 py-3 text-xs text-rose-600 dark:text-rose-400">
+                          {creditHistoryError}
+                        </td>
+                      </tr>
+                    )}
                     {loadingCredit ? (
                       <tr>
                         <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
@@ -1396,6 +1454,11 @@ export default function SupplierDossierDrawer({
 
             {/* COMMUNICATIONS LIST */}
             <div className="space-y-3">
+              {communicationsError && (
+                <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">
+                  {communicationsError}
+                </div>
+              )}
               {loadingComms ? (
                 <div className="p-8 text-center text-slate-400 text-xs">
                   <Loader2 className="w-5 h-5 animate-spin mx-auto text-emerald-600 mb-2" />
@@ -1421,7 +1484,7 @@ export default function SupplierDossierDrawer({
                               : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                           }`}
                         >
-                          {comm.direction || 'OUTGOING'}
+                          {comm.direction || EMPTY_VALUE}
                         </span>
                         <span className="text-xs font-bold text-slate-900 dark:text-white">
                           {comm.subject || `${comm.channel} Notice`}
@@ -1429,7 +1492,7 @@ export default function SupplierDossierDrawer({
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
-                          {comm.deliveryStatus || 'Delivered'}
+                          {comm.deliveryStatus || EMPTY_VALUE}
                         </span>
                         <span className="text-[11px] text-slate-400">
                           {formatIndianDateTime(comm.sentAt)}
@@ -1472,28 +1535,28 @@ export default function SupplierDossierDrawer({
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.payments.totalPaid}</span>
                 <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                  {formatCurrency(paymentSummary?.totalAmountPaid ?? 5999)}
+                  {paymentSummary?.totalAmountPaid != null ? formatCurrency(paymentSummary.totalAmountPaid) : EMPTY_VALUE}
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">Subscription fees</p>
+                
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.payments.successful}</span>
                 <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  {paymentSummary?.totalSuccessfulPayments ?? 1}
+                  {paymentSummary?.totalSuccessfulPayments ?? EMPTY_VALUE}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Settled invoices</p>
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.payments.pending}</span>
                 <div className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
-                  {paymentSummary?.pendingPayments ?? 0}
+                  {paymentSummary?.pendingPayments ?? EMPTY_VALUE}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Awaiting gateway</p>
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.payments.failed}</span>
                 <div className="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1">
-                  {paymentSummary?.failedPayments ?? 0}
+                  {paymentSummary?.failedPayments ?? EMPTY_VALUE}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Declined / expired</p>
               </div>
@@ -1557,6 +1620,13 @@ export default function SupplierDossierDrawer({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {paymentHistoryError && (
+                      <tr>
+                        <td colSpan={6} role="alert" className="px-4 py-3 text-xs text-rose-600 dark:text-rose-400">
+                          {paymentHistoryError}
+                        </td>
+                      </tr>
+                    )}
                     {loadingPayments ? (
                       <tr>
                         <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
@@ -1704,7 +1774,10 @@ export default function SupplierDossierDrawer({
                 Select Major Procurement Categories:
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto p-2 border border-slate-200 dark:border-slate-700 rounded-lg">
-                {Array.from(new Set([...DEFAULT_SUPPLIER_CATEGORIES, ...editingCategories])).map((cat) => {
+                {majorCategoryError && majorCategoryOptions.length === 0 && (
+                  <p role="alert" className="col-span-full text-[11px] text-rose-600 dark:text-rose-400">{majorCategoryError}</p>
+                )}
+                {Array.from(new Set([...majorCategoryOptions, ...editingCategories])).map((cat) => {
                   const isChecked = editingCategories.includes(cat);
                   return (
                     <label
@@ -1799,13 +1872,13 @@ export default function SupplierDossierDrawer({
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40">
                 <span className="text-[11px] text-slate-400">Total Quoted</span>
                 <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">
-                  {formatCurrency(selectedQuoteForModal.quote?.totalPrice || 0)}
+                  {selectedQuoteForModal.quote?.totalPrice != null ? formatCurrency(selectedQuoteForModal.quote.totalPrice) : EMPTY_VALUE}
                 </div>
               </div>
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40">
                 <span className="text-[11px] text-slate-400">GST / Taxes</span>
                 <div className="text-base font-bold text-emerald-600 mt-0.5">
-                  {formatCurrency(selectedQuoteForModal.quote?.taxAmount || 63000)}
+                  {selectedQuoteForModal.quote?.taxAmount != null ? formatCurrency(selectedQuoteForModal.quote.taxAmount) : EMPTY_VALUE}
                 </div>
               </div>
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40">
@@ -1817,7 +1890,7 @@ export default function SupplierDossierDrawer({
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40">
                 <span className="text-[11px] text-slate-400">Status</span>
                 <div className="text-xs font-semibold text-emerald-600 mt-1">
-                  {selectedQuoteForModal.quote?.status || 'Active'}
+                  {selectedQuoteForModal.quote?.status || EMPTY_VALUE}
                 </div>
               </div>
             </div>
@@ -1840,8 +1913,8 @@ export default function SupplierDossierDrawer({
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {modalLineItems.length > 0 ? (
                       modalLineItems.map((item: any, idx: number) => {
-                        const unitRate = Number(selectedQuoteForModal.quote?.unitPrice || 70000);
-                        const lineTotal = Number(item.quantity || 1) * unitRate;
+                        const unitRate = selectedQuoteForModal.quote?.unitPrice != null ? Number(selectedQuoteForModal.quote.unitPrice) : null;
+                        const lineTotal = unitRate !== null && item.quantity != null ? Number(item.quantity) * unitRate : null;
                         return (
                           <tr key={item.id || idx}>
                             <td className="px-3 py-2">
@@ -1853,13 +1926,13 @@ export default function SupplierDossierDrawer({
                               )}
                             </td>
                             <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                              {item.quantity} {item.unit || 'Nos'}
+                              {item.quantity} {item.unit || EMPTY_VALUE}
                             </td>
                             <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                              {formatCurrency(unitRate)}
+                              {unitRate !== null ? formatCurrency(unitRate) : EMPTY_VALUE}
                             </td>
                             <td className="px-3 py-2 text-right font-semibold text-slate-900 dark:text-white">
-                              {formatCurrency(lineTotal)}
+                              {lineTotal !== null ? formatCurrency(lineTotal) : EMPTY_VALUE}
                             </td>
                           </tr>
                         );
@@ -2045,6 +2118,7 @@ export default function SupplierDossierDrawer({
                         onChange={(e) => setComposeCallOutcome(e.target.value)}
                         className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
                       >
+                        <option value="">{EMPTY_VALUE}</option>
                         {CALL_OUTCOMES.map((o) => (
                           <option key={o.value} value={o.value}>{o.label}</option>
                         ))}
@@ -2291,15 +2365,19 @@ export default function SupplierDossierDrawer({
                         value={composeFollowupAssigneeId}
                         onChange={(e) => {
                           setComposeFollowupAssigneeId(e.target.value);
-                          const m = DEFAULT_INTERNAL_MEMBERS.find((mem) => mem.id === e.target.value);
-                          if (m) setComposeFollowupAssigneeName(m.name);
+                          const m = assignees.find((mem) => mem.id === e.target.value);
+                          setComposeFollowupAssigneeName(m?.name ?? '');
                         }}
                         className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
                       >
-                        {DEFAULT_INTERNAL_MEMBERS.map((m) => (
+                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                        {assignees.map((m) => (
                           <option key={m.id} value={m.id}>{m.name} ({m.role})</option>
                         ))}
                       </select>
+                      {assigneesError && (
+                        <p role="alert" className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{assigneesError}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
@@ -2390,7 +2468,7 @@ export default function SupplierDossierDrawer({
                   {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
                 </label>
                 <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller)} Credits
+                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits
                 </div>
               </div>
 
@@ -2415,17 +2493,14 @@ export default function SupplierDossierDrawer({
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
                 </label>
-                <select
+                <input
+                  id="quote-credit-initiator"
+                  type="text"
+                  readOnly
                   value={quoteCreditInitiator}
-                  onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                >
-                  {CREDIT_APPROVAL_INITIATORS.map((init) => (
-                    <option key={init} value={init}>
-                      {init}
-                    </option>
-                  ))}
-                </select>
+                  placeholder={UI_STRINGS.dataLoad.emptyCell}
+                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
+                />
               </div>
 
               {/* Assigned Approver Select */}
@@ -2433,17 +2508,15 @@ export default function SupplierDossierDrawer({
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                 </label>
-                <select
+                {/* No approver list is served by the API. The server checks the name against its configured approvers. */}
+                <input
+                  id="quote-credit-approver"
+                  type="text"
                   value={quoteCreditApprover}
                   onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                  placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                >
-                  {CREDIT_APPROVAL_APPROVERS.map((appr) => (
-                    <option key={appr} value={appr}>
-                      {appr}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
 
               {/* Reason / Remarks */}

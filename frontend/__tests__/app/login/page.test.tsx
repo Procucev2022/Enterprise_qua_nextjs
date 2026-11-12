@@ -27,15 +27,15 @@ const AUTH = UI_STRINGS.auth;
 
 const BUYER_SESSION = {
   id: 'usr-1',
-  email: 'navinchaudhary.dev@gmail.com',
-  name: 'Navin Chaudhary',
+  email: 'buyer@example.com',
+  name: 'Test Buyer',
   role: 'buyer' as const,
   orgId: 'org-1',
-  orgName: 'Navin Chaudhary Enterprises',
+  orgName: 'Test Buyer Enterprises',
 };
 
 /** Registered mobile number sign-in is verified against. */
-const LOGIN_MOBILE = '9157154504';
+const LOGIN_MOBILE = '9876543210';
 
 /** A well-formed email OTP, matching the shared 6-digit contract. */
 const OTP_CODE = '123456';
@@ -102,14 +102,14 @@ describe('LoginPage', () => {
   };
 
   const fillValidForm = () => {
-    typeInto(/Full Name/i, 'Navin Chaudhary');
-    typeInto(/Company Name/i, 'Larsen & Toubro Procurement');
+    typeInto(/Full Name/i, 'Test Buyer');
+    typeInto(/Company Name/i, 'Test Procurement Team');
     typeInto(/GSTIN/i, '27AAAAA0000A1Z5');
     typeInto(/City/i, 'Pune');
     typeInto(/State/i, 'Maharashtra');
     typeInto(/Pincode/i, '411001');
     typeInto(/Corporate Email ID/i, BUYER_SESSION.email);
-    typeInto(/Mobile Number/i, '9157154504');
+    typeInto(/Mobile Number/i, '9876543210');
     typeInto(/^Password$/i, 'Pass@1234');
   };
 
@@ -211,7 +211,7 @@ describe('LoginPage', () => {
       });
 
       render(<LoginPage />);
-      typeInto(/Registered Email ID/i, 'vendor@supplier.com');
+      typeInto(/Registered Email ID/i, 'vendor@example.com');
       typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
       typeInto(/^Password$/i, 'TempPass@123');
       fireEvent.click(submitButton(/Sign In/i));
@@ -415,7 +415,7 @@ describe('LoginPage', () => {
       await waitFor(() => {
         expect(showToast).toHaveBeenCalledWith(
           AUTH.otpRequestFailedTitle,
-          'No active account matches this email address and mobile number together.',
+          `No active account matches this email address and mobile number together. ${AUTH.otpSendFailureGuidance}`,
           'warning'
         );
       });
@@ -496,6 +496,38 @@ describe('LoginPage', () => {
       expect(authClient.requestOtp).not.toHaveBeenCalled();
     });
 
+    it('never fills in or displays a code the server returns', async () => {
+      // A response carrying a code, as an older server would send. The page must ignore it.
+      const responseWithLegacyCode = { success: true, message: 'Verification OTP dispatched', demoCode: '987654' };
+      (authClient.requestOtp as jest.Mock).mockResolvedValue(responseWithLegacyCode);
+
+      render(<LoginPage />);
+      switchToOtp();
+      fillOtpIdentity();
+      fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
+
+      await waitFor(() => expect(screen.getByLabelText(/Email Verification Code \(OTP\)/i)).toHaveValue(''));
+      expect(showToast).toHaveBeenCalledWith(AUTH.otpRequestedTitle, 'Verification OTP dispatched', 'success');
+      expect(showToast).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining('987654'), expect.anything());
+    });
+
+    it.each([
+      ['failed', { email: 'failed', sms: 'sent' }, 'warning'],
+      ['pending', { email: 'pending', sms: 'pending' }, 'info'],
+    ])('sets the toast severity from a %s delivery channel', async (_state, delivery, severity) => {
+      const serverMessage = 'Verification OTP status reported by the server.';
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true, message: serverMessage, delivery });
+
+      render(<LoginPage />);
+      switchToOtp();
+      fillOtpIdentity();
+      fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
+
+      await waitFor(() => {
+        expect(showToast).toHaveBeenCalledWith(AUTH.otpRequestedTitle, serverMessage, severity);
+      });
+    });
+
     it('returns to the email step from the code step', async () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
 
@@ -518,6 +550,31 @@ describe('LoginPage', () => {
       fireEvent.change(screen.getByLabelText(/Mobile OTP/i), { target: { value: mobileOtp } });
       fireEvent.click(screen.getByRole('button', { name: /Verify & Activate Account/i }));
     };
+
+    it('shows the server message for requested codes and leaves both code fields empty', async () => {
+      const serverMessage = 'Verification codes dispatched. Email OTP sent and SMS OTP sent.';
+      // The demo fields are legacy: a response that still carries them must not prefill the form.
+      const responseWithLegacyCodes = {
+        success: true,
+        message: serverMessage,
+        delivery: { email: 'sent', sms: 'sent' },
+        demoEmailCode: '111222',
+        demoMobileCode: '333444',
+      };
+      (authClient.requestOtp as jest.Mock).mockResolvedValue(responseWithLegacyCodes);
+
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      submitForm(/Create Account/i);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Verify & Activate Account/i })).toBeInTheDocument();
+      });
+      expect(screen.getByPlaceholderText(/6-digit Email OTP/i)).toHaveValue('');
+      expect(screen.getByPlaceholderText(/6-digit Mobile OTP/i)).toHaveValue('');
+      expect(showToast).toHaveBeenCalledWith(AUTH.registrationCodesTitle, serverMessage, 'success');
+    });
 
     it('creates a real account and signs the new user in after dual OTP verification', async () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({
@@ -542,10 +599,10 @@ describe('LoginPage', () => {
       await waitFor(() => {
         expect(authClient.register).toHaveBeenCalledWith(
           expect.objectContaining({
-            name: 'Navin Chaudhary',
+            name: 'Test Buyer',
             email: BUYER_SESSION.email,
             password: 'Pass@1234',
-            mobile: '9157154504',
+            mobile: '9876543210',
             role: 'buyer',
           })
         );
@@ -557,8 +614,8 @@ describe('LoginPage', () => {
     it('creates a vendor partner account when vendor role is selected', async () => {
       const vendorUser = {
         id: 'usr-v-1',
-        email: 'vendor@supplier.com',
-        name: 'Rajesh Kumar',
+        email: 'vendor@example.com',
+        name: 'Test Vendor Lead',
         role: 'vendor' as const,
         vendorId: 'vnd-1',
         passwordChangeRequired: true,
@@ -576,14 +633,14 @@ describe('LoginPage', () => {
       openRegister();
       fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
 
-      typeInto(/Authorized Representative Name/i, 'Rajesh Kumar');
-      typeInto(/Vendor Enterprise/i, 'Precision Works');
+      typeInto(/Authorized Representative Name/i, 'Test Vendor Lead');
+      typeInto(/Vendor Enterprise/i, 'Test Vendor Works');
       typeInto(/GSTIN/i, '27AAAAA0000A1Z5');
       typeInto(/City/i, 'Pune');
       typeInto(/State/i, 'Maharashtra');
       typeInto(/Pincode/i, '411001');
-      typeInto(/Corporate Email ID/i, 'vendor@supplier.com');
-      typeInto(/Mobile Number/i, '9811223344');
+      typeInto(/Corporate Email ID/i, 'vendor@example.com');
+      typeInto(/Mobile Number/i, '9123456780');
       typeInto(/^Password$/i, 'Pass@1234');
 
       fireEvent.click(submitButton(/Create Account/i));
@@ -595,10 +652,10 @@ describe('LoginPage', () => {
       await waitFor(() => {
         expect(authClient.register).toHaveBeenCalledWith(
           expect.objectContaining({
-            name: 'Rajesh Kumar',
-            email: 'vendor@supplier.com',
+            name: 'Test Vendor Lead',
+            email: 'vendor@example.com',
             password: 'Pass@1234',
-            mobile: '9811223344',
+            mobile: '9123456780',
             role: 'vendor',
           })
         );
@@ -631,6 +688,9 @@ describe('LoginPage', () => {
         gstin: '27AAAAA0000A1Z5',
         primaryPlantLocation: 'Pune, Maharashtra (411001)',
       });
+      // Nothing the user did not enter is guessed onto the new record.
+      expect(addBuyerAccount.mock.calls[0][0].industrySector).toBe('');
+      expect(addBuyerAccount.mock.calls[0][0]).not.toHaveProperty('contactDesignation');
     });
 
     it('rejects a short password before calling the API', () => {
@@ -799,8 +859,8 @@ describe('LoginPage', () => {
       fireEvent.click(registerTab as HTMLElement);
 
       const company = screen.getByLabelText(/Company Name/i);
-      fireEvent.change(company, { target: { value: 'Navin Chaudhary Enterprises' } });
-      expect(company).toHaveValue('Navin Chaudhary Enterprises');
+      fireEvent.change(company, { target: { value: 'Test Buyer Enterprises' } });
+      expect(company).toHaveValue('Test Buyer Enterprises');
     });
 
     it('switches between password and email OTP modes in sign-in', () => {
@@ -816,14 +876,13 @@ describe('LoginPage', () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({
         success: true,
         message: 'OTP sent',
-        email: 'navinchaudhary.dev@gmail.com',
-        demoCode: '123456',
+        delivery: { email: 'sent', sms: 'sent' },
       });
 
       render(<LoginPage />);
       fireEvent.click(screen.getByRole('button', { name: /Email OTP/i }));
-      typeInto(/Registered Email ID/i, 'navinchaudhary.dev@gmail.com');
-      typeInto(/Registered Mobile Number/i, '9157154504');
+      typeInto(/Registered Email ID/i, 'buyer@example.com');
+      typeInto(/Registered Mobile Number/i, '9876543210');
       submitForm(/Request Login OTP/i);
 
       await waitFor(() => {
@@ -849,8 +908,8 @@ describe('LoginPage', () => {
 
       render(<LoginPage />);
       fireEvent.click(screen.getByRole('button', { name: /Email OTP/i }));
-      typeInto(/Registered Email ID/i, 'navinchaudhary.dev@gmail.com');
-      typeInto(/Registered Mobile Number/i, '9157154504');
+      typeInto(/Registered Email ID/i, 'buyer@example.com');
+      typeInto(/Registered Mobile Number/i, '9876543210');
       submitForm(/Request Login OTP/i);
 
       await waitFor(() => {
@@ -859,7 +918,11 @@ describe('LoginPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Resend OTP/i }));
       await waitFor(() => {
-        expect(showToast).toHaveBeenCalledWith('OTP Request Failed', 'Rate limit exceeded', 'warning');
+        expect(showToast).toHaveBeenCalledWith(
+          AUTH.otpRequestFailedTitle,
+          `Rate limit exceeded ${AUTH.otpSendFailureGuidance}`,
+          'warning'
+        );
       });
     });
 
@@ -867,7 +930,7 @@ describe('LoginPage', () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({
         success: true,
         message: 'Verification OTP dispatched',
-        demoCode: '654321',
+        delivery: { email: 'sent', sms: 'sent' },
       });
 
       render(<LoginPage />);
@@ -909,7 +972,7 @@ describe('LoginPage', () => {
       await waitFor(() => {
         expect(showToast).toHaveBeenCalledWith(
           AUTH.registrationFailedTitle,
-          'Rate limit reached for SMS gateway',
+          `Rate limit reached for SMS gateway ${AUTH.otpSendFailureGuidance}`,
           'warning'
         );
       });
@@ -918,8 +981,6 @@ describe('LoginPage', () => {
     it('completes dual OTP verification and account creation for buyer', async () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({
         success: true,
-        demoEmailCode: '123456',
-        demoMobileCode: '654321',
       });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: true,
@@ -952,8 +1013,6 @@ describe('LoginPage', () => {
     it('handles registration failure during dual OTP completion', async () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({
         success: true,
-        demoEmailCode: '123456',
-        demoMobileCode: '654321',
       });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: false,

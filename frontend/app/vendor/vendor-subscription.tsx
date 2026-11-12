@@ -3,17 +3,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
-import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { authClient } from '@/lib/authClient';
-import { VENDOR_PLAN_RFQ_QUOTA } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import {
+  getPaidVendorPlanPrice,
+  getPaidVendorPlanRfqQuota,
+  getVendorCatalogueLimit,
+  paidPlanDisplayName,
+  rfqQuotaFeatureCopy,
+  catalogueFeatureCopy,
+  type PaidVendorPlanId,
+} from './vendorPlanPricing';
 import { ShieldCheck, Check, Zap, Layers, AlertCircle, Download, Package, ArrowRight } from 'lucide-react';
 
 export default function VendorSubscriptionCenter() {
   const {
     vendorSubscription,
     updateVendorSubscription,
-    vendorRfqDownloadsUsed,
-    setVendorRfqDownloadsUsed,
+    vendorFreeCreditsAllocated,
+    vendorFreeCreditsUsed,
+    vendorFreeCreditsRemaining,
     showToast,
     addAuditLog,
     vendorCatalogue,
@@ -83,73 +93,38 @@ export default function VendorSubscriptionCenter() {
     };
   } | null>(null);
   const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);
-  const [vendorPricing, setVendorPricing] = useState({
-    connect: {
-      price: '₹7,499',
-      basePrice: '₹7,499',
-      gstAmount: '+ ₹1,350 (18% GST)',
-      totalWithGst: '₹8,849',
-      chargeAmount: '₹8,849',
-    },
-    select: {
-      price: '₹14,999',
-      basePrice: '₹14,999',
-      gstAmount: '+ ₹2,700 (18% GST)',
-      totalWithGst: '₹17,699',
-      chargeAmount: '₹17,699',
-    },
-  });
 
+  // Plan prices and plan limits come only from the pricing API. Until it answers, prices show
+  // a dash and the paid plan buttons stay disabled, so no price is shown or charged blind.
+  // A failed request shows an error with a retry action.
+  const [pricing, setPricing] = useState<SubscriptionPricingResponse | null>(null);
+  const [pricingFailed, setPricingFailed] = useState(false);
+  const [pricingAttempt, setPricingAttempt] = useState(0);
   useEffect(() => {
     let isMounted = true;
+    setPricingFailed(false);
     void fetchSubscriptionPricing().then((config) => {
-      if (!isMounted || !config?.seller) return;
-      const formatINR = (val: number) => `₹${Math.round(val).toLocaleString('en-IN')}`;
-      const connectData = config.seller.connect?.['12_months'] || config.seller.connect?.['6_months'];
-      const selectData = config.seller.select?.['12_months'] || config.seller.select?.['6_months'];
-      const gstRate = config.gstRate ?? 0.18;
-      const gstPercent = config.gstPercent ?? 18;
-
-      setVendorPricing((prev) => {
-        const nextPricing = { ...prev };
-        if (connectData) {
-          const base = connectData.baseDurationPrice || 7499;
-          const gst = connectData.gstAmount || Math.round(base * gstRate * 100) / 100;
-          const total = connectData.totalWithGst || (base + gst);
-          nextPricing.connect = {
-            price: formatINR(base),
-            basePrice: formatINR(base),
-            gstAmount: `+ ${formatINR(gst)} (${gstPercent}% GST)`,
-            totalWithGst: formatINR(total),
-            chargeAmount: formatINR(total),
-          };
-        }
-        if (selectData) {
-          const base = selectData.baseDurationPrice || 14999;
-          const gst = selectData.gstAmount || Math.round(base * gstRate * 100) / 100;
-          const total = selectData.totalWithGst || (base + gst);
-          nextPricing.select = {
-            price: formatINR(base),
-            basePrice: formatINR(base),
-            gstAmount: `+ ${formatINR(gst)} (${gstPercent}% GST)`,
-            totalWithGst: formatINR(total),
-            chargeAmount: formatINR(total),
-          };
-        }
-        return nextPricing;
-      });
+      if (!isMounted) return;
+      if (config) setPricing(config);
+      else setPricingFailed(true);
     });
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [pricingAttempt]);
+  const retryPricing = () => setPricingAttempt((attempt) => attempt + 1);
+
+  const connectPrice = getPaidVendorPlanPrice(pricing, 'connect');
+  const selectPrice = getPaidVendorPlanPrice(pricing, 'select');
+  const paidPlanPrice = (plan: PaidVendorPlanId) => (plan === 'connect' ? connectPrice : selectPrice);
+  const connectRfqQuota = getPaidVendorPlanRfqQuota(pricing, 'connect');
+  const selectRfqQuota = getPaidVendorPlanRfqQuota(pricing, 'select');
+  const catalogueLimit = getVendorCatalogueLimit(pricing);
 
   const planLabel = (plan: 'premium' | 'connect' | 'select') =>
     plan === 'premium'
       ? 'Premium Model (Client Uploaded Vendor)'
-      : plan === 'connect'
-      ? 'Connect Model (50 RFQs / 3 Months)'
-      : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+      : paidPlanDisplayName(plan, plan === 'connect' ? connectRfqQuota : selectRfqQuota);
 
   const handleSubscribe = async (plan: 'premium' | 'connect' | 'select') => {
     if (isUpdatingPlan) return;
@@ -164,56 +139,74 @@ export default function VendorSubscriptionCenter() {
       `Successfully switched to ${planName}.`,
       'success'
     );
-    addAuditLog(
-      `${currentUserSession?.orgName || 'Vendor'} updated vendor subscription to ${planName}`,
-      undefined,
-      currentUserSession?.email
-    );
+    addAuditLog(`${currentUserSession?.orgName || 'Vendor'} updated vendor subscription to ${planName}`);
   };
 
-  // Premium is free (granted on buyer roster upload) so it switches instantly;
-  // Connect/Select advertise real $ prices, so they go through the dummy
-  // payment gateway first rather than flipping the plan for free on click.
+  // Premium is granted on buyer roster upload, so it switches directly. Connect and
+  // Select are paid: they open a real Zoho payment link, and the plan changes only
+  // after the payment is confirmed.
   const handlePlanButtonClick = (plan: 'premium' | 'connect' | 'select') => {
     if (plan === 'premium') {
-      handleSubscribe(plan);
+      void handleSubscribe(plan);
       return;
     }
-    const pricing = vendorPricing[plan];
+    const price = paidPlanPrice(plan);
+    if (!price) {
+      showToast(UI_STRINGS.vendorWorkspace.pricingUnavailableTitle, UI_STRINGS.vendorWorkspace.pricingUnavailableMessage, 'warning');
+      return;
+    }
     setPendingPayment({
       planId: plan,
       planName: planLabel(plan),
-      price: pricing.totalWithGst,
+      price: price.totalWithGst,
       billingDurationLabel: '12 Months (Recommended)',
       breakdown: {
-        basePrice: pricing.basePrice,
-        gstAmount: pricing.gstAmount,
+        basePrice: price.basePrice,
+        gstAmount: price.gstAmount,
       },
     });
   };
 
-  const getMaxQuota = () => {
-    // Premium (client-uploaded) has no marketplace quota.
-    return VENDOR_PLAN_RFQ_QUOTA[vendorSubscription] ?? 0;
-  };
-
-  const maxQuota = getMaxQuota();
-  const remainingDownloads = maxQuota > 0 ? Math.max(0, maxQuota - vendorRfqDownloadsUsed) : 'Unlimited (Client Uploaded)';
+  // Download figures are the vendor's own balance from the backend credits endpoint.
+  // A figure that has not loaded is shown as "Not available", never as a number.
+  const notAvailable = UI_STRINGS.vendorWorkspace.notAvailable;
+  const downloadsUsedText =
+    vendorFreeCreditsUsed !== null && vendorFreeCreditsAllocated !== null
+      ? formatString(UI_STRINGS.vendorWorkspace.downloadsUsedOfAllocated, {
+          used: vendorFreeCreditsUsed,
+          allocated: vendorFreeCreditsAllocated,
+        })
+      : notAvailable;
+  const remainingDownloadsText =
+    vendorFreeCreditsRemaining !== null
+      ? formatString(UI_STRINGS.vendorWorkspace.downloadsRemaining, { count: vendorFreeCreditsRemaining })
+      : notAvailable;
+  const downloadMeterPercent =
+    vendorFreeCreditsUsed !== null && vendorFreeCreditsAllocated !== null && vendorFreeCreditsAllocated > 0
+      ? Math.min(100, (vendorFreeCreditsUsed / vendorFreeCreditsAllocated) * 100)
+      : 0;
+  const downloadQuotaExhausted =
+    vendorFreeCreditsUsed !== null &&
+    vendorFreeCreditsAllocated !== null &&
+    vendorFreeCreditsAllocated > 0 &&
+    vendorFreeCreditsUsed >= vendorFreeCreditsAllocated;
+  const meterLabel =
+    vendorSubscription === 'connect' || vendorSubscription === 'select'
+      ? UI_STRINGS.vendorWorkspace.downloadsLabelThreeMonth
+      : UI_STRINGS.vendorWorkspace.downloadsLabel;
 
   const plans = [
     {
       id: 'premium' as const,
       name: 'Premium Model',
       subtext: 'Client Uploaded Vendor',
-      originalPrice: '',
       price: 'Free',
-      chargeAmount: 'Free',
       billing: 'included with Buyer Roster upload',
       description: 'Automatically granted to vendors uploaded by buyers. Access all direct RFQ invitations issued by your clients.',
       badge: 'Client Uploaded',
       colorClass: 'border-slate-200 dark:border-gray-800',
       features: [
-        'See all RFQs from buyers who uploaded your vendor profile (e.g. L&T, Reliance)',
+        'See all RFQs from buyers who uploaded your vendor profile',
         'Unlimited technical BOQ downloads for direct invitation RFQs',
         'Email-based quotation tracking and status updates',
         'Direct communication channel with inviting enterprise buyers',
@@ -227,20 +220,16 @@ export default function VendorSubscriptionCenter() {
       id: 'connect' as const,
       name: 'Connect Model',
       subtext: 'Marketplace Expansion',
-      originalPrice: '₹25,000',
-      price: vendorPricing.connect.price,
-      // Must match the actual GST-inclusive amount Zoho charges
-      // (computeZohoPlanAmount in backend/src/config/constants.js), so the
-      // payment button never promises an amount the backend won't collect.
-      chargeAmount: vendorPricing.connect.chargeAmount,
+      // The price shown is the base price from the pricing API. The payment modal
+      // charges the GST-inclusive total from the same response.
+      price: connectPrice?.basePrice ?? '—',
       billing: 'per year',
       description: 'Expand your market reach. Access & download open RFQs across the entire Procucev Network Marketplace.',
       badge: 'Popular for Growth',
       colorClass: 'border-indigo-300 dark:border-indigo-800 shadow-indigo-500/10',
       features: [
         'All Premium Client-Uploaded features included',
-        'Download up to 50 RFQs within 3 months (90-day period)',
-        '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
+        rfqQuotaFeatureCopy(connectRfqQuota),
         'Access to full Open Network Marketplace RFQs',
         'Instant email dispatch of technical BOQ spreadsheets & specifications',
         'Automated category & location proximity matching alerts',
@@ -254,18 +243,15 @@ export default function VendorSubscriptionCenter() {
       id: 'select' as const,
       name: 'Select Model',
       subtext: 'Item Catalogue & High Volume',
-      originalPrice: '₹50,000',
-      price: vendorPricing.select.price,
-      chargeAmount: vendorPricing.select.chargeAmount,
+      price: selectPrice?.basePrice ?? '—',
       billing: 'per year',
       description: 'Complete tier for high-volume suppliers. Build your Item Catalogue and capture maximum marketplace demand.',
       badge: 'Full Suite',
       colorClass: 'border-purple-300 dark:border-purple-800 shadow-purple-500/10',
       features: [
         'All Premium & Connect Model features included',
-        '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
-        'Vendor Item Catalogue: Host up to 100 products (SKUs, MOQs & Specs)',
-        'Download up to 100 RFQs within 3 months (90-day period)',
+        catalogueFeatureCopy(catalogueLimit),
+        rfqQuotaFeatureCopy(selectRfqQuota),
         'Bidirectional Cross-Highlighting (📦 Catalogue Match & 🔔 RFQs Available)',
         'Priority category positioning in Buyer Mode 2 & Mode 3 AI matching',
         'Bulk CSV/Excel Catalogue import and export tools',
@@ -309,8 +295,8 @@ export default function VendorSubscriptionCenter() {
             </div>
             <p className="text-xs text-slate-600 dark:text-gray-300 mt-1 font-medium">
               {vendorSubscription === 'premium' && 'You are an uploaded roster vendor. Access all RFQs directly dispatched by your enterprise buyers.'}
-              {vendorSubscription === 'connect' && 'Marketplace access enabled: Download up to 50 open marketplace RFQs per 3-month period.'}
-              {vendorSubscription === 'select' && 'Full tier active: Item Catalogue unlocked (100 products max) + Download up to 100 open marketplace RFQs per 3-month period.'}
+              {vendorSubscription === 'connect' && UI_STRINGS.vendorWorkspace.connectActiveDescription}
+              {vendorSubscription === 'select' && UI_STRINGS.vendorWorkspace.selectActiveDescription}
             </p>
           </div>
         </div>
@@ -320,26 +306,28 @@ export default function VendorSubscriptionCenter() {
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 min-w-[220px] space-y-1.5">
             <div className="flex justify-between items-center text-[11px] font-extrabold">
               <span className="text-slate-500 dark:text-gray-400 flex items-center gap-1">
-                <Download size={12} /> 3-Month Downloads:
+                <Download size={12} /> {meterLabel}
               </span>
               <span className="text-indigo-650 dark:text-indigo-400 font-mono">
-                {vendorRfqDownloadsUsed} / {maxQuota}
+                {downloadsUsedText}
               </span>
             </div>
             <div className="w-full bg-slate-200 dark:bg-gray-800 h-2 rounded-full overflow-hidden">
               <div
                 className={`h-full transition-all ${
-                  vendorRfqDownloadsUsed >= maxQuota
+                  downloadQuotaExhausted
                     ? 'bg-rose-500'
                     : vendorSubscription === 'select'
                     ? 'bg-purple-600'
                     : 'bg-indigo-600'
                 }`}
-                style={{ width: `${Math.min(100, (vendorRfqDownloadsUsed / maxQuota) * 100)}%` }}
+                style={{
+                  width: `${downloadMeterPercent}%`,
+                }}
               />
             </div>
             <span className="text-[10px] text-slate-400 block text-right font-medium">
-              {remainingDownloads} downloads remaining
+              {remainingDownloadsText}
             </span>
           </div>
         ) : (
@@ -353,6 +341,19 @@ export default function VendorSubscriptionCenter() {
           </div>
         )}
       </div>
+
+      {pricingFailed && (
+        <div role="alert" className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-xs font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <span>{UI_STRINGS.vendorWorkspace.pricesUnavailableNotice}</span>
+          <button
+            type="button"
+            onClick={retryPricing}
+            className="btn btn-secondary btn-xs font-bold shrink-0"
+          >
+            {UI_STRINGS.vendorWorkspace.pricesRetryAction}
+          </button>
+        </div>
+      )}
 
       {/* Plan Grid Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -388,20 +389,15 @@ export default function VendorSubscriptionCenter() {
 
                 <div className="flex items-baseline justify-between gap-2 flex-wrap">
                   <div className="flex items-baseline gap-1.5 flex-wrap">
-                    {p.originalPrice && (
-                      <span className="text-sm font-semibold text-slate-400 dark:text-gray-500 line-through">
-                        {p.originalPrice}
-                      </span>
-                    )}
                     <span className="text-3xl font-black text-slate-900 dark:text-white">{p.price}</span>
                     <span className="text-[11px] text-slate-400 dark:text-gray-500 font-medium">{p.billing}</span>
                   </div>
                   {p.id !== 'premium' && (
                     <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 shrink-0">
-                      + 18% GST
+                      + {paidPlanPrice(p.id)?.gstLabel ?? 'GST'} GST
                     </span>
                   )}
-                  {p.originalPrice && (
+                  {p.id !== 'premium' && (
                     <span className="text-[9px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400 w-full">
                       #Annual Billing Only
                     </span>
@@ -450,7 +446,7 @@ export default function VendorSubscriptionCenter() {
               <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
                   onClick={() => handlePlanButtonClick(p.id)}
-                  disabled={isActive || isUpdatingPlan}
+                  disabled={isActive || isUpdatingPlan || (p.id !== 'premium' && !paidPlanPrice(p.id))}
                   className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${
                     isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'

@@ -61,7 +61,8 @@ describe('paymentActivationQueries', () => {
     const payment = paymentActivationQueries.paymentLinkUpdateStatement(vendorLink, paymentActivationQueries.payerConfig(vendorLink), { event: 'paid' });
     const buyerPayment = paymentActivationQueries.paymentLinkUpdateStatement(buyerLink, paymentActivationQueries.payerConfig(buyerLink), null);
 
-    expect(buyer.text).toContain("json_set(raw, '$.subscriptionPlan', $4, '$.billingDuration', $5, '$.remainingFreeRFQs', 5)");
+    expect(buyer.text).toContain("json_set(raw, '$.subscriptionPlan', $4, '$.billingDuration', $5, '$.remainingFreeRFQs', $6)");
+    expect(buyer.params.slice(3)).toEqual(['free_trial', 'annual', 5]);
     expect(buyer.text).toContain("json_extract(raw, '$.activated')");
     expect(vendor.text).toContain("'$.rfqDownloadsUsed', 0");
     expect(payment.text).toContain("json_extract(raw, '$.activated')");

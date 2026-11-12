@@ -397,7 +397,7 @@ export default function EnterpriseInquiriesConsole() {
                       {/* Submission Timestamp */}
                       <span className="text-[11px] text-slate-400 dark:text-gray-500 flex items-center gap-1">
                         <Clock size={11} />
-                        {inq.createdAt ? formatIndianDateTime(inq.createdAt) : 'Recent'}
+                        {inq.createdAt ? formatIndianDateTime(inq.createdAt) : UI_STRINGS.dataLoad.emptyCell}
                       </span>
                     </div>
 
@@ -566,7 +566,7 @@ export default function EnterpriseInquiriesConsole() {
               <div className="flex justify-between">
                 <span className="text-slate-500 dark:text-gray-400 font-bold">Received At:</span>
                 <span className="text-slate-700 dark:text-gray-300">
-                  {selectedInquiry.createdAt ? formatIndianDateTime(selectedInquiry.createdAt) : 'Recent'}
+                  {selectedInquiry.createdAt ? formatIndianDateTime(selectedInquiry.createdAt) : UI_STRINGS.dataLoad.emptyCell}
                 </span>
               </div>
               {selectedInquiry.contactedBy && (

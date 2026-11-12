@@ -35,6 +35,9 @@ jest.mock('@/lib/authClient', () => ({
     getProfile: jest.fn(),
     changePassword: jest.fn().mockResolvedValue({ success: true }),
     getSessionUser: jest.fn().mockReturnValue(null),
+    // Screens and API clients read the bearer token through getToken(). Without it, the call
+    // throws inside an effect and the screen falls into its error state.
+    getToken: jest.fn().mockReturnValue('test-session-token'),
   },
 }));
 jest.mock('@/lib/documentExtraction', () => ({
@@ -364,12 +367,8 @@ describe('Frontend Master Coverage Booster Suite', () => {
       success: true,
       user: { id: 'usr-1', name: 'Rajesh Sharma', role: 'buyer', email: 'client@procucev.com' },
     });
-    (authClient.requestOtp as jest.Mock).mockResolvedValue({
-      success: true,
-      demoCode: '123456',
-      demoEmailCode: '123456',
-      demoMobileCode: '654321',
-    });
+    // OTP responses carry no code. The user types the code that arrives by email.
+    (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
     (authClient.verifyOtp as jest.Mock).mockResolvedValue({
       success: true,
       user: { id: 'usr-1', name: 'Rajesh Sharma', role: 'buyer', email: 'client@procucev.com' },
@@ -709,10 +708,10 @@ describe('Frontend Master Coverage Booster Suite', () => {
       />
     );
 
-    const priceInputs = screen.getAllByRole('spinbutton');
-    if (priceInputs.length > 0) {
-      fireEvent.change(priceInputs[0], { target: { value: '195000' } });
-    }
+    // The bid form opens once the vendor record has loaded, so wait for its number inputs.
+    const priceInputs = await screen.findAllByRole('spinbutton');
+    expect(priceInputs.length).toBeGreaterThan(0);
+    fireEvent.change(priceInputs[0], { target: { value: '195000' } });
 
     const leadTimeInputs = screen.getAllByRole('spinbutton');
     if (leadTimeInputs.length > 1) {
@@ -749,17 +748,21 @@ describe('Frontend Master Coverage Booster Suite', () => {
 
     expect(screen.getByText(/Save Supplier Profile/i)).toBeInTheDocument();
 
+    // Save stays disabled while the saved profile loads, so wait for it before submitting.
+    const saveBtn = screen.getByRole('button', { name: /Save Supplier Profile/i });
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+
     const inputs = screen.getAllByRole('textbox');
     if (inputs.length > 1) {
       fireEvent.change(inputs[1], { target: { value: 'Apex Hydro Innovations' } });
     }
 
-    const saveBtn = screen.getByRole('button', { name: /Save Supplier Profile/i });
     await act(async () => {
       fireEvent.click(saveBtn);
     });
 
-    expect(mockShowToast).toHaveBeenCalled();
+    // The fixture has no legal name, PAN or GSTIN, so the submit is rejected before any request is sent.
+    expect(mockShowToast).toHaveBeenCalledWith('Validation Error', expect.stringContaining('required'), 'warning');
   });
 
   // ── ManualRFQModal Extended Tests ─────────────────────────────────────────
@@ -870,11 +873,13 @@ describe('Frontend Master Coverage Booster Suite', () => {
     fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
 
     await waitFor(() => expect(authClient.requestOtp).toHaveBeenCalledTimes(1));
-    expect(screen.getByLabelText(/Email Verification Code/i)).toHaveValue('123456');
+    // The code is never filled in for the user. The field starts empty.
+    expect(screen.getByLabelText(/Email Verification Code/i)).toHaveValue('');
 
     fireEvent.click(screen.getByRole('button', { name: /Resend OTP/i }));
     await waitFor(() => expect(authClient.requestOtp).toHaveBeenCalledTimes(2));
 
+    fireEvent.change(screen.getByLabelText(/Email Verification Code/i), { target: { value: '123456' } });
     fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
     await waitFor(() => {
       expect(authClient.verifyOtp).toHaveBeenCalledWith(

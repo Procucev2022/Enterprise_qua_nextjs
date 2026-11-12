@@ -84,6 +84,12 @@ async function autoResolveLogErrors(req, res, next) {
     const body = req.body || {};
     if (body.action) {
       const result = await logErrorResolver.executeRemediation(body.action);
+      if (!result.success) {
+        // 400 for an action the resolver does not support. 503 when a supported
+        // action ran but did not succeed.
+        const statusCode = result.status === 'not_supported' ? 400 : 503;
+        return res.status(statusCode).json({ success: false, remediation: result });
+      }
       return res.json({ success: true, remediation: result });
     }
     const report = await logErrorResolver.autoResolveAll();

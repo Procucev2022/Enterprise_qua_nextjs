@@ -1,14 +1,33 @@
 // ==============================================================================
-// PAYMENT DUES QUERIES (PostgreSQL & Cloudflare D1 with in-memory fallback)
+// PAYMENT DUES QUERIES (PostgreSQL & Cloudflare D1)
 // ==============================================================================
 // Fetches, filters, sorts, and records low-credit monitoring & communications.
 // ==============================================================================
 
 const pool = require('./pool');
 const crypto = require('crypto');
-const storeService = require('../services/storeService');
+const { VENDOR_PLAN_RFQ_QUOTA } = require('../config/constants');
 const { logger } = require('../services/loggerService');
-const { VENDOR_PLAN_RFQ_QUOTA, VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
+
+const DASH = '–';
+const PAYMENT_DUES_ERRORS = Object.freeze({
+  COMMUNICATED_BY_REQUIRED: 'The sender name is required to record a communication. Sign in and retry.',
+  UPDATED_BY_REQUIRED: 'The updating user is required to record an acknowledgement. Sign in and retry.',
+});
+
+function validationError(message) {
+  const error = new Error(message);
+  error.code = 'VALIDATION_FAILED';
+  error.statusCode = 400;
+  return error;
+}
+
+/** Account status from the stored status, or from the active flag. Unknown is a dash. */
+function resolveAccountStatus(status, isActive) {
+  if (status) return status;
+  if (isActive === undefined || isActive === null) return DASH;
+  return Number(isActive) ? 'Active' : 'Inactive';
+}
 
 function parseRaw(val, fallback = {}) {
   if (!val) return fallback;
@@ -45,32 +64,36 @@ function getSellerPlanQuota(v) {
 function getSellerAvailableCredits(v) {
   const quota = getSellerPlanQuota(v);
   if (quota !== undefined) return Math.max(0, quota - parseCredits(v.rfqDownloadsUsed, 0));
-  if (v.availableCredits != null) return parseCredits(v.availableCredits, 0);
-  if (v.freeQuotationCredits != null) return parseCredits(v.freeQuotationCredits, 0);
-  if (v.freeRfqDownloadCredits != null) return parseCredits(v.freeRfqDownloadCredits, 0);
-  if (v.freeCreditsRemaining != null) return parseCredits(v.freeCreditsRemaining, 0);
-  if (v.credits != null) return parseCredits(v.credits, 0);
-  return VENDOR_FREE_CREDITS_LIMIT;
+  if (v.availableCredits != null) return parseCredits(v.availableCredits, null);
+  if (v.freeQuotationCredits != null) return parseCredits(v.freeQuotationCredits, null);
+  if (v.freeRfqDownloadCredits != null) return parseCredits(v.freeRfqDownloadCredits, null);
+  if (v.freeCreditsRemaining != null) return parseCredits(v.freeCreditsRemaining, null);
+  if (v.credits != null) return parseCredits(v.credits, null);
+  return null;
 }
 
 function getSellerCreditsUsed(v, totalCredits, available) {
   if (v.freeCreditsUsed != null) return Number(v.freeCreditsUsed);
   if (v.rfqDownloadsUsed != null) return Number(v.rfqDownloadsUsed);
+  if (totalCredits === null || available === null) return null;
   return Math.max(0, totalCredits - available);
 }
 
-// In-memory communications storage when pool.hasStorage() is false (e.g. tests / offline)
-const inMemoryCommunications = new Map();
+
 
 function throwPersistenceUnavailable(operation, cause) {
   const error = new Error(`Payment dues ${operation} failed because configured database persistence is unavailable.`);
   error.code = 'PERSISTENCE_UNAVAILABLE';
   error.cause = cause;
-  logger.error('Payment dues persistence failed; refusing in-memory fallback', {
+  logger.error('Payment dues persistence failed', {
     operation,
     error: cause,
   }, 'PAYMENT_DUES');
   throw error;
+}
+
+function requireStorage(operation) {
+  if (!pool.hasStorage()) throwPersistenceUnavailable(operation, null);
 }
 
 function mapCommunicationRow(row) {
@@ -96,84 +119,73 @@ function mapCommunicationRow(row) {
   };
 }
 
-/**
- * Reset in-memory communications (used by unit tests)
- */
-function resetInMemoryCommunications() {
-  inMemoryCommunications.clear();
-}
+
 
 /**
- * Retrieve all registered buyers from database or storeService
+ * Retrieve all registered buyers from the database
  */
 async function fetchRawBuyers() {
-  if (pool.hasStorage()) {
-    try {
-      const sql = 'SELECT id, is_active, raw, created_at, updated_at FROM buyer_accounts ORDER BY created_at DESC';
-      const result = await pool.query(sql, [], {
-        d1: true,
-        d1Text: 'SELECT id, is_active, raw, created_at, updated_at FROM buyer_accounts ORDER BY created_at DESC',
-        useCache: true,
-        tag: 'buyer_accounts',
-        ttlMs: 30000,
-      });
-      if (result && Array.isArray(result.rows)) {
-        return result.rows.map((row) => {
-          const raw = parseRaw(row.raw, {});
-          return {
-            id: row.id,
-            ...raw,
-            createdAt: row.created_at || raw.createdAt || '',
-            updatedAt: row.updated_at || raw.updatedAt || '',
-            isActive: row.is_active !== undefined ? row.is_active : raw.isActive,
-          };
-        });
-      }
-    } catch (error) {
-      throwPersistenceUnavailable('buyer account read', error);
-    }
+  requireStorage('buyer account read');
+  let result;
+  try {
+    const sql = 'SELECT id, is_active, raw, created_at, updated_at FROM buyer_accounts ORDER BY created_at DESC';
+    result = await pool.query(sql, [], {
+      d1: true,
+      d1Text: 'SELECT id, is_active, raw, created_at, updated_at FROM buyer_accounts ORDER BY created_at DESC',
+      useCache: true,
+      tag: 'buyer_accounts',
+      ttlMs: 30000,
+    });
+  } catch (error) {
+    throwPersistenceUnavailable('buyer account read', error);
   }
-
-  // Fallback to storeService
-  const accounts = storeService.getBuyerAccounts() || [];
-  return accounts.map((acc) => ({ ...acc }));
+  if (!result || !Array.isArray(result.rows)) {
+    throwPersistenceUnavailable('buyer account read', new Error('The buyer account query returned no row set.'));
+  }
+  return result.rows.map((row) => {
+    const raw = parseRaw(row.raw, {});
+    return {
+      id: row.id,
+      ...raw,
+      createdAt: row.created_at || raw.createdAt || null,
+      updatedAt: row.updated_at || raw.updatedAt || null,
+      isActive: row.is_active !== undefined ? row.is_active : raw.isActive,
+    };
+  });
 }
 
 /**
- * Retrieve all registered vendors from database or storeService
+ * Retrieve all registered vendors from the database
  */
 async function fetchRawVendors() {
-  if (pool.hasStorage()) {
-    try {
-      const sql = 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC LIMIT 500';
-      const result = await pool.query(sql, [], {
-        d1: true,
-        d1Text: 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC LIMIT 500',
-        useCache: true,
-        tag: 'vendors',
-        ttlMs: 30000,
-      });
-      if (result && Array.isArray(result.rows)) {
-        return result.rows.map((row) => {
-          const raw = parseRaw(row.raw, {});
-          return {
-            id: row.id,
-            email: row.email,
-            status: row.status,
-            ...raw,
-            createdAt: row.created_at || raw.createdAt,
-            updatedAt: row.updated_at || raw.updatedAt,
-          };
-        });
-      }
-    } catch (error) {
-      throwPersistenceUnavailable('vendor account read', error);
-    }
+  requireStorage('vendor account read');
+  let result;
+  try {
+    const sql = 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC LIMIT 500';
+    result = await pool.query(sql, [], {
+      d1: true,
+      d1Text: 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC LIMIT 500',
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 30000,
+    });
+  } catch (error) {
+    throwPersistenceUnavailable('vendor account read', error);
   }
-
-  // Fallback to storeService
-  const vendors = (await storeService.getVendors()) || [];
-  return vendors.map((v) => ({ ...v }));
+  if (!result || !Array.isArray(result.rows)) {
+    throwPersistenceUnavailable('vendor account read', new Error('The vendor account query returned no row set.'));
+  }
+  return result.rows.map((row) => {
+    const raw = parseRaw(row.raw, {});
+    return {
+      id: row.id,
+      email: row.email,
+      status: row.status,
+      ...raw,
+      createdAt: row.created_at || raw.createdAt,
+      updatedAt: row.updated_at || raw.updatedAt,
+    };
+  });
 }
 
 /**
@@ -235,12 +247,7 @@ async function fetchCommunicationsMap(accountIds) {
     }
   }
 
-  // In-memory fallback
-  for (const [accId, list] of inMemoryCommunications.entries()) {
-    if (hasAccountFilter && !selectedAccountIdSet.has(accId)) continue;
-    if (list[0]) commMap.set(accId, [list[0]]);
-  }
-  return commMap;
+  throwPersistenceUnavailable('latest communication lookup', null);
 }
 
 /**
@@ -263,65 +270,57 @@ async function getLowCreditAccounts({
     module.exports.fetchRawBuyers(),
     module.exports.fetchRawVendors(),
   ]);
+
+  // Available credits are null when the record holds no credit figure. Such an account
+  // is never listed as low-credit, because its balance is unknown.
+  const isLowCredit = (available) => available !== null && available >= 0 && available <= 2;
+  const buyerEntries = buyers.map((buyer) => ({ buyer, available: parseCredits(buyer.remainingFreeRFQs, null) }));
+  const vendorEntries = vendors.map((vendor) => ({ vendor, available: getSellerAvailableCredits(vendor) }));
   const lowCreditAccountIds = [
-    ...buyers
-      .filter((buyer) => {
-        const available = parseCredits(buyer.remainingFreeRFQs, 5);
-        return available <= 2 && available >= 0;
-      })
-      .map((buyer) => buyer.id),
-    ...vendors
-      .filter((vendor) => {
-        const available = getSellerAvailableCredits(vendor);
-        return available <= 2 && available >= 0;
-      })
-      .map((vendor) => vendor.id),
+    ...buyerEntries.filter((entry) => isLowCredit(entry.available)).map((entry) => entry.buyer.id),
+    ...vendorEntries.filter((entry) => isLowCredit(entry.available)).map((entry) => entry.vendor.id),
   ].filter(Boolean);
   const commMap = await fetchCommunicationsMap(lowCreditAccountIds);
 
   const allEligibleAccounts = [];
 
   // 1. Process Buyers
-  for (const b of buyers) {
-    const available = parseCredits(b.remainingFreeRFQs, 5);
-    // Strict eligibility: available credits <= 2 and >= 0
-    if (available > 2 || available < 0) continue;
+  for (const { buyer: b, available } of buyerEntries) {
+    if (!isLowCredit(available)) continue;
 
-    const totalCredits = Number(b.totalCredits || 5);
-    const creditsUsed = Math.max(0, totalCredits - available);
+    const totalCredits = parseCredits(b.totalCredits, null);
+    const creditsUsed = totalCredits === null ? null : Math.max(0, totalCredits - available);
     const history = commMap.get(b.id) || [];
     const latestComm = history[0] || null;
 
     allEligibleAccounts.push({
       accountId: b.id,
       accountType: 'buyer',
-      companyName: pickFirst(b.organizationName, b.companyName, b.name, 'Unnamed Buyer'),
-      contactPerson: pickFirst(b.contactPerson, b.fullName, b.adminName, b.name, '–'),
-      email: pickFirst(b.corporateEmail, b.email, '–'),
-      phoneNumber: pickFirst(b.phone, b.mobile, b.contactNumber, '–'),
+      companyName: pickFirst(b.organizationName, b.companyName, b.name) || DASH,
+      contactPerson: pickFirst(b.contactPerson, b.fullName, b.adminName, b.name) || DASH,
+      email: pickFirst(b.corporateEmail, b.email) || DASH,
+      phoneNumber: pickFirst(b.phone, b.mobile, b.contactNumber) || DASH,
       availableCredits: available,
       totalCredits,
       creditsUsed,
-      accountStatus: b.status || (b.isActive !== false ? 'Active' : 'Inactive'),
-      registrationDate: pickFirst(b.createdAt, b.created_at, new Date().toISOString()),
-      lastActivity: pickFirst(b.lastActivity, b.lastLogin, b.updatedAt, b.updated_at, b.createdAt, new Date().toISOString()),
-      assignedExecutive: pickFirst(b.assignedExecutive, b.accountManager, 'CM Team'),
+      accountStatus: resolveAccountStatus(b.status, b.isActive),
+      registrationDate: pickFirst(b.createdAt, b.created_at) || null,
+      lastActivity: pickFirst(b.lastActivity, b.lastLogin, b.updatedAt, b.updated_at, b.createdAt) || null,
+      assignedExecutive: pickFirst(b.assignedExecutive, b.accountManager) || DASH,
       lastNotification: latestComm ? latestComm.sentAt : null,
-      notificationChannel: latestComm ? latestComm.channel : '–',
+      notificationChannel: latestComm ? latestComm.channel : DASH,
       acknowledgementStatus: latestComm ? latestComm.acknowledgementStatus : 'Not Notified',
-      deliveryStatus: latestComm ? latestComm.deliveryStatus : '–',
+      deliveryStatus: latestComm ? latestComm.deliveryStatus : DASH,
       notificationStatus: latestComm ? latestComm.notificationStatus : 'Not Notified',
       rawRecord: b,
     });
   }
 
   // 2. Process Sellers (Vendors)
-  for (const v of vendors) {
-    const available = getSellerAvailableCredits(v);
-    // Strict eligibility: available credits <= 2 and >= 0
-    if (available > 2 || available < 0) continue;
+  for (const { vendor: v, available } of vendorEntries) {
+    if (!isLowCredit(available)) continue;
 
-    const totalCredits = getSellerPlanQuota(v) ?? Number(v.totalCredits || v.freeCreditsAllocated || VENDOR_FREE_CREDITS_LIMIT);
+    const totalCredits = getSellerPlanQuota(v) ?? parseCredits(v.totalCredits ?? v.freeCreditsAllocated, null);
     const creditsUsed = getSellerCreditsUsed(v, totalCredits, available);
     const history = commMap.get(v.id) || [];
     const latestComm = history[0] || null;
@@ -329,21 +328,21 @@ async function getLowCreditAccounts({
     allEligibleAccounts.push({
       accountId: v.id,
       accountType: 'seller',
-      companyName: pickFirst(v.name, v.companyName, 'Unnamed Seller'),
-      contactPerson: pickFirst(v.contactPerson, v.ownerName, v.contactName, '–'),
-      email: pickFirst(v.email, v.corporateEmail, '–'),
-      phoneNumber: pickFirst(v.phone, v.mobile, v.mobileNumber, '–'),
+      companyName: pickFirst(v.name, v.companyName) || DASH,
+      contactPerson: pickFirst(v.contactPerson, v.ownerName, v.contactName) || DASH,
+      email: pickFirst(v.email, v.corporateEmail) || DASH,
+      phoneNumber: pickFirst(v.phone, v.mobile, v.mobileNumber) || DASH,
       availableCredits: available,
       totalCredits,
       creditsUsed,
-      accountStatus: v.status || 'Active',
-      registrationDate: pickFirst(v.createdAt, v.created_at, new Date().toISOString()),
-      lastActivity: pickFirst(v.lastActivity, v.updatedAt, v.updated_at, v.createdAt, new Date().toISOString()),
-      assignedExecutive: pickFirst(v.assignedExecutive, v.accountManager, 'CM Team'),
+      accountStatus: v.status || DASH,
+      registrationDate: pickFirst(v.createdAt, v.created_at) || null,
+      lastActivity: pickFirst(v.lastActivity, v.updatedAt, v.updated_at, v.createdAt) || null,
+      assignedExecutive: pickFirst(v.assignedExecutive, v.accountManager) || DASH,
       lastNotification: latestComm ? latestComm.sentAt : null,
-      notificationChannel: latestComm ? latestComm.channel : '–',
+      notificationChannel: latestComm ? latestComm.channel : DASH,
       acknowledgementStatus: latestComm ? latestComm.acknowledgementStatus : 'Not Notified',
-      deliveryStatus: latestComm ? latestComm.deliveryStatus : '–',
+      deliveryStatus: latestComm ? latestComm.deliveryStatus : DASH,
       notificationStatus: latestComm ? latestComm.notificationStatus : 'Not Notified',
       rawRecord: v,
     });
@@ -468,17 +467,64 @@ async function recordCommunication({
   recipient,
   subject = '',
   message,
-  notificationStatus = 'Notification Sent',
-  deliveryStatus = 'Delivered',
+  notificationStatus = 'Notification Pending',
+  deliveryStatus = 'Pending',
   acknowledgementStatus = 'Acknowledgement Pending',
-  communicatedBy = 'Category Manager',
+  communicatedBy,
   notes = '',
   metadata = {},
 }) {
+  // Statuses default to pending. A communication is reported delivered only when the
+  // caller passes a delivery result from a provider.
+  const sender = String(communicatedBy || '').trim();
+  if (!sender) throw validationError(PAYMENT_DUES_ERRORS.COMMUNICATED_BY_REQUIRED);
+  requireStorage('communication insert');
+
   const id = `pdc_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
   const now = new Date().toISOString();
+  const sql = `
+    INSERT INTO payment_dues_communications (
+      id, account_id, account_type, channel, recipient, subject, message,
+      notification_status, delivery_status, acknowledgement_status,
+      communicated_by, sent_at, notes, metadata, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    RETURNING *
+  `;
+  const d1Sql = `
+    INSERT INTO payment_dues_communications (
+      id, account_id, account_type, channel, recipient, subject, message,
+      notification_status, delivery_status, acknowledgement_status,
+      communicated_by, sent_at, notes, metadata, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+  `;
+  try {
+    await pool.query(
+      sql,
+      [
+        id,
+        accountId,
+        accountType,
+        channel,
+        recipient,
+        subject || '',
+        message,
+        notificationStatus,
+        deliveryStatus,
+        acknowledgementStatus,
+        sender,
+        now,
+        notes,
+        typeof metadata === 'object' ? JSON.stringify(metadata) : metadata,
+        now,
+        now,
+      ],
+      { d1: true, d1Text: d1Sql }
+    );
+  } catch (err) {
+    throwPersistenceUnavailable('communication insert', err);
+  }
 
-  const record = {
+  return {
     id,
     accountId,
     accountType,
@@ -489,7 +535,7 @@ async function recordCommunication({
     notificationStatus,
     deliveryStatus,
     acknowledgementStatus,
-    communicatedBy,
+    communicatedBy: sender,
     sentAt: now,
     acknowledgedAt: null,
     acknowledgedBy: null,
@@ -498,57 +544,6 @@ async function recordCommunication({
     createdAt: now,
     updatedAt: now,
   };
-
-  if (pool.hasStorage()) {
-    try {
-      const sql = `
-        INSERT INTO payment_dues_communications (
-          id, account_id, account_type, channel, recipient, subject, message,
-          notification_status, delivery_status, acknowledgement_status,
-          communicated_by, sent_at, notes, metadata, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-        RETURNING *
-      `;
-      const d1Sql = `
-        INSERT INTO payment_dues_communications (
-          id, account_id, account_type, channel, recipient, subject, message,
-          notification_status, delivery_status, acknowledgement_status,
-          communicated_by, sent_at, notes, metadata, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-      `;
-      await pool.query(
-        sql,
-        [
-          id,
-          accountId,
-          accountType,
-          channel,
-          recipient,
-          subject || '',
-          message,
-          notificationStatus,
-          deliveryStatus,
-          acknowledgementStatus,
-          communicatedBy,
-          now,
-          notes,
-          typeof metadata === 'object' ? JSON.stringify(metadata) : metadata,
-          now,
-          now,
-        ],
-        { d1: true, d1Text: d1Sql }
-      );
-    } catch (err) {
-      throwPersistenceUnavailable('communication insert', err);
-    }
-  }
-
-  // Always update in-memory record
-  const list = inMemoryCommunications.get(accountId) || [];
-  list.unshift(record);
-  inMemoryCommunications.set(accountId, list);
-
-  return record;
 }
 
 async function updateCommunicationDeliveryStatus({
@@ -559,62 +554,46 @@ async function updateCommunicationDeliveryStatus({
   metadataPatch,
 }) {
   if (!communicationId) return null;
+  requireStorage('delivery status update');
 
   const now = new Date().toISOString();
-  if (pool.hasStorage()) {
-    const sql = `
-      UPDATE payment_dues_communications
-      SET notification_status = $2,
-          delivery_status = $3,
-          acknowledgement_status = $4,
-          updated_at = $5,
-          metadata = CASE WHEN $6::jsonb IS NULL THEN metadata
-            ELSE COALESCE(metadata, '{}'::jsonb) || $6::jsonb END
-      WHERE id = $1
-      RETURNING *
-    `;
-    const d1Sql = `
-      UPDATE payment_dues_communications
-      SET notification_status = $2,
-          delivery_status = $3,
-          acknowledgement_status = $4,
-          updated_at = $5,
-          metadata = CASE WHEN $6 IS NULL THEN metadata
-            ELSE json_patch(COALESCE(metadata, '{}'), $6) END
-      WHERE id = $1
-      RETURNING *
-    `;
-    try {
-      const result = await pool.query(sql, [
-        communicationId,
-        notificationStatus,
-        deliveryStatus,
-        acknowledgementStatus,
-        now,
-        metadataPatch === undefined ? null : JSON.stringify(metadataPatch),
-      ], { d1: true, d1Text: d1Sql });
-      const row = result?.rows?.[0];
-      if (!row) return null;
-      return mapCommunicationRow(row);
-    } catch (error) {
-      throwPersistenceUnavailable('delivery status update', error);
-    }
+  const sql = `
+    UPDATE payment_dues_communications
+    SET notification_status = $2,
+        delivery_status = $3,
+        acknowledgement_status = $4,
+        updated_at = $5,
+        metadata = CASE WHEN $6::jsonb IS NULL THEN metadata
+          ELSE COALESCE(metadata, '{}'::jsonb) || $6::jsonb END
+    WHERE id = $1
+    RETURNING *
+  `;
+  const d1Sql = `
+    UPDATE payment_dues_communications
+    SET notification_status = $2,
+        delivery_status = $3,
+        acknowledgement_status = $4,
+        updated_at = $5,
+        metadata = CASE WHEN $6 IS NULL THEN metadata
+          ELSE json_patch(COALESCE(metadata, '{}'), $6) END
+    WHERE id = $1
+    RETURNING *
+  `;
+  let result;
+  try {
+    result = await pool.query(sql, [
+      communicationId,
+      notificationStatus,
+      deliveryStatus,
+      acknowledgementStatus,
+      now,
+      metadataPatch === undefined ? null : JSON.stringify(metadataPatch),
+    ], { d1: true, d1Text: d1Sql });
+  } catch (error) {
+    throwPersistenceUnavailable('delivery status update', error);
   }
-
-  for (const communications of inMemoryCommunications.values()) {
-    const communication = communications.find((item) => item.id === communicationId);
-    if (!communication) continue;
-    communication.notificationStatus = notificationStatus;
-    communication.deliveryStatus = deliveryStatus;
-    communication.acknowledgementStatus = acknowledgementStatus;
-    if (metadataPatch && typeof metadataPatch === 'object') {
-      communication.metadata = { ...(communication.metadata || {}), ...metadataPatch };
-    }
-    communication.updatedAt = now;
-    return communication;
-  }
-
-  return null;
+  const row = result?.rows?.[0];
+  return row ? mapCommunicationRow(row) : null;
 }
 
 /**
@@ -623,207 +602,84 @@ async function updateCommunicationDeliveryStatus({
 async function updateAcknowledgementStatus({
   communicationId,
   accountId,
-  accountType,
   acknowledgementStatus,
   deliveryStatus,
   notes = '',
-  updatedBy = 'Category Manager',
+  updatedBy,
 }) {
+  // Updates only an existing record. A missing record returns null and nothing is created.
+  const actor = String(updatedBy || '').trim();
+  if (!actor) throw validationError(PAYMENT_DUES_ERRORS.UPDATED_BY_REQUIRED);
+  requireStorage('acknowledgement update');
+
   const now = new Date().toISOString();
-  let updatedRecord = null;
-
-  if (pool.hasStorage()) {
-    try {
-      const targetParam = communicationId || accountId;
-      const sql = communicationId
-        ? `
-          UPDATE payment_dues_communications
-          SET acknowledgement_status = COALESCE($1, acknowledgement_status),
-              delivery_status = COALESCE($2, delivery_status),
-              notes = COALESCE($3, notes),
-              acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
-              acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
-              updated_at = $4
-          WHERE id = $6
-             OR metadata->>'gatewayMessageId' = $6
-             OR metadata->>'msgid' = $6
-              OR metadata->>'messageId' = $6
-             OR metadata->'smsResult'->>'messageId' = $6
-             OR metadata->'emailResult'->>'messageId' = $6
-          RETURNING *
-        `
-        : `
-          UPDATE payment_dues_communications
-          SET acknowledgement_status = COALESCE($1, acknowledgement_status),
-              delivery_status = COALESCE($2, delivery_status),
-              notes = COALESCE($3, notes),
-              acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
-              acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
-              updated_at = $4
-          WHERE id = (
-            SELECT id FROM payment_dues_communications
-            WHERE account_id = $6
-            ORDER BY sent_at DESC
-            LIMIT 1
-          )
-          RETURNING *
-        `;
-      const d1Sql = communicationId
-        ? `
-          UPDATE payment_dues_communications
-          SET acknowledgement_status = COALESCE($1, acknowledgement_status),
-              delivery_status = COALESCE($2, delivery_status),
-              notes = COALESCE($3, notes),
-              acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
-              acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
-              updated_at = $4
-          WHERE id = $6
-             OR json_extract(metadata, '$.gatewayMessageId') = $6
-             OR json_extract(metadata, '$.msgid') = $6
-             OR json_extract(metadata, '$.messageId') = $6
-             OR json_extract(metadata, '$.smsResult.messageId') = $6
-             OR json_extract(metadata, '$.emailResult.messageId') = $6
-          RETURNING *
-        `
-        : sql;
-      const queryParams = [
-        acknowledgementStatus || null,
-        deliveryStatus || null,
-        notes || null,
-        now,
-        updatedBy,
-        targetParam,
-      ];
-      const result = await pool.query(sql, queryParams, { d1: true, d1Text: d1Sql });
-      if (result && result.rows && result.rows.length > 0) {
-        const row = result.rows[0];
-        updatedRecord = {
-          id: row.id,
-          accountId: row.account_id,
-          accountType: row.account_type,
-          channel: row.channel,
-          recipient: row.recipient,
-          subject: row.subject,
-          message: row.message,
-          notificationStatus: row.notification_status,
-          deliveryStatus: row.delivery_status,
-          acknowledgementStatus: row.acknowledgement_status,
-          communicatedBy: row.communicated_by,
-          sentAt: row.sent_at,
-          acknowledgedAt: row.acknowledged_at,
-          acknowledgedBy: row.acknowledged_by,
-          notes: row.notes,
-          metadata: parseRaw(row.metadata, {}),
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        };
-      }
-    } catch (err) {
-      throwPersistenceUnavailable('acknowledgement update', err);
-    }
+  const sql = communicationId
+    ? `
+      UPDATE payment_dues_communications
+      SET acknowledgement_status = COALESCE($1, acknowledgement_status),
+          delivery_status = COALESCE($2, delivery_status),
+          notes = COALESCE($3, notes),
+          acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
+          acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+          updated_at = $4
+      WHERE id = $6
+         OR metadata->>'gatewayMessageId' = $6
+         OR metadata->>'msgid' = $6
+          OR metadata->>'messageId' = $6
+         OR metadata->'smsResult'->>'messageId' = $6
+         OR metadata->'emailResult'->>'messageId' = $6
+      RETURNING *
+    `
+    : `
+      UPDATE payment_dues_communications
+      SET acknowledgement_status = COALESCE($1, acknowledgement_status),
+          delivery_status = COALESCE($2, delivery_status),
+          notes = COALESCE($3, notes),
+          acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
+          acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+          updated_at = $4
+      WHERE id = (
+        SELECT id FROM payment_dues_communications
+        WHERE account_id = $6
+        ORDER BY sent_at DESC
+        LIMIT 1
+      )
+      RETURNING *
+    `;
+  const d1Sql = communicationId
+    ? `
+      UPDATE payment_dues_communications
+      SET acknowledgement_status = COALESCE($1, acknowledgement_status),
+          delivery_status = COALESCE($2, delivery_status),
+          notes = COALESCE($3, notes),
+          acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
+          acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+          updated_at = $4
+      WHERE id = $6
+         OR json_extract(metadata, '$.gatewayMessageId') = $6
+         OR json_extract(metadata, '$.msgid') = $6
+         OR json_extract(metadata, '$.messageId') = $6
+         OR json_extract(metadata, '$.smsResult.messageId') = $6
+         OR json_extract(metadata, '$.emailResult.messageId') = $6
+      RETURNING *
+    `
+    : sql;
+  const queryParams = [
+    acknowledgementStatus || null,
+    deliveryStatus || null,
+    notes || null,
+    now,
+    actor,
+    communicationId || accountId,
+  ];
+  let result;
+  try {
+    result = await pool.query(sql, queryParams, { d1: true, d1Text: d1Sql });
+  } catch (err) {
+    throwPersistenceUnavailable('acknowledgement update', err);
   }
-
-  if (pool.hasStorage()) return updatedRecord;
-
-  // Update in-memory storage
-  if (communicationId) {
-    for (const list of inMemoryCommunications.values()) {
-      const found = list.find(
-        (item) =>
-          item.id === communicationId ||
-          item.metadata?.gatewayMessageId === communicationId ||
-          item.metadata?.msgid === communicationId ||
-          item.metadata?.messageId === communicationId ||
-          item.metadata?.smsResult?.messageId === communicationId ||
-          item.metadata?.emailResult?.messageId === communicationId
-      );
-      if (found) {
-        if (acknowledgementStatus) found.acknowledgementStatus = acknowledgementStatus;
-        if (notes) found.notes = notes;
-        if (acknowledgementStatus === 'Acknowledged') {
-          found.acknowledgedAt = now;
-          found.acknowledgedBy = updatedBy;
-        }
-
-        if (found.channel === 'BOTH') {
-          if (deliveryStatus) {
-            const isSmsTarget = found.metadata?.gatewayMessageId === communicationId ||
-              found.metadata?.msgid === communicationId ||
-              found.metadata?.smsResult?.messageId === communicationId;
-            const isEmailTarget = found.metadata?.emailResult?.messageId === communicationId;
-
-            if (isSmsTarget && !isEmailTarget) {
-              found.metadata = found.metadata || {};
-              found.metadata.smsDeliveryStatus = deliveryStatus;
-              const emailState = found.metadata.emailDeliveryStatus ||
-                ((found.metadata.emailResult?.success || found.metadata.emailResult?.sent) ? 'Delivered' : 'Failed');
-              found.deliveryStatus = (emailState === 'Delivered' && deliveryStatus === 'Delivered')
-                ? 'Delivered'
-                : (deliveryStatus === 'Failed' && emailState === 'Failed')
-                ? 'Failed'
-                : 'Partial';
-            } else if (isEmailTarget && !isSmsTarget) {
-              found.metadata = found.metadata || {};
-              found.metadata.emailDeliveryStatus = deliveryStatus;
-              const smsState = found.metadata.smsDeliveryStatus ||
-                ((found.metadata.smsResult?.success || found.metadata.smsResult?.sent) ? 'Delivered' : 'Failed');
-              found.deliveryStatus = (smsState === 'Delivered' && deliveryStatus === 'Delivered')
-                ? 'Delivered'
-                : (deliveryStatus === 'Failed' && smsState === 'Failed')
-                ? 'Failed'
-                : 'Partial';
-            } else {
-              found.deliveryStatus = deliveryStatus;
-            }
-          }
-        } else if (deliveryStatus) {
-          found.deliveryStatus = deliveryStatus;
-        }
-
-        found.updatedAt = now;
-        updatedRecord = found;
-        break;
-      }
-    }
-    return updatedRecord;
-  }
-
-  // Fallback by accountId when communicationId is not provided
-  if (accountId) {
-    const list = inMemoryCommunications.get(accountId) || [];
-    if (list.length > 0) {
-      const item = list[0];
-      if (acknowledgementStatus) item.acknowledgementStatus = acknowledgementStatus;
-      if (deliveryStatus) item.deliveryStatus = deliveryStatus;
-      if (notes) item.notes = notes;
-      if (acknowledgementStatus === 'Acknowledged') {
-        item.acknowledgedAt = now;
-        item.acknowledgedBy = updatedBy;
-      }
-      item.updatedAt = now;
-      updatedRecord = item;
-    } else {
-      updatedRecord = await recordCommunication({
-        accountId,
-        accountType: accountType || 'buyer',
-        channel: 'message',
-        recipient: accountId,
-        subject: 'Manual Acknowledgement Status Update',
-        message: `Status updated to ${acknowledgementStatus || deliveryStatus}`,
-        communicatedBy: updatedBy,
-        notificationStatus: 'Delivered',
-        deliveryStatus: deliveryStatus || 'Delivered',
-        acknowledgementStatus: acknowledgementStatus || 'Pending',
-        notes,
-      });
-      if (acknowledgementStatus === 'Acknowledged') {
-        updatedRecord.acknowledgedAt = now;
-        updatedRecord.acknowledgedBy = updatedBy;
-      }
-    }
-  }
-
-  return updatedRecord;
+  const row = result?.rows?.[0];
+  return row ? mapCommunicationRow(row) : null;
 }
 
 /**
@@ -833,56 +689,36 @@ async function getCommunicationHistory(accountId, options = {}) {
   const isAll = Boolean(options?.isCrossAccount) && (!accountId || accountId === '' || accountId === '*');
   const limit = Math.min(Math.max(Number(options?.limit) || 50, 1), 200);
   const offset = Math.max(Number(options?.offset) || 0, 0);
+  requireStorage('communication history read');
 
-  if (pool.hasStorage()) {
-    try {
-      const sql = isAll
-        ? 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC LIMIT $1 OFFSET $2'
-        : 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC LIMIT $2 OFFSET $3';
-      const params = isAll ? [limit, offset] : [accountId, limit, offset];
-      const result = await pool.query(sql, params, {
-        d1: true,
-        d1Text: sql,
-      });
-      if (result && Array.isArray(result.rows)) {
-        return result.rows.map(mapCommunicationRow);
-      }
-    } catch (error) {
-      throwPersistenceUnavailable('communication history read', error);
-    }
+  const sql = isAll
+    ? 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC LIMIT $1 OFFSET $2'
+    : 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC LIMIT $2 OFFSET $3';
+  const params = isAll ? [limit, offset] : [accountId, limit, offset];
+  let result;
+  try {
+    result = await pool.query(sql, params, { d1: true, d1Text: sql });
+  } catch (error) {
+    throwPersistenceUnavailable('communication history read', error);
   }
-
-  if (isAll) {
-    const all = [];
-    for (const comms of inMemoryCommunications.values()) {
-      all.push(...comms);
-    }
-    all.sort((a, b) => new Date(b.sentAt || 0) - new Date(a.sentAt || 0));
-    return all.slice(offset, offset + limit);
+  if (!result || !Array.isArray(result.rows)) {
+    throwPersistenceUnavailable('communication history read', new Error('The history query returned no row set.'));
   }
-
-  const list = inMemoryCommunications.get(accountId) || [];
-  return list.slice(offset, offset + limit);
+  return result.rows.map(mapCommunicationRow);
 }
 
 async function getCommunicationById(communicationId) {
   if (!communicationId) return null;
+  requireStorage('communication lookup');
 
-  if (pool.hasStorage()) {
-    const sql = 'SELECT * FROM payment_dues_communications WHERE id = $1 LIMIT 1';
-    try {
-      const result = await pool.query(sql, [communicationId], { d1: true, d1Text: sql });
-      return result?.rows?.[0] ? mapCommunicationRow(result.rows[0]) : null;
-    } catch (error) {
-      throwPersistenceUnavailable('communication lookup', error);
-    }
+  const sql = 'SELECT * FROM payment_dues_communications WHERE id = $1 LIMIT 1';
+  let result;
+  try {
+    result = await pool.query(sql, [communicationId], { d1: true, d1Text: sql });
+  } catch (error) {
+    throwPersistenceUnavailable('communication lookup', error);
   }
-
-  for (const communications of inMemoryCommunications.values()) {
-    const record = communications.find((communication) => communication.id === communicationId);
-    if (record) return record;
-  }
-  return null;
+  return result?.rows?.[0] ? mapCommunicationRow(result.rows[0]) : null;
 }
 
 
@@ -941,33 +777,7 @@ async function queryCommunications({
     }
   }
 
-  // In-memory query implementation
-  let all = [];
-  if (accountId && !isCrossAccount) {
-    all = [...(inMemoryCommunications.get(accountId) || [])];
-  } else {
-    for (const comms of inMemoryCommunications.values()) {
-      all.push(...comms);
-    }
-  }
-
-  if (entityType) {
-    const et = String(entityType).toLowerCase();
-    all = all.filter(
-      (r) => String(r.accountType || '').toLowerCase() === et || String(r.metadata?.entityType || '').toLowerCase() === et
-    );
-  }
-
-  if (channel && channel !== 'ALL') {
-    const ch = String(channel).toUpperCase();
-    all = all.filter((r) => String(r.channel || '').toUpperCase() === ch);
-  }
-
-  all.sort((a, b) => new Date(b.sentAt || 0) - new Date(a.sentAt || 0));
-  const total = all.length;
-  const items = all.slice(pOffset, pOffset + pLimit);
-
-  return { items, total };
+  throwPersistenceUnavailable('communications query', null);
 }
 
 module.exports = {
@@ -979,7 +789,6 @@ module.exports = {
   getCommunicationHistory,
   getCommunicationById,
   queryCommunications,
-  resetInMemoryCommunications,
   fetchRawBuyers,
   fetchRawVendors,
   fetchCommunicationsMap,

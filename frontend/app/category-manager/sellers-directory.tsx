@@ -101,6 +101,33 @@ function getSellerActualLastLogin(
   return '';
 }
 
+// Shown wherever a value is missing from the record. Never a substitute value.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
+
+// The Source label for a supplier. A record with no recorded source shows a dash rather than a guessed origin.
+function sourceLabelFor(source: unknown): string {
+  if (source === 'procucev_network') return UI_STRINGS.sellerDirectory.procucevNetwork;
+  return typeof source === 'string' && source.trim() !== '' ? UI_STRINGS.sellerDirectory.buyerUploaded : EMPTY_VALUE;
+}
+
+// A 360° score as "n/100", or a dash when the record holds no numeric score.
+function formatScore360(value: unknown): string {
+  const numeric = toNumberOrNull(value);
+  return numeric === null ? EMPTY_VALUE : `${numeric}/100`;
+}
+
+// Shows a rating to one decimal place, or a dash when the record has no numeric rating.
+function formatRating(value: unknown): string {
+  const numeric = toNumberOrNull(value);
+  return numeric === null ? EMPTY_VALUE : String(numeric);
+}
+
+// The finite number held by a record field, or null when the record does not hold one. Never a default.
+function toNumberOrNull(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN;
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 export default function SellersDirectory({ onSelectRFQ, initialSellerId }: SellersDirectoryProps) {
   const { buyerVendors = [], rfqs = [], auditLogs = [], categoryTaxonomy = [] } = useApp();
   const strings = UI_STRINGS.sellerDirectory;
@@ -261,39 +288,39 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         (Array.isArray((v as any).preferredLocations) && (v as any).preferredLocations.length > 0 && (v as any).preferredLocations.join(', ')) ||
         (v as any).location ||
         (v as any).city ||
-        'India';
+        '';
       const lastLogin = getSellerActualLastLogin(v, rfqs, auditLogs);
       map.set(id, {
         id,
-        name: v.name || 'Verified Supplier',
-        contactPerson: (v as any).contactPerson || v.name,
+        name: v.name || '',
+        contactPerson: (v as any).contactPerson || '',
         email: v.email || '',
         phone: (v as any).phone || '',
-        location: (v as any).location || (v as any).city || 'India',
-        deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : 'India',
+        location: (v as any).location || (v as any).city || '',
+        deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : '',
         lastLogin,
-        source: (v as any).source || 'procucev_network',
-        majorCategory: (v as any).majorCategory || (v as any).category || 'Industrial Supplies',
-        category: (v as any).majorCategory || (v as any).category || 'Industrial Supplies',
+        source: (v as any).source || '',
+        majorCategory: (v as any).majorCategory || (v as any).category || '',
+        category: (v as any).majorCategory || (v as any).category || '',
         minorCategories: Array.isArray((v as any).minorCategories) ? (v as any).minorCategories : [],
-        score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : 88,
-        score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : 88,
-        rating: typeof (v as any).rating === 'number' ? (v as any).rating : 4.5,
-        status: (v as any).status || 'ACTIVE',
-        subscriptionPlan: (v as any).subscriptionPlan || 'Preferred Partner',
+        score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
+        score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
+        rating: typeof (v as any).rating === 'number' ? (v as any).rating : null,
+        status: (v as any).status || '',
+        subscriptionPlan: (v as any).subscriptionPlan || '',
         // Plan balance for Connect/Select subscribers, free-tier balance otherwise.
         freeQuotationCredits: getVendorCreditBalance(v as any),
-        rfqDownloadsUsed: (v as any).rfqDownloadsUsed ?? 0,
-        gstNumber: (v as any).gstNumber || '27AAACG0000A1Z5',
-        panNumber: (v as any).panNumber || 'AAACG0000A',
+        rfqDownloadsUsed: toNumberOrNull((v as any).rfqDownloadsUsed),
+        gstNumber: (v as any).gstNumber || '',
+        panNumber: (v as any).panNumber || '',
         isNetwork: true,
-        createdAt: (v as any).createdAt || (v as any).created_at || '2026-03-01T10:00:00.000Z',
+        createdAt: (v as any).createdAt || (v as any).created_at || '',
       });
     });
 
     // Add local buyer-uploaded vendors
-    buyerVendors.forEach((bv) => {
-      const id = String(bv.id || bv.email || 'buyer-' + Math.random());
+    buyerVendors.forEach((bv, buyerIndex) => {
+      const id = String(bv.id || bv.email || `buyer-${buyerIndex}`);
       if (!map.has(id)) {
         const deliveryLocation =
           (typeof (bv as any).deliveryLocation === 'string' && (bv as any).deliveryLocation.trim()) ||
@@ -301,32 +328,32 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           (Array.isArray((bv as any).serviceLocations) && (bv as any).serviceLocations.length > 0 && (bv as any).serviceLocations.join(', ')) ||
           (Array.isArray((bv as any).preferredLocations) && (bv as any).preferredLocations.length > 0 && (bv as any).preferredLocations.join(', ')) ||
           bv.location ||
-          'India';
+          '';
         const lastLogin = getSellerActualLastLogin(bv, rfqs, auditLogs);
         map.set(id, {
           id,
-          name: bv.name || 'Verified Supplier',
-          contactPerson: bv.contactPerson || bv.name || 'Key Accounts Desk',
+          name: bv.name || '',
+          contactPerson: bv.contactPerson || '',
           email: bv.email || '',
           phone: bv.phone || '',
-          location: bv.location || 'India',
-          deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : 'India',
+          location: bv.location || '',
+          deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : '',
           lastLogin,
           source: 'buyer_uploaded',
-          majorCategory: bv.majorCategory || 'Custom Client Category',
-          category: bv.majorCategory || 'Custom Client Category',
+          majorCategory: bv.majorCategory || '',
+          category: bv.majorCategory || '',
           minorCategories: Array.isArray(bv.minorCategories) ? bv.minorCategories : [],
-          score: Math.round(Number((bv as any).qualityScore || bv.score || 85)),
-          score360: Math.round(Number((bv as any).qualityScore || bv.score || 85)),
-          rating: Number(bv.rating || 4.2),
-          status: 'VERIFIED_CLIENT_LIST',
-          subscriptionPlan: 'Verified Supplier',
+          score: toNumberOrNull((bv as any).qualityScore ?? bv.score),
+          score360: toNumberOrNull((bv as any).qualityScore ?? bv.score),
+          rating: toNumberOrNull(bv.rating),
+          status: (bv as any).status || '',
+          subscriptionPlan: (bv as any).subscriptionPlan || '',
           freeQuotationCredits: getVendorCreditBalance(bv as any),
-          rfqDownloadsUsed: (bv as any).rfqDownloadsUsed ?? 0,
-          gstNumber: (bv as any).gstNumber || '27AAACB1111B1Z6',
-          panNumber: (bv as any).panNumber || 'AAACB1111B',
+          rfqDownloadsUsed: toNumberOrNull((bv as any).rfqDownloadsUsed),
+          gstNumber: (bv as any).gstNumber || '',
+          panNumber: (bv as any).panNumber || '',
           isNetwork: false,
-          createdAt: (bv as any).createdAt || (bv as any).created_at || '2026-03-01T10:00:00.000Z',
+          createdAt: (bv as any).createdAt || (bv as any).created_at || '',
         });
       }
     });
@@ -349,10 +376,19 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   const buyerUploadedCount = allSellers.filter((s) => s.source === 'buyer_uploaded').length;
   const verifiedCount = allSellers.filter((s) => s.status.includes('ACTIVE') || s.status.includes('VERIFIED')).length;
 
-  const avgScore = useMemo(() => {
-    if (allSellers.length === 0) return 85;
-    const total = allSellers.reduce((acc, s) => acc + (Number(s.score) || 85), 0);
-    return Math.round(total / allSellers.length);
+  // Averages cover only sellers that have a recorded value. Null when none does.
+  const avgScore = useMemo<number | null>(() => {
+    const scored = allSellers.filter((s) => typeof s.score === 'number' && Number.isFinite(s.score));
+    if (scored.length === 0) return null;
+    const total = scored.reduce((acc, s) => acc + s.score, 0);
+    return Math.round(total / scored.length);
+  }, [allSellers]);
+
+  const avgRating = useMemo<number | null>(() => {
+    const rated = allSellers.filter((s) => typeof s.rating === 'number' && Number.isFinite(s.rating));
+    if (rated.length === 0) return null;
+    const total = rated.reduce((acc, s) => acc + s.rating, 0);
+    return Math.round((total / rated.length) * 10) / 10;
   }, [allSellers]);
 
   // Unique categories for filter dropdown derived from taxonomy & catalogs rather than filtered list
@@ -493,21 +529,21 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       label: 'Supplier Name',
       render: (item) => (
         <span className="font-semibold text-slate-900 dark:text-white">
-          {String(item.name || '–')}
+          {String(item.name || EMPTY_VALUE)}
         </span>
       ),
     },
     {
       key: 'contactPerson',
       label: 'Contact Person',
-      render: (item) => <span>{String(item.contactPerson || '–')}</span>,
+      render: (item) => <span>{String(item.contactPerson || EMPTY_VALUE)}</span>,
     },
     {
       key: 'email',
       label: 'Email / Phone',
       render: (item) => (
         <div className="flex flex-col">
-          <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300">{String(item.email || '–')}</span>
+          <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300">{String(item.email || EMPTY_VALUE)}</span>
           {Boolean(item.phone) && <span className="text-[10px] text-slate-400">{String(item.phone)}</span>}
         </div>
       ),
@@ -517,7 +553,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       label: 'Major Category',
       render: (item) => (
         <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
-          {String(item.majorCategory || item.category || '–')}
+          {String(item.majorCategory || item.category || EMPTY_VALUE)}
         </span>
       ),
     },
@@ -526,7 +562,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       label: 'Source',
       render: (item) => (
         <span className="text-slate-600 dark:text-slate-400">
-          {item.source === 'procucev_network' ? 'Procucev Network' : 'Buyer Uploaded'}
+          {sourceLabelFor(item.source)}
         </span>
       ),
     },
@@ -535,8 +571,8 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       label: 'Rating / Score',
       render: (item) => (
         <div className="flex items-center gap-1.5 font-semibold">
-          <span>{Number(item.score) || 85}</span>
-          <span className="text-amber-500 text-[11px]">★ {Number(item.rating) || 4.5}</span>
+          <span>{toNumberOrNull(item.score) ?? EMPTY_VALUE}</span>
+          <span className="text-amber-500 text-[11px]">★ {formatRating(item.rating)}</span>
         </div>
       ),
     },
@@ -545,7 +581,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       label: 'Free Credits',
       render: (item) => (
         <span className="font-bold text-slate-800 dark:text-slate-200">
-          {Number(item.freeQuotationCredits || 0)}
+          {toNumberOrNull(item.freeQuotationCredits) ?? EMPTY_VALUE}
         </span>
       ),
     },
@@ -557,7 +593,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       label: 'RFQ Number',
       render: (item) => (
         <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
-          {String(item.rfqNumber || item.id || '–')}
+          {String(item.rfqNumber || item.id || EMPTY_VALUE)}
         </span>
       ),
     },
@@ -566,14 +602,14 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       label: 'Title',
       render: (item) => (
         <span className="font-semibold text-slate-900 dark:text-white max-w-xs truncate block" title={String(item.title || '')}>
-          {String(item.title || '–')}
+          {String(item.title || EMPTY_VALUE)}
         </span>
       ),
     },
     {
       key: 'buyerAccountName',
       label: 'Buyer Organization',
-      render: (item) => <span>{String(item.buyerAccountName || item.raisedByName || '–')}</span>,
+      render: (item) => <span>{String(item.buyerAccountName || item.raisedByName || EMPTY_VALUE)}</span>,
     },
     {
       key: 'quotesCount',
@@ -590,7 +626,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     {
       key: 'createdAt',
       label: 'Created Date',
-      render: (item) => <span>{item.createdAt ? formatIndianDateTime(String(item.createdAt)) : '–'}</span>,
+      render: (item) => <span>{item.createdAt ? formatIndianDateTime(String(item.createdAt)) : EMPTY_VALUE}</span>,
     },
   ], []);
 
@@ -653,20 +689,20 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
 
   const handleExportDirectory = () => {
     const rows = sortedSellers.map((s) => ({
-      CompanyName: s.name,
-      ContactPerson: s.contactPerson || '',
-      Email: s.email,
-      Phone: s.phone,
-      CompanyLocation: s.location,
-      DeliveryLocation: s.deliveryLocation || s.location || 'All India',
-      LastLogin: s.lastLogin ? formatIndianDateTime(s.lastLogin) : 'Never',
-      Source: s.source === 'procucev_network' ? 'Procucev Network' : 'Buyer Uploaded',
-      MajorCategory: s.majorCategory,
-      AIScore: s.score,
-      StarRating: s.rating,
-      FreeQuotationCredits: s.freeQuotationCredits,
-      RFQDownloadsUsed: s.rfqDownloadsUsed,
-      Status: s.status,
+      CompanyName: s.name || EMPTY_VALUE,
+      ContactPerson: s.contactPerson || EMPTY_VALUE,
+      Email: s.email || EMPTY_VALUE,
+      Phone: s.phone || EMPTY_VALUE,
+      CompanyLocation: s.location || EMPTY_VALUE,
+      DeliveryLocation: s.deliveryLocation || s.location || EMPTY_VALUE,
+      LastLogin: s.lastLogin ? formatIndianDateTime(s.lastLogin) : EMPTY_VALUE,
+      Source: sourceLabelFor(s.source),
+      MajorCategory: s.majorCategory || EMPTY_VALUE,
+      AIScore: s.score ?? EMPTY_VALUE,
+      StarRating: s.rating ?? EMPTY_VALUE,
+      FreeQuotationCredits: s.freeQuotationCredits ?? EMPTY_VALUE,
+      RFQDownloadsUsed: s.rfqDownloadsUsed ?? EMPTY_VALUE,
+      Status: s.status || EMPTY_VALUE,
     }));
     exportReportToExcel(rows, `Sellers_Directory_${new Date().toISOString().split('T')[0]}`, 'SellersDirectory');
   };
@@ -749,10 +785,10 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </p>
           <div className="flex items-center gap-1.5 mt-1">
             <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
-              {avgScore}
+              {avgScore ?? EMPTY_VALUE}
             </span>
             <span className="text-[11px] text-amber-500 font-semibold leading-none">
-              ★ 4.5
+              ★ {avgRating ?? EMPTY_VALUE}
             </span>
           </div>
           <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
@@ -1029,10 +1065,10 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                                   onClick={() => setActiveSeller(seller)}
                                 >
                                   <div className="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center justify-center shrink-0 group-hover:bg-emerald-100 transition-colors border border-emerald-200/60 dark:border-emerald-800/50">
-                                    {seller.name.charAt(0).toUpperCase()}
+                                    {seller.name ? seller.name.charAt(0).toUpperCase() : EMPTY_VALUE}
                                   </div>
                                   <span className="font-semibold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
-                                    {seller.name}
+                                    {seller.name || EMPTY_VALUE}
                                   </span>
                                 </div>
                               </td>
@@ -1040,15 +1076,15 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                           case 'location':
                             return (
                               <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
-                                {seller.location}
+                                {seller.location || EMPTY_VALUE}
                               </td>
                             );
                           case 'deliveryLocation':
                             return (
                               <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
-                                <span className="flex items-center gap-1 truncate max-w-xs" title={seller.deliveryLocation}>
+                                <span className="flex items-center gap-1 truncate max-w-xs" title={seller.deliveryLocation || EMPTY_VALUE}>
                                   <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                                  <span className="truncate">{seller.deliveryLocation}</span>
+                                  <span className="truncate">{seller.deliveryLocation || EMPTY_VALUE}</span>
                                 </span>
                               </td>
                             );
@@ -1056,7 +1092,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                             return (
                               <td key={col.key} className="px-3.5 py-2">
                                 <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 truncate max-w-xs">
-                                  {seller.majorCategory}
+                                  {seller.majorCategory || EMPTY_VALUE}
                                 </span>
                               </td>
                             );
@@ -1066,7 +1102,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                                 {seller.lastLogin ? (
                                   formatIndianDateTime(seller.lastLogin)
                                 ) : (
-                                  <span className="text-slate-400 text-[11px]">Never</span>
+                                  <span className="text-slate-400 text-[11px]">{EMPTY_VALUE}</span>
                                 )}
                               </td>
                             );
@@ -1075,14 +1111,16 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                               <td key={col.key} className="px-3.5 py-2">
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
                                   <Star className="w-3 h-3 fill-current text-amber-500" />
-                                  {seller.rating}
+                                  {formatRating(seller.rating)}
                                 </span>
                               </td>
                             );
                           case 'credits':
                             return (
                               <td key={col.key} className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
-                                {seller.freeQuotationCredits} Credits
+                                {seller.freeQuotationCredits === null || seller.freeQuotationCredits === undefined
+                                  ? EMPTY_VALUE
+                                  : `${seller.freeQuotationCredits} Credits`}
                               </td>
                             );
                           case 'status':
@@ -1100,38 +1138,38 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                                       isVerified ? 'bg-emerald-500' : 'bg-slate-400'
                                     }`}
                                   />
-                                  <span>{seller.status || 'Active'}</span>
+                                  <span>{seller.status || EMPTY_VALUE}</span>
                                 </span>
                               </td>
                             );
                           case 'contactPerson':
                             return (
                               <td key={col.key} className="px-4 py-3 text-slate-700 dark:text-slate-300">
-                                {seller.contactPerson || '—'}
+                                {seller.contactPerson || EMPTY_VALUE}
                               </td>
                             );
                           case 'email':
                             return (
                               <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
-                                {seller.email || '—'}
+                                {seller.email || EMPTY_VALUE}
                               </td>
                             );
                           case 'phone':
                             return (
                               <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
-                                {seller.phone || '—'}
+                                {seller.phone || EMPTY_VALUE}
                               </td>
                             );
                           case 'score360':
                             return (
                               <td key={col.key} className="px-4 py-3 font-semibold text-emerald-600 dark:text-emerald-400">
-                                {seller.score}/100
+                                {formatScore360(seller.score)}
                               </td>
                             );
                           case 'registrationDate':
                             return (
                               <td key={col.key} className="px-4 py-3 text-slate-500 text-xs">
-                                {seller.createdAt ? formatIndianDateTime(seller.createdAt) : '—'}
+                                {seller.createdAt ? formatIndianDateTime(seller.createdAt) : EMPTY_VALUE}
                               </td>
                             );
                           case 'actions':

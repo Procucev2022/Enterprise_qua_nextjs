@@ -47,7 +47,6 @@ async function repair() {
           }
         }
         item.category = item.minorCategory;
-        item.confidence = 90;
         item.classificationStatus = 'KEYWORD';
         delete item.categoryMismatch;
 

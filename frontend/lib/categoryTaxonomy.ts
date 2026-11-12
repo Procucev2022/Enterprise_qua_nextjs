@@ -14,7 +14,6 @@
 // ==============================================================================
 
 import type { MajorMinorCategory } from './types';
-import { MASTER_CATEGORY_GROUPS } from './categoryTaxonomySeed';
 
 // ==============================================================================
 // KEYWORD MATCHING AND RULE DEFINITIONS
@@ -726,10 +725,8 @@ export function setCategoryTaxonomy(next: MajorMinorCategory[]): void {
       key = taxonomyKey(cleanMajor);
     }
 
-    if (!mergedMap.has(key)) {
-      mergedMap.set(key, { majorCategory: cleanMajor, minors: new Set<string>() });
-    }
-    const entry = mergedMap.get(key)!;
+    const entry = mergedMap.get(key) ?? { majorCategory: cleanMajor, minors: new Set<string>() };
+    mergedMap.set(key, entry);
 
     (group.minorCategories || []).forEach((m) => {
       const cleanMinor = String(m || '').trim().replace(/\s+/g, ' ');
@@ -806,11 +803,6 @@ export function hasMinorCategory(major: string, minor: string): boolean {
   return Boolean(minors && minors.has(taxonomyKey(minor)));
 }
 
-/** Standard procurement category taxonomy fallback when database is unseeded. */
-export function getDefaultCategoryTaxonomy(): MajorMinorCategory[] {
-  return groups.length > 0 ? groups : MASTER_CATEGORY_GROUPS;
-}
-
 /**
  * The major category the master owns a minor under, or an empty string.
  * Returns display name from majorsByKey. First major wins for duplicate minors.
@@ -823,7 +815,7 @@ export function findMajorForMinor(minor: string): string {
     const majorKey = taxonomyKey(group.majorCategory);
     const minors = minorsByMajorKey.get(majorKey);
     if (minors && minors.has(key)) {
-      return majorsByKey.get(majorKey)!;
+      return majorsByKey.get(majorKey) ?? group.majorCategory;
     }
   }
   return '';
@@ -942,5 +934,3 @@ export function clearCategoryTaxonomy(): void {
   setCategoryTaxonomy([]);
 }
 
-// Prime the registry with the default master category groups on initial load
-setCategoryTaxonomy(MASTER_CATEGORY_GROUPS);

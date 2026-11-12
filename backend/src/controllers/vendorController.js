@@ -23,7 +23,7 @@ const {
   VENDOR_SUBSCRIPTION_PLANS,
   getSubscriptionPricingConfig,
   parseSearchTokens,
-  DEFAULT_VENDOR_DIRECTORY_PASSKEY,
+  AUTH_MESSAGES,
   VENDOR_FREE_CREDITS_LIMIT,
   PERSISTENCE_MESSAGES,
   EVENT_OUTBOX_TYPES,
@@ -53,7 +53,7 @@ async function checkVendorOwnership(user, vendorOrEmail) {
       (vendorOrEmail.buyerId && String(vendorOrEmail.buyerId).toLowerCase() === sId) ||
       (vendorOrEmail.buyerAccountId && String(vendorOrEmail.buyerAccountId).toLowerCase() === sId) ||
       (vendorOrEmail.buyerEmail && String(vendorOrEmail.buyerEmail).toLowerCase() === sId) ||
-      (vendorOrEmail.id && (String(vendorOrEmail.id).startsWith('v-hist-') || String(vendorOrEmail.id).startsWith('v-navin-') || String(vendorOrEmail.id).startsWith('v-1788') || String(vendorOrEmail.id).startsWith('v-buyer-') || String(vendorOrEmail.id).startsWith('vm-')));
+      (vendorOrEmail.id && (String(vendorOrEmail.id).startsWith('v-hist-') || String(vendorOrEmail.id).startsWith('v-buyer-') || String(vendorOrEmail.id).startsWith('vm-')));
     if (isOwner) return true;
   }
 
@@ -611,7 +611,7 @@ async function deleteVendor(req, res, next) {
       // If it's a buyer vendor ID pattern or buyer session, handle deletion idempotently
       if (
         (req.user && (req.user.role === 'buyer' || req.user.role === 'admin')) &&
-        (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+        (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
       ) {
         logger.info(`Cleaning up vendor ID ${id}`, { id }, 'VENDOR_CONTROLLER');
         await storeService.deleteVendorDurably(id, req.user && req.user.email);
@@ -655,7 +655,7 @@ async function bulkDeleteVendors(req, res, next) {
       if (!existing) {
         if (
           (user.role === 'buyer' || user.role === 'admin') &&
-          (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+          (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
         ) {
           await storeService.deleteVendorDurably(id, user.email);
           deletedIds.push(id);
@@ -869,7 +869,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // the matching comment in buyerAccountController.createSubscriptionPaymentLink
     // for why a hardcoded `?payment=success` here would misreport a real
     // cancellation.
-    const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const linkId = `pl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     const returnBase = String(ZOHO_CONFIG.RETURN_URL_BASE || '').replace(/\/+$/, '');
     const returnUrl = `${returnBase}/vendor/vendor-subscription?linkId=${linkId}`;
 
@@ -1124,7 +1124,7 @@ async function bulkImportVendors(req, res, next) {
 
     const { results: importResults, importedCount, duplicateCount, missingEmailCount } =
       rowsToImport.length > 0
-        ? await storeService.bulkAddVendors(rowsToImport)
+        ? await storeService.bulkAddVendors(rowsToImport, req.user?.email || null)
         : { results: [], importedCount: 0, duplicateCount: 0, missingEmailCount: 0 };
 
     const allResults = importResults.sort((a, b) => a.rowNumber - b.rowNumber);
@@ -1543,40 +1543,43 @@ async function getPublicVendorById(req, res, next) {
  * Authenticates enterprise visitors/vendors attempting to access the Vendor Directory.
  * Single shared directory login credential separate from the main platform user accounts.
  */
+// Compares SHA-256 digests so the check takes the same time whatever the input length.
+function accessKeysMatch(input, expected) {
+  const inputDigest = crypto.createHash('sha256').update(input, 'utf8').digest();
+  const expectedDigest = crypto.createHash('sha256').update(expected, 'utf8').digest();
+  return crypto.timingSafeEqual(inputDigest, expectedDigest);
+}
+
 async function authenticateVendorDirectory(req, res, next) {
   try {
-    const { passcode, accessKey, username, password } = req.body || {};
-    const inputPasskey = String(passcode || accessKey || '').trim();
-    const inputUsername = String(username || '').trim().toLowerCase();
-    const inputPassword = String(password || '').trim();
-
-    const expectedPasskey = process.env.VENDOR_DIRECTORY_ACCESS_KEY || DEFAULT_VENDOR_DIRECTORY_PASSKEY;
-    const isValidPasskey = inputPasskey && (
-      inputPasskey === expectedPasskey ||
-      inputPasskey === 'VENDOR2026' ||
-      inputPasskey === 'Procucev@Vendors2026'
-    );
-    const isValidCredentials = (inputUsername === 'vendor' || inputUsername === 'directory@procucev.com') && (
-      inputPassword === expectedPasskey ||
-      inputPassword === 'Procucev@Vendors2026'
-    );
-
-    if (!isValidPasskey && !isValidCredentials) {
-      logger.warn('Failed vendor directory authentication attempt', {
-        hasPasskey: Boolean(inputPasskey),
-        hasUsername: Boolean(inputUsername),
-      }, 'VENDOR_DIRECTORY_AUTH');
-      return res.status(401).json({
+    // The access key is deployment configuration. Without it no directory session can be
+    // issued, and the request fails closed instead of falling back to a built-in key.
+    const expectedAccessKey = String(process.env.VENDOR_DIRECTORY_ACCESS_KEY || '').trim();
+    if (!expectedAccessKey) {
+      logger.error('Vendor directory access key is not configured; directory sign-in refused', {}, 'VENDOR_DIRECTORY_AUTH');
+      return res.status(503).json({
         success: false,
-        error: 'Invalid directory access key. Please enter the valid passkey provided by Procucev.',
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_ACCESS_KEY_NOT_CONFIGURED,
       });
     }
 
-    const token = `vdir_${Buffer.from(`${Date.now()}_${Math.random()}`).toString('base64url')}`;
+    const { passcode, accessKey } = req.body || {};
+    const inputAccessKey = String(passcode || accessKey || '').trim();
+    if (!inputAccessKey || !accessKeysMatch(inputAccessKey, expectedAccessKey)) {
+      logger.warn('Failed vendor directory authentication attempt', {
+        hasAccessKey: Boolean(inputAccessKey),
+      }, 'VENDOR_DIRECTORY_AUTH');
+      return res.status(401).json({
+        success: false,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_ACCESS_KEY_INVALID,
+      });
+    }
+
+    const token = `vdir_${crypto.randomBytes(32).toString('base64url')}`;
     const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
 
     logger.info('Vendor directory authenticated successfully', {
-      method: isValidPasskey ? 'PASSKEY' : 'CREDENTIALS',
+      method: 'ACCESS_KEY',
       expiresAt: new Date(expiresAt).toISOString(),
     }, 'VENDOR_DIRECTORY_AUTH');
 

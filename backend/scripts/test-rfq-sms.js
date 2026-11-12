@@ -1,24 +1,34 @@
 /**
  * test-rfq-sms.js
  *
- * End-to-end smoke test for the RFQ → WhatsApp + SMS notification flow.
+ * MANUAL ONLY. Sends real WhatsApp and SMS messages and writes a real RFQ to the
+ * configured database. Run it by hand against a test environment. It is never
+ * part of CI or npm test.
  *
  * Flow:
- *   1. Print active gateway config
- *   2. Hydrate store from D1
- *   3. Ensure vendor nodos31566@bitproy.com exists with phone 9157154504
- *   4. Create a fresh mode_3 RFQ
- *   5. Invite vendor → triggers:
- *        • Immediate WhatsApp (sendmsg.in)
- *        • Immediate SMS (sendmsg.in DLT)
- *        • Chaser sequence scheduled (persisted to D1 chaser_queue)
- *   6. Wait for async dispatches to settle, then check logs
- *   7. Verify RFQ + vendor + chaser jobs are in D1
- *   8. Print summary
+ *   1. Print the gateway config. Unset values print as "(not set)".
+ *   2. Clear throttle caches
+ *   3. Hydrate the store from the database
+ *   4. Find the EXISTING vendor named by TEST_VENDOR_EMAIL (this script never creates vendors)
+ *   5. Create a fresh RFQ from TEST_RFQ_* values
+ *   6. Invite the vendor, which triggers WhatsApp, SMS, and the chaser sequence
+ *   7. Wait for async dispatches to settle, then check the database and logs
+ *   8. Print a summary
  *
- * NOTE: No direct gateway pre-call before the invite flow — that was
- * poisoning the 30s throttle and blocking the chaser sends. The invite
- * flow is the single entry point now.
+ * Required environment variables:
+ *   TEST_VENDOR_EMAIL             email of an existing vendor record
+ *   TEST_VENDOR_PHONE             phone that receives the messages
+ *   TEST_RFQ_TITLE                RFQ title
+ *   TEST_RFQ_CATEGORY             major category
+ *   TEST_RFQ_DELIVERY_LOCATION    delivery location text
+ *   TEST_RFQ_DELIVERY_PINCODE     delivery pincode
+ *   TEST_RFQ_LINE_ITEMS_JSON      JSON array of {"description","quantity","unit"}
+ * Optional:
+ *   TEST_ACTOR_EMAIL              email recorded as the actor of the invitation
+ *
+ * NOTE: No direct gateway pre-call before the invite flow. That poisoned the
+ * 30s throttle and blocked the chaser sends. The invite flow is the single entry
+ * point.
  *
  * Run:
  *   node scripts/test-rfq-sms.js
@@ -34,10 +44,49 @@ const storeService     = require('../src/services/storeService');
 const { getD1HttpClient } = require('../src/db/d1Bridge');
 
 // ─── Config ────────────────────────────────────────────────────────────────
-const VENDOR_EMAIL  = 'nodos31566@bitproy.com';
-const VENDOR_PHONE  = '9157154504';
-const VENDOR_NAME   = 'wefgrf';
-const TEST_RFQ_TITLE = 'gref – WhatsApp + SMS E2E Test';
+const REQUIRED_ENV = [
+  'TEST_VENDOR_EMAIL',
+  'TEST_VENDOR_PHONE',
+  'TEST_RFQ_TITLE',
+  'TEST_RFQ_CATEGORY',
+  'TEST_RFQ_DELIVERY_LOCATION',
+  'TEST_RFQ_DELIVERY_PINCODE',
+  'TEST_RFQ_LINE_ITEMS_JSON',
+];
+
+/** Validate every input before anything is created or sent. */
+function readConfig() {
+  const missing = REQUIRED_ENV.filter((name) => !process.env[name]);
+  if (missing.length > 0) {
+    console.error(`[test-rfq-sms] Missing required environment variable(s): ${missing.join(', ')}. Nothing was created or sent.`);
+    process.exit(1);
+  }
+
+  let lineItems;
+  try {
+    lineItems = JSON.parse(process.env.TEST_RFQ_LINE_ITEMS_JSON);
+  } catch (err) {
+    console.error(`[test-rfq-sms] TEST_RFQ_LINE_ITEMS_JSON is not valid JSON: ${err.message}. Nothing was created or sent.`);
+    process.exit(1);
+  }
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    console.error('[test-rfq-sms] TEST_RFQ_LINE_ITEMS_JSON must be a non-empty JSON array. Nothing was created or sent.');
+    process.exit(1);
+  }
+
+  return {
+    vendorEmail: process.env.TEST_VENDOR_EMAIL.trim().toLowerCase(),
+    vendorPhone: process.env.TEST_VENDOR_PHONE.trim(),
+    actorEmail: process.env.TEST_ACTOR_EMAIL || null,
+    rfq: {
+      title: process.env.TEST_RFQ_TITLE,
+      category: process.env.TEST_RFQ_CATEGORY,
+      deliveryLocation: process.env.TEST_RFQ_DELIVERY_LOCATION,
+      deliveryPincode: process.env.TEST_RFQ_DELIVERY_PINCODE,
+      lineItems,
+    },
+  };
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 function banner(text) {
@@ -50,21 +99,23 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 async function main() {
-  banner('RFQ → WhatsApp + SMS end-to-end test');
+  banner('RFQ → WhatsApp + SMS end-to-end test (manual only)');
+  const config = readConfig();
 
-  // ── 0. Gateway config ────────────────────────────────────────────────────
-  const smsId = process.env.SMS_GATEWAY_SMSGID || 'TEST';
+  // ── 0. Gateway config (printed as-is, never defaulted) ───────────────────
+  const smsId = process.env.SMS_GATEWAY_SMSGID;
+  const smsIdNote = !smsId ? '⚠️  not set' : (smsId === 'TEST' ? '⚠️  carriers will drop this!' : '✅');
   console.log('\n  SMS gateway:');
-  console.log('    URL    :', process.env.SMS_GATEWAY_URL    || 'https://sms.sendmsg.in/datasend');
-  console.log('    USER   :', process.env.SMS_GATEWAY_USER   || 'Procucev_OTP');
-  console.log('    SENDER :', process.env.SMS_GATEWAY_SENDER || 'PROCUC');
-  console.log('    SMSGID :', smsId, smsId === 'TEST' ? '⚠️  carriers will drop this!' : '✅');
+  console.log('    URL    :', process.env.SMS_GATEWAY_URL || '(not set)');
+  console.log('    USER   :', process.env.SMS_GATEWAY_USER || '(not set)');
+  console.log('    SENDER :', process.env.SMS_GATEWAY_SENDER || '(not set)');
+  console.log('    SMSGID :', smsId || '(not set)', smsIdNote);
   console.log('  WhatsApp gateway:');
   console.log('    USERNAME:', process.env.WHATSAPP_USERNAME || '(not set)');
   console.log('    FROM    :', process.env.WHATSAPP_FROM_NUMBER || '(not set)');
   console.log('  Delays:');
-  console.log('    WA  :', process.env.CHASER_WHATSAPP_DELAY_MS  ?? '0 (immediate)');
-  console.log('    SMS :', process.env.CHASER_SMS_DELAY_MS       ?? '300000 (5 min)');
+  console.log('    WA  :', process.env.CHASER_WHATSAPP_DELAY_MS ?? '(not set; service default applies)');
+  console.log('    SMS :', process.env.CHASER_SMS_DELAY_MS ?? '(not set; service default applies)');
 
   // ── 1. Clear all throttles — clean state before test ─────────────────────
   banner('STEP 1 — Clear throttle caches (clean state)');
@@ -72,8 +123,8 @@ async function main() {
   whatsAppService.clearWhatsAppThrottleCache();
   console.log('  ✅  Throttle caches cleared.');
 
-  // ── 2. Hydrate store from D1 ─────────────────────────────────────────────
-  banner('STEP 2 — Hydrate store from D1');
+  // ── 2. Hydrate store from the database ───────────────────────────────────
+  banner('STEP 2 — Hydrate store from the database');
   try {
     await storeService.hydrateFromDB();
     console.log(`  ✅  Store hydrated — vendors: ${(storeService.vendors || []).length}, RFQs: ${(storeService.rfqs || []).length}`);
@@ -81,29 +132,19 @@ async function main() {
     console.log('  ⚠️   Hydration error (continuing):', err.message);
   }
 
-  // ── 3. Ensure vendor exists with phone ───────────────────────────────────
-  banner('STEP 3 — Locate / register vendor');
+  // ── 3. Find the existing vendor (never created here) ─────────────────────
+  banner('STEP 3 — Locate existing vendor');
+  let vendor = (storeService.vendors || []).find((v) => (v.email || '').toLowerCase() === config.vendorEmail);
 
-  let vendor = (storeService.vendors || []).find((v) => v.email === VENDOR_EMAIL);
+  if (!vendor) {
+    console.log('  ❌  No vendor with the TEST_VENDOR_EMAIL address is in the store. Onboard it first. Nothing was created or sent.');
+    process.exit(1);
+  }
 
-  if (vendor) {
-    console.log(`  ✅  Vendor found in store: id=${vendor.id}, phone=${vendor.phone || 'MISSING'}`);
-    if (!vendor.phone) {
-      vendor = storeService.updateVendor(vendor.id, { phone: VENDOR_PHONE });
-      console.log(`  🔧  Patched phone → ${vendor.phone}`);
-    }
-  } else {
-    vendor = storeService.addVendor({
-      name           : VENDOR_NAME,
-      email          : VENDOR_EMAIL,
-      phone          : VENDOR_PHONE,
-      majorCategory  : 'Mechanical & Fluid Equipment',
-      minorCategories: ['Pumps & Compressors'],
-      contactPerson  : 'wefgrf',
-      status         : 'REGISTERED / NOT EVALUATED',
-      source         : 'test_script',
-    });
-    console.log(`  ✅  Vendor created: id=${vendor.id}, phone=${vendor.phone}`);
+  console.log(`  ✅  Vendor found in store: id=${vendor.id}, phone=${vendor.phone || 'MISSING'}`);
+  if (!vendor.phone) {
+    vendor = storeService.updateVendor(vendor.id, { phone: config.vendorPhone });
+    console.log('  🔧  Patched phone from TEST_VENDOR_PHONE');
   }
 
   if (!vendor || !vendor.phone) {
@@ -115,30 +156,28 @@ async function main() {
   banner('STEP 4 — Create test RFQ (mode_3)');
 
   const rfq = storeService.createRFQ({
-    title             : TEST_RFQ_TITLE,
-    category          : 'Mechanical & Fluid Equipment',
+    title             : config.rfq.title,
+    category          : config.rfq.category,
     sourcingMode      : 'mode_3',
-    deliveryLocation  : 'Gandhinagar, Gujarat',
-    deliveryPincode   : '382010',
+    deliveryLocation  : config.rfq.deliveryLocation,
+    deliveryPincode   : config.rfq.deliveryPincode,
     targetDeliveryDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    lineItems         : [{ description: 'Industrial pump', quantity: 2, unit: 'nos' }],
+    lineItems         : config.rfq.lineItems,
   });
 
   console.log(`  ✅  RFQ created: ${rfq.rfqNumber} (id=${rfq.id})`);
 
   // ── 5. Invite vendor — triggers WhatsApp + SMS immediately ───────────────
   banner('STEP 5 — inviteVendorsToRFQ → WhatsApp + SMS + chaser');
-  console.log(`  → Inviting ${VENDOR_NAME} (${VENDOR_PHONE}) to ${rfq.rfqNumber} …`);
+  console.log(`  → Inviting ${vendor.name} to ${rfq.rfqNumber} …`);
 
-  const inviteResult = await storeService.inviteVendorsToRFQ(
-    rfq.id, [vendor.id], 'test-script@procucev.ai'
-  );
+  const inviteResult = await storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], config.actorEmail);
 
   console.log(`  invitedCount : ${inviteResult?.invitedCount ?? 'null'}`);
 
   if (inviteResult?.invitedCount === 1) {
     console.log('  ✅  Vendor invited.');
-    console.log(`\n  ⏳  Waiting 5 s for all fire-and-forget dispatches to settle …`);
+    console.log('\n  ⏳  Waiting 5 s for all fire-and-forget dispatches to settle …');
     await sleep(5000);
     console.log('  ✅  Done waiting.');
   } else {
@@ -160,19 +199,19 @@ async function main() {
         'SELECT rfq_number, sourcing_mode, status FROM rfqs WHERE rfq_number = ?', [rfq.rfqNumber]
       );
       if (rfqRow.rows?.length) {
-        console.log(`  ✅  RFQ in D1:`, JSON.stringify(rfqRow.rows[0]));
+        console.log('  ✅  RFQ in D1:', JSON.stringify(rfqRow.rows[0]));
       } else {
         console.log(`  ❌  RFQ ${rfq.rfqNumber} NOT in D1`);
       }
 
       // Vendor
       const vRow = await d1._execHttp(
-        'SELECT id, email FROM vendors WHERE email = ?', [VENDOR_EMAIL]
+        'SELECT id, email FROM vendors WHERE email = ?', [config.vendorEmail]
       );
       if (vRow.rows?.length) {
-        console.log(`  ✅  Vendor in D1:`, JSON.stringify(vRow.rows[0]));
+        console.log('  ✅  Vendor in D1:', JSON.stringify(vRow.rows[0]));
       } else {
-        console.log(`  ❌  Vendor NOT in D1`);
+        console.log('  ❌  Vendor NOT in D1');
       }
 
       // Chaser jobs
@@ -200,7 +239,7 @@ async function main() {
     const logText = fs.readFileSync(logPath, 'utf8');
     const lines = logText.split('\n').filter(Boolean);
     const recent = lines.slice(-80).filter((l) =>
-      l.includes(rfq.rfqNumber) || l.includes(VENDOR_PHONE) || l.includes('WHATSAPP') || l.includes('SMS_SERVICE')
+      l.includes(rfq.rfqNumber) || l.includes(config.vendorPhone) || l.includes('WHATSAPP') || l.includes('SMS_SERVICE')
     );
     if (recent.length) {
       console.log(`  Found ${recent.length} relevant log line(s):`);
@@ -226,9 +265,9 @@ async function main() {
   console.log('  D1 persisted : see STEP 6 above');
   console.log('  Logs         : see STEP 7 above');
   console.log('');
-  console.log('  Check your phone 9157154504 for:');
-  console.log('    • WhatsApp message from QUA testing Procucev (immediate)');
-  console.log('    • SMS from PROCUC (immediate if CHASER_SMS_DELAY_MS=0, or +5 min)');
+  console.log('  Check the TEST_VENDOR_PHONE handset for:');
+  console.log('    • WhatsApp message (immediate)');
+  console.log('    • SMS (immediate if CHASER_SMS_DELAY_MS=0, otherwise after that delay)');
   console.log('');
   console.log('  If WhatsApp/SMS arrived → both channels working ✅');
   console.log('  If not → check STEP 7 logs for "failed" or "throttled" entries\n');

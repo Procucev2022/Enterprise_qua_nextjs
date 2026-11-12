@@ -1,8 +1,10 @@
 // ==============================================================================
-// DOCUMENT VAULT QUERIES (PostgreSQL & Relational Pool with in-memory fallback)
+// DOCUMENT VAULT QUERIES (PostgreSQL & Relational Pool)
 // ==============================================================================
 // Relational repository for enterprise collateral, sales pitch decks, rate cards,
-// and commercial email attachments.
+// and commercial email attachments. Every read and write goes to the database.
+// When storage is unavailable or a query fails, the call throws a
+// PERSISTENCE_UNAVAILABLE error instead of answering from memory.
 // ==============================================================================
 
 const pool = require('./pool');
@@ -10,199 +12,114 @@ const accountDocumentQueries = require('./accountDocumentQueries');
 const crypto = require('crypto');
 const { logger } = require('../services/loggerService');
 
+const DOCUMENT_VAULT_ERRORS = Object.freeze({
+  ACTOR_REQUIRED: 'A signed-in user is required to upload a document to the vault.',
+});
+
 function escapeLikeWildcards(str) {
   if (typeof str !== 'string') return '';
   // `!` is the SQL LIKE escape character in both PostgreSQL and SQLite.
   return str.replace(/([!%_])/g, '!$1');
 }
 
+function toNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toIsoOrNull(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 function mapRow(row) {
   if (!row) return null;
+  const activeValue = row.is_active ?? row.isActive;
   return {
-    id: String(row.id || ''),
-    documentName: row.document_name || row.documentName || '',
-    fileName: row.file_name || row.fileName || '',
-    fileSize: Number(row.file_size !== undefined && row.file_size !== null ? row.file_size : (row.fileSize || 0)),
-    mimeType: row.mime_type || row.mimeType || 'application/pdf',
-    category: row.category || 'other',
-    fileUrl: row.file_url || row.fileUrl || '',
-    description: row.description || '',
-    uploadedBy: row.uploaded_by || row.uploadedBy || 'System Admin',
-    isActive: row.is_active !== undefined ? Boolean(row.is_active) : (row.isActive !== undefined ? Boolean(row.isActive) : true),
-    createdAt: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || new Date().toISOString()),
-    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || new Date().toISOString()),
+    id: row.id != null ? String(row.id) : null,
+    documentName: row.document_name ?? row.documentName ?? null,
+    fileName: row.file_name ?? row.fileName ?? null,
+    fileSize: toNumberOrNull(row.file_size ?? row.fileSize),
+    mimeType: row.mime_type ?? row.mimeType ?? null,
+    category: row.category ?? null,
+    fileUrl: row.file_url || row.fileUrl || null,
+    description: row.description ?? null,
+    uploadedBy: row.uploaded_by ?? row.uploadedBy ?? null,
+    isActive: activeValue === undefined || activeValue === null ? null : Boolean(activeValue),
+    createdAt: toIsoOrNull(row.created_at ?? row.createdAt),
+    updatedAt: toIsoOrNull(row.updated_at ?? row.updatedAt),
     accountType: row.account_type || row.accountType || 'vault',
     accountId: row.account_id || row.accountId || null,
   };
 }
 
-const DEFAULT_DOCUMENTS = [
-  {
-    id: 'doc_buyer_sample_1',
-    documentName: 'Enterprise Buyer Statutory GST & KYC Dossier',
-    fileName: 'Buyer_Statutory_KYC_Dossier.pdf',
-    fileSize: 1420000,
-    mimeType: 'application/pdf',
-    category: 'compliance',
-    fileUrl: '/documents/Buyer_Statutory_KYC_Dossier.pdf',
-    description: 'Verified statutory incorporation and GSTIN registration certificate for ProcureHub Buyer Account.',
-    uploadedBy: 'Enterprise Buyer (ProcureHub)',
-    isActive: true,
-    createdAt: new Date('2026-02-01T10:00:00Z').toISOString(),
-    updatedAt: new Date('2026-02-01T10:00:00Z').toISOString(),
-    accountType: 'buyer',
-    accountId: 'BUYER-001',
-  },
-  {
-    id: 'doc_seller_sample_1',
-    documentName: 'Verified Supplier MSME & ISO 9001 Quality Certificate',
-    fileName: 'Supplier_MSME_ISO9001_Dossier.pdf',
-    fileSize: 2150000,
-    mimeType: 'application/pdf',
-    category: 'compliance',
-    fileUrl: '/documents/Supplier_MSME_ISO9001_Dossier.pdf',
-    description: 'Audited MSME manufacturing and quality assurance dossier for Apex Industrial Supplies.',
-    uploadedBy: 'Apex Industrial Supplies (Seller)',
-    isActive: true,
-    createdAt: new Date('2026-02-05T12:30:00Z').toISOString(),
-    updatedAt: new Date('2026-02-05T12:30:00Z').toISOString(),
-    accountType: 'seller',
-    accountId: 'SELLER-001',
-  },
-
-  {
-    id: 'doc_buyer_roi',
-    documentName: 'Enterprise Buyer ROI & Cost Savings Benchmark 2026',
-    fileName: 'Buyer_ROI_Benchmark_2026.pdf',
-    fileSize: 1850000,
-    mimeType: 'application/pdf',
-    category: 'marketing_overview',
-    fileUrl: '/documents/Buyer_ROI_Benchmark_2026.pdf',
-    accountType: 'vault',
-    description: 'Comprehensive financial justification model and benchmark metrics for enterprise procurement teams.',
-    uploadedBy: 'Enterprise Growth Team',
-    isActive: true,
-    createdAt: new Date('2026-01-15T09:00:00Z').toISOString(),
-    updatedAt: new Date('2026-01-15T09:00:00Z').toISOString(),
-  },
-  {
-    id: 'doc_pitch_deck',
-    documentName: 'Procucev Platform Overview & Capability Deck',
-    fileName: 'Procucev_Enterprise_Platform_Overview.pdf',
-    fileSize: 3420000,
-    mimeType: 'application/pdf',
-    category: 'marketing_overview',
-    fileUrl: '/documents/Procucev_Enterprise_Platform_Overview.pdf',
-    accountType: 'vault',
-    description: 'Executive introductory deck highlighting reverse auctioning, vendor diligence, and ERP integrations.',
-    uploadedBy: 'Corporate Sales',
-    isActive: true,
-    createdAt: new Date('2026-01-16T10:30:00Z').toISOString(),
-    updatedAt: new Date('2026-01-16T10:30:00Z').toISOString(),
-  },
-  {
-    id: 'doc_rate_card_standard',
-    documentName: 'Standard Commercial Subscription & Transaction Fee Schedule',
-    fileName: 'Procucev_Rate_Card_2026.pdf',
-    fileSize: 620000,
-    mimeType: 'application/pdf',
-    category: 'rate_cards',
-    fileUrl: '/documents/Procucev_Rate_Card_2026.pdf',
-    accountType: 'vault',
-    description: 'Transparent tier schedules, annual platform licensing, and GMV tier rebate scales.',
-    uploadedBy: 'Finance & Monetization',
-    isActive: true,
-    createdAt: new Date('2026-01-20T14:15:00Z').toISOString(),
-    updatedAt: new Date('2026-01-20T14:15:00Z').toISOString(),
-  },
-  {
-    id: 'doc_supplier_onboarding',
-    documentName: 'Verified Supplier Onboarding & Compliance Packet',
-    fileName: 'Supplier_Compliance_Onboarding_Packet.pdf',
-    fileSize: 1250000,
-    mimeType: 'application/pdf',
-    category: 'templates',
-    fileUrl: '/documents/Supplier_Compliance_Onboarding_Packet.pdf',
-    accountType: 'vault',
-    description: 'Statutory compliance checklists, GSTIN validation steps, and banking authentication forms.',
-    uploadedBy: 'Vendor Operations',
-    isActive: true,
-    createdAt: new Date('2026-01-22T11:00:00Z').toISOString(),
-    updatedAt: new Date('2026-01-22T11:00:00Z').toISOString(),
-  },
-  {
-    id: 'doc_sla_agreement',
-    documentName: 'Enterprise SLA & Multi-Vendor Guarantee Contract',
-    fileName: 'Enterprise_SLA_Master_Agreement.pdf',
-    fileSize: 980000,
-    mimeType: 'application/pdf',
-    category: 'legal_compliance',
-    fileUrl: '/documents/Enterprise_SLA_Master_Agreement.pdf',
-    accountType: 'vault',
-    description: '99.9% uptime commitments, escrow settlement rules, and supplier penalty framework.',
-    uploadedBy: 'Legal Counsel',
-    isActive: true,
-    createdAt: new Date('2026-01-25T16:45:00Z').toISOString(),
-    updatedAt: new Date('2026-01-25T16:45:00Z').toISOString(),
-  },
-];
-
-let inMemoryDocuments = JSON.parse(JSON.stringify(DEFAULT_DOCUMENTS));
-
-function resetInMemoryStore() {
-  inMemoryDocuments = JSON.parse(JSON.stringify(DEFAULT_DOCUMENTS));
-}
-
-function throwPersistenceUnavailable(operation, cause) {
+function persistenceUnavailable(operation, cause) {
   const error = new Error(`Document vault ${operation} failed because configured database persistence is unavailable.`);
   error.code = 'PERSISTENCE_UNAVAILABLE';
   error.cause = cause;
-  logger.error('Document vault persistence failed; refusing in-memory fallback', {
+  logger.error('Document vault persistence failed', {
     operation,
     error: cause,
   }, 'DOCUMENT_VAULT');
-  throw error;
+  return error;
+}
+
+function requireText(value, field) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) {
+    const error = new Error(`Document ${field} is required.`);
+    error.code = 'VALIDATION_FAILED';
+    throw error;
+  }
+  return text;
+}
+
+function resolveUploaderName(actor) {
+  if (typeof actor === 'string') return actor.trim() || null;
+  if (!actor || typeof actor !== 'object') return null;
+  return actor.fullName || actor.name || actor.corporateEmail || actor.email || null;
 }
 
 async function listDocuments(filters = {}) {
   const { category, search, activeOnly, source, accountType } = filters;
   const targetSource = (source || accountType || 'all').toLowerCase();
 
-  let vaultDocs = [];
-  if (pool.hasStorage()) {
-    try {
-      const conditions = [];
-      const values = [];
+  if (!pool.hasStorage()) throw persistenceUnavailable('list', null);
 
-      if (category && category !== 'all') {
-        values.push(category);
-        conditions.push(`category = $${values.length}`);
-      }
+  const conditions = [];
+  const values = [];
 
-      if (activeOnly) {
-        conditions.push('is_active = 1');
-      }
-
-      if (search && search.trim()) {
-        values.push(`%${escapeLikeWildcards(search.trim())}%`);
-        const pIndex = values.length;
-        conditions.push(`(LOWER(document_name) LIKE LOWER($${pIndex}) ESCAPE '!' OR LOWER(file_name) LIKE LOWER($${pIndex}) ESCAPE '!' OR LOWER(description) LIKE LOWER($${pIndex}) ESCAPE '!')`);
-      }
-
-      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      const queryText = `SELECT id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at FROM document_vault ${whereClause} ORDER BY created_at DESC`;
-
-      const result = await pool.query(queryText, values, { d1: true });
-      vaultDocs = result.rows.map(mapRow);
-    } catch (err) {
-      throwPersistenceUnavailable('list', err);
-    }
-  } else {
-    vaultDocs = inMemoryDocuments.slice();
+  if (category && category !== 'all') {
+    values.push(category);
+    conditions.push(`category = $${values.length}`);
   }
 
-  // Also retrieve account documents from buyer & seller accounts (Auto-sync)
-  let accountDocs = [];
+  if (activeOnly) {
+    conditions.push('is_active = 1');
+  }
+
+  if (search && search.trim()) {
+    values.push(`%${escapeLikeWildcards(search.trim())}%`);
+    const pIndex = values.length;
+    conditions.push(`(LOWER(document_name) LIKE LOWER($${pIndex}) ESCAPE '!' OR LOWER(file_name) LIKE LOWER($${pIndex}) ESCAPE '!' OR LOWER(description) LIKE LOWER($${pIndex}) ESCAPE '!')`);
+  }
+
+  let vaultDocs;
+  try {
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const queryText = `SELECT id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at FROM document_vault ${whereClause} ORDER BY created_at DESC`;
+
+    const result = await pool.query(queryText, values, { d1: true });
+    vaultDocs = result.rows.map(mapRow);
+  } catch (err) {
+    throw persistenceUnavailable('list', err);
+  }
+
+  // Buyer and seller dossier documents are part of the vault listing. A failed
+  // lookup fails the whole listing so callers never receive a partial answer.
+  let accountDocs;
   try {
     accountDocs = await accountDocumentQueries.getAllAccountDocuments({
       category,
@@ -211,16 +128,10 @@ async function listDocuments(filters = {}) {
       accountType: (targetSource === 'vault' || targetSource === 'platform') ? null : (targetSource !== 'all' ? targetSource : undefined),
     });
   } catch (err) {
-    logger.warn('documentVaultQueries: Failed to load account documents for vault auto-sync', { error: err.message });
+    throw persistenceUnavailable('account document list', err);
   }
 
-  const mappedAccountDocs = (accountDocs || []).map((ad) => ({
-    ...ad,
-    accountType: ad.accountType || 'buyer',
-  }));
-
-  // Combine vaultDocs and mappedAccountDocs
-  let combined = [...vaultDocs, ...mappedAccountDocs];
+  let combined = [...vaultDocs, ...(accountDocs || [])];
 
   // Apply in-memory category filter if needed
   if (category && category !== 'all') {
@@ -263,199 +174,149 @@ async function listDocuments(filters = {}) {
     }
   }
 
-  // Sort by createdAt descending
-  deduplicated.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  // Sort by createdAt descending (documents without a date sort last)
+  const timeOf = (doc) => (doc.createdAt ? new Date(doc.createdAt).getTime() : 0);
+  deduplicated.sort((a, b) => timeOf(b) - timeOf(a));
 
   return deduplicated;
 }
 
 async function getDocumentById(id) {
   if (!id) return null;
+  if (!pool.hasStorage()) throw persistenceUnavailable('lookup', null);
 
-  if (pool.hasStorage()) {
-    try {
-      const result = await pool.query(
-        'SELECT id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at FROM document_vault WHERE id = $1',
-        [id],
-        { d1: true }
-      );
-      if (result.rows && result.rows.length > 0) {
-        return mapRow(result.rows[0]);
-      }
-      return null;
-    } catch (err) {
-      throwPersistenceUnavailable('lookup', err);
+  try {
+    const result = await pool.query(
+      'SELECT id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at FROM document_vault WHERE id = $1',
+      [id],
+      { d1: true }
+    );
+    if (result.rows && result.rows.length > 0) {
+      return mapRow(result.rows[0]);
     }
+    return null;
+  } catch (err) {
+    throw persistenceUnavailable('lookup', err);
   }
-
-  const found = inMemoryDocuments.find((d) => d.id === id);
-  return found ? { ...found } : null;
 }
 
 async function createDocument(payload = {}, actor) {
-  const id = 'doc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-  const now = new Date();
-  const documentName = payload.documentName || 'Untitled Document';
-  const fileName = payload.fileName || 'document.pdf';
-  const fileSize = payload.fileSize !== undefined ? Number(payload.fileSize) : 0;
-  const mimeType = payload.mimeType || 'application/pdf';
-  const category = payload.category || 'other';
-  const fileUrl = payload.fileUrl || `/documents/${fileName}`;
-  const description = payload.description || '';
-  const uploadedBy =
-    (actor && (actor.name || actor.corporateEmail || actor.email)) ||
-    (typeof actor === 'string' ? actor : 'System Admin');
-  const isActive = payload.isActive !== undefined ? Boolean(payload.isActive) : true;
-  const accountType = payload.accountType || 'vault';
-  const accountId = payload.accountId || null;
-
-  if (pool.hasStorage()) {
-    try {
-      const result = await pool.query(
-        `INSERT INTO document_vault (id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at`,
-        [
-          id,
-          documentName,
-          fileName,
-          fileSize,
-          mimeType,
-          category,
-          fileUrl,
-          description,
-          uploadedBy,
-          isActive ? 1 : 0,
-          now.toISOString(),
-          now.toISOString(),
-        ],
-        { d1: true }
-      );
-      return mapRow(result.rows[0]);
-    } catch (err) {
-      throwPersistenceUnavailable('creation', err);
-    }
+  const documentName = requireText(payload.documentName, 'name');
+  const fileName = requireText(payload.fileName, 'file name');
+  const category = requireText(payload.category, 'category');
+  const uploadedBy = resolveUploaderName(actor);
+  if (!uploadedBy) {
+    const error = new Error(DOCUMENT_VAULT_ERRORS.ACTOR_REQUIRED);
+    error.code = 'ACTOR_REQUIRED';
+    error.statusCode = 401;
+    throw error;
   }
+  if (!pool.hasStorage()) throw persistenceUnavailable('creation', null);
 
-  const newDoc = {
-    id,
-    documentName,
-    fileName,
-    fileSize,
-    mimeType,
-    category,
-    fileUrl,
-    description,
-    uploadedBy,
-    isActive,
-    accountType,
-    accountId,
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-  };
+  const id = 'doc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const now = new Date().toISOString();
+  const fileSize = toNumberOrNull(payload.fileSize);
+  const mimeType = payload.mimeType || null;
+  // file_url is NOT NULL in the schema. An empty string records "no file location".
+  const fileUrl = payload.fileUrl || '';
+  const description = payload.description || '';
+  const isActive = payload.isActive !== undefined ? Boolean(payload.isActive) : true;
 
-  inMemoryDocuments.unshift(newDoc);
-  return { ...newDoc };
+  try {
+    const result = await pool.query(
+      `INSERT INTO document_vault (id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at`,
+      [
+        id,
+        documentName,
+        fileName,
+        fileSize,
+        mimeType,
+        category,
+        fileUrl,
+        description,
+        uploadedBy,
+        isActive ? 1 : 0,
+        now,
+        now,
+      ],
+      { d1: true }
+    );
+    return mapRow(result.rows[0]);
+  } catch (err) {
+    throw persistenceUnavailable('creation', err);
+  }
 }
 
 async function updateDocument(id, updates = {}) {
   if (!id) return null;
+  if (!pool.hasStorage()) throw persistenceUnavailable('update', null);
 
-  if (pool.hasStorage()) {
-    try {
-      const fields = [];
-      const values = [];
-      let idx = 1;
+  try {
+    const fields = [];
+    const values = [];
+    let idx = 1;
 
-      if (updates.documentName !== undefined) {
-        fields.push(`document_name = $${idx++}`);
-        values.push(updates.documentName);
-      }
-      if (updates.fileName !== undefined) {
-        fields.push(`file_name = $${idx++}`);
-        values.push(updates.fileName);
-      }
-      if (updates.fileSize !== undefined) {
-        fields.push(`file_size = $${idx++}`);
-        values.push(Number(updates.fileSize));
-      }
-      if (updates.mimeType !== undefined) {
-        fields.push(`mime_type = $${idx++}`);
-        values.push(updates.mimeType);
-      }
-      if (updates.category !== undefined) {
-        fields.push(`category = $${idx++}`);
-        values.push(updates.category);
-      }
-      if (updates.fileUrl !== undefined) {
-        fields.push(`file_url = $${idx++}`);
-        values.push(updates.fileUrl);
-      }
-      if (updates.description !== undefined) {
-        fields.push(`description = $${idx++}`);
-        values.push(updates.description);
-      }
-      if (updates.isActive !== undefined) {
-        fields.push(`is_active = $${idx++}`);
-        values.push(updates.isActive ? 1 : 0);
-      }
-
-      fields.push(`updated_at = $${idx++}`);
-      values.push(new Date());
-
-      values.push(id);
-      const queryText = `UPDATE document_vault SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at`;
-
-      const result = await pool.query(queryText, values, { d1: true });
-      if (result.rows && result.rows.length > 0) {
-        return mapRow(result.rows[0]);
-      }
-      return null;
-    } catch (err) {
-      throwPersistenceUnavailable('update', err);
+    if (updates.documentName !== undefined) {
+      fields.push(`document_name = $${idx++}`);
+      values.push(updates.documentName);
     }
+    if (updates.fileName !== undefined) {
+      fields.push(`file_name = $${idx++}`);
+      values.push(updates.fileName);
+    }
+    if (updates.fileSize !== undefined) {
+      fields.push(`file_size = $${idx++}`);
+      values.push(toNumberOrNull(updates.fileSize));
+    }
+    if (updates.mimeType !== undefined) {
+      fields.push(`mime_type = $${idx++}`);
+      values.push(updates.mimeType);
+    }
+    if (updates.category !== undefined) {
+      fields.push(`category = $${idx++}`);
+      values.push(updates.category);
+    }
+    if (updates.fileUrl !== undefined) {
+      fields.push(`file_url = $${idx++}`);
+      values.push(updates.fileUrl);
+    }
+    if (updates.description !== undefined) {
+      fields.push(`description = $${idx++}`);
+      values.push(updates.description);
+    }
+    if (updates.isActive !== undefined) {
+      fields.push(`is_active = $${idx++}`);
+      values.push(updates.isActive ? 1 : 0);
+    }
+
+    fields.push(`updated_at = $${idx++}`);
+    values.push(new Date());
+
+    values.push(id);
+    const queryText = `UPDATE document_vault SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at`;
+
+    const result = await pool.query(queryText, values, { d1: true });
+    if (result.rows && result.rows.length > 0) {
+      return mapRow(result.rows[0]);
+    }
+    return null;
+  } catch (err) {
+    throw persistenceUnavailable('update', err);
   }
-
-  const idx = inMemoryDocuments.findIndex((d) => d.id === id);
-  if (idx === -1) return null;
-
-  const current = inMemoryDocuments[idx];
-  const updated = {
-    ...current,
-    documentName: updates.documentName !== undefined ? updates.documentName : current.documentName,
-    fileName: updates.fileName !== undefined ? updates.fileName : current.fileName,
-    fileSize: updates.fileSize !== undefined ? Number(updates.fileSize) : current.fileSize,
-    mimeType: updates.mimeType !== undefined ? updates.mimeType : current.mimeType,
-    category: updates.category !== undefined ? updates.category : current.category,
-    fileUrl: updates.fileUrl !== undefined ? updates.fileUrl : current.fileUrl,
-    description: updates.description !== undefined ? updates.description : current.description,
-    isActive: updates.isActive !== undefined ? Boolean(updates.isActive) : current.isActive,
-    updatedAt: new Date().toISOString(),
-  };
-
-  inMemoryDocuments[idx] = updated;
-  return { ...updated };
 }
 
 async function deleteDocument(id) {
   if (!id) return false;
+  if (!pool.hasStorage()) throw persistenceUnavailable('deletion', null);
 
-  if (pool.hasStorage()) {
-    try {
-      const result = await pool.query('DELETE FROM document_vault WHERE id = $1', [id], { d1: true });
-      return result.rowCount > 0;
-    } catch (err) {
-      throwPersistenceUnavailable('deletion', err);
-    }
+  try {
+    const result = await pool.query('DELETE FROM document_vault WHERE id = $1', [id], { d1: true });
+    return result.rowCount > 0;
+  } catch (err) {
+    throw persistenceUnavailable('deletion', err);
   }
-
-  const idx = inMemoryDocuments.findIndex((d) => d.id === id);
-  if (idx !== -1) {
-    inMemoryDocuments.splice(idx, 1);
-    return true;
-  }
-
-  return false;
 }
 
 async function getDocumentVaultSummary() {
@@ -480,7 +341,6 @@ async function getDocumentVaultSummary() {
 }
 
 module.exports = {
-  resetInMemoryStore,
   listDocuments,
   getDocumentById,
   createDocument,

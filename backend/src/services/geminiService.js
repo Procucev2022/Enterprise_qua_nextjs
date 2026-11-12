@@ -130,7 +130,8 @@ function maskApiKey(key) {
 /** Resolve API keys pool from GEMINI_CONFIG.API_KEYS, GEMINI_CONFIG.API_KEY, numbered env vars, and GEMINI_CONFIG.BACKUP_KEYS. */
 function resolveApiKeys() {
   const keys = [];
-  const isInvalidPlaceholder = (k) => typeof k === 'string' && (k.includes('mD3Zq8mD') || k === 'placeholder' || k.startsWith('AIzaSyC_2mDq'));
+  // Rejects only the template text an unfilled env value carries. No real key is named in code.
+  const isInvalidPlaceholder = (k) => typeof k === 'string' && k === 'placeholder';
   const addKey = (val) => {
     if (!val) return;
     if (Array.isArray(val)) {
@@ -346,8 +347,8 @@ function parseExtractionJson(text) {
  * Map the model's item shape onto the raw row shape rfqIngestionService expects.
  *
  * A row with no description cannot be quoted against and is dropped here. A null
- * quantity is passed through untouched so the ingestion layer applies the same
- * documented default the Java service used, rather than the model inventing one.
+ * quantity is passed through as null, so the ingestion layer reports it as missing
+ * and never fills in a quantity of 1.
  */
 function toRawLineItems(parsed) {
   const items = Array.isArray(parsed?.items)
@@ -682,7 +683,8 @@ function extractSpreadsheetLineItems(text) {
       }
 
       const rawUnit = unitIdx !== undefined ? cells[unitIdx] : '';
-      const unit = rawUnit ? rawUnit.trim() : 'Nos';
+      // A row with no stated unit keeps the unit as missing (null). It is never filled with 'Nos'.
+      const unit = rawUnit ? rawUnit.trim() : null;
 
       const rawCatVal = (catIdx !== undefined && cells[catIdx]) ? cells[catIdx].trim() : (sheet.sheetName || '');
       const row = {
@@ -1896,136 +1898,33 @@ function cleanEmailText(text = '') {
     .replace(/&#39;/gi, "'");
 }
 
-/**
- * Fallback heuristic/regex extraction when Gemini AI is not configured or fails.
- */
-function extractQuotationFallback(text = '', rfqContext = {}) {
-  const sanitized = cleanEmailText(text);
-  const clean = sanitized.replace(/\r?\n/g, ' ');
 
-  let unitPrice = 0;
-  let totalPrice = 0;
+/** Messages for quotation extraction results that carry no usable figures. */
+const QUOTATION_EXTRACTION_MESSAGES = Object.freeze({
+  NOT_CONFIGURED: 'Quotation extraction did not run: the AI extraction key is not configured.',
+  AI_FAILED: 'Quotation extraction failed: the AI service did not return a usable result.',
+});
 
-  const unitMatch = clean.match(
-    /(?:unit\s*price|price\s*per\s*unit|unit\s*rate|unit\s*cost|rate\s*per\s*unit|\brate\b)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)/i
-  );
-  const totalMatch = clean.match(
-    /(?:total\s*quoted\s*value|total\s*quoted\s*amount|total\s*order\s*value|total\s*value|total\s*cost|total\s*price|total\s*amount|grand\s*total|total\s*bid|total\s*quote|quoted\s*value)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)/i
-  ) || clean.match(/(?:\btotal\b)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)(?!\s*(?:units?|nos?|items?|pcs?|pieces?|quantity|qty))/i);
-  const generalPriceMatch =
-    clean.match(/(?:(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?))/i) ||
-    clean.match(/(?:price|quote|bid)[\s:=~–—\-\/]*([\d,]+(?:\.\d+)?)/i);
+/** Compliance states the extractor may return. Any other value is recorded as not stated. */
+const QUOTATION_COMPLIANCE_STATUSES = Object.freeze(['Fully Compliant', 'Minor Exception', 'Pending Review']);
 
-  const parseNum = (str) => (str ? Number(String(str).replace(/,/g, '')) : 0);
+/** A stated number, or null. A missing or non-numeric value is never replaced with a default. */
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
-  if (unitMatch) unitPrice = parseNum(unitMatch[1]);
-  if (totalMatch) totalPrice = parseNum(totalMatch[1]);
-  if (!unitPrice && !totalMatch && generalPriceMatch) unitPrice = parseNum(generalPriceMatch[1]);
-
-  const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
-  const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
-
-  if (unitPrice > 0 && !totalPrice) {
-    totalPrice = unitPrice * rfqQty;
-  } else if (totalPrice > 0 && !unitPrice) {
-    unitPrice = Math.round(totalPrice / rfqQty);
-  }
-
-  let leadTimeDays = 7;
-  const leadMatch = clean.match(/(?:lead\s*time|delivery\s*time|delivery\s*period|dispatch\s*in)[\s:=]*(\d+)\s*(days?|weeks?|months?)/i) ||
-    clean.match(/(\d+)\s*(?:working\s*)?(days?|weeks?)\s*(?:delivery|lead\s*time|dispatch)/i);
-  if (leadMatch) {
-    const val = Number(leadMatch[1]);
-    const unit = (leadMatch[2] || '').toLowerCase();
-    if (unit.startsWith('week')) leadTimeDays = val * 7;
-    else if (unit.startsWith('month')) leadTimeDays = val * 30;
-    else leadTimeDays = val;
-  }
-
-  let warrantyYears = 1;
-  const warMatch = clean.match(/(?:warranty|guarantee)[\s:=]*(\d+)\s*(years?|months?)/i) ||
-    clean.match(/(\d+)\s*(years?|months?)\s*(?:warranty|guarantee)/i);
-  if (warMatch) {
-    const val = Number(warMatch[1]);
-    const unit = (warMatch[2] || '').toLowerCase();
-    if (unit.startsWith('month')) warrantyYears = Math.max(1, Math.round(val / 12));
-    else warrantyYears = val;
-  }
-
-  let paymentTerms = 'Standard Terms';
-  const payMatch = sanitized.match(/(?:payment\s*terms?|payment)[\s:=]*([^\n\r,;\.]{2,40})/i);
-  if (payMatch) {
-    paymentTerms = payMatch[1].replace(/(?:taxes|gst|freight|remarks|delivery).*/i, '').trim();
-  }
-
-  let taxes = 0;
-  const taxMatch = clean.match(/(?:gst|tax(?:es)?)[\s:=@]*(\d+(?:\.\d+)?)\s*%/i);
-  if (taxMatch && totalPrice > 0) {
-    taxes = Math.round((totalPrice * Number(taxMatch[1])) / 100);
-  }
-
-  let deliveryCharges = 0;
-  const delMatch = clean.match(/(?:delivery\s*charges?|freight\s*charges?|freight|shipping(?:\s*charges?)?)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
-  if (delMatch) {
-    deliveryCharges = parseNum(delMatch[1]);
-  }
-
-  const lineItemQuotes = rfqItems.map((rfqItem, idx) => {
-    const itemName = rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`;
-    const qty = Number(rfqItem.quantity) || 1;
-    let itemUnitPrice = unitPrice;
-
-    // Search for item-specific price in the email text
-    const escaped = itemName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').split(/\s+/).slice(0, 2).join('\\s+');
-    const itemRegex = new RegExp(
-      `(?:${escaped})[^\\n\\r]*?(?:INR|Rs\\.?|₹)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*(?:per|/|unit|each|piece)?`,
-      'i'
-    );
-    let itemMatch = sanitized.match(itemRegex);
-    if (!itemMatch) {
-      const itemBlockRegex = new RegExp(
-        `(?:${escaped})[\\s\\S]{0,140}?(?:unit\\s*price|rate|price|quote)(?:\\s*\\([^)]*\\)|\\[[^\\]]*\\])?[\\s:=~–—\\-\\/₹RsINR\\.]*([\\d,]+(?:\\.\\d+)?)`,
-        'i'
-      );
-      itemMatch = sanitized.match(itemBlockRegex);
-    }
-    if (itemMatch) {
-      const parsed = parseNum(itemMatch[1]);
-      if (parsed > 0) itemUnitPrice = parsed;
-    }
-
-    return {
-      itemName,
-      quantity: qty,
-      unit: rfqItem.unit || 'Units',
-      unitPrice: itemUnitPrice || 0,
-      totalPrice: (itemUnitPrice || 0) * qty,
-      tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
-      deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || '',
-    };
-  });
-
-  const calculatedTotal = lineItemQuotes.reduce((acc, it) => acc + (it.totalPrice || 0), 0);
-  if (calculatedTotal > 0) {
-    totalPrice = calculatedTotal;
-  }
-
-  if (!unitPrice && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice > 0) {
-    unitPrice = lineItemQuotes[0].unitPrice;
-  }
-
+/** Result for a quotation extraction that did not run or did not succeed. Every figure is null. */
+function quotationExtractionFailure(status, error) {
   return {
-    unitPrice,
-    totalPrice: totalPrice || unitPrice,
-    leadTimeDays,
-    warrantyYears,
-    paymentTerms,
-    remarks: 'Extracted from vendor email quotation reply',
-    taxes,
-    deliveryCharges,
-    complianceStatus: 'Fully Compliant',
-    lineItemQuotes,
-    extractionMethod: 'heuristic_fallback',
+    success: false,
+    status,
+    error,
+    extractionMethod: null,
+    unitPrice: null,
+    totalPrice: null,
+    lineItemQuotes: [],
   };
 }
 
@@ -2037,27 +1936,28 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
  * @param {string} [input.subject] - Email subject
  * @param {string} [input.fromAddress] - Vendor email
  * @param {object} [rfqContext] - Target RFQ metadata for matching line items
- * @returns {Promise<object>} Extracted quotation payload
+ * @returns {Promise<object>} The extracted quotation with success:true. When extraction did not
+ *   run or did not succeed, success is false and every figure is null. No value is estimated.
  */
 async function extractQuotationFromEmail(input = {}, rfqContext = {}) {
   const text = input.bodyText || input.text || '';
   const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
 
   if (!isConfigured()) {
-    logger.info('Extracting quotation details via heuristic parser (API key not configured)', {}, 'GEMINI');
-    return extractQuotationFallback(text, rfqContext);
+    logger.warn('Quotation extraction not run: GEMINI_API_KEY is not set', {}, 'GEMINI');
+    return quotationExtractionFailure(EXTRACTION_STATUS.NOT_CONFIGURED, QUOTATION_EXTRACTION_MESSAGES.NOT_CONFIGURED);
   }
 
   const rfqSummary = {
-    rfqNumber: rfqContext.rfqNumber || 'RFQ',
+    rfqNumber: rfqContext.rfqNumber || null,
     title: rfqContext.title || '',
     category: rfqContext.category || '',
-    budget: rfqContext.budget || 0,
+    budget: normalizeAmount(rfqContext.budget),
     lineItems: rfqItems.map((item, idx) => ({
       index: idx + 1,
       itemName: item.itemName || item.description || '',
-      quantity: Number(item.quantity) || 1,
-      unit: item.unit || 'Units',
+      quantity: optionalNumber(item.quantity),
+      unit: item.unit || null,
       specification: item.technicalSpecs || item.specification || '',
     })),
   };
@@ -2081,10 +1981,10 @@ Extract and return ONLY a JSON object with this EXACT structure:
   "leadTimeDays": Number (delivery lead time in days, integer >= 0),
   "warrantyYears": Number (warranty period in years, integer >= 0),
   "paymentTerms": "String (e.g. Net 30, 100% advance, 30 days against invoice, or as stated)",
-  "complianceStatus": "String (one of: 'Fully Compliant', 'Minor Exception', 'Pending Review')",
+  "complianceStatus": "String (one of: 'Fully Compliant', 'Minor Exception', 'Pending Review', or null if not stated)",
   "remarks": "String (any vendor notes, exclusions, or commercial conditions stated in the email)",
-  "taxes": Number (total tax or GST amount if stated or calculated, else 0),
-  "deliveryCharges": Number (freight or delivery charges if stated, else 0),
+  "taxes": Number (total tax or GST amount if stated, else null),
+  "deliveryCharges": Number (freight or delivery charges if stated, else null),
   "deliveryDate": "String in YYYY-MM-DD if explicit delivery date is stated, else null",
   "quotationValidity": "String (quotation validity period e.g. '30 days', '15 days', or null)",
   "lineItemQuotes": [
@@ -2093,69 +1993,76 @@ Extract and return ONLY a JSON object with this EXACT structure:
       "quantity": Number (quoted quantity),
       "unitPrice": Number (unit rate quoted for this specific item),
       "totalPrice": Number (line total quoted for this specific item),
-      "tax": Number (tax amount for this line item, else 0),
+      "tax": Number (tax amount for this line item if stated, else null),
       "deliveryDate": "String in YYYY-MM-DD or null"
     }
   ]
 }
 
-If specific values are missing from the email, provide reasonable procurement defaults (e.g. leadTimeDays: 7, warrantyYears: 1, paymentTerms: "Standard Terms", complianceStatus: "Fully Compliant") based on the text.
+If a value is not stated in the email, return null for it. Never estimate a value or substitute a default.
 Do NOT include markdown fences, prose or explanation outside the JSON object.`;
 
   const result = await generateJson({ prompt, label: 'vendor-quote-extraction' });
 
   if (result.status === EXTRACTION_STATUS.SUCCESS && result.data && typeof result.data === 'object') {
     const data = result.data;
-    let unitPrice = normalizeAmount(data.unitPrice) || 0;
-    let totalPrice = normalizeAmount(data.totalPrice) || (unitPrice * (rfqItems.length || 1));
-
-    if (totalPrice > 0 && (!unitPrice || unitPrice === 0)) {
-      unitPrice = Math.round(totalPrice / (rfqItems.length || 1));
+    let unitPrice = normalizeAmount(data.unitPrice);
+    const statedTotal = normalizeAmount(data.totalPrice);
+    // A missing unit price is taken from the stated total only when the RFQ has items to divide by.
+    if (unitPrice === null && statedTotal !== null && rfqItems.length > 0) {
+      unitPrice = Math.round(statedTotal / rfqItems.length);
     }
 
-    const leadTimeDays = Number(data.leadTimeDays) || 7;
-    const warrantyYears = Number(data.warrantyYears) || 1;
-    const paymentTerms = String(data.paymentTerms || 'Standard Terms').trim();
-    const complianceStatus = ['Fully Compliant', 'Minor Exception', 'Pending Review'].includes(data.complianceStatus)
-      ? data.complianceStatus
-      : 'Fully Compliant';
+    const leadTimeDays = optionalNumber(data.leadTimeDays);
+    const warrantyYears = optionalNumber(data.warrantyYears);
+    const paymentTerms = String(data.paymentTerms || '').trim() || null;
+    const complianceStatus = QUOTATION_COMPLIANCE_STATUSES.includes(data.complianceStatus) ? data.complianceStatus : null;
     const remarks = String(data.remarks || '').trim();
-    const taxes = normalizeAmount(data.taxes) || 0;
-    const deliveryCharges = normalizeAmount(data.deliveryCharges) || 0;
+    const taxes = normalizeAmount(data.taxes);
+    const deliveryCharges = normalizeAmount(data.deliveryCharges);
 
-    let lineItemQuotes = Array.isArray(data.lineItemQuotes) && data.lineItemQuotes.length > 0
+    const lineItemQuotes = Array.isArray(data.lineItemQuotes) && data.lineItemQuotes.length > 0
       ? data.lineItemQuotes.map((lq, idx) => {
-          const lqUnit = normalizeAmount(lq.unitPrice) || unitPrice || 0;
-          const lqQty = Number(lq.quantity) || Number(rfqItems[idx]?.quantity) || 1;
-          const lqTotal = normalizeAmount(lq.totalPrice) || (lqUnit * lqQty);
+          const lqQuantity = optionalNumber(lq.quantity) ?? optionalNumber(rfqItems[idx]?.quantity);
+          const lqUnit = normalizeAmount(lq.unitPrice) ?? unitPrice;
+          const lqTotal = normalizeAmount(lq.totalPrice)
+            ?? (lqUnit !== null && lqQuantity !== null ? lqUnit * lqQuantity : null);
           return {
-            itemName: lq.itemName || rfqItems[idx]?.itemName || `Item ${idx + 1}`,
-            quantity: lqQty,
+            itemName: lq.itemName || rfqItems[idx]?.itemName || null,
+            quantity: lqQuantity,
             unitPrice: lqUnit,
             totalPrice: lqTotal,
-            tax: normalizeAmount(lq.tax) || 0,
+            tax: normalizeAmount(lq.tax),
             deliveryDate: lq.deliveryDate || null,
           };
         })
-      : rfqItems.map((rfqItem, idx) => ({
-          itemName: rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`,
-          quantity: Number(rfqItem.quantity) || 1,
-          unitPrice: unitPrice || 0,
-          totalPrice: (unitPrice || 0) * (Number(rfqItem.quantity) || 1),
-          tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
-          deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
-        }));
+      : rfqItems.map((rfqItem) => {
+          const quantity = optionalNumber(rfqItem.quantity);
+          return {
+            itemName: rfqItem.itemName || rfqItem.description || null,
+            quantity,
+            unitPrice,
+            totalPrice: unitPrice !== null && quantity !== null ? unitPrice * quantity : null,
+            tax: null,
+            deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
+          };
+        });
 
-    if (!unitPrice && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice > 0) {
+    if (unitPrice === null && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice !== null) {
       unitPrice = lineItemQuotes[0].unitPrice;
-      if (!totalPrice) {
-        totalPrice = lineItemQuotes.reduce((acc, it) => acc + (it.totalPrice || 0), 0);
-      }
     }
 
+    // The total is the stated total, or the sum of the line totals when every line has one.
+    const lineTotals = lineItemQuotes.map((item) => item.totalPrice);
+    const summedLineTotals = lineTotals.length > 0 && lineTotals.every((value) => value !== null)
+      ? lineTotals.reduce((acc, value) => acc + value, 0)
+      : null;
+    const totalPrice = statedTotal ?? summedLineTotals;
+
     return {
+      success: true,
       unitPrice,
-      totalPrice: totalPrice || unitPrice,
+      totalPrice,
       leadTimeDays,
       warrantyYears,
       paymentTerms,
@@ -2170,8 +2077,8 @@ Do NOT include markdown fences, prose or explanation outside the JSON object.`;
     };
   }
 
-  logger.warn('Gemini quotation extraction fell back to heuristic parser', { status: result.status, error: result.error }, 'GEMINI');
-  return extractQuotationFallback(text, rfqContext);
+  logger.warn('Gemini quotation extraction did not return a usable result', { status: result.status, error: result.error }, 'GEMINI');
+  return quotationExtractionFailure(result.status || EXTRACTION_STATUS.AI_FAILED, QUOTATION_EXTRACTION_MESSAGES.AI_FAILED);
 }
 
 module.exports = {
@@ -2201,7 +2108,6 @@ module.exports = {
   buildRequestBody,
   extractLineItems,
   extractQuotationFromEmail,
-  extractQuotationFallback,
   extractSpreadsheetLineItems,
   parseValidQuantity,
   matchHeaderField,

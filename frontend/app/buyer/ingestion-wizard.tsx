@@ -128,8 +128,8 @@ function withStoredValue(options: string[], value: string): string[] {
 type ConfirmationVendor = string | {
   id?: string;
   name?: string;
-  source?: string;
-  addedByBuyerCompany?: boolean;
+  source?: string | null;
+  addedByBuyerCompany?: string | null;
   vendorCategory?: string;
 };
 
@@ -298,7 +298,6 @@ export default function IngestionWizard({
   const {
     addNewRFQ,
     adoptCreatedRFQ,
-    currentMode,
     setCurrentMode,
     showToast,
     activeSubscription: storeSubscription,
@@ -326,10 +325,8 @@ export default function IngestionWizard({
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode | string>('mode_1');
 
-  const [form, setForm] = useState<ManualRFQForm>(() => ({
-    ...createEmptyManualRFQForm(),
-    sourcingMode: currentMode || 'mode_2',
-  }));
+  // No sourcing mode is preselected. The buyer chooses one before the RFQ can be dispatched.
+  const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
   const isQuotaExhausted = !isPaidPlan && effectiveRemaining <= 0 && form.sourcingMode !== 'mode_0';
 
   // Auto-prefill delivery location and pincode from active buyer profile
@@ -1130,8 +1127,10 @@ export default function IngestionWizard({
     }
 
     const validation = validateManualRFQForm(form);
-    if (!validation.isValid) {
+    // The mode check narrows the type for the dispatch below. Validation already reports an unchosen mode.
+    if (!validation.isValid || form.sourcingMode === null) {
       const missing: string[] = [];
+      if (validation.formErrors.sourcingMode) missing.push(MODAL.sourcingModeLabel);
       if (validation.formErrors.title) missing.push('RFQ Title');
       if (validation.formErrors.deliveryLocation) missing.push('Delivery Location');
       if (validation.formErrors.deliveryPincode) missing.push('Delivery Pincode');
@@ -1337,10 +1336,7 @@ export default function IngestionWizard({
 
   /** Clears all form fields, line items, and uploaded documents */
   const handleClearForm = () => {
-    setForm({
-      ...createEmptyManualRFQForm(),
-      sourcingMode: currentMode || 'mode_2',
-    });
+    setForm(createEmptyManualRFQForm());
     setUploadedFiles([]);
     setExtractionSummary(null);
     setExtractionError(null);
@@ -1391,7 +1387,7 @@ export default function IngestionWizard({
               href="/buyer/subscription-center"
               onClick={(e) => {
                 e.preventDefault();
-                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                 setIsUpgradeModalOpen(true);
               }}
               className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs shadow-md hover:shadow-lg"
@@ -1912,7 +1908,7 @@ export default function IngestionWizard({
               id="sourcing-mode-select"
               data-testid="sourcing-mode-select"
               aria-label="Sourcing Mode"
-              value={form.sourcingMode}
+              value={form.sourcingMode ?? ''}
               onChange={(e) => {
                 const target = e.target.value as SourcingMode;
                 if (!entitledModes.includes(target)) {
@@ -1925,6 +1921,9 @@ export default function IngestionWizard({
               className="sr-only"
               tabIndex={-1}
             >
+              <option value="" disabled>
+                {MODAL.sourcingModePlaceholder}
+              </option>
               {SOURCING_MODES.map((mode) => (
                 <option
                   key={mode.id}
@@ -1987,6 +1986,8 @@ export default function IngestionWizard({
           </div>
 
 
+
+        <FieldError message={formErrors.sourcingMode} />
 
         {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
         {form.sourcingMode === 'mode_1' && (
@@ -3090,7 +3091,7 @@ export default function IngestionWizard({
               href="/buyer/subscription-center"
               onClick={(e) => {
                 e.preventDefault();
-                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                 setIsUpgradeModalOpen(true);
               }}
               className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg cursor-pointer"

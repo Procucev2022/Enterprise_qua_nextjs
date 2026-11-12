@@ -54,11 +54,37 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/buyer-accounts returns only the signed-in buyer account', async () => {
-      const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
-      expect(res.statusCode).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(Array.isArray(res.body.data)).toBe(true);
-      expect(res.body.data.every((account) => account.corporateEmail === TEST_USERS.buyer.email)).toBe(true);
+      const pool = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
+      const ownAccountSpy = jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB')
+        .mockResolvedValueOnce({ id: 'buyer-own', corporateEmail: TEST_USERS.buyer.email });
+      try {
+        const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
+        expect(res.statusCode).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.source).toBe('persisted');
+        expect(Array.isArray(res.body.data)).toBe(true);
+        expect(res.body.data.every((account) => account.corporateEmail === TEST_USERS.buyer.email)).toBe(true);
+      } finally {
+        pool.pool = originalPool;
+        ownAccountSpy.mockRestore();
+      }
+    });
+
+    test('GET /api/buyer-accounts refuses with 503 PERSISTENCE_UNAVAILABLE when no database is configured', async () => {
+      const pool = require('../src/db/pool');
+      const originalPool = pool.pool;
+      pool.pool = null;
+      try {
+        const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
+        expect(res.statusCode).toBe(503);
+        expect(res.body).toMatchObject({ success: false, code: 'PERSISTENCE_UNAVAILABLE' });
+        expect(res.body.source).toBeUndefined();
+      } finally {
+        pool.pool = originalPool;
+      }
     });
 
     test('POST /api/buyer-accounts creates new buyer account', async () => {
@@ -874,7 +900,7 @@ describe('API Route Endpoints', () => {
         });
 
       expect(res.statusCode).toBe(201);
-      expect(res.body.data.budget).toBe(0);
+      expect(res.body.data.budget).toBeNull();
       expect(res.body.data.deliveryLocation).toBe('Pune Facility, Dock 2');
     });
 
@@ -1276,12 +1302,15 @@ describe('API Route Endpoints', () => {
 
       const getRes = await request(app).get('/api/system-config').set(authHeader('admin'));
       expect(getRes.statusCode).toBe(200);
+      expect(getRes.body.data.systemConfig).toEqual({ aiModel: expect.any(String), aiTemperature: expect.any(Number) });
 
+      // No setting is persisted, so a write is refused instead of echoed back as saved.
       const postRes = await request(app).post('/api/system-config').set(authHeader('admin')).send({
         ocrExtractionThreshold: 90,
       });
-      expect(postRes.statusCode).toBe(200);
-      expect(postRes.body.data.ocrExtractionThreshold).toBe(90);
+      expect(postRes.statusCode).toBe(501);
+      expect(postRes.body.success).toBe(false);
+      expect(postRes.body.error).toMatch(/cannot be changed/i);
     });
 
     test('GET /api/db/status returns health status', async () => {

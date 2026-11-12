@@ -85,18 +85,25 @@ function VendorRFQDetailsView() {
       let myVendorId: string | null = null;
       const email = currentUserSession?.email;
       if (email) {
+        // A 404 means this account has no vendor record, so it has no quote on this RFQ. Any other
+        // failure is shown as an error. Showing zero quotes then would read as "no quote submitted".
+        let lookupFailed = false;
         try {
           const token = authClient.getToken();
           const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
           });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && data.data) myVendorId = data.data.id;
+          if (res.status !== 404) {
+            const data = res.ok ? await res.json() : null;
+            if (res.ok && data?.success && data.data) myVendorId = data.data.id;
+            else lookupFailed = true;
           }
         } catch {
-          // No vendor record resolved: fall through and show zero quotes
-          // rather than every vendor's, which is the safe default.
+          lookupFailed = true;
+        }
+        if (lookupFailed) {
+          setState({ status: 'error', message: UI_STRINGS.vendorWorkspace.rfqProfileLoadFailed, canRetry: true });
+          return;
         }
       }
 

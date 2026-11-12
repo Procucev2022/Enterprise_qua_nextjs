@@ -882,6 +882,7 @@ export default function InitialSetupModal() {
             return;
           }
 
+          const invalidPoRows: string[] = [];
           const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
             const keys = Object.keys(row);
             const getRawVal = (possibleKeys: string[], excludeSubstrings: string[] = []): unknown => {
@@ -912,17 +913,18 @@ export default function InitialSetupModal() {
               return raw !== undefined && raw !== null ? String(raw).trim() : '';
             };
 
-            const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']) || `PO-2025-${(1000 + idx).toString()}`;
+            const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']);
             const rawPoDate = getRawVal(['podate', 'po date', 'date', 'order date', 'creation date']);
-            const poDate = normalizePoDate(rawPoDate) || '2025-06-15';
-            const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']) || 'Apex Supplies Ltd.';
-            const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']) || 'Industrial Mechanical Spares';
+            const poDate = normalizePoDate(rawPoDate) || '';
+            const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']);
+            const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']);
             const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
             
             const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
-            const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
+            // 0 means no usable quantity. The row is rejected below rather than set to 1.
+            const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) : 0;
             
-            const unit = getVal(['unit', 'uom', 'unit of measure', 'units']) || 'Units';
+            const unit = getVal(['unit', 'uom', 'unit of measure', 'units']);
 
             const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
             const totalSpendRaw = getVal(['total spend inr', 'total spend (inr)', 'total spend rs', 'total spend', 'total amount inr', 'total amount (inr)', 'total amount', 'total inr', 'total (inr)', 'spend inr', 'spend', 'amount inr', 'amount', 'total value', 'po amount', 'total']);
@@ -937,12 +939,24 @@ export default function InitialSetupModal() {
               unitPrice = Math.round(totalSpend / quantity);
             } else if (totalSpend === 0 && unitPrice > 0) {
               totalSpend = unitPrice * quantity;
-            } else if (totalSpend === 0 && unitPrice === 0) {
-              unitPrice = 500;
-              totalSpend = unitPrice * quantity;
             }
+            // With neither a unit price nor a spend figure, the row is rejected below. It is not priced at a guess.
 
-            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category', 'function']) || 'General';
+            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category', 'function']);
+
+            // Rows the filter below would drop as blank are skipped here. Any other row must name every
+            // required field it lacks. Nothing is substituted for a missing value.
+            const isBlankRow = !vendorIdentifier && !itemName && !department;
+            const missingFields: string[] = [];
+            if (!poNumber) missingFields.push('PO Number');
+            if (!poDate) missingFields.push('PO Date');
+            if (!vendorIdentifier) missingFields.push('Vendor');
+            if (!itemName) missingFields.push('Line Item Description');
+            if (quantity < 1) missingFields.push('Quantity');
+            if (totalSpend <= 0) missingFields.push('Spend');
+            if (!isBlankRow && missingFields.length > 0) {
+              invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
+            }
 
             return {
               id: `po-upload-${Date.now()}-${idx}`,
@@ -965,6 +979,17 @@ export default function InitialSetupModal() {
           })
             .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.department?.trim()))
             .sort((a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime());
+
+          // Any incomplete row rejects the whole file, so no partial PO dump is stored.
+          if (invalidPoRows.length > 0) {
+            const errMsg = `Nothing was imported. Fix these rows and upload the PO dump again: ${invalidPoRows.join('; ')}.`;
+            setPoUploadError(errMsg);
+            showToast('Invalid PO File', errMsg, 'warning');
+            setIsParsingPo(false);
+            setPoJob(null);
+            if (poFileInputRef.current) poFileInputRef.current.value = '';
+            return;
+          }
 
           if (parsedPOs.length === 0) {
             const errMsg = 'The uploaded PO dump file contains no recognizable purchase order records. Please verify your file.';
@@ -1082,7 +1107,7 @@ export default function InitialSetupModal() {
     showToast('Selection Cleared', 'Vendor Master selection has been removed. Please upload a file.', 'info');
   };
 
-  const resetToSamplePoData = () => {
+  const resetPoUpload = () => {
     setPoLineItems([]);
     setApiJoinedVendors(null);
     setPoFileName(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
@@ -1233,52 +1258,12 @@ export default function InitialSetupModal() {
   const mappedVendors = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
   const unmappedVendors = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
 
-  // Download Sample Vendor Master Excel (.xlsx)
+  // Download the Vendor Master template (.xlsx)
   const handleDownloadVendorMasterExcel = () => {
-    const sampleRows = [
-      {
-        'Vendor Code': 'VND-1001',
-        'Company Name': 'Apex Supplies Ltd.',
-        'Contact Person': 'Rajesh Nair',
-        'Email ID': 'rajesh@apexsupplies.in',
-        Phone: '+91 98201 44820',
-        Address: 'MIDC Thane, Mumbai, MH',
-        GSTIN: '27AAACA1928K1Z4',
-        'Rating (0-100 Optional)': 95,
-      },
-      {
-        'Vendor Code': 'VND-1002',
-        'Company Name': 'Kiran Valve Industries',
-        'Contact Person': 'Amit Kumar',
-        'Email ID': 'amit@kiranvalves.com',
-        Phone: '+91 97653 21098',
-        Address: 'Bhosari, Pune, MH',
-        GSTIN: '27AAACK3921P1Z9',
-        'Rating (0-100 Optional)': 78,
-      },
-      {
-        'Vendor Code': 'VND-1007',
-        'Company Name': 'Vortex Hydraulic Systems',
-        'Contact Person': 'Nikhil Rane',
-        'Email ID': 'nikhil@vortexhydraulics.in',
-        Phone: '+91 98450 11920',
-        Address: 'Peenya, Bangalore, KA',
-        GSTIN: '29AAACV8841P1Z5',
-        'Rating (0-100 Optional)': 82,
-      },
-      {
-        'Vendor Code': 'VND-1008',
-        'Company Name': 'Nova Electrical Spares',
-        'Contact Person': 'Pooja Deshmukh',
-        'Email ID': 'sales@novaelectricals.com',
-        Phone: '+91 97230 44510',
-        Address: 'Makarpura, Vadodara, GJ',
-        GSTIN: '24AAACN4419K1Z1',
-        'Rating (0-100 Optional)': '',
-      },
-    ];
-
-    const worksheet = XLSX.utils.json_to_sheet(sampleRows);
+    // Headers only. The template carries no sample vendors, so nothing is pre-filled.
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      ['Vendor Code', 'Company Name', 'Contact Person', 'Email ID', 'Phone', 'Address', 'GSTIN', 'Rating (0-100 Optional)'],
+    ]);
     const workbook: XLSX.WorkBook = {
       Sheets: { 'Vendor Master': worksheet },
       SheetNames: ['Vendor Master'],
@@ -1290,76 +1275,27 @@ export default function InitialSetupModal() {
     link.href = url;
     link.download = 'Procucev_Template_1_Vendor_Master.xlsx';
     link.click();
-    showToast('Template Downloaded', 'Sample Vendor Master Excel template downloaded.', 'success');
+    showToast('Template Downloaded', 'Vendor Master Excel template downloaded.', 'success');
   };
   const handleDownloadVendorMasterCsv = handleDownloadVendorMasterExcel;
 
-  // Download Sample PO Data Excel (.xlsx)
+  // Download the PO Purchase Dump template (.xlsx)
   const handleDownloadPoDataExcel = () => {
-    const samplePoRows = [
-      {
-        'PO Number': 'PO-2025-00891',
-        'PO Date': '2025-04-12',
-        'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Description': 'Centrifugal Water Pump 500 GPM (15 HP Motor)',
-        'Specifications': '15 HP Motor, 500 GPM, Cast Iron, Class 150',
-        Quantity: 12,
-        Unit: 'Units',
-        'Unit Price (INR)': 12500,
-        'Total Spend (INR)': 150000,
-        Department: 'Mechanical',
-      },
-      {
-        'PO Number': 'PO-2025-01156',
-        'PO Date': '2025-08-04',
-        'Vendor Name': 'Kiran Valve Industries',
-        'Item Description': 'Flanged Gate Valve 4-inch Class 150',
-        'Specifications': 'Forged Steel, ASTM A105, Flanged RF',
-        Quantity: 24,
-        Unit: 'Units',
-        'Unit Price (INR)': 3800,
-        'Total Spend (INR)': 91200,
-        Department: 'Piping',
-      },
-      {
-        'PO Number': 'PO-2025-01431',
-        'PO Date': '2025-10-10',
-        'Vendor Name': 'Nova Electrical Spares',
-        'Item Description': 'LV Switchgear Modular Panels with Drawout MCCB',
-        'Specifications': '415V, 3-Phase 50Hz, 800A Busbar Rating',
-        Quantity: 3,
-        Unit: 'Panels',
-        'Unit Price (INR)': 85000,
-        'Total Spend (INR)': 255000,
-        Department: 'Electrical',
-      },
-      {
-        'PO Number': 'PO-2025-01740',
-        'PO Date': '2025-12-05',
-        'Vendor Name': 'Everest Steel & Infra Structures',
-        'Item Description': 'Fe500D TMT High-Yield Reinforcement Bars',
-        'Specifications': 'IS 1786 Grade Fe500D, 16mm Diameter',
-        Quantity: 120,
-        Unit: 'Tons',
-        'Unit Price (INR)': 6200,
-        'Total Spend (INR)': 744000,
-        Department: 'Civil',
-      },
-      {
-        'PO Number': 'PO-2025-02015',
-        'PO Date': '2026-01-20',
-        'Vendor Name': 'Vortex Hydraulic Systems',
-        'Item Description': 'Hydraulic Power Pack Unit 200 Bar with Gear Pump',
-        'Specifications': '200 Bar Working Pressure, 40L Reservoir',
-        Quantity: 2,
-        Unit: 'Units',
-        'Unit Price (INR)': 110000,
-        'Total Spend (INR)': 220000,
-        Department: 'Mechanical',
-      },
-    ];
-
-    const worksheet = XLSX.utils.json_to_sheet(samplePoRows);
+    // Headers only. The template carries no sample purchase orders, so nothing is pre-filled.
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      [
+        'PO Number',
+        'PO Date',
+        'Vendor Name',
+        'Item Description',
+        'Specifications',
+        'Quantity',
+        'Unit',
+        'Unit Price (INR)',
+        'Total Spend (INR)',
+        'Department',
+      ],
+    ]);
     const workbook: XLSX.WorkBook = {
       Sheets: { 'PO Purchase Dump': worksheet },
       SheetNames: ['PO Purchase Dump'],
@@ -1371,7 +1307,7 @@ export default function InitialSetupModal() {
     link.href = url;
     link.download = `Procucev_Template_2_PO_Purchase_Dump_${selectedPeriod}.xlsx`;
     link.click();
-    showToast('Template Downloaded', 'Sample PO Pre-Purchase Order Dump Excel template downloaded.', 'success');
+    showToast('Template Downloaded', 'PO Purchase Dump Excel template downloaded.', 'success');
   };
   const handleDownloadPoDataCsv = handleDownloadPoDataExcel;
 
@@ -1513,7 +1449,7 @@ export default function InitialSetupModal() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 leading-relaxed">
-                Organization: <strong>{activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited'}</strong> · Upload Vendor Master and PO purchase dump separately for AI category cross-mapping.
+                {activeBuyerAccount?.organizationName ? <>Organization: <strong>{activeBuyerAccount.organizationName}</strong> · </> : null}Upload Vendor Master and PO purchase dump separately for AI category cross-mapping.
               </p>
             </div>
           </div>
@@ -1754,7 +1690,7 @@ export default function InitialSetupModal() {
                       </span>
                     </div>
                     <p className="text-sm font-black font-mono text-slate-900 dark:text-white">
-                      {vendorFileName || vendorJob?.fileName || 'Vendor_Master_Database.xlsx'}
+                      {vendorFileName || vendorJob?.fileName || '—'}
                     </p>
                     <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 font-medium">
                       {(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} suppliers parsed and loaded into vendor master
@@ -2222,7 +2158,7 @@ export default function InitialSetupModal() {
                 </button>
                 <button
                   type="button"
-                  onClick={resetToSamplePoData}
+                  onClick={resetPoUpload}
                   className="text-[11px] text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200 underline font-medium"
                 >
                   Reset Template
@@ -2295,9 +2231,9 @@ export default function InitialSetupModal() {
                   </button>
                   <button
                     type="button"
-                    onClick={resetToSamplePoData}
+                    onClick={resetPoUpload}
                     className="btn btn-secondary btn-sm font-bold text-xs text-slate-600 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 border-slate-300 dark:border-gray-700 flex items-center gap-1.5"
-                    title="Reset PO data to default sample"
+                    title="Reset PO data"
                   >
                     <RotateCcw size={13} /> Reset
                   </button>
@@ -2388,7 +2324,7 @@ export default function InitialSetupModal() {
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {formatCurrency(p.totalSpend)}
                         </td>
-                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.department || 'General'}</td>
+                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.department || '—'}</td>
                       </tr>
                     ))}
                   </tbody>

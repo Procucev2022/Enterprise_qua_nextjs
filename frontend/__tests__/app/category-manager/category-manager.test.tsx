@@ -6,6 +6,7 @@ import BuyerConsole from '@/app/category-manager/buyer-console';
 import VendorConsole from '@/app/category-manager/vendor-console';
 import CategorySummaryDashboard from '@/app/category-manager/category-summary-dashboard';
 import { AppProvider, useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
@@ -90,7 +91,7 @@ describe('Category Manager Screens Suite', () => {
       global.fetch = originalFetch;
     });
 
-    test('renders real portfolio metrics and the scored column from the live RFQ pipeline, handles toolbar overrides', async () => {
+    test('renders real portfolio metrics and the scored column from the live RFQ pipeline, handles toolbar actions', async () => {
       const onMatrix = jest.fn();
       const onSpend = jest.fn();
 
@@ -122,26 +123,20 @@ describe('Category Manager Screens Suite', () => {
       const batchBtn = screen.getByRole('button', { name: /Batch Multi-Channel Chaser \(0\)/i });
       expect(() => fireEvent.click(batchBtn)).not.toThrow();
 
-      const overrideBtn = screen.getByRole('button', { name: /Override AI Score/i });
-      fireEvent.click(overrideBtn);
-
       const surveyBtn = screen.getByRole('button', { name: /Conduct Mode 3 Vendor Survey/i });
       fireEvent.click(surveyBtn);
       expect(screen.getByText(/Mode 3 AI Vendor Survey/i)).toBeInTheDocument();
-      const cancelSurveyBtn = screen.getByRole('button', { name: /Cancel/i });
-      fireEvent.click(cancelSurveyBtn);
+      // The dialog states that no survey is sent, and its footer button is labelled Close.
+      expect(screen.getByText(UI_STRINGS.vendorSurvey.notConnected)).toBeInTheDocument();
+      const closeSurveyBtn = screen.getByRole('button', { name: UI_STRINGS.vendorSurvey.closeButton });
+      fireEvent.click(closeSurveyBtn);
+      expect(screen.queryByText(UI_STRINGS.vendorSurvey.notConnected)).not.toBeInTheDocument();
 
       // The scored card renders real RFQ fields — number, title, AI score, status, quote count
       expect(screen.getByText('RFQ-2026-00421')).toBeInTheDocument();
       expect(screen.getByText(/94% AI Match/i)).toBeInTheDocument();
       expect(screen.getByText(/3 quotes evaluated/i)).toBeInTheDocument();
       expect(screen.getByText('AI Recommended')).toBeInTheDocument();
-
-      const approveBtn = screen.getByRole('button', { name: /Approve Report/i });
-      fireEvent.click(approveBtn);
-
-      const shareBtn = screen.getByRole('button', { name: /Share Report/i });
-      fireEvent.click(shareBtn);
 
       // The real RFQ has quotes, so its card links straight into the real quote matrix
       const matrixBtn = screen.getByRole('button', { name: /View Comparative Quote Matrix/i });
@@ -565,21 +560,25 @@ describe('Category Manager Screens Suite', () => {
 
     // With no navigation callbacks supplied, the 4 KPI cards stay disabled
     // rather than silently no-op-ing on click.
-    test('KPI cards render zeroed real metrics and stay disabled without navigation callbacks', () => {
+    test('KPI cards show a dash for rates with no recorded data and stay disabled without navigation callbacks', async () => {
       renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
 
       expect(screen.getByText('RFQs Received (Raised)')).toBeInTheDocument();
       expect(screen.getAllByText('RFQs Downloaded')[0]).toBeInTheDocument();
       expect(screen.getByText('Avg Vendors / RFQ')).toBeInTheDocument();
       expect(screen.getByText('Vendor Response Rate')).toBeInTheDocument();
-      // The default jest.setup.ts fixtures carry no recent createdAt/audit
-      // logs/assignedVendors/followUpData, so every real metric is 0.
-      expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0);
 
-      const raisedCard = screen.getByText('RFQs Received (Raised)').closest('button')!;
-      const downloadedCard = screen.getAllByText('RFQs Downloaded')[0].closest('button')!;
-      const vendorsCard = screen.getByText('Avg Vendors / RFQ').closest('button')!;
-      const responseCard = screen.getByText('Vendor Response Rate').closest('button')!;
+      const raisedCard = screen.getByText('RFQs Received (Raised)').closest('button') as HTMLButtonElement;
+      const downloadedCard = screen.getAllByText('RFQs Downloaded')[0].closest('button') as HTMLButtonElement;
+      const vendorsCard = screen.getByText('Avg Vendors / RFQ').closest('button') as HTMLButtonElement;
+      const responseCard = screen.getByText('Vendor Response Rate').closest('button') as HTMLButtonElement;
+
+      // The fixtures record no follow-up attempts, so the response rate is a dash rather than a percentage.
+      expect(within(responseCard).getByText(UI_STRINGS.dataLoad.emptyCell)).toBeInTheDocument();
+
+      // The fixture RFQ has no assignedVendors, so the per-RFQ average is a real 0.0 once the RFQ loads.
+      await waitFor(() => expect(within(vendorsCard).getByText('0.0')).toBeInTheDocument());
+
       [raisedCard, downloadedCard, vendorsCard, responseCard].forEach((card) => expect(card).toBeDisabled());
     });
 
@@ -727,7 +726,7 @@ describe('Category Manager Screens Suite', () => {
       expect(onNavigateToKanban).toHaveBeenCalledTimes(1);
     });
 
-    test('Avg Vendors / RFQ falls back to 0.0 for an RFQ with no assignedVendors, with an empty RFQ list', async () => {
+    test('Avg Vendors / RFQ shows a dash when the RFQ list is empty, because there is no average to compute', async () => {
       const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
       global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
         if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
@@ -739,7 +738,8 @@ describe('Category Manager Screens Suite', () => {
       renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
 
       await waitFor(() => expect(screen.getByText('Avg Vendors / RFQ')).toBeInTheDocument());
-      expect(screen.getByText('0.0')).toBeInTheDocument();
+      const vendorsCardText = screen.getByText('Avg Vendors / RFQ').closest('button') as HTMLElement;
+      expect(within(vendorsCardText).getByText(UI_STRINGS.dataLoad.emptyCell)).toBeInTheDocument();
     });
 
     test('SpendDashboard computes mode breakdown for Mode 1, Mode 2, and Mode 3 with audit downloads', async () => {
@@ -899,7 +899,7 @@ describe('Category Manager Screens Suite', () => {
       expect(normalizeModeToken('')).toBe('');
 
       // 2. calculateTurnaround
-      expect(calculateTurnaround([], '3.6 Days')).toBe('—');
+      expect(calculateTurnaround([])).toBe(UI_STRINGS.dataLoad.emptyCell);
       const rfqWithQuotes: any = {
         id: 'rfq-t1',
         createdAt: '2026-08-01T00:00:00Z',
@@ -907,20 +907,20 @@ describe('Category Manager Screens Suite', () => {
           { submittedAt: '2026-08-03T12:00:00Z' },
         ],
       };
-      expect(calculateTurnaround([rfqWithQuotes], '3.6 Days')).toBe('2.5 Days');
+      expect(calculateTurnaround([rfqWithQuotes])).toBe('2.5 Days');
 
       const rfqInvalidDate: any = {
         id: 'rfq-t2',
         createdAt: 'invalid-date',
         quotes: [{ submittedAt: 'also-invalid' }],
       };
-      expect(calculateTurnaround([rfqInvalidDate], '4.0 Days')).toBe('4.0 Days');
+      expect(calculateTurnaround([rfqInvalidDate])).toBe(UI_STRINGS.dataLoad.emptyCell);
 
       const rfqNoQuotes: any = {
         id: 'rfq-t3',
         createdAt: '2026-08-01',
       };
-      expect(calculateTurnaround([rfqNoQuotes], '5.0 Days')).toBe('5.0 Days');
+      expect(calculateTurnaround([rfqNoQuotes])).toBe(UI_STRINGS.dataLoad.emptyCell);
 
       // 3. calculateModeMetrics
       const rfqV0: any = {
@@ -1185,11 +1185,13 @@ describe('Category Manager Screens Suite', () => {
 
       renderWithProvider(<BuyerConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
 
-      await waitFor(() => expect(screen.getByText('Unnamed Contact')).toBeInTheDocument());
-      expect(screen.getAllByText(/Unnamed Organization/).length).toBeGreaterThan(0);
+      const reviewButton = await screen.findByRole('button', { name: UI_STRINGS.actions.reviewRfqDetails });
+      // A buyer with no contact name or organization shows a dash in the card heading, not an invented label.
+      const sparseCard = reviewButton.closest('.glass-panel') as HTMLElement;
+      expect(within(sparseCard).getByRole('heading', { name: UI_STRINGS.dataLoad.emptyCell })).toBeInTheDocument();
+      expect(screen.queryByText(/Unnamed/)).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByText('Unnamed Contact'));
-      fireEvent.click(screen.getByRole('button', { name: /Review RFQ Details/i }));
+      fireEvent.click(reviewButton);
 
       expect(screen.getByText('Sparse RFQ Missing Line Items')).toBeInTheDocument();
       expect(screen.getByText('Parsing')).toBeInTheDocument();

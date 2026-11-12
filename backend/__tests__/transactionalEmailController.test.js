@@ -5,6 +5,10 @@
 
 const transactionalEmailController = require('../src/controllers/transactionalEmailController');
 const transactionalEmailTemplates = require('../src/services/transactionalEmailTemplates');
+const { QUA_AI_EMAIL_TEMPLATES } = require('../src/config/constants');
+
+const EMAIL_1 = QUA_AI_EMAIL_TEMPLATES.EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED;
+const EMAIL_4 = QUA_AI_EMAIL_TEMPLATES.EMAIL_4_NEW_RFQ_TO_QUOTE;
 
 describe('transactionalEmailController', () => {
   let req;
@@ -23,6 +27,10 @@ describe('transactionalEmailController', () => {
       json: jest.fn().mockReturnThis(),
     };
     next = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   describe('listTemplates', () => {
@@ -49,18 +57,48 @@ describe('transactionalEmailController', () => {
   });
 
   describe('getTemplateById', () => {
-    test('returns template details when found', async () => {
+    test('returns catalog metadata for the template without rendering it', async () => {
+      const renderSpy = jest.spyOn(transactionalEmailTemplates, 'renderTransactionalEmail');
       req.params.id = '1';
+
       await transactionalEmailController.getTemplateById(req, res, next);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          data: expect.objectContaining({
-            templateNumber: 1,
-            subject: expect.stringContaining('live on Qua AI'),
-          }),
-        })
-      );
+
+      expect(renderSpy).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: {
+          templateId: EMAIL_1.id,
+          templateNumber: EMAIL_1.number,
+          name: EMAIL_1.name,
+          who: EMAIL_1.who,
+          trigger: EMAIL_1.trigger,
+          subject: EMAIL_1.subject,
+          subjectPlaceholders: ['rfq_id'],
+        },
+      });
+    });
+
+    test('lists each subject placeholder once, in order of first appearance', async () => {
+      jest.spyOn(transactionalEmailTemplates, 'getAllTransactionalEmailTemplates').mockReturnValueOnce([
+        {
+          templateId: EMAIL_4.id,
+          number: EMAIL_4.number,
+          name: EMAIL_4.name,
+          who: EMAIL_4.who,
+          trigger: EMAIL_4.trigger,
+          subjectPattern: 'New RFQ {rfq_id}: {rfq_title}, quotes close {quote_deadline}, RFQ {rfq_id}',
+        },
+      ]);
+      req.params.id = EMAIL_4.id;
+
+      await transactionalEmailController.getTemplateById(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({
+          subjectPlaceholders: ['rfq_id', 'rfq_title', 'quote_deadline'],
+        }),
+      }));
     });
 
     test('returns 404 when template id is unknown', async () => {
@@ -75,10 +113,25 @@ describe('transactionalEmailController', () => {
       );
     });
 
+    test('returns 404 when the template key resolves but the catalog has no entry for it', async () => {
+      jest.spyOn(transactionalEmailTemplates, 'getAllTransactionalEmailTemplates').mockReturnValueOnce([]);
+      req.params.id = '1';
+
+      await transactionalEmailController.getTemplateById(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('not found'),
+        })
+      );
+    });
+
     test('handles exceptions by forwarding to next', async () => {
       req.params.id = '1';
-      const spy = jest.spyOn(transactionalEmailTemplates, 'renderTransactionalEmail').mockImplementationOnce(() => {
-        throw new Error('Render crash');
+      const spy = jest.spyOn(transactionalEmailTemplates, 'getAllTransactionalEmailTemplates').mockImplementationOnce(() => {
+        throw new Error('Catalog read failure');
       });
 
       await transactionalEmailController.getTemplateById(req, res, next);
@@ -95,6 +148,8 @@ describe('transactionalEmailController', () => {
           first_name: 'Anand',
           rfq_id: 'RFQ-7711',
           rfq_title: 'Seamless Pipes',
+          item_count: 3,
+          suppliers_invited: 12,
         },
       };
 
@@ -107,6 +162,20 @@ describe('transactionalEmailController', () => {
             text: expect.stringContaining('Anand'),
           }),
         })
+      );
+    });
+
+    test('forwards the error instead of rendering a default when a required value is missing', async () => {
+      req.body = {
+        templateId: 'EMAIL_2_RFQ_CREATED',
+        params: { first_name: 'Anand', rfq_id: 'RFQ-7711', item_count: 3 },
+      };
+
+      await transactionalEmailController.previewTemplate(req, res, next);
+
+      expect(res.json).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('suppliers_invited') })
       );
     });
 
@@ -156,6 +225,8 @@ describe('transactionalEmailController', () => {
 
       const spy = jest.spyOn(transactionalEmailTemplates, 'sendTransactionalEmail').mockResolvedValueOnce({
         sent: true,
+        success: true,
+        status: 'sent',
         messageId: 'mock-tx-123',
       });
 
@@ -167,6 +238,28 @@ describe('transactionalEmailController', () => {
         })
       );
       spy.mockRestore();
+    });
+
+    test('reports success false when the provider did not accept the message', async () => {
+      req.body = {
+        templateId: 'EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED',
+        recipientEmail: 'buyer@procucev.com',
+      };
+      jest.spyOn(transactionalEmailTemplates, 'sendTransactionalEmail').mockResolvedValueOnce({
+        sent: false,
+        success: false,
+        status: 'not_configured',
+        reason: 'SMTP not configured',
+      });
+
+      await transactionalEmailController.sendTemplate(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          result: expect.objectContaining({ sent: false, status: 'not_configured' }),
+        })
+      );
     });
 
     test('returns 400 when recipient email is invalid or missing', async () => {

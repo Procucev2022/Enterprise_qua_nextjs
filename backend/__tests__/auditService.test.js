@@ -111,3 +111,28 @@ describe('Audit Service & SHA-256 Cryptographic Chain', () => {
     ]));
   });
 });
+
+describe('Audit entry identity, network, and identifier defaults', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('an entry with no signed-in actor is attributed to the documented system actor', () => {
+    const { SYSTEM_ACTOR_EMAIL } = require('../src/config/constants');
+    expect(createAuditEntry({ action: 'Background sweep' }).userEmail).toBe(SYSTEM_ACTOR_EMAIL);
+  });
+
+  test('an entry with no request IP records unknown, never a fixed network address', () => {
+    expect(createAuditEntry({ userEmail: 'a@b.com', action: 'x' }).ipAddress).toBe('unknown');
+    expect(createAuditEntry({ userEmail: 'a@b.com', action: 'x', ipAddress: null }).ipAddress).toBe('unknown');
+    expect(createAuditEntry({ userEmail: 'a@b.com', action: 'x', ipAddress: '203.0.113.9' }).ipAddress).toBe('203.0.113.9');
+  });
+
+  test('entry ids and empty-payload seals never draw from Math.random', () => {
+    const random = jest.spyOn(Math, 'random');
+    const entry = createAuditEntry({ userEmail: 'a@b.com', action: 'x' });
+    expect(entry.id).toMatch(/^log-\d+-[0-9a-f]{6}$/);
+    expect(generateShaHash('')).toMatch(/^[0-9a-f]{64}$/);
+    expect(random).not.toHaveBeenCalled();
+  });
+});

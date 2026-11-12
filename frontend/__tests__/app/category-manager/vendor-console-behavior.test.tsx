@@ -50,8 +50,12 @@ describe('vendor source classification', () => {
     expect(classifyVendorSource({ source }).subType).toBe('buyer_added');
   });
 
-  test.each(['v-hist-1', 'v-navin-1', 'vm-1', 'v-ingest-1', 'v-buyer-1'])('recognizes legacy buyer identifier %s', (id) => {
+  test.each(['v-hist-1', 'vm-1', 'v-ingest-1', 'v-buyer-1'])('recognizes legacy buyer identifier %s', (id) => {
     expect(classifyVendorSource({ id }).section).toBe('self_onboard_buyer');
+  });
+
+  test('does not treat a name-based identifier as a buyer import', () => {
+    expect(classifyVendorSource({ id: 'v-navin-1' }).subType).toBe('source_not_recorded');
   });
 
   test.each(['category_manager_upload', 'legacy_category_manager', 'legacy_cm_upload', 'excel'])('recognizes catalog upload source %s', (source) => {
@@ -66,10 +70,11 @@ describe('vendor source classification', () => {
   test('uses buyer binding, excludes the public all marker, and preserves CM upload ownership', () => {
     expect(classifyVendorSource({ buyerId: 'buyer-1' }).subType).toBe('buyer_added');
     expect(classifyVendorSource({ buyerAccountId: 'buyer-2' }).subType).toBe('buyer_added');
-    expect(classifyVendorSource({ buyerAccountId: 'all', buyerId: 'all' }).subType).toBe('procucev_network');
+    expect(classifyVendorSource({ buyerAccountId: 'all', buyerId: 'all' }).subType).toBe('source_not_recorded');
+    expect(classifyVendorSource({ source: 'procucev_network' }).subType).toBe('procucev_network');
     expect(classifyVendorSource({ source: 'category_manager_upload', buyerId: 'buyer-1' }).subType).toBe('cm_upload');
     expect(classifyVendorSource({ addedByBuyerCompany: 'Owner company' }).label).toContain('Owner company');
-    expect(classifyVendorSource(null as unknown as Parameters<typeof classifyVendorSource>[0]).subType).toBe('procucev_network');
+    expect(classifyVendorSource(null as unknown as Parameters<typeof classifyVendorSource>[0]).subType).toBe('source_not_recorded');
   });
 });
 

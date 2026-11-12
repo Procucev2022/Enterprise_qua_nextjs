@@ -49,16 +49,14 @@ import type {
   BuyerCommunicationItem,
   BuyerPaymentSummary,
   BuyerPaymentTransaction,
+  InternalTeamMember,
 } from '@/lib/types';
 import {
   formatCurrency,
   formatIndianDateTime,
   RFQ_MODE_LABELS,
-  DEFAULT_INTERNAL_MEMBERS,
   CALL_OUTCOMES,
   FOLLOWUP_PRIORITIES,
-  CREDIT_APPROVAL_APPROVERS,
-  CREDIT_APPROVAL_INITIATORS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
@@ -68,7 +66,11 @@ import {
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
+  fetchCategoryTaxonomy,
 } from '@/lib/buyerProfileClient';
+import { fetchInternalAssignees } from '@/lib/internalTaskClient';
+import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { authClient } from '@/lib/authClient';
 import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
@@ -82,18 +84,8 @@ interface BuyerDossierDrawerProps {
   onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => void;
 }
 
-const DEFAULT_MAJOR_CATEGORIES = [
-  'General Procurement',
-  'Raw Materials',
-  'Spares',
-  'Capital Equipment',
-  'IT & Telecom',
-  'Logistics & Supply Chain',
-  'Services & Maintenance',
-  'Packaging Materials',
-  'Electrical Components',
-  'Chemicals & Solvents',
-];
+// Shown wherever a value is missing from the record. Never a substitute value.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 export default function BuyerDossierDrawer({
   buyer,
@@ -121,12 +113,16 @@ export default function BuyerDossierDrawer({
   const [composeSubject, setComposeSubject] = useState<string>('');
   const [composeMessage, setComposeMessage] = useState<string>('');
   const [composeRecipient, setComposeRecipient] = useState<string>(buyer.corporateEmail || buyer.mobileNumber || '');
-  const [composeCallOutcome, setComposeCallOutcome] = useState<string>('Connected');
+  const [composeCallOutcome, setComposeCallOutcome] = useState<string>('');
   const [composeDuration, setComposeDuration] = useState<string>('');
   const [composeNextFollowupDate, setComposeNextFollowupDate] = useState<string>('');
   const [composeFollowupPriority, setComposeFollowupPriority] = useState<'Low' | 'Medium' | 'High' | 'Critical'>('Medium');
-  const [composeFollowupAssigneeId, setComposeFollowupAssigneeId] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].id);
-  const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].name);
+  const [composeFollowupAssigneeId, setComposeFollowupAssigneeId] = useState<string>('');
+  const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>('');
+  const [assignees, setAssignees] = useState<InternalTeamMember[]>([]);
+  const [assigneesError, setAssigneesError] = useState<string | null>(null);
+  const [majorCategoryOptions, setMajorCategoryOptions] = useState<string[]>(() => getMajorCategories());
+  const [majorCategoryError, setMajorCategoryError] = useState<string | null>(null);
   const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
   const [composeScenarioId, setComposeScenarioId] = useState<string>('');
   const [availableVaultDocs, setAvailableVaultDocs] = useState<DocumentVaultItem[]>([]);
@@ -145,29 +141,50 @@ export default function BuyerDossierDrawer({
     };
   }, []);
 
+  // Follow-up assignees and the major category list come from the API. Nothing is preselected.
+  useEffect(() => {
+    let isSubscribed = true;
+    void fetchInternalAssignees().then((result) => {
+      if (!isSubscribed) return;
+      setAssignees(result.assignees);
+      setAssigneesError(result.error ?? null);
+    });
+    void fetchCategoryTaxonomy()
+      .then((result) => {
+        if (!isSubscribed) return;
+        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          setMajorCategoryOptions(result.data.map((c) => c.majorCategory).filter(Boolean));
+          setMajorCategoryError(null);
+        } else {
+          setMajorCategoryError(result.error || UI_STRINGS.buyerProfile.taxonomyEmpty);
+        }
+      })
+      .catch(() => {
+        if (isSubscribed) setMajorCategoryError(UI_STRINGS.buyerProfile.taxonomyEmpty);
+      });
+    return () => {
+      isSubscribed = false;
+    };
+  }, []);
+
   const handleBuyerScenarioChange = useCallback((scId: string) => {
     setComposeScenarioId(scId);
     if (!scId || scId === 'custom') return;
     const scenarios = getScenariosForEntityType('BUYER');
     const sc = scenarios.find((s) => s.id === scId);
     if (!sc) return;
-    const defaultDateStr = new Date(Date.now() + 86400000 * (sc.defaultFollowupDays || 2)).toISOString().slice(0, 10);
+    // Each token holds only what the buyer record, the user, or the form supplies.
+    // A token without a value renders as an empty string in the template.
     const tokens: Record<string, string | number | undefined> = {
-      contactName: buyer.contactPerson || buyer.organizationName || 'Valued Partner',
-      companyName: buyer.organizationName || buyer.id,
+      contactName: buyer.contactPerson,
+      companyName: buyer.organizationName,
       entityId: buyer.id,
-      followupDate: composeNextFollowupDate || defaultDateStr,
-      followupTime: '11:00 AM',
-      followupNotes: composeFollowupNotes || 'Commercial proposal and plan review',
-      assigneeName: composeFollowupAssigneeName || 'Category Specialist',
-      senderName: 'Category Manager',
-      dueDate: composeNextFollowupDate || defaultDateStr,
-      rfqNumber: buyer.id,
-      rfqTitle: 'Procurement Requirements',
-      notes: composeMessage || 'Please review the attached details',
-      creditAmount: '₹25,00,000',
-      creditBalance: '₹25,00,000',
-      dueAmount: 'Standard Terms',
+      followupDate: composeNextFollowupDate,
+      followupNotes: composeFollowupNotes,
+      assigneeName: composeFollowupAssigneeName,
+      senderName: authClient.getSessionUser()?.name,
+      dueDate: composeNextFollowupDate,
+      notes: composeMessage,
     };
     if (sc.subjectTemplate) setComposeSubject(interpolateScenarioTemplate(sc.subjectTemplate, tokens));
     if (sc.bodyTemplate) setComposeMessage(interpolateScenarioTemplate(sc.bodyTemplate, tokens));
@@ -192,7 +209,7 @@ export default function BuyerDossierDrawer({
 
   const handleDraftEmailForCallOutcome = useCallback((outcome: string) => {
     setComposeChannel('EMAIL');
-    setComposeRecipient(buyer.corporateEmail || buyer.organizationName || '');
+    setComposeRecipient(buyer.corporateEmail || '');
     setCommSubTab('email');
     const matchedScenario = getScenarioForCallOutcome('BUYER', outcome);
     if (matchedScenario) {
@@ -200,31 +217,15 @@ export default function BuyerDossierDrawer({
     } else {
       handleBuyerScenarioChange('buyer_conversion_followup');
     }
-  }, [buyer.corporateEmail, buyer.organizationName, handleBuyerScenarioChange]);
+  }, [buyer.corporateEmail, handleBuyerScenarioChange]);
 
   const handleConvertCallToFollowupEmail = useCallback(() => {
     setComposeChannel('EMAIL');
-    setComposeRecipient(buyer.corporateEmail || buyer.organizationName || '');
+    setComposeRecipient(buyer.corporateEmail || '');
     setCommSubTab('email');
     handleBuyerScenarioChange('buyer_conversion_followup');
-  }, [buyer.corporateEmail, buyer.organizationName, handleBuyerScenarioChange]);
+  }, [buyer.corporateEmail, handleBuyerScenarioChange]);
 
-  const handleLocalBuyerFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-      const newAtt: ActionCenterAttachment = {
-        id: `local_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        documentName: `${cleanName} (Local Upload)`,
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type || 'application/pdf',
-        category: 'local_upload',
-      };
-      setComposeAttachments((prev) => [...prev, newAtt]);
-      e.target.value = '';
-    }
-  }, []);
   const [isSendingComm, setIsSendingComm] = useState<boolean>(false);
 
   useEffect(() => {
@@ -244,20 +245,41 @@ export default function BuyerDossierDrawer({
     setTimeout(() => setToast(null), 3500);
   }, []);
 
+  // A local attachment gets its id from the platform's secure random source. Math.random is not used.
+  // Without randomUUID the file is not attached, and the user is told why.
+  const handleLocalBuyerFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+      showToast(UI_STRINGS.dataLoad.secureIdUnavailable, 'error');
+      e.target.value = '';
+      return;
+    }
+    const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+    const newAtt: ActionCenterAttachment = {
+      id: `local_${globalThis.crypto.randomUUID()}`,
+      documentName: `${cleanName} (Local Upload)`,
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: file.type || 'application/octet-stream',
+      category: 'local_upload',
+    };
+    setComposeAttachments((prev) => [...prev, newAtt]);
+    e.target.value = '';
+  }, [showToast]);
+
   // ---------------------------------------------------------------------------
   // 1. CATEGORIES MANAGEMENT (Tab 1: Profile)
   // ---------------------------------------------------------------------------
   const [isEditCategoriesOpen, setIsEditCategoriesOpen] = useState<boolean>(false);
-  const [currentCategories, setCurrentCategories] = useState<string[]>(
-    buyer.supportedMajorCategories || ['General Procurement', 'Raw Materials', 'Spares']
-  );
+  const [currentCategories, setCurrentCategories] = useState<string[]>(buyer.supportedMajorCategories || []);
   const [selectedCategoriesDraft, setSelectedCategoriesDraft] = useState<string[]>(currentCategories);
   const [newCategoryInput, setNewCategoryInput] = useState<string>('');
   const [isSubmittingCategories, setIsSubmittingCategories] = useState<boolean>(false);
 
   useEffect(() => {
-    setCurrentCategories(buyer.supportedMajorCategories || ['General Procurement', 'Raw Materials', 'Spares']);
-    setSelectedCategoriesDraft(buyer.supportedMajorCategories || ['General Procurement', 'Raw Materials', 'Spares']);
+    setCurrentCategories(buyer.supportedMajorCategories || []);
+    setSelectedCategoriesDraft(buyer.supportedMajorCategories || []);
   }, [buyer.supportedMajorCategories]);
 
   const handleToggleCategory = (cat: string) => {
@@ -326,29 +348,39 @@ export default function BuyerDossierDrawer({
 
   // Add Credit modal states
   const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
-  const [creditApprover, setCreditApprover] = useState<string>(CREDIT_APPROVAL_APPROVERS[0]);
-  const [creditInitiator, setCreditInitiator] = useState<string>(CREDIT_APPROVAL_INITIATORS[0]);
-  const [addCreditAmount, setAddCreditAmount] = useState<number>(5);
+  const [creditApprover, setCreditApprover] = useState<string>('');
+  // The initiator is the signed-in user. The name comes from the session, never from a list.
+  const creditInitiator = authClient.getSessionUser()?.name ?? '';
+  const [addCreditAmount, setAddCreditAmount] = useState<number>(0);
   const [addCreditReason, setAddCreditReason] = useState<string>('');
   const [isSubmittingCredit, setIsSubmittingCredit] = useState<boolean>(false);
+  const [creditHistoryError, setCreditHistoryError] = useState<string | null>(null);
   const creditApprovalRequestKey = useRef<string>('');
   const creditApprovalRequestFingerprint = useRef<string>('');
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
+    setCreditHistoryError(null);
     try {
       const res = await fetchBuyerCreditHistory(buyer.id);
       if (res.success) {
         setCreditSummary(res.summary || null);
         setCreditTransactions(res.transactions || []);
         setCreditHistoryAvailable(res.historyAvailable ?? (res.transactions || []).length > 0);
+      } else {
+        setCreditSummary(null);
+        setCreditTransactions([]);
+        setCreditHistoryError(res.error || strings.credit.loadFailure);
       }
-    } catch {
-      // Fallback baseline
+    } catch (error) {
+      logger.error('Buyer credit history request failed', { buyerId: buyer.id, error }, 'BUYER_DOSSIER');
+      setCreditSummary(null);
+      setCreditTransactions([]);
+      setCreditHistoryError(strings.credit.loadFailure);
     } finally {
       setLoadingCredit(false);
     }
-  }, [buyer.id]);
+  }, [buyer.id, strings.credit.loadFailure]);
 
   useEffect(() => {
     if (dossierTab === 'credits') {
@@ -358,7 +390,14 @@ export default function BuyerDossierDrawer({
 
   const handleConfirmAddCredit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (addCreditAmount <= 0) return;
+    if (addCreditAmount <= 0) {
+      showToast(strings.creditApproval.invalidAmount, 'error');
+      return;
+    }
+    if (!creditApprover.trim() || !creditInitiator) {
+      showToast(strings.creditApproval.approverRequired, 'error');
+      return;
+    }
     setIsSubmittingCredit(true);
     const requestFingerprint = JSON.stringify([
       buyer.id,
@@ -375,8 +414,8 @@ export default function BuyerDossierDrawer({
     try {
       const res = await requestBuyerCreditApproval(buyer.id, {
         amount: addCreditAmount,
-        reason: addCreditReason || 'Enterprise sourcing credit allocation request',
-        approverName: creditApprover,
+        reason: addCreditReason.trim(),
+        approverName: creditApprover.trim(),
         initiatorName: creditInitiator,
         idempotencyKey: creditApprovalRequestKey.current,
       });
@@ -391,7 +430,7 @@ export default function BuyerDossierDrawer({
           'success'
         );
         setIsAddCreditModalOpen(false);
-        setAddCreditAmount(5);
+        setAddCreditAmount(0);
         setAddCreditReason('');
       } else {
         showToast(res.error || strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.', 'error');
@@ -434,6 +473,7 @@ export default function BuyerDossierDrawer({
 
 
   const [loadingComms, setLoadingComms] = useState<boolean>(false);
+  const [communicationsError, setCommunicationsError] = useState<string | null>(null);
   const [commSearch, setCommSearch] = useState<string>('');
   const [commDateFilter, setCommDateFilter] = useState<string>('');
   const [selectedEmailModal, setSelectedEmailModal] = useState<BuyerCommunicationItem | null>(null);
@@ -484,17 +524,21 @@ export default function BuyerDossierDrawer({
 
   const loadCommunications = useCallback(async () => {
     setLoadingComms(true);
+    setCommunicationsError(null);
     try {
       const res = await fetchBuyerCommunications(buyer.id);
       if (res && res.success && Array.isArray(res.data)) {
         setCommunications(res.data);
+      } else {
+        setCommunicationsError(res?.error || strings.compose.loadFailure);
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      logger.error('Buyer communications request failed', { buyerId: buyer.id, error }, 'BUYER_DOSSIER');
+      setCommunicationsError(strings.compose.loadFailure);
     } finally {
       setLoadingComms(false);
     }
-  }, [buyer.id]);
+  }, [buyer.id, strings.compose.loadFailure]);
 
   useEffect(() => {
     if (dossierTab === 'communications') {
@@ -721,7 +765,7 @@ export default function BuyerDossierDrawer({
                   {buyer.organizationName}
                 </h2>
                 <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                  {RFQ_MODE_LABELS[buyer.sourcingMode] || 'Mode 0'}
+                  {RFQ_MODE_LABELS[buyer.sourcingMode] || EMPTY_VALUE}
                 </span>
                 <button
                   type="button"
@@ -735,7 +779,7 @@ export default function BuyerDossierDrawer({
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 {formatString(strings.registered, {
-                  date: formatIndianDateTime(buyer.createdDate) || 'Verified Enterprise',
+                  date: formatIndianDateTime(buyer.createdDate) || EMPTY_VALUE,
                 })}
               </p>
             </div>
@@ -790,9 +834,8 @@ export default function BuyerDossierDrawer({
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
                   <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total Sourced Spend</p>
                   <p className="text-xl font-bold text-indigo-700 dark:text-indigo-300 mt-0.5">
-                    {String(buyer.totalSpend || '₹0').replace(/\$/g, '₹')}
+                    {buyer.totalSpend ? String(buyer.totalSpend).replace(/\$/g, '₹') : EMPTY_VALUE}
                   </p>
-                  <p className="text-[10px] text-slate-400">Procurement run-rate</p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total RFQs Sourced</p>
@@ -804,7 +847,7 @@ export default function BuyerDossierDrawer({
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Available Quota</p>
                   <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {buyer.remainingFreeRFQs ?? 5}
+                    {buyer.remainingFreeRFQs ?? EMPTY_VALUE}
                   </p>
                   <p className="text-[10px] text-slate-400">Free RFQ credits remaining</p>
                 </div>
@@ -819,7 +862,7 @@ export default function BuyerDossierDrawer({
                   <div className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
                     <p className="flex items-center gap-2">
                       <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span className="font-semibold">{buyer.contactPerson || 'Procurement Executive'}</span>
+                      <span className="font-semibold">{buyer.contactPerson || EMPTY_VALUE}</span>
                     </p>
                     <p className="flex items-center gap-2">
                       <Mail className="w-4 h-4 text-slate-400 shrink-0" />
@@ -827,13 +870,13 @@ export default function BuyerDossierDrawer({
                     </p>
                     <p className="flex items-center gap-2">
                       <Phone className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span>{buyer.mobileNumber || '+91 Not provided'}</span>
+                      <span>{buyer.mobileNumber || EMPTY_VALUE}</span>
                     </p>
                     <p className="flex items-center gap-2">
                       <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
                       <span>
                         {buyer.city ? `${buyer.city}, ` : ''}
-                        {buyer.primaryPlantLocation || 'India'}
+                        {buyer.primaryPlantLocation || EMPTY_VALUE}
                       </span>
                     </p>
                   </div>
@@ -846,19 +889,19 @@ export default function BuyerDossierDrawer({
                   <div className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
                     <p>
                       <span className="text-slate-500">Sourcing Mode:</span>{' '}
-                      <span className="font-semibold">{RFQ_MODE_LABELS[buyer.sourcingMode] || 'Mode 0'}</span>
+                      <span className="font-semibold">{RFQ_MODE_LABELS[buyer.sourcingMode] || EMPTY_VALUE}</span>
                     </p>
                     <p>
                       <span className="text-slate-500">Subscription Tier:</span>{' '}
-                      <span className="font-semibold capitalize">{buyer.subscriptionPlan || 'Enterprise Trial'}</span>
+                      <span className="font-semibold capitalize">{buyer.subscriptionPlan || EMPTY_VALUE}</span>
                     </p>
                     <p>
                       <span className="text-slate-500">Status:</span>{' '}
-                      <span className="font-semibold text-emerald-600">{buyer.status || 'ACTIVE'}</span>
+                      <span className="font-semibold text-emerald-600">{buyer.status || EMPTY_VALUE}</span>
                     </p>
                     <p>
                       <span className="text-slate-500">Last Synced:</span>{' '}
-                      <span>{formatIndianDateTime(buyer.syncTimestamp) || 'Real-time'}</span>
+                      <span>{formatIndianDateTime(buyer.syncTimestamp) || EMPTY_VALUE}</span>
                     </p>
                   </div>
                 </div>
@@ -958,7 +1001,7 @@ export default function BuyerDossierDrawer({
                           </td>
                           <td className="px-3.5 py-2.5">
                             <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                              {RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}
+                              {RFQ_MODE_LABELS[rfq.sourcingMode] || EMPTY_VALUE}
                             </span>
                           </td>
                           <td className="px-3.5 py-2.5 font-medium">
@@ -971,7 +1014,7 @@ export default function BuyerDossierDrawer({
                           </td>
                           <td className="px-3.5 py-2.5">
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                              {rfq.status || 'Quotes Pending'}
+                              {rfq.status || EMPTY_VALUE}
                             </span>
                           </td>
                           <td className="px-3.5 py-2.5 text-right">
@@ -1013,25 +1056,25 @@ export default function BuyerDossierDrawer({
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.totalAllocated}</p>
                   <p className="text-xl font-bold text-slate-900 dark:text-white mt-0.5">
-                    {creditSummary?.totalCreditsAllocated ?? 5}
+                    {creditSummary?.totalCreditsAllocated ?? EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.totalConsumed}</p>
                   <p className="text-xl font-bold text-amber-600 dark:text-amber-400 mt-0.5">
-                    {creditSummary?.totalCreditsConsumed ?? Math.max(0, 5 - (buyer.remainingFreeRFQs ?? 5))}
+                    {creditSummary?.totalCreditsConsumed ?? EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.remainingFree}</p>
                   <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {creditSummary?.remainingFreeCredits ?? (buyer.remainingFreeRFQs ?? 5)}
+                    {creditSummary?.remainingFreeCredits ?? EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.entitlementMode}</p>
                   <p className="text-lg font-bold text-indigo-700 dark:text-indigo-300 mt-0.5">
-                    {RFQ_MODE_LABELS[buyer.sourcingMode] || 'Mode 0'}
+                    {RFQ_MODE_LABELS[buyer.sourcingMode] || EMPTY_VALUE}
                   </p>
                 </div>
               </div>
@@ -1039,6 +1082,11 @@ export default function BuyerDossierDrawer({
               {creditHistoryAvailable === false && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200" role="status">
                   {strings.credit.historyUnavailable}
+                </div>
+              )}
+              {creditHistoryError && (
+                <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">
+                  {creditHistoryError}
                 </div>
               )}
 
@@ -1139,7 +1187,7 @@ export default function BuyerDossierDrawer({
                             {tx.creditsConsumed > 0 ? `-${tx.creditsConsumed}` : '-'}
                           </td>
                           <td className="px-3.5 py-2.5 text-right font-extrabold text-slate-900 dark:text-white">
-                            {tx.updatedBalance}
+                            {tx.updatedBalance ?? EMPTY_VALUE}
                           </td>
                           <td className="px-3.5 py-2.5 text-indigo-600 dark:text-indigo-400 font-medium">
                             {tx.relatedRfqId || '-'}
@@ -1250,6 +1298,11 @@ export default function BuyerDossierDrawer({
               </div>
 
               {/* Communication Items */}
+              {communicationsError && (
+                <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">
+                  {communicationsError}
+                </div>
+              )}
               {loadingComms ? (
                 <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2">
                   <Loader2 className="animate-spin text-indigo-500" size={24} />
@@ -1273,7 +1326,7 @@ export default function BuyerDossierDrawer({
                               {comm.subject || `${comm.channel} Dispatch`}
                             </span>
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
-                              {comm.deliveryStatus || 'Delivered'}
+                              {comm.deliveryStatus || EMPTY_VALUE}
                             </span>
                             {comm.acknowledgementStatus && (
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
@@ -1330,25 +1383,25 @@ export default function BuyerDossierDrawer({
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[10px] font-medium text-slate-500 uppercase">{strings.payments.totalPaid}</p>
                   <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                    {formatCurrency(paymentSummary?.totalAmountPaid ?? (payments[0]?.amount || 0))}
+                    {paymentSummary?.totalAmountPaid != null ? formatCurrency(paymentSummary.totalAmountPaid) : EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[10px] font-medium text-slate-500 uppercase">{strings.payments.successful}</p>
                   <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">
-                    {paymentSummary?.totalSuccessfulPayments ?? payments.filter((p) => p.status === 'PAID').length}
+                    {paymentSummary?.totalSuccessfulPayments ?? EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[10px] font-medium text-slate-500 uppercase">{strings.payments.pending}</p>
                   <p className="text-lg font-bold text-amber-600 dark:text-amber-400 mt-0.5">
-                    {paymentSummary?.pendingPayments ?? 0}
+                    {paymentSummary?.pendingPayments ?? EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[10px] font-medium text-slate-500 uppercase">{strings.payments.failed}</p>
                   <p className="text-lg font-bold text-rose-600 dark:text-rose-400 mt-0.5">
-                    {paymentSummary?.failedPayments ?? 0}
+                    {paymentSummary?.failedPayments ?? EMPTY_VALUE}
                   </p>
                 </div>
               </div>
@@ -1450,7 +1503,7 @@ export default function BuyerDossierDrawer({
                           </td>
                           <td className="px-3.5 py-2.5 text-slate-600 dark:text-slate-300">{p.description}</td>
                           <td className="px-3.5 py-2.5 font-bold text-slate-900 dark:text-white">
-                            {formatCurrency(p.amount)}
+                            {typeof p.amount === 'number' && Number.isFinite(p.amount) ? formatCurrency(p.amount) : EMPTY_VALUE}
                           </td>
                           <td className="px-3.5 py-2.5 text-slate-500">
                             <span>{p.gateway}</span>
@@ -1580,7 +1633,7 @@ export default function BuyerDossierDrawer({
                   {strings.creditApproval?.availableCreditsLabel || 'Available Sourcing Credits'}
                 </label>
                 <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                  {creditSummary?.remainingFreeCredits ?? (buyer as any).creditsRemaining ?? 0} Credits
+                  {creditSummary?.remainingFreeCredits != null ? `${creditSummary.remainingFreeCredits} Credits` : EMPTY_VALUE}
                 </div>
               </div>
 
@@ -1605,35 +1658,30 @@ export default function BuyerDossierDrawer({
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   {strings.creditApproval?.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
                 </label>
-                <select
+                <input
+                  id="credit-initiator"
+                  type="text"
+                  readOnly
                   value={creditInitiator}
-                  onChange={(e) => setCreditInitiator(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                >
-                  {CREDIT_APPROVAL_INITIATORS.map((init) => (
-                    <option key={init} value={init}>
-                      {init}
-                    </option>
-                  ))}
-                </select>
+                  placeholder={UI_STRINGS.dataLoad.emptyCell}
+                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
+                />
               </div>
 
               {/* Assigned Approver Select */}
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <label htmlFor="credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   {strings.creditApproval?.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                 </label>
-                <select
+                {/* No approver list is served by the API. The server checks the name against its configured approvers. */}
+                <input
+                  id="credit-approver"
+                  type="text"
                   value={creditApprover}
                   onChange={(e) => setCreditApprover(e.target.value)}
+                  placeholder={strings.creditApproval.approverPlaceholder}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                >
-                  {CREDIT_APPROVAL_APPROVERS.map((appr) => (
-                    <option key={appr} value={appr}>
-                      {appr}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
 
               {/* Reason / Remarks */}
@@ -1709,8 +1757,11 @@ export default function BuyerDossierDrawer({
               <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
                 Standard Taxonomy Categories
               </span>
+              {majorCategoryError && majorCategoryOptions.length === 0 && (
+                <p role="alert" className="text-[11px] text-rose-600 dark:text-rose-400">{majorCategoryError}</p>
+              )}
               <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
-                {DEFAULT_MAJOR_CATEGORIES.map((cat) => {
+                {majorCategoryOptions.map((cat) => {
                   const isSelected = selectedCategoriesDraft.includes(cat);
                   return (
                     <button
@@ -1815,10 +1866,10 @@ export default function BuyerDossierDrawer({
                     {selectedRfqForModal.rfqNumber}
                   </h3>
                   <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                    {RFQ_MODE_LABELS[selectedRfqForModal.sourcingMode] || 'Mode 1'}
+                    {RFQ_MODE_LABELS[selectedRfqForModal.sourcingMode] || EMPTY_VALUE}
                   </span>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
-                    {selectedRfqForModal.status || 'Active'}
+                    {selectedRfqForModal.status || EMPTY_VALUE}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">{selectedRfqForModal.title}</p>
@@ -1850,13 +1901,13 @@ export default function BuyerDossierDrawer({
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Location</span>
                   <span className="font-extrabold text-slate-900 dark:text-white mt-0.5 block truncate">
-                    {selectedRfqForModal.deliveryLocation || 'India'}
+                    {selectedRfqForModal.deliveryLocation || EMPTY_VALUE}
                   </span>
                 </div>
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Delivery Date</span>
                   <span className="font-extrabold text-slate-900 dark:text-white mt-0.5 block truncate">
-                    {selectedRfqForModal.targetDeliveryDate ? formatIndianDateTime(selectedRfqForModal.targetDeliveryDate) : 'Standard'}
+                    {selectedRfqForModal.targetDeliveryDate ? formatIndianDateTime(selectedRfqForModal.targetDeliveryDate) : EMPTY_VALUE}
                   </span>
                 </div>
                 <div>
@@ -1923,11 +1974,11 @@ export default function BuyerDossierDrawer({
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {selectedRfqForModal.quotes.map((q, idx) => (
                           <tr key={idx}>
-                            <td className="p-2.5 font-semibold">{q.vendorName || `Vendor ${idx + 1}`}</td>
+                            <td className="p-2.5 font-semibold">{q.vendorName || EMPTY_VALUE}</td>
                             <td className="p-2.5 font-bold text-emerald-600 dark:text-emerald-400">
-                              {formatCurrency(q.totalPrice || 0)}
+                              {q.totalPrice != null ? formatCurrency(q.totalPrice) : EMPTY_VALUE}
                             </td>
-                            <td className="p-2.5 text-slate-500">{q.leadTimeDays ? `${q.leadTimeDays} days` : 'Standard'}</td>
+                            <td className="p-2.5 text-slate-500">{q.leadTimeDays != null ? `${q.leadTimeDays} days` : EMPTY_VALUE}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -2121,6 +2172,7 @@ export default function BuyerDossierDrawer({
                         onChange={(e) => setComposeCallOutcome(e.target.value)}
                         className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
                       >
+                        <option value="">{UI_STRINGS.dataLoad.emptyCell}</option>
                         {CALL_OUTCOMES.map((o) => (
                           <option key={o.value} value={o.value}>{o.label}</option>
                         ))}
@@ -2367,15 +2419,19 @@ export default function BuyerDossierDrawer({
                         value={composeFollowupAssigneeId}
                         onChange={(e) => {
                           setComposeFollowupAssigneeId(e.target.value);
-                          const m = DEFAULT_INTERNAL_MEMBERS.find((mem) => mem.id === e.target.value);
-                          if (m) setComposeFollowupAssigneeName(m.name);
+                          const m = assignees.find((mem) => mem.id === e.target.value);
+                          setComposeFollowupAssigneeName(m?.name ?? '');
                         }}
                         className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
                       >
-                        {DEFAULT_INTERNAL_MEMBERS.map((m) => (
+                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                        {assignees.map((m) => (
                           <option key={m.id} value={m.id}>{m.name} ({m.role})</option>
                         ))}
                       </select>
+                      {assigneesError && (
+                        <p role="alert" className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{assigneesError}</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
@@ -2450,7 +2506,7 @@ export default function BuyerDossierDrawer({
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Amount</span>
                   <span className="font-extrabold text-emerald-600 dark:text-emerald-400">
-                    {formatCurrency(selectedPaymentModal.amount)}
+                    {typeof selectedPaymentModal.amount === 'number' && Number.isFinite(selectedPaymentModal.amount) ? formatCurrency(selectedPaymentModal.amount) : EMPTY_VALUE}
                   </span>
                 </div>
               </div>

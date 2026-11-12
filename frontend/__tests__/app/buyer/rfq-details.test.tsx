@@ -2688,7 +2688,6 @@ function makeInquiry(overrides: any = {}): any {
     });
 
     it('exercises useRouter error catch fallback to null', () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const nextNav = require('next/navigation');
       const orig = nextNav.useRouter;
       nextNav.useRouter = () => {

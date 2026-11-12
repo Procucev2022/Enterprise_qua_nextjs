@@ -17,6 +17,17 @@ const BASE64_CONTENT_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 const BOT_EMAIL_BODY_MAX_LENGTH = 1_000_000;
 const { BOT_BRIDGE_CONFIG } = require('./botBridgeConfig');
 
+// Approver names come from APPROVER_CONFIG in constants.js. constants.js loads this module
+// at its own top level, so the lookup is deferred until validation runs to avoid a cycle.
+function getCreditApproverNames() {
+  return require('./constants').CREDIT_APPROVAL_APPROVERS;
+}
+
+// Chaser channel names come from BATCH_CHASER_CHANNELS in constants.js, read the same deferred way.
+function getBatchChaserChannels() {
+  return require('./constants').BATCH_CHASER_CHANNELS;
+}
+
 function validateBotEmailAddressList(value, required) {
   const addresses = Array.isArray(value) ? value : [value];
   if (required && addresses.length === 0) return 'At least one email recipient is required.';
@@ -321,17 +332,15 @@ const VALIDATION_SCHEMAS = {
       message: 'Credit amount must be a positive integer.',
     },
     reason: { type: 'string', required: false, maxLength: 1000 },
+    // The maker is the signed-in account (buyerAccountController), so no initiator name is
+    // accepted from the request body.
     approverName: {
       type: 'string',
       required: true,
-      enum: ['Srinu Sir', 'Sudheer Sir'],
-      message: 'Approver must be Srinu Sir or Sudheer Sir.',
-    },
-    initiatorName: {
-      type: 'string',
-      required: true,
-      enum: ['Govardhan', 'Krishna', 'Chandhan'],
-      message: 'Initiator must be Govardhan, Krishna, or Chandhan.',
+      get enum() {
+        return getCreditApproverNames();
+      },
+      message: 'Approver must be one of the configured approvers.',
     },
   },
 
@@ -1086,10 +1095,22 @@ const VALIDATION_SCHEMAS = {
     status: { type: 'string', required: false, enum: ['Pending', 'In Progress', 'Escalated', 'Completed'] },
     category: { type: 'string', required: false, maxLength: 100 },
     project: { type: 'string', required: false, maxLength: 255 },
-    customerName: { type: 'string', required: false, maxLength: 255 },
-    customerEmail: { type: 'string', required: false, maxLength: 255 },
-    customerPhone: { type: 'string', required: false, maxLength: 64 },
-    assignedToName: { type: 'string', required: false, maxLength: 255 },
+    customerName: {
+      type: 'string', required: true, minLength: 2, maxLength: 255,
+      message: 'Customer name is required (2 to 255 characters).',
+    },
+    customerEmail: {
+      type: 'string', required: true, maxLength: 320, pattern: EMAIL_REGEX,
+      message: 'Customer email is required and must be a valid email address.',
+    },
+    customerPhone: {
+      type: 'string', required: true, minLength: 8, maxLength: 32, pattern: PHONE_REGEX,
+      message: 'Customer phone is required and must be a valid phone number (8 to 32 characters).',
+    },
+    assignedToName: {
+      type: 'string', required: true, minLength: 2, maxLength: 255,
+      message: 'Assigned to name is required (2 to 255 characters).',
+    },
     assignedTeam: { type: 'string', required: false, maxLength: 100 },
     dueDate: { type: 'string', required: false, maxLength: 64 },
   },
@@ -1116,11 +1137,45 @@ const VALIDATION_SCHEMAS = {
     comment: { type: 'string', required: true, minLength: 1, maxLength: 5000, message: 'Comment text cannot be empty.' },
   },
 
+  // Channels for POST /api/rfqs/:id/batch-chaser. The request must name at least one channel,
+  // each channel at most once, and no more channels than BATCH_CHASER_CHANNELS holds.
+  batchChaserChannels: {
+    channels: {
+      type: 'array',
+      required: true,
+      message: 'Choose at least one chaser channel: call, whatsapp or sms.',
+      custom: (value) => {
+        const allowed = getBatchChaserChannels();
+        if (!Array.isArray(value) || value.length === 0) {
+          return `Choose at least one chaser channel: ${allowed.join(', ')}.`;
+        }
+        if (value.length > allowed.length) {
+          return `Choose no more than ${allowed.length} chaser channels.`;
+        }
+        const unsupported = value.filter((channel) => !allowed.includes(channel));
+        if (unsupported.length > 0) {
+          return `Chaser channel "${String(unsupported[0])}" is not supported. Use ${allowed.join(', ')}.`;
+        }
+        if (new Set(value).size !== value.length) {
+          return 'Each chaser channel can be chosen only once.';
+        }
+        return null;
+      },
+    },
+  },
+
   approvalAction: {
     action: { type: 'string', required: true, enum: ['APPROVE', 'REJECT', 'Approve', 'Reject', 'approved', 'rejected'], message: 'Action must be APPROVE or REJECT.' },
     remarks: { type: 'string', required: false, maxLength: 1000 },
     password: { type: 'string', required: true, minLength: 1, message: 'Approver password confirmation is required.' },
-    approverName: { type: 'string', required: true, minLength: 2, maxLength: 100, message: 'Select the approver whose password you are confirming.' },
+    approverName: {
+      type: 'string',
+      required: true,
+      get enum() {
+        return getCreditApproverNames();
+      },
+      message: 'Select the approver whose password you are confirming.',
+    },
   },
 
   registrationList: {

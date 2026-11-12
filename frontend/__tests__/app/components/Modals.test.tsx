@@ -6,7 +6,6 @@ import {
   WhatsAppChaserModal,
   RFQFollowUpDeepDiveModal,
   VendorSurveyModal,
-  RbacModal,
   VendorEvaluationSummaryModal,
   ActivePipelineModal,
   IntakeSourcesModal,
@@ -14,7 +13,8 @@ import {
   SubscriptionPaymentModal,
 } from '@/app/components/Modals';
 import * as storeModule from '@/lib/store';
-import { RFQItem, VendorEvaluationRecord } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import { QuoteComparison, RFQItem, VendorEvaluationRecord } from '@/lib/types';
 
 jest.mock('@/lib/store');
 
@@ -51,6 +51,8 @@ describe('Modals.tsx', () => {
 
   describe('PurchaseOrderModal', () => {
     const mockOnClose = jest.fn();
+    // A quote that records only a tax amount, which is the input GST and the grand total are computed from.
+    const taxOnly = (taxes: number) => ({ taxes } as Partial<QuoteComparison>) as QuoteComparison;
 
     const baseLineItems = [{ description: 'Centrifugal Water Pump', quantity: 12, unit: 'Nos' }];
 
@@ -268,8 +270,9 @@ describe('Modals.tsx', () => {
           rfqNumber="RFQ-WORDS-01"
           vendorId="v-words"
           vendorName="Words Vendor"
-          totalAmount={25000000}
-          unitPrice={25000000}
+          totalAmount={20000000}
+          unitPrice={20000000}
+          quote={taxOnly(5000000)}
           leadTime={10}
           deliveryDate="2026-12-01"
           lineItems={[{ description: 'Heavy Turbine', quantity: 1, unit: 'Nos' }]}
@@ -287,6 +290,7 @@ describe('Modals.tsx', () => {
           vendorName="Words Vendor"
           totalAmount={1000000000000}
           unitPrice={1000000000000}
+          quote={taxOnly(100)}
           leadTime={10}
           deliveryDate="2026-12-01"
           lineItems={[{ description: 'Mega Project', quantity: 1, unit: 'Nos' }]}
@@ -641,23 +645,15 @@ describe('Modals.tsx', () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it('renders and handles survey form submission and cancel and close X button', () => {
-      jest.useFakeTimers();
+    it('states that no survey is connected, offers no dispatch action and sends nothing', () => {
       const { unmount } = render(<VendorSurveyModal isOpen={true} onClose={mockOnClose} />);
       expect(screen.getByText('Mode 3 AI Vendor Survey')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorSurvey.notConnected)).toBeInTheDocument();
+      expect(screen.queryByText(/Execute Mode 3 Survey/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/24/)).not.toBeInTheDocument();
+      expect(mockShowToast).not.toHaveBeenCalled();
 
-      const cancelBtn = screen.getByText('Cancel');
-      fireEvent.click(cancelBtn);
-      expect(mockOnClose).toHaveBeenCalled();
-
-      const submitBtn = screen.getByText(/Execute Mode 3 Survey/);
-      fireEvent.click(submitBtn);
-
-      act(() => {
-        jest.advanceTimersByTime(1100);
-      });
-
-      expect(mockShowToast).toHaveBeenCalledWith('Mode 3 Survey Dispatched', expect.any(String), 'success');
+      fireEvent.click(screen.getByText(UI_STRINGS.vendorSurvey.closeButton));
       expect(mockOnClose).toHaveBeenCalled();
       unmount();
 
@@ -665,40 +661,7 @@ describe('Modals.tsx', () => {
       render(<VendorSurveyModal isOpen={true} onClose={mockOnClose} />);
       const topX = screen.getAllByRole('button')[0];
       fireEvent.click(topX);
-      expect(mockOnClose).toHaveBeenCalled();
-
-      jest.useRealTimers();
-    });
-  });
-
-  describe('RbacModal', () => {
-    const mockOnClose = jest.fn();
-
-    it('returns null when closed', () => {
-      const { container } = render(<RbacModal isOpen={false} onClose={mockOnClose} />);
-      expect(container.firstChild).toBeNull();
-    });
-
-    it('renders and allows clicking Sync Azure AD Roles and close button and top X button', () => {
-      const { unmount } = render(<RbacModal isOpen={true} onClose={mockOnClose} />);
-      expect(screen.getByText('Azure Active Directory & RBAC Matrix')).toBeInTheDocument();
-
-      const closeBtn = screen.getByText('Close');
-      fireEvent.click(closeBtn);
-      expect(mockOnClose).toHaveBeenCalled();
-
-      const syncBtn = screen.getByText(/Sync Azure AD Roles/);
-      fireEvent.click(syncBtn);
-
-      expect(mockShowToast).toHaveBeenCalledWith('RBAC Policies Synchronized', expect.any(String), 'success');
-      expect(mockOnClose).toHaveBeenCalled();
-      unmount();
-
-      // Top X
-      render(<RbacModal isOpen={true} onClose={mockOnClose} />);
-      const topX = screen.getAllByRole('button')[0];
-      fireEvent.click(topX);
-      expect(mockOnClose).toHaveBeenCalled();
+      expect(mockOnClose).toHaveBeenCalledTimes(2);
     });
   });
 

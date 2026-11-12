@@ -4,6 +4,7 @@ import '@testing-library/jest-dom';
 import VendorRFQDetailsPage from '@/app/vendor/rfq-details/page';
 import { fetchRFQById } from '@/lib/rfqClient';
 import { useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem } from '@/lib/types';
 
 jest.mock('@/lib/rfqClient', () => ({
@@ -118,9 +119,9 @@ describe('Vendor RFQ Details page', () => {
     expect(screen.queryByRole('button', { name: /Close RFQ/i })).not.toBeInTheDocument();
   });
 
-  test('shows zero quotes when this vendor has no record resolved', async () => {
+  test('shows zero quotes when the vendor lookup reports no vendor record (404)', async () => {
     mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
-    global.fetch = jest.fn().mockResolvedValue({ ok: false }) as any;
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404 }) as any;
 
     render(<VendorRFQDetailsPage />);
 
@@ -131,20 +132,32 @@ describe('Vendor RFQ Details page', () => {
     expect(screen.queryByText('Competitor Supplies')).not.toBeInTheDocument();
   });
 
-  test('shows zero quotes when the vendor lookup request throws', async () => {
+  test('shows an error instead of zero quotes when the vendor lookup request throws', async () => {
     mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
     global.fetch = jest.fn().mockRejectedValue(new Error('network down')) as any;
 
     render(<VendorRFQDetailsPage />);
 
     await waitFor(() =>
-      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+      expect(screen.getByText(UI_STRINGS.vendorWorkspace.rfqProfileLoadFailed)).toBeInTheDocument(),
     );
-    expect(screen.queryByText('My Vendor Co')).not.toBeInTheDocument();
-    expect(screen.queryByText('Competitor Supplies')).not.toBeInTheDocument();
+    expect(screen.queryByText('Steel Bottle RFQ Requirement')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: UI_STRINGS.rfqDetails.retryAction })).toBeInTheDocument();
   });
 
-  test('handles vendor lookup response without data property', async () => {
+  test('shows an error instead of zero quotes when the vendor lookup fails with a server error', async () => {
+    mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 }) as any;
+
+    render(<VendorRFQDetailsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText(UI_STRINGS.vendorWorkspace.rfqProfileLoadFailed)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Steel Bottle RFQ Requirement')).not.toBeInTheDocument();
+  });
+
+  test('handles vendor lookup response without data property as a failed lookup', async () => {
     mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
@@ -154,7 +167,7 @@ describe('Vendor RFQ Details page', () => {
     render(<VendorRFQDetailsPage />);
 
     await waitFor(() =>
-      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+      expect(screen.getByText(UI_STRINGS.vendorWorkspace.rfqProfileLoadFailed)).toBeInTheDocument(),
     );
     expect(screen.queryByText('My Vendor Co')).not.toBeInTheDocument();
   });

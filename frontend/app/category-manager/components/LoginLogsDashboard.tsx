@@ -34,7 +34,6 @@ import type {
 import {
   fetchLoginLogs,
   fetchLoginLogsSummary,
-  FALLBACK_SUMMARY,
 } from '@/lib/loginLogsClient';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 
@@ -95,7 +94,9 @@ export default function LoginLogsDashboard() {
   // Data states
   // -------------------------------------------------------------------------
   const [logs, setLogs] = useState<LoginLogEntry[]>([]);
-  const [summary, setSummary] = useState<LoginLogsSummary>(FALLBACK_SUMMARY);
+  // Null until the summary loads, and when it fails. No count is substituted.
+  const [summary, setSummary] = useState<LoginLogsSummary | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [realtimeActive, setRealtimeActive] = useState<boolean>(true);
@@ -150,7 +151,8 @@ export default function LoginLogsDashboard() {
       ]);
 
       setLogs(logsRes.logs);
-      setSummary(summaryRes);
+      setSummary(summaryRes.summary);
+      setLoadError(logsRes.error || summaryRes.error || null);
     } catch {
       // Errors handled gracefully within client
     } finally {
@@ -320,7 +322,7 @@ export default function LoginLogsDashboard() {
       `"${log.phoneNumber}"`,
       `"${log.loginAt}"`,
       `"${log.logoutAt || ''}"`,
-      `"${log.durationSeconds || 0}"`,
+      `"${log.durationSeconds ?? ''}"`,
       `"${log.status}"`,
       `"${log.ipAddress || ''}"`,
       `"${(log.deviceInfo || '').replace(/"/g, '""')}"`,
@@ -427,8 +429,14 @@ export default function LoginLogsDashboard() {
       <div className="sr-only">
         <h1>{strings.title}</h1>
         <p>{strings.subtitle}</p>
-        {summary.todayPeakHour && <span>Peak: {summary.todayPeakHour}</span>}
+        {summary?.todayPeakHour && <span>Peak: {summary.todayPeakHour}</span>}
       </div>
+
+      {loadError && (
+        <div role="alert" className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-300">
+          {loadError}
+        </div>
+      )}
 
       {/* KPI Stats Grid – ultra-compact Action Center standard */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-2.5 w-full">
@@ -442,7 +450,7 @@ export default function LoginLogsDashboard() {
           </div>
           <div className="mt-1 flex items-baseline justify-between">
             <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
-              {summary.totalToday}
+              {summary?.totalToday ?? UI_STRINGS.dataLoad.emptyCell}
             </span>
           </div>
         </div>
@@ -460,7 +468,7 @@ export default function LoginLogsDashboard() {
           </div>
           <div className="mt-1">
             <span className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none">
-              {summary.activeNow}
+              {summary?.activeNow ?? UI_STRINGS.dataLoad.emptyCell}
             </span>
           </div>
         </div>
@@ -475,7 +483,7 @@ export default function LoginLogsDashboard() {
           </div>
           <div className="mt-1">
             <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
-              {summary.buyerLogins}
+              {summary?.buyerLogins ?? UI_STRINGS.dataLoad.emptyCell}
             </span>
           </div>
         </div>
@@ -490,7 +498,7 @@ export default function LoginLogsDashboard() {
           </div>
           <div className="mt-1">
             <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
-              {summary.sellerLogins}
+              {summary?.sellerLogins ?? UI_STRINGS.dataLoad.emptyCell}
             </span>
           </div>
         </div>
@@ -505,7 +513,7 @@ export default function LoginLogsDashboard() {
           </div>
           <div className="mt-1">
             <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
-              {summary.avgDurationMinutes}m
+              {summary?.avgDurationMinutes != null ? `${summary.avgDurationMinutes}m` : UI_STRINGS.dataLoad.emptyCell}
             </span>
           </div>
         </div>
@@ -967,7 +975,7 @@ export default function LoginLogsDashboard() {
                 <div className="border border-slate-100 dark:border-slate-800 p-2.5 rounded-lg">
                   <div className="text-slate-400 text-[10px] uppercase font-semibold">{strings.details.networkIp}</div>
                   <div className="font-mono text-slate-800 dark:text-slate-200 mt-0.5">
-                    {selectedLogForDetails.ipAddress || '127.0.0.1'}
+                    {selectedLogForDetails.ipAddress || UI_STRINGS.dataLoad.emptyCell}
                   </div>
                 </div>
 

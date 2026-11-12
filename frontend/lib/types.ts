@@ -86,6 +86,7 @@ export interface QuoteComparison {
   submissionMethod?: 'email' | 'portal' | 'web_portal';
   submittedAt?: string;
   taxes?: number;
+  taxRate?: number;
   deliveryCharges?: number;
   deliveryDate?: string;
   lineItemQuotes?: LineItemQuote[];
@@ -232,7 +233,8 @@ export interface ManualRFQForm {
   lineItems: ManualRFQLineItem[];
   /** Stored server-side and downloadable. Never sent for AI extraction. */
   attachments: RFQAttachment[];
-  sourcingMode: SourcingMode;
+  /** `null` until the buyer chooses a sourcing mode. No mode is preselected. */
+  sourcingMode: SourcingMode | null;
 }
 
 /**
@@ -605,6 +607,11 @@ export interface RFQInquiry {
 export interface RFQAssignedVendor {
   id?: string;
   name: string;
+  /** Ownership fields copied from the vendor record. isBuyerUploaded (vendor-summary) reads them. */
+  source?: string | null;
+  buyerId?: string | null;
+  buyerAccountId?: string | null;
+  addedByBuyerCompany?: string | null;
   email?: string | null;
   contactPerson?: string | null;
   phone?: string | null;
@@ -783,22 +790,16 @@ export interface AuditVerificationReport {
 
 export interface AzureServiceHealth {
   service: string;
-  status: 'ONLINE' | 'HEALTHY' | 'DEGRADED';
+  status: 'CHECKING' | 'ONLINE' | 'UNREACHABLE' | 'NOT_CONFIGURED';
   latency: string;
   uptime: string;
   details: string;
 }
 
+/** Read-only settings the server reports (GET /api/system-config). The server stores no editable setting. */
 export interface SystemConfig {
-  ollamaModel: 'Llama 3 (8B Instruct)' | 'Llama 3.1 (70B Quantized)' | 'Mistral NeMo 12B';
-  ollamaActive: boolean;
-  ocrExtractionThreshold: number;
-  whatsappAutoChaser: boolean;
-  voiceCallAutoChaser?: boolean;
-  smsAutoChaser?: boolean;
-  escalationIntervalHours: number;
-  azureDbBackupFrequency: 'Hourly' | 'Daily' | 'Continuous';
-  rbacEnforced: boolean;
+  aiModel: string;
+  aiTemperature: number;
 }
 
 export interface VendorModuleScore {
@@ -1901,26 +1902,49 @@ export interface BuyerAccount {
   historicalVendorsCount?: number;
 }
 
+/** Database connection health, read from the top level of GET /api/db/status. */
 export interface DBHealthStatus {
-  connected: boolean;
-  isConnected?: boolean;
-  isConfigured?: boolean;
+  isConfigured: boolean;
+  isConnected: boolean;
+  provider?: string;
   providerLabel?: string;
+  poolStatus?: string;
+  database?: string;
   latencyMs?: number;
-  poolStatus?: {
-    totalCount?: number;
-    idleCount: number;
-    waitingCount: number;
-  };
-  tablesCount?: number;
-  totalRecords?: {
+  userCount?: number;
+  vendorCount?: number;
+  rfqCount?: number;
+  errorMessage?: string;
+  timestamp?: string;
+  /** Records this server process holds in memory. It is a cache, not a separate count of the database. */
+  loadedRecords?: {
+    isLoadedFromDatabase?: boolean;
     buyerAccounts?: number;
     vendors?: number;
     rfqs?: number;
-    evaluations?: number;
-    auditLogs?: number;
   };
-  uptime?: string;
+}
+
+/** Body of GET /api/db/status on success, or the error body when the request fails. */
+export interface DBStatusResponse extends DBHealthStatus {
+  success?: boolean;
+  error?: string;
+}
+
+/** One line in the support chat widget. `notice` is text from the app itself, not from support. */
+export interface SupportChatMessage {
+  id: string;
+  sender: 'user' | 'support' | 'notice';
+  text: string;
+  timestamp: string;
+}
+
+/** Body of POST /api/support-chat. `reply` is set only when the support service answered. */
+export interface SupportChatResponse {
+  success: boolean;
+  status?: string;
+  reply?: string | null;
+  error?: string;
 }
 
 export interface EncryptedPayload {
@@ -2189,17 +2213,25 @@ export interface RFQPortfolioSummary {
   followUps: RFQPortfolioFollowUps;
 }
 
+/** Result of one OTP channel as the server reports it. Only "sent" means a provider accepted the message. */
+export type OtpChannelStatus = 'sent' | 'pending' | 'failed';
+
+/** Per-channel outcome of an OTP request. */
+export interface OtpDeliveryReport {
+  email?: OtpChannelStatus;
+  sms?: OtpChannelStatus;
+}
+
 export interface AuthResponse {
   success: boolean;
   message?: string;
   token?: string;
   user?: UserSession;
   error?: string;
-  demoCode?: string;
-  demoEmailCode?: string;
-  demoMobileCode?: string;
   expiresInSeconds?: number;
   passwordChangeRequired?: boolean;
+  /** Present on a successful OTP request: the email and SMS channel outcomes. */
+  delivery?: OtpDeliveryReport;
 }
 
 export interface LoginCredentials {

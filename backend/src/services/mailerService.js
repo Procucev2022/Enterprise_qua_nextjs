@@ -106,8 +106,65 @@ function getTransporter() {
   return transporter;
 }
 
+// Shown when an optional descriptive field is missing. Stays here until it moves to backend/src/config/constants.js.
+const MAILER_NOT_SPECIFIED = 'Not specified';
+// Shown for a rating or score that was never computed, for example a vendor with no previous rating.
+const MAILER_NOT_EVALUATED = 'Not evaluated';
+
+/**
+ * Required counts are never defaulted. Throws when the caller does not supply a whole number of 0 or more.
+ * @param {unknown} value
+ * @param {string} fieldName
+ * @param {string} context Short description of the email, used in the error text
+ * @returns {number}
+ */
+function requireMailCount(value, fieldName, context) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${context} requires ${fieldName} as a whole number of 0 or more. Count the matching records before sending.`);
+  }
+  return value;
+}
+
+/**
+ * Required identifiers are never defaulted. Throws when the value is missing or blank.
+ * @param {unknown} value
+ * @param {string} fieldName
+ * @param {string} context
+ * @returns {string}
+ */
+function requireMailText(value, fieldName, context) {
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  if (!text) {
+    throw new Error(`${context} requires ${fieldName} before sending.`);
+  }
+  return text;
+}
+
+/**
+ * Quantity and unit for item tables. A missing quantity shows "Not specified"; it is never 1.
+ * @param {{ quantity?: unknown, unit?: unknown, uom?: unknown }} item
+ * @returns {string}
+ */
+function itemQuantityText(item) {
+  const quantity = item.quantity != null && item.quantity !== '' ? String(item.quantity) : MAILER_NOT_SPECIFIED;
+  const unit = item.unit || item.uom;
+  return unit ? `${quantity} ${unit}` : quantity;
+}
+
+/**
+ * Formats a rating or score for display. A null or missing value (never rated) shows "Not evaluated".
+ * @param {unknown} value
+ * @param {string} [suffix] Text appended after a real number, e.g. ' / 5.0'
+ * @returns {string}
+ */
+function formatRatingValue(value, suffix = '') {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}${suffix}` : MAILER_NOT_EVALUATED;
+}
+
 function fromAddress() {
-  const user = process.env.SMTP_FROM || process.env.SMTP_USER || 'manav.procucev@gmail.com';
+  // No default sender. A personal mailbox must never be used when SMTP_FROM / SMTP_USER are unset.
+  const user = process.env.SMTP_FROM || process.env.SMTP_USER || '';
+  if (!user) return '';
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
@@ -125,17 +182,7 @@ function getPublicFrontendUrl() {
     getEnv('APP_PUBLIC_URL') ||
     getEnv('FRONTEND_URL');
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
-    const trimmed = envVal.trim().replace(/\/+$/, '');
-    if (trimmed.includes('srinivas-mukku.workers.dev')) {
-      const isProd =
-        getEnv('NODE_ENV') === 'production' ||
-        getEnv('ENVIRONMENT') === 'production' ||
-        getEnv('ENVIRONMENT') === 'prod';
-      if (isProd) {
-        return 'https://equa.procucev.com';
-      }
-    }
-    return trimmed;
+    return envVal.trim().replace(/\/+$/, '');
   }
   if (getEnv('NODE_ENV') === 'production') {
     return 'https://equa.procucev.com';
@@ -158,8 +205,8 @@ function getLogoUrl() {
 
 /**
  * Lazily builds a Gmail / SMTP transporter for vendor notifications and invites
- * from VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD (defaults strictly to srinu20252026@gmail.com).
- * Vendor communications NEVER fall back to buyer SMTP (rfqprocucev@gmail.com).
+ * from VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD.
+ * Vendor communications NEVER fall back to buyer SMTP.
  */
 function getVendorTransporter() {
   if (vendorTransporter) return vendorTransporter;
@@ -210,7 +257,9 @@ function getVendorTransporter() {
 }
 
 function vendorFromAddress() {
-  const user = getEnv('VENDOR_GMAIL_SENDER_EMAIL') || getEnv('VENDOR_SMTP_FROM') || getEnv('VENDOR_SMTP_USER') || 'srinu20252026@gmail.com';
+  // No default sender: a personal mailbox must never be used when the vendor sender is unset.
+  const user = getEnv('VENDOR_GMAIL_SENDER_EMAIL') || getEnv('VENDOR_SMTP_FROM') || getEnv('VENDOR_SMTP_USER') || '';
+  if (!user) return '';
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
@@ -223,7 +272,7 @@ function vendorGatewayAddress() {
     getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
     getEnv('VENDOR_EMAIL_GATEWAY_USER') ||
     getEnv('VENDOR_SMTP_USER') ||
-    'srinu20252026@gmail.com'
+    ''
   );
 }
 
@@ -249,8 +298,8 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
   const lineItemsHtml = lineItems.length > 0
     ? lineItems.map((item, index) => `
         <tr style="border-bottom: 1px solid #e2e8f0;">
-          <td style="padding: 10px; font-weight: bold;">${index + 1}. ${item.itemName || item.name || 'Line Item'}</td>
-          <td style="padding: 10px; text-align: center;">${item.quantity || 1} ${item.unit || item.uom || 'Units'}</td>
+          <td style="padding: 10px; font-weight: bold;">${index + 1}. ${item.itemName || item.name || MAILER_NOT_SPECIFIED}</td>
+          <td style="padding: 10px; text-align: center;">${item.quantity != null && item.quantity !== '' ? item.quantity : MAILER_NOT_SPECIFIED}${item.unit || item.uom ? ` ${item.unit || item.uom}` : ''}</td>
           <td style="padding: 10px; font-size: 12px; color: #475569;">${item.technicalSpecs || item.specs || item.description || '-'}</td>
         </tr>
       `).join('')
@@ -262,9 +311,10 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
 
   return {
     from: fromAddress(),
-    to: to || process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || 'navinchaudhary.dev@gmail.com',
+    // No recipient fallback: when none is configured, deliver() reports the message as skipped.
+    to: to || process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || null,
     replyTo: fromEmail || safeRfq.sourceEmail || undefined,
-    subject: `[Procucev Requisition] ${safeRfq.title || 'New Inbound Requisition'} (${safeRfq.rfqNumber || 'Draft'})`,
+    subject: `[Procucev Requisition] ${safeRfq.title || MAILER_NOT_SPECIFIED} (${safeRfq.rfqNumber || MAILER_NOT_SPECIFIED})`,
     html: `
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
         <tr>
@@ -296,10 +346,10 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
               </div>
               <div class="email-content" style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word;">
                 <div style="background: #f8fafc; padding: 14px; border-radius: 6px; margin-bottom: 18px; border-left: 4px solid #0284c7; box-sizing: border-box;">
-                  <p style="margin: 0; font-size: 13px;"><strong>From (Buyer / Plant Engineer):</strong> ${fromEmail || rfq.sourceEmail || 'Buyer'}</p>
+                  <p style="margin: 0; font-size: 13px;"><strong>From (Buyer / Plant Engineer):</strong> ${fromEmail || rfq.sourceEmail || MAILER_NOT_SPECIFIED}</p>
                   <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>RFQ Number:</strong> <span style="font-family: monospace; color: #0284c7; font-weight: bold;">${rfq.rfqNumber}</span></p>
-                  <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Category:</strong> ${rfq.category || 'General Procurement'}</p>
-                  <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Target Delivery Date:</strong> ${rfq.targetDeliveryDate || 'Immediate'}</p>
+                  <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Category:</strong> ${rfq.category || MAILER_NOT_SPECIFIED}</p>
+                  <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Target Delivery Date:</strong> ${rfq.targetDeliveryDate || MAILER_NOT_SPECIFIED}</p>
                 </div>
 
                 <h3 style="font-size: 14px; margin: 0 0 10px 0; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Extracted Line Items</h3>
@@ -604,27 +654,34 @@ function wait(ms) {
  * Send one message through the first provider in the channel's chain that
  * accepts it.
  *
- * Resolves `{ sent: true, messageId }` on success and `{ sent: false, reason }`
+ * Resolves `{ sent: true, success: true, status: 'sent', messageId }` on success and
+ * `{ sent: false, success: false, status, reason }` otherwise (status: 'skipped', 'not_configured').
  * when nothing is configured (or under tests). Throws when providers exist but
  * every one of them failed or is cooling down — a real failure the caller must
  * see, never a silent drop.
  */
 async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER, critical = false } = {}) {
   if (process.env.NODE_ENV === 'test') {
-    return { sent: false, reason: 'test environment' };
+    return { sent: false, success: false, status: 'skipped', reason: 'test environment' };
+  }
+
+  if (!message || !message.to) {
+    logger.warn(`${label} not sent: no recipient address`, { channel }, 'MAILER_SERVICE');
+    return { sent: false, success: false, status: 'skipped', reason: 'missing recipient email' };
   }
 
   const outgoing = { ...message };
   // Vendor replies must reach the vendor gateway inbox even when the message is
   // sent from a borrowed (buyer/pool) mailbox, or quote replies are lost.
-  if (channel === DELIVERY_CHANNEL.VENDOR && !outgoing.replyTo) {
-    outgoing.replyTo = vendorGatewayAddress();
+  const gatewayAddress = vendorGatewayAddress();
+  if (channel === DELIVERY_CHANNEL.VENDOR && !outgoing.replyTo && gatewayAddress) {
+    outgoing.replyTo = gatewayAddress;
   }
 
   const steps = deliveryPlan(channel, critical);
   if (steps.length === 0) {
     logger.warn(`No outbound mail provider configured — ${label} not sent`, { to: message.to, channel }, 'MAILER_SERVICE');
-    return { sent: false, reason: 'SMTP not configured' };
+    return { sent: false, success: false, status: 'not_configured', reason: 'SMTP not configured' };
   }
 
   const attempts = [];
@@ -640,7 +697,7 @@ async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER,
         logger.info(`Dispatching ${label} to ${message.to} via ${step.label}`, { subject: message.subject }, 'MAILER_SERVICE');
         const result = await step.run(outgoing);
         logger.info(`${label} sent successfully to ${message.to} via ${step.label}`, { messageId: result.messageId }, 'MAILER_SERVICE');
-        return { sent: true, messageId: result.messageId };
+        return { sent: true, success: true, status: 'sent', messageId: result.messageId };
       } catch (err) {
         lastError = err;
         const kind = mailTransport.noteProviderFailure(step.key, err);
@@ -805,7 +862,7 @@ function normalizeToAndContext(toOrParams, maybeContext) {
 }
 
 function emailGatewayAddress() {
-  return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com';
+  return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || '';
 }
 
 /**
@@ -872,7 +929,6 @@ function isBuyerUploadedVendor(vendor, context = {}, rfq = {}) {
     const id = String(v.id).toLowerCase().trim();
     if (
       id.startsWith('v-hist-') ||
-      id.startsWith('v-navin-') ||
       id.startsWith('vm-') ||
       id.startsWith('v-ingest-') ||
       id.startsWith('v-buyer-')
@@ -916,8 +972,8 @@ function buildRfqInviteEmail(to, context = {}) {
     .map(
       (it, idx) =>
         `<tr>
-          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${idx + 1}. ${it.itemName || it.name || it.item_name || 'Line item'}${it.technicalSpecs || it.specifications || it.specs || it.description ? `<br/><span style="font-weight: normal; font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications || it.specs || it.description}</span>` : ''}</td>
-          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e293b;">${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${idx + 1}. ${it.itemName || it.name || it.item_name || MAILER_NOT_SPECIFIED}${it.technicalSpecs || it.specifications || it.specs || it.description ? `<br/><span style="font-weight: normal; font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications || it.specs || it.description}</span>` : ''}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e293b;">${itemQuantityText(it)}</td>
           <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">${it.deliveryLocation || it.location || rfq.deliveryLocation || '-'}</td>
         </tr>`
     )
@@ -931,10 +987,10 @@ function buildRfqInviteEmail(to, context = {}) {
 
   const budgetFormatted = rfq.budget != null && rfq.budget !== '' ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : null;
 
-  const sampleReplyFormat = items.length > 1
-    ? items.map((it, idx) => `${idx + 1}. ${it.itemName || it.name || `Item ${idx + 1}`}: Unit Price ₹[Enter Price] (Qty: ${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'})`).join('\n') + '\n\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]'
+  const replyFormatGuide = items.length > 1
+    ? items.map((it, idx) => `${idx + 1}. ${it.itemName || it.name || `Item ${idx + 1}`}: Unit Price ₹[Enter Price] (Qty: ${itemQuantityText(it)})`).join('\n') + '\n\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]'
     : items.length === 1
-      ? `Item: ${items[0].itemName || items[0].name || 'Line Item'}\nUnit Price: ₹[Enter Unit Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`
+      ? `Item: ${items[0].itemName || items[0].name || MAILER_NOT_SPECIFIED}\nUnit Price: ₹[Enter Unit Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`
       : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
 
   const gatewayEmail = vendorGatewayAddress();
@@ -1001,7 +1057,7 @@ function buildRfqInviteEmail(to, context = {}) {
         requiresPortal
           ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Make sure every RFQ line item is priced in the downloaded workbook. Include supporting documents with your portal submission.</em></p>'
           : `<p style="margin: 14px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Email Reply Format (Copy, Fill & Send):</p>
-             <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${sampleReplyFormat}</div>
+             <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${replyFormatGuide}</div>
              <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;"><em>Our automated AI Email Gateway will parse your reply and immediately reflect your bid in Enterprise QUA Vendor Comparison.</em></p>
              ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}`
       }
@@ -1126,8 +1182,8 @@ async function sendQuoteFailureEmail(toOrParams, maybeContext) {
 function buildVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
   const { rfq = {}, rfqNumber, rfqTitle, vendorName, cc, upgradeUrl } = context;
-  const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
-  const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
+  const targetRfqNumber = requireMailText(rfqNumber || rfq.rfqNumber, 'rfqNumber', 'Vendor credits exhausted notice');
+  const targetTitle = rfqTitle || rfq.title || MAILER_NOT_SPECIFIED;
   const portalUpgradeLink = upgradeUrl || vendorUpgradeUrl();
 
   const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
@@ -1143,15 +1199,15 @@ function buildVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
     .map(
       (it, idx) =>
         `<tr>
-          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${idx + 1}. ${it.itemName || it.name || 'Line Item'}${it.technicalSpecs || it.specifications || it.specs || it.description ? `<br/><span style="font-weight: normal; font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications || it.specs || it.description}</span>` : ''}</td>
-          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e293b;">${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${idx + 1}. ${it.itemName || it.name || MAILER_NOT_SPECIFIED}${it.technicalSpecs || it.specifications || it.specs || it.description ? `<br/><span style="font-weight: normal; font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications || it.specs || it.description}</span>` : ''}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e293b;">${itemQuantityText(it)}</td>
           <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">${it.deliveryLocation || it.location || rfq.deliveryLocation || '-'}</td>
         </tr>`
     )
     .join('');
 
   const budgetFormatted = rfq.budget != null && rfq.budget !== '' ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : null;
-  const subject = `Action Required – 5 Free Quotation Credits Exhausted for RFQ #${targetRfqNumber}`;
+  const subject = `Action Required – ${VENDOR_FREE_CREDITS_LIMIT} Free Quotation Credits Exhausted for RFQ #${targetRfqNumber}`;
 
   const inner = `
     <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
@@ -1159,7 +1215,7 @@ function buildVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
     
     <div style="background: #fffbeb; border: 1px solid #f59e0b; color: #92400e; padding: 14px; border-radius: 6px; margin: 16px 0;">
       <strong>Notice: Free Quotation Credits Exhausted</strong><br/>
-      Your <strong>5 free RFQ quotation credits</strong> have been fully used. In accordance with Enterprise QUA procurement policies, an active subscription plan is required to continue submitting quotations and creating bids.
+      Your <strong>${VENDOR_FREE_CREDITS_LIMIT} free RFQ quotation credits</strong> have been fully used. In accordance with Enterprise QUA procurement policies, an active subscription plan is required to continue submitting quotations and creating bids.
     </div>
 
     <h3 style="font-size: 14px; margin: 16px 0 8px 0; color: #0f172a; text-transform: uppercase;">Relevant Current RFQ Details</h3>
@@ -1296,7 +1352,7 @@ function buildLineItemsBreakdownHtml(rfq = {}, quote = {}) {
             ${itemQuotes.map((item, idx) => {
               const ent = (item.lineItemId && entityMap.get(item.lineItemId)) || {};
               const name = item.itemName || item.description || ent.itemName || ent.name || `Line Item ${idx + 1}`;
-              const qty = item.quantity != null ? item.quantity : (ent.quantity || 1);
+              const qty = (item.quantity != null ? item.quantity : ent.quantity) ?? MAILER_NOT_SPECIFIED;
               const uom = item.unit || item.uom || ent.unit || ent.uom || '';
               const specs = item.technicalSpecs || item.specs || ent.technicalSpecs || ent.specs || '';
               const brand = item.brand || ent.brand || '';
@@ -1363,7 +1419,7 @@ function buildLineItemsBreakdownHtml(rfq = {}, quote = {}) {
                   ${item.technicalSpecs || item.specs ? `<div style="font-size: 11px; color: #64748b; margin-top: 2px;">Spec: ${escapeHtml(item.technicalSpecs || item.specs)}</div>` : ''}
                 </td>
                 <td style="padding: 8px 10px; text-align: center; color: #334155; white-space: nowrap;">
-                  ${item.quantity || 1} ${escapeHtml(item.unit || item.uom || '')}
+                  ${escapeHtml(itemQuantityText(item))}
                 </td>
                 <td style="padding: 8px 10px; color: #64748b;">
                   ${escapeHtml(item.category || item.majorCategory || '-')}
@@ -1406,7 +1462,7 @@ function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
   if (Array.isArray(quote.attachments) && quote.attachments.length > 0) {
     attachmentsHtml = quote.attachments
       .map((att) => {
-        const name = escapeHtml(att.fileName || att.name || 'Document');
+        const name = escapeHtml(att.fileName || att.name || MAILER_NOT_SPECIFIED);
         const sizeStr = formatAttachmentSize(att.size);
         return `<span style="display: inline-block; background: #e0f2fe; color: #0369a1; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin: 2px 4px 2px 0;">📎 ${name}${sizeStr ? ` (${sizeStr})` : ''}</span>`;
       })
@@ -1510,8 +1566,8 @@ async function sendQuoteReceivedEmail(to, context) {
 function buildRfqFinalComparisonEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
   const { rfq = {}, quotes = [], recipientName, comparisonUrl } = context;
-  const rfqNumber = rfq.rfqNumber || 'RFQ';
-  const rfqTitle = rfq.title || 'Procurement Requisition';
+  const rfqNumber = requireMailText(rfq.rfqNumber, 'rfq.rfqNumber', 'RFQ comparison notice');
+  const rfqTitle = rfq.title || MAILER_NOT_SPECIFIED;
   const quotesList = Array.isArray(quotes) && quotes.length > 0 ? quotes : (Array.isArray(rfq.quotes) ? rfq.quotes : []);
   const base = getPublicFrontendUrl();
   const resolvedUrl = comparisonUrl || `${base}/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNumber)}`;
@@ -1522,14 +1578,14 @@ function buildRfqFinalComparisonEmail(toOrParams, maybeContext) {
     return `
       <tr style="border-bottom: 1px solid #e2e8f0; ${isLowest ? 'background: #f0fdf4;' : ''}">
         <td style="padding: 10px; font-size: 13px; font-weight: 600; color: #0f172a;">
-          ${idx + 1}. ${q.vendorName || 'Vendor'}
+          ${idx + 1}. ${q.vendorName || MAILER_NOT_SPECIFIED}
           ${isLowest ? '<span style="background: #16a34a; color: white; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">Lowest Bid (L1)</span>' : ''}
         </td>
         <td style="padding: 10px; font-size: 13px; font-weight: bold; color: #1e293b;">${q.unitPrice != null ? `₹${Number(q.unitPrice).toLocaleString('en-IN')}` : '-'}</td>
         <td style="padding: 10px; font-size: 13px; color: #334155;">${q.leadTimeDays != null ? `${q.leadTimeDays} days` : '-'}</td>
         <td style="padding: 10px; font-size: 13px; color: #334155;">${q.warrantyYears != null ? `${q.warrantyYears} yr(s)` : '-'}</td>
         <td style="padding: 10px; font-size: 13px; color: #334155;">${q.aiMatchScore != null ? `${q.aiMatchScore}%` : '-'}</td>
-        <td style="padding: 10px; font-size: 12px; color: #475569;">${q.complianceStatus || 'Compliant'}</td>
+        <td style="padding: 10px; font-size: 12px; color: #475569;">${q.complianceStatus || MAILER_NOT_SPECIFIED}</td>
       </tr>
     `;
   }).join('');
@@ -1595,9 +1651,13 @@ async function sendRfqFinalComparisonEmail(toOrParams, maybeContext) {
 
 function buildRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
-  const { rfq = {}, quotesCount = 0, recipientName } = context;
-  const rfqNumber = rfq.rfqNumber || 'RFQ';
-  const rfqTitle = rfq.title || 'Procurement Requisition';
+  const { rfq = {}, quotesCount, recipientName } = context;
+  if (!rfq.rfqNumber) {
+    throw new Error('RFQ auto-closure acknowledgement requires rfq.rfqNumber before sending.');
+  }
+  requireMailCount(quotesCount, 'quotesCount', 'RFQ auto-closure acknowledgement');
+  const rfqNumber = rfq.rfqNumber;
+  const rfqTitle = rfq.title || MAILER_NOT_SPECIFIED;
   const subject = `All Invited Vendors Quoted – RFQ #${rfqNumber} Automatically Closed`;
 
   const inner = `
@@ -1645,9 +1705,18 @@ async function sendRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext) 
 
 function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
-  const { rfq = {}, vendorName, itemCount = 0, cc } = context;
-  const rfqNumber = rfq.rfqNumber || 'RFQ';
-  const rfqTitle = rfq.title || 'Procurement Requisition';
+  const { rfq = {}, vendorName, itemCount: suppliedItemCount, cc } = context;
+  if (!rfq.rfqNumber) {
+    throw new Error('Complex RFQ portal redirect requires rfq.rfqNumber before sending.');
+  }
+  // Prefer the caller's count, then the stored line items. Never a fixed number.
+  const itemCount = requireMailCount(
+    suppliedItemCount !== undefined ? suppliedItemCount : (Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities.length : undefined),
+    'itemCount',
+    'Complex RFQ portal redirect'
+  );
+  const rfqNumber = rfq.rfqNumber;
+  const rfqTitle = rfq.title || MAILER_NOT_SPECIFIED;
   const base = getPublicFrontendUrl();
   const portalUrl = `${base}/vendor/quotation-form?opportunity=${encodeURIComponent(rfqNumber)}`;
   const subject = `Portal Bidding Required for RFQ #${rfqNumber} (${itemCount} Items)`;
@@ -1695,8 +1764,8 @@ async function sendComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
 function buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
   const { rfq = {}, rfqNumber, rfqTitle, vendorName, issueMessage, reason, cc } = context;
-  const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
-  const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
+  const targetRfqNumber = requireMailText(rfqNumber || rfq.rfqNumber, 'rfqNumber', 'Vendor issue acknowledgement');
+  const targetTitle = rfqTitle || rfq.title || MAILER_NOT_SPECIFIED;
   const subject = `Inquiry Logged for RFQ #${targetRfqNumber} – Quotation Not Generated`;
 
   const inner = `
@@ -1759,10 +1828,10 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
   const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
   const displayBuyer = isBuyerVendor && buyerAccountName;
 
-  const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
-  const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
-  const targetCategory = rfqCategory || rfq.category || 'Requisition Category';
-  const currentCategory = vendorCurrentCategory || 'Not specified / general';
+  const targetRfqNumber = requireMailText(rfqNumber || rfq.rfqNumber, 'rfqNumber', 'Category mismatch notice');
+  const targetTitle = rfqTitle || rfq.title || MAILER_NOT_SPECIFIED;
+  const targetCategory = rfqCategory || rfq.category || MAILER_NOT_SPECIFIED;
+  const currentCategory = vendorCurrentCategory || MAILER_NOT_SPECIFIED;
   const subject = `Action Required: Category Mismatch for RFQ #${targetRfqNumber} – Please Update Business Profile`;
 
   const profileUrl = `${vendorSignInUrl()}?redirect=${encodeURIComponent('/vendor/vendor-profile')}`;
@@ -1854,10 +1923,7 @@ function buyerPortalUrl() {
  */
 function buildUnauthorizedBuyerEmail(to, context = {}) {
   const portalUrl = buyerPortalUrl();
-  const gatewayAddress =
-    context.gatewayAddress ||
-    process.env.EMAIL_GATEWAY_USER ||
-    UNAUTHORIZED_BUYER_NOTIFICATION.DEFAULT_GATEWAY_EMAIL;
+  const gatewayAddress = context.gatewayAddress || emailGatewayAddress();
 
   const inner = `
     <p>Dear Sir/Madam,</p>
@@ -1870,7 +1936,7 @@ function buildUnauthorizedBuyerEmail(to, context = {}) {
       </p>
       <p style="margin: 4px 0; font-size: 12px; color: #64748b;">Registration URL: <a href="${portalUrl}" style="color: #0284c7;">${portalUrl}</a></p>
     </div>
-    <p>After completing the registration and verification process, please resend your RFQ email to the Enterprise QUA RFQ email address (<strong>${gatewayAddress}</strong>).</p>
+    <p>After completing the registration and verification process, please resend your RFQ email to the Enterprise QUA RFQ email address${gatewayAddress ? ` (<strong>${escapeHtml(gatewayAddress)}</strong>)` : ''}.</p>
     <p style="font-size: 13px; color: #dc2626; font-weight: 500;">Your RFQ has not been created because the sender email is currently not authorized.</p>
     <p style="margin-top: 24px;">Regards,<br/><strong>Enterprise QUA</strong><br/>ProcureV</p>
   `;
@@ -1891,7 +1957,7 @@ function buildUnauthorizedBuyerEmail(to, context = {}) {
  * Dispatches a registration notification to an unregistered/unauthorized sender.
  */
 async function sendUnauthorizedBuyerNotificationEmail(to, context = {}) {
-  if (!to) return { sent: false, reason: 'missing recipient email' };
+  if (!to) return { sent: false, success: false, status: 'skipped', reason: 'missing recipient email' };
   return deliver(
     asAutoReply(buildUnauthorizedBuyerEmail(to, context)),
     'unauthorized-buyer registration notification email'
@@ -2115,7 +2181,7 @@ function buildVendorBulkImportInvitationEmail({ to, recipientName, buyerOrganiza
  */
 function buildBuyerCredentialsEmail({ to, recipientName, tempPassword, contactPhone, mobileNumber }) {
   const signInUrl = escapeHtml(buyerPortalUrl());
-  const phone = escapeHtml(mobileNumber || contactPhone || '9999999999');
+  const phone = escapeHtml(mobileNumber || contactPhone || MAILER_NOT_SPECIFIED);
   const inner = `
     <p>${recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,'}</p>
     <p>Your buyer account on <strong>Procucev Enterprise</strong> is ready. Use the credentials below to sign in and raise RFQs.</p>
@@ -2163,7 +2229,8 @@ function buildBuyerOnboardingWithRfqEmail({
 }) {
   const rawNumber = String(rfqNumber || (rfqs.length > 0 ? rfqs.map((r) => r.rfqNumber).join(', ') : '')).trim();
   const cleanNumber = rawNumber.replace(/^#+/, '');
-  const formattedRfq = cleanNumber ? cleanNumber : 'RFQ';
+  // No "RFQ" placeholder id. An empty id makes the template reject the send.
+  const formattedRfq = cleanNumber;
 
   const portalSignInUrl = loginUrl || buyerPortalUrl();
   const rfqReviewUrl = reviewUrl || `${getPublicFrontendUrl()}/login?redirect=/buyer/rfq-summary`;
@@ -2171,10 +2238,10 @@ function buildBuyerOnboardingWithRfqEmail({
   const rendered = buildEmail1_RfqCreatedAccountAutoCreated({
     first_name: buyerName,
     rfq_id: formattedRfq,
-    rfq_title: rfqTitle || 'Procurement Requirement',
+    rfq_title: rfqTitle,
     email: to,
-    mobile_number: mobileNumber || '9999999999',
-    temp_password: tempPassword || 'QuaAI#2026Auto',
+    mobile_number: mobileNumber,
+    temp_password: tempPassword,
     login_url: portalSignInUrl,
     review_url: rfqReviewUrl,
   });
@@ -2182,7 +2249,7 @@ function buildBuyerOnboardingWithRfqEmail({
   return {
     from: fromAddress(),
     to,
-    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    replyTo: emailGatewayAddress() || undefined,
     subject: rendered.subject,
     text: rendered.text,
     html: rendered.html,
@@ -2203,15 +2270,19 @@ function buildBuyerProfileCompletionReminderEmail({
   recipientName,
   rfqNumber,
   rfqTitle,
-  quotesCount = 1,
+  quotesCount,
 }) {
+  requireMailCount(quotesCount, 'quotesCount', 'Buyer profile completion reminder');
+  if (!rfqNumber) {
+    throw new Error('Buyer profile completion reminder requires rfqNumber before sending.');
+  }
   const signInUrl = escapeHtml(buyerPortalUrl());
-  const name = escapeHtml(recipientName || 'Valued Buyer');
-  const formattedRfq = escapeHtml(rfqNumber || '');
+  const greeting = recipientName ? `Hi <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,';
+  const formattedRfq = escapeHtml(rfqNumber);
 
   const inner = `
     <div style="font-family: Arial, sans-serif; width: 100%; box-sizing: border-box; color: #1e293b; line-height: 1.6;">
-      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
+      <p style="font-size: 16px; margin: 0 0 16px 0;">${greeting}</p>
 
       <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 16px 0;">
         <p style="margin: 0; font-size: 15px; color: #166534; font-weight: 600;">
@@ -2228,7 +2299,7 @@ function buildBuyerProfileCompletionReminderEmail({
         </p>
         <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px; color: #78350f;">
           <li>Verify your corporate email via OTP</li>
-          <li>Replace temporary placeholder mobile (9999999999) with your verified phone number via SMS OTP</li>
+          <li>Confirm your mobile number with an SMS OTP</li>
           <li>Update your temporary password to a permanent secure password</li>
           <li>Provide your registered company name, GSTIN (Goods and Services Tax Identification Number), and business address</li>
         </ul>
@@ -2251,7 +2322,7 @@ function buildBuyerProfileCompletionReminderEmail({
   return {
     from: fromAddress(),
     to,
-    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    replyTo: emailGatewayAddress() || undefined,
     subject: `[Action Required] Quotation Received for RFQ ${formattedRfq} - Update Profile to Access Quotes`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Alert - Profile Update Required', inner),
   };
@@ -2285,7 +2356,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
         <table style="width: 100%; border-collapse: collapse;">
           <tr>
             <td style="padding: 12px 0; color: #64748b; font-size: 13px; font-weight: 600;">Previous Rating</td>
-            <td style="padding: 12px 0; color: #0f172a; font-size: 14px; font-weight: 600;">${previousRating.toFixed(1)} / 5.0</td>
+            <td style="padding: 12px 0; color: #0f172a; font-size: 14px; font-weight: 600;">${formatRatingValue(previousRating, ' / 5.0')}</td>
           </tr>
           <tr>
             <td style="padding: 12px 0; color: #64748b; font-size: 13px; font-weight: 600;">New Rating</td>
@@ -2293,7 +2364,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
           </tr>
           <tr>
             <td style="padding: 12px 0; color: #64748b; font-size: 13px; font-weight: 600;">Score Change</td>
-            <td style="padding: 12px 0; color: #0f172a; font-size: 14px; font-weight: 600;">${previousScore.toFixed(1)} → ${newScore.toFixed(1)}</td>
+            <td style="padding: 12px 0; color: #0f172a; font-size: 14px; font-weight: 600;">${formatRatingValue(previousScore)} → ${formatRatingValue(newScore)}</td>
           </tr>
         </table>
       </div>
@@ -2380,34 +2451,31 @@ function buildRfqAcknowledgementEmail(params = {}) {
 
   const rawNumber = String(rfqNumber || '').trim();
   const cleanNumber = rawNumber.replace(/^#+/, '');
-  const formattedRfqNumber = cleanNumber ? cleanNumber : 'RFQ';
+  // No "RFQ" placeholder id. An empty id makes the template reject the send.
+  const formattedRfqNumber = cleanNumber;
 
-  const normalizedItems = Array.isArray(items) && items.length > 0
+  // Only stored line items are used. No placeholder line is invented when none exist.
+  const normalizedItems = Array.isArray(items)
     ? items.map((it) => ({
-        item_name: it.item_name || it.itemName || it.name || 'Item',
-        item_spec: it.item_spec || it.technicalSpecs || it.specifications || it.specs || it.description || 'Standard Specification',
-        qty: it.qty != null ? it.qty : (it.quantity != null ? it.quantity : 1),
-        uom: it.uom || it.unit || 'Nos',
+        item_name: it.item_name || it.itemName || it.name,
+        item_spec: it.item_spec || it.technicalSpecs || it.specifications || it.specs || it.description,
+        qty: it.qty != null ? it.qty : it.quantity,
+        uom: it.uom || it.unit,
       }))
-    : [{
-        item_name: rfqTitle || 'Procurement Requirement',
-        item_spec: 'Standard Specification',
-        qty: 1,
-        uom: 'Lot',
-      }];
+    : [];
 
   const count = itemCount !== undefined ? itemCount : normalizedItems.length;
 
   const rendered = buildEmail2_RfqCreated({
     first_name: buyerName,
     rfq_id: formattedRfqNumber,
-    rfq_title: rfqTitle || 'Procurement Requirement',
-    category: category || 'Industrial Supplies',
+    rfq_title: rfqTitle,
+    category,
     item_count: count,
-    delivery_location: deliveryLocation || 'As per RFQ Specification',
-    required_by: requiredBy || deliveryDate || 'To be scheduled',
-    quote_deadline: quoteDeadline || deadline || 'Within 72 hours',
-    suppliers_invited: suppliersInvited !== undefined ? suppliersInvited : 5,
+    delivery_location: deliveryLocation,
+    required_by: requiredBy || deliveryDate,
+    quote_deadline: quoteDeadline || deadline,
+    suppliers_invited: suppliersInvited,
     items: normalizedItems,
     rfq_summary_url: rfqSummaryUrl || `${getPublicFrontendUrl()}/buyer/rfq-summary`,
   });
@@ -2415,7 +2483,7 @@ function buildRfqAcknowledgementEmail(params = {}) {
   return {
     from: fromAddress(),
     to,
-    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    replyTo: emailGatewayAddress() || undefined,
     subject: rendered.subject,
     text: rendered.text,
     html: rendered.html,
@@ -2438,7 +2506,7 @@ function buildRfqNotCreatedEmail({ to, buyerName, reason, originalSubject, count
   const template =
     RFQ_NOT_CREATED_NOTIFICATION.REASONS[reason] || RFQ_NOT_CREATED_NOTIFICATION.REASONS.PROCESSING_FAILED;
   const reasonText = template.replace('{count}', String(count ?? '')).replace('{max}', String(max ?? ''));
-  const name = escapeHtml(buyerName || 'Valued Buyer');
+  const name = escapeHtml(buyerName || 'there');
   const portalUrl = buyerPortalUrl();
 
   const inner = `
@@ -2457,22 +2525,22 @@ function buildRfqNotCreatedEmail({ to, buyerName, reason, originalSubject, count
     from: fromAddress(),
     to,
     subject: RFQ_NOT_CREATED_NOTIFICATION.SUBJECT,
-    text: `Hi ${buyerName || 'Valued Buyer'},\n\nWe received your email${originalSubject ? ` "${originalSubject}"` : ''}, but no RFQ has been created from it.\n\n${reasonText}\n\nBuyer Portal: ${portalUrl}\n\n${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}`,
+    text: `Hi ${buyerName || 'there'},\n\nWe received your email${originalSubject ? ` "${originalSubject}"` : ''}, but no RFQ has been created from it.\n\n${reasonText}\n\nBuyer Portal: ${portalUrl}\n\n${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}`,
     html: wrapEmail(RFQ_NOT_CREATED_NOTIFICATION.HEADLINE, RFQ_NOT_CREATED_NOTIFICATION.SUBLINE, inner),
   };
 }
 
 async function sendRfqNotCreatedEmail(params = {}) {
-  if (!params.to) return { sent: false, reason: 'missing recipient email' };
+  if (!params.to) return { sent: false, success: false, status: 'skipped', reason: 'missing recipient email' };
   return deliver(asAutoReply(buildRfqNotCreatedEmail(params)), 'buyer RFQ not-created notice');
 }
 
 /**
  * Resolves the recipient email for new Enterprise Contracts inquiry alerts.
- * Configurable via ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL; defaults to info@procucev.com.
+ * Configured via ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL. Empty when unset, and the send is then skipped.
  */
 function getEnterpriseInquiryRecipient() {
-  return getEnv('ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL') || 'info@procucev.com';
+  return getEnv('ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL') || '';
 }
 
 function buildEnterpriseInquiryNotificationEmail({ inquiry = {}, recipientEmail } = {}) {
@@ -2482,7 +2550,7 @@ function buildEnterpriseInquiryNotificationEmail({ inquiry = {}, recipientEmail 
   const mobile = escapeHtml(inquiry.mobile || 'Not specified');
   const buyerAccountId = inquiry.buyerAccountId ? escapeHtml(inquiry.buyerAccountId) : null;
   const notes = inquiry.notes ? escapeHtml(inquiry.notes) : null;
-  const inquiryId = escapeHtml(inquiry.id || 'N/A');
+  const inquiryId = escapeHtml(inquiry.id || MAILER_NOT_SPECIFIED);
   const dateFormatted = new Date(inquiry.createdAt || Date.now()).toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
     dateStyle: 'medium',
@@ -2491,7 +2559,7 @@ function buildEnterpriseInquiryNotificationEmail({ inquiry = {}, recipientEmail 
 
   const frontendUrl = getPublicFrontendUrl();
   const consoleUrl = `${frontendUrl}/category-manager/enterprise-inquiries`;
-  const subject = `[Enterprise Inquiry] New Inquiry from ${inquiry.companyName || 'Buyer'}`;
+  const subject = `[Enterprise Inquiry] New Inquiry from ${inquiry.companyName || MAILER_NOT_SPECIFIED}`;
 
   const inner = `
     <p>A buyer has submitted a new <strong>Enterprise Contracts</strong> inquiry from the Subscription Center.</p>
@@ -2556,7 +2624,7 @@ function buildEnterpriseInquiryNotificationEmail({ inquiry = {}, recipientEmail 
     to,
     replyTo: inquiry.email || undefined,
     subject,
-    text: `New Enterprise Contract Inquiry\n\nCompany Name: ${inquiry.companyName || 'N/A'}\nCorporate Email: ${inquiry.email || 'N/A'}\nMobile: ${inquiry.mobile || 'N/A'}\nInquiry ID: ${inquiry.id || 'N/A'}\nSubmitted At: ${dateFormatted} IST\n\nView details: ${consoleUrl}`,
+    text: `New Enterprise Contract Inquiry\n\nCompany Name: ${inquiry.companyName || MAILER_NOT_SPECIFIED}\nCorporate Email: ${inquiry.email || MAILER_NOT_SPECIFIED}\nMobile: ${inquiry.mobile || MAILER_NOT_SPECIFIED}\nInquiry ID: ${inquiry.id || MAILER_NOT_SPECIFIED}\nSubmitted At: ${dateFormatted} IST\n\nView details: ${consoleUrl}`,
     html: wrapEmail('ENTERPRISE CONTRACTS', 'New Custom Contract Request', inner),
   };
 }
@@ -2569,8 +2637,8 @@ async function sendEnterpriseInquiryNotificationEmail(inquiry, options = {}) {
 
 function buildEnterpriseInquiryBuyerConfirmationEmail(inquiry = {}) {
   const to = inquiry.email;
-  const companyName = escapeHtml(inquiry.companyName || 'Valued Buyer');
-  const inquiryId = escapeHtml(inquiry.id || 'N/A');
+  const companyName = escapeHtml(inquiry.companyName || MAILER_NOT_SPECIFIED);
+  const inquiryId = escapeHtml(inquiry.id || MAILER_NOT_SPECIFIED);
   const dateFormatted = new Date(inquiry.createdAt || Date.now()).toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
     dateStyle: 'medium',
@@ -2621,13 +2689,13 @@ function buildEnterpriseInquiryBuyerConfirmationEmail(inquiry = {}) {
     from: fromAddress(),
     to,
     subject,
-    text: `Dear ${inquiry.companyName || 'Valued Buyer'},\n\nThank you for reaching out regarding Procucev Enterprise Contracts.\nWe have received your inquiry (Ref: ${inquiry.id || 'N/A'}).\nOur Enterprise Contracts team will reach out to you at ${inquiry.email} or ${inquiry.mobile} within 24 hours.\n\nBest regards,\nProcucev Enterprise Contracts Team`,
+    text: `Dear ${inquiry.companyName || MAILER_NOT_SPECIFIED},\n\nThank you for reaching out regarding Procucev Enterprise Contracts.\nWe have received your inquiry (Ref: ${inquiry.id || MAILER_NOT_SPECIFIED}).\nOur Enterprise Contracts team will reach out to you at ${inquiry.email} or ${inquiry.mobile} within 24 hours.\n\nBest regards,\nProcucev Enterprise Contracts Team`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Inquiry Received', inner),
   };
 }
 
 async function sendEnterpriseInquiryBuyerConfirmationEmail(inquiry, options = {}) {
-  if (!inquiry || !inquiry.email) return { sent: false, reason: 'missing recipient email' };
+  if (!inquiry || !inquiry.email) return { sent: false, success: false, status: 'skipped', reason: 'missing recipient email' };
   const message = buildEnterpriseInquiryBuyerConfirmationEmail(inquiry);
   return deliver(asAutoReply(message), 'enterprise inquiry buyer confirmation', options);
 }

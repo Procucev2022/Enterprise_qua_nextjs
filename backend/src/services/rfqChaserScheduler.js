@@ -367,10 +367,11 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
     const fup = liveRfq.followUpData;
 
     if (channel === 'whatsapp') {
-      if (!fup.whatsappStats) fup.whatsappStats = { total: 0, delivered: 0, read: 0, replied: 0 };
-      fup.whatsappStats.delivered = (fup.whatsappStats.delivered || 0) + 1;
-      if (fup.whatsappStats.delivered > (fup.whatsappStats.total || 0)) {
-        fup.whatsappStats.total = fup.whatsappStats.delivered;
+      // A provider acceptance is counted as "sent". "delivered" needs a real delivery receipt, and none is recorded here.
+      if (!fup.whatsappStats) fup.whatsappStats = { total: 0, sent: 0, delivered: 0, read: 0, replied: 0 };
+      fup.whatsappStats.sent = (fup.whatsappStats.sent || 0) + 1;
+      if (fup.whatsappStats.sent > (fup.whatsappStats.total || 0)) {
+        fup.whatsappStats.total = fup.whatsappStats.sent;
       }
       if (Array.isArray(fup.vendors) && vendor) {
         let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
@@ -378,13 +379,13 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
           vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
           fup.vendors.push(vRecord);
         }
-        vRecord.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        vRecord.whatsapp = { status: 'sent', lastAttempt: new Date().toISOString() };
       }
     } else if (channel === 'sms') {
-      if (!fup.smsStats) fup.smsStats = { total: 0, delivered: 0, clicked: 0 };
-      fup.smsStats.delivered = (fup.smsStats.delivered || 0) + 1;
-      if (fup.smsStats.delivered > (fup.smsStats.total || 0)) {
-        fup.smsStats.total = fup.smsStats.delivered;
+      if (!fup.smsStats) fup.smsStats = { total: 0, sent: 0, delivered: 0, clicked: 0 };
+      fup.smsStats.sent = (fup.smsStats.sent || 0) + 1;
+      if (fup.smsStats.sent > (fup.smsStats.total || 0)) {
+        fup.smsStats.total = fup.smsStats.sent;
       }
       if (Array.isArray(fup.vendors) && vendor) {
         let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
@@ -392,14 +393,13 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
           vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
           fup.vendors.push(vRecord);
         }
-        vRecord.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        vRecord.sms = { status: 'sent', lastAttempt: new Date().toISOString() };
       }
     } else if (channel === 'email') {
       if (!fup.emailStats) fup.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
       fup.emailStats.sent24h = (fup.emailStats.sent24h || 0) + 1;
-      fup.emailStats.delivered = (fup.emailStats.delivered || 0) + 1;
-      if (fup.emailStats.delivered > (fup.emailStats.total || 0)) {
-        fup.emailStats.total = fup.emailStats.delivered;
+      if (fup.emailStats.sent24h > (fup.emailStats.total || 0)) {
+        fup.emailStats.total = fup.emailStats.sent24h;
       }
       if (Array.isArray(fup.vendors) && vendor) {
         let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
@@ -407,7 +407,7 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
           vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
           fup.vendors.push(vRecord);
         }
-          vRecord.email = { status: 'delivered', lastAttempt: new Date().toISOString() };
+          vRecord.email = { status: 'sent', lastAttempt: new Date().toISOString() };
           vRecord.emailSent = true;
         }
       }

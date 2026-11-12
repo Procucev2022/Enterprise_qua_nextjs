@@ -10,14 +10,15 @@
  * Ported from the Java p2pservices pipeline (EmailProcessorService +
  * CategoryClassificationService + RFQBuilderService). The behaviours kept
  * deliberately identical to that service, because buyers already rely on them:
- *   - quantity <= 0 becomes 1, a blank unit becomes 'Nos'
+ *   - a missing or non-positive quantity stays null and is reported as missing,
+ *     and a blank unit stays null; neither is defaulted
  *   - classification precedence is explicit category, then keyword, then default
  *   - the RFQ title is derived from the first line item, capped at 100 chars
  *   - a missing delivery date defaults to today + 5 days
  *   - duplicate rows within one ingest are collapsed on a composite key
  */
 
-const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG, DEFAULT_CATEGORY_TAXONOMY, EMAIL_GATEWAY_CONFIG } = require('../config/constants');
+const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG, DEFAULT_CATEGORY_TAXONOMY } = require('../config/constants');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { logger } = require('./loggerService');
 
@@ -33,8 +34,6 @@ const {
 } = RFQ_CATEGORY_CLASSIFICATION;
 
 const {
-  DEFAULT_UNIT,
-  DEFAULT_QUANTITY,
   DELIVERY_DATE_OFFSET_DAYS,
   MAX_TITLE_LENGTH,
   TITLE_SUFFIX_SINGLE,
@@ -518,11 +517,12 @@ function ensureFutureDeliveryDate(dateInput, offsetDays = DELIVERY_DATE_OFFSET_D
 
 /**
  * Coerce a spreadsheet quantity into a usable positive number.
- * Anything absent, non-numeric or <= 0 becomes the documented default of 1.
+ * Anything absent, non-numeric or <= 0 returns null. The quantity is then missing
+ * and is reported as missing; it is never defaulted to a number the document did not state.
  */
 function normalizeQuantity(raw) {
   if (typeof raw === 'number') {
-    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_QUANTITY;
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
   }
   if (typeof raw === 'string') {
     const cleaned = raw.replace(/,/g, '').trim();
@@ -532,7 +532,7 @@ function normalizeQuantity(raw) {
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
     }
   }
-  return DEFAULT_QUANTITY;
+  return null;
 }
 
 /**
@@ -562,14 +562,16 @@ function normalizeAmount(raw) {
 /**
  * Value of one line: the stated line total when the document printed one, else
  * the stated unit rate multiplied by the quantity. Null when neither was priced,
- * which keeps an unpriced line out of the budget instead of contributing zero.
+ * or when the rate is stated but the quantity is missing, so the value cannot be
+ * computed. Either way the line stays out of the budget instead of counting as zero.
  */
 function lineItemValue(raw, quantity) {
   const total = normalizeAmount(raw.totalPrice ?? raw.amount);
   if (total !== null) return total;
 
   const unitPrice = normalizeAmount(raw.unitPrice ?? raw.rate);
-  return unitPrice === null ? null : unitPrice * quantity;
+  if (unitPrice === null || quantity === null) return null;
+  return unitPrice * quantity;
 }
 
 /**
@@ -645,12 +647,12 @@ function normalizeLineItems(rawItems, options = {}) {
       id: raw.id || `ent-ingested-${Date.now()}-${index}`,
       itemName,
       quantity: normalizeQuantity(raw.quantity),
-      unit: String(raw.unit || raw.uom || '').trim() || DEFAULT_UNIT,
+      unit: String(raw.unit || raw.uom || '').trim() || null,
       targetDate: (options.allowEmptyDeliveryDate || options.source === 'ai_extraction')
         ? (raw.targetDate ? (options.ensureFutureDate ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS) : String(raw.targetDate).trim()) : '')
         : (options.ensureFutureDate
-            ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS)
-            : (String(raw.targetDate || '').trim() || defaultTargetDate())),
+            ? (raw.targetDate ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS) : '')
+            : String(raw.targetDate || '').trim()),
       technicalSpecs: String(raw.technicalSpecs || raw.specifications || raw.specification || '').trim(),
       brand: String(raw.brand || '').trim(),
       deliveryCity: String(raw.deliveryCity || '').trim(),
@@ -761,11 +763,12 @@ async function buildRFQDraft(payload = {}, options = {}) {
     });
   }
 
+  // No generic title is invented. With no usable line item and no explicit title,
+  // the title is blank and the caller decides what to do with it.
   const derivedTitle = deriveTitle(entities);
-  const fallbackTitle = (EMAIL_GATEWAY_CONFIG && EMAIL_GATEWAY_CONFIG.DEFAULT_FALLBACK_RFQ_TITLE) || 'Request for Quotation';
   const title = (payload.source === 'email_gateway')
-    ? (derivedTitle || fallbackTitle)
-    : (String(payload.title || '').trim() || derivedTitle || fallbackTitle);
+    ? derivedTitle
+    : (String(payload.title || '').trim() || derivedTitle);
 
   // The RFQ header category follows the majority of its line items rather than
   // just the first, so a mixed BOQ lands in the category it mostly belongs to.

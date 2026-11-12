@@ -194,16 +194,13 @@ async function dispatchEvent(job) {
         error.code = 'INVALID_PERSISTED_RECORD';
         throw error;
       }
-      const numericFields = [
-        'previousRating',
-        'newRating',
-        'previousScore',
-        'newCompositeScore',
-        'qualityScore',
-        'costScore',
-        'deliveryScore',
-      ];
-      if (numericFields.some((field) => typeof revision[field] !== 'number' || !Number.isFinite(revision[field]))) {
+      // A vendor that was never rated has null previous values. Those are valid; every other value must be a finite number.
+      const requiredNumericFields = ['newRating', 'newCompositeScore', 'qualityScore', 'costScore', 'deliveryScore'];
+      const nullablePreviousFields = ['previousRating', 'previousScore'];
+      const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
+      const hasInvalidRequired = requiredNumericFields.some((field) => !isFiniteNumber(revision[field]));
+      const hasInvalidPrevious = nullablePreviousFields.some((field) => revision[field] !== null && !isFiniteNumber(revision[field]));
+      if (hasInvalidRequired || hasInvalidPrevious) {
         const error = new Error('Vendor rating revision email references an invalid persisted rating.');
         error.code = 'INVALID_PERSISTED_RECORD';
         throw error;
@@ -581,7 +578,7 @@ async function dispatchEvent(job) {
             }
             delivery = await mailerService.deliver(emailPayload, 'COMMUNICATION_DELIVERY');
             if (!delivery?.sent) {
-              deliveryError = Object.assign(new Error('Communication email provider did not accept the message.'), {
+              deliveryError = Object.assign(new Error(delivery?.reason || delivery?.error || 'Communication email provider did not accept the message.'), {
                 code: 'EMAIL_DELIVERY_NOT_ACCEPTED',
               });
             }
@@ -590,13 +587,13 @@ async function dispatchEvent(job) {
             const recipientPhone = metadata.deliveryRecipientPhone || communication.recipient;
             delivery = await smsService.sendActionCenterSms({
               mobile: recipientPhone,
-              recipientName: metadata.deliveryRecipientName || (accountType === 'vendor' ? 'Supplier' : 'Buyer'),
-              message: communication.message || communication.subject || 'Important account update',
+              recipientName: metadata.deliveryRecipientName,
+              message: communication.message || communication.subject,
               linkUrl: metadata.deliveryLinkUrl || '',
               entityType: metadata.deliveryEntityType || `${accountType || 'account'}_dossier`,
             });
             if (!delivery?.success) {
-              deliveryError = Object.assign(new Error('Communication SMS provider did not accept the message.'), {
+              deliveryError = Object.assign(new Error(delivery?.error || 'Communication SMS provider did not accept the message.'), {
                 code: 'SMS_DELIVERY_NOT_ACCEPTED',
               });
             }
@@ -681,27 +678,27 @@ async function dispatchEvent(job) {
       }
 
       const lineItems = Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [];
+      // Stored values pass through unchanged. Missing values stay missing so the template shows "Not specified".
       const items = lineItems.map((item) => ({
-        item_name: item.itemName || item.name || item.item_name || 'Line Item',
-        item_spec: item.technicalSpecs || item.specifications || item.specs || item.description || item.item_spec || 'Standard Specification',
-        qty: item.quantity != null ? item.quantity : (item.qty != null ? item.qty : 1),
-        uom: item.unit || item.uom || 'Nos',
+        item_name: item.itemName || item.name || item.item_name,
+        item_spec: item.technicalSpecs || item.specifications || item.specs || item.description || item.item_spec,
+        qty: item.quantity != null ? item.quantity : item.qty,
+        uom: item.unit || item.uom,
       }));
       const delivery = await mailerService.sendRfqAcknowledgementEmail({
         to: recipient,
-        buyerName: rfq.raisedByName || rfq.buyerAccountName || 'Valued Buyer',
+        buyerName: rfq.raisedByName || rfq.buyerAccountName,
         rfqNumber: rfq.rfqNumber,
         rfqTitle: rfq.title,
         category: rfq.category,
-        itemCount: items.length || 1,
+        itemCount: items.length,
         deliveryLocation: rfq.deliveryLocation,
         deliveryDate: rfq.targetDeliveryDate,
         requiredBy: rfq.targetDeliveryDate,
         quoteDeadline: rfq.deadline,
         deadline: rfq.deadline,
-        suppliersInvited: Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0
-          ? rfq.assignedVendors.length
-          : (rfq.procucevVendorCount || 5),
+        // The real number of suppliers assigned to this RFQ. No fixed fallback.
+        suppliersInvited: Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors.length : rfq.procucevVendorCount,
         items,
       });
       if (!delivery?.sent) {
@@ -823,7 +820,7 @@ async function dispatchEvent(job) {
       const delivery = await mailerService.sendQuoteReceivedEmail(recipientEmail, {
         rfq,
         quote,
-        recipientName: recipientName || rfq.buyerAccountName || rfq.buyerName || 'Buyer',
+        recipientName: recipientName || rfq.buyerAccountName || rfq.buyerName,
       });
       if (!delivery?.sent) {
         const error = new Error('RFQ quote notification email provider did not accept the message.');
@@ -942,7 +939,7 @@ async function dispatchEvent(job) {
       }
       const delivery = await mailerService.sendBuyerProfileCompletionReminderEmail({
         to: persistedRecipient,
-        recipientName: buyer.organizationName || recipientName || 'Buyer',
+        recipientName: buyer.organizationName || recipientName,
         rfqNumber: rfq.rfqNumber,
         rfqTitle: rfq.title,
         quotesCount: rfq.quotes.length,
@@ -988,7 +985,7 @@ async function dispatchEvent(job) {
       const delivery = await mailerService.sendRfqAutoClosureAcknowledgementEmail(recipientEmail, {
         rfq,
         quotesCount: rfq.quotes.length,
-        recipientName: recipientName || rfq.buyerAccountName || rfq.buyerName || 'Buyer',
+        recipientName: recipientName || rfq.buyerAccountName || rfq.buyerName,
       });
       if (!delivery?.sent) {
         const error = new Error('RFQ auto-closure acknowledgement provider did not accept the message.');

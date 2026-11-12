@@ -11,13 +11,11 @@ import {
   AuditLogEntry,
   AzureServiceHealth,
   SystemConfig,
-  QuoteComparison,
   VendorEvaluationRecord,
   VendorSubscriptionPlan,
   VendorEntry,
   StandardRFQEmailPayload,
   VendorOnboardingEmailPayload,
-  VendorProfileReminderPayload,
   HistoricalPurchaseVendorRecord,
   IngestionSummary,
   ExtractedEntity,
@@ -27,8 +25,6 @@ import {
   UserSession,
   RFQUpdatePayload,
   MajorMinorCategory,
-  RFQFollowUpBreakdown,
-  VendorFollowUpRecord,
 } from './types';
 import { authClient } from './authClient';
 import { logger } from './logger';
@@ -43,7 +39,7 @@ import {
   getBuyerPaymentLinkStatus,
 } from './subscriptionPaymentClient';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
-import { setCategoryTaxonomy, clearCategoryTaxonomy, getDefaultCategoryTaxonomy } from './categoryTaxonomy';
+import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
 import {
   createRFQ,
@@ -58,12 +54,8 @@ import {
   SOURCING_MODES,
   RFQ_MODES,
   RFQ_MODE_LABELS,
-  INITIAL_SYSTEM_CONFIG,
-  INITIAL_AZURE_HEALTH,
   formatCurrency,
-  hasUnlimitedAccess,
-  VENDOR_PLAN_RFQ_QUOTA,
-  VENDOR_FREE_CREDITS_LIMIT,
+  STORE_MESSAGES,
 } from './constants';
 
 function logApiResponseFailure(
@@ -174,11 +166,14 @@ interface AppContextType {
   setActiveTab: (tab: string) => void;
   rfqs: RFQItem[];
   aiFeed: AIBotFeedItem[];
+  /** Set when the last feed refresh failed. The events in `aiFeed` are then the last ones that loaded. */
+  aiFeedError: string | null;
   vendorOpportunities: VendorOpportunity[];
   auditLogs: AuditLogEntry[];
   azureHealth: AzureServiceHealth[];
-  systemConfig: SystemConfig;
-  setSystemConfig: React.Dispatch<React.SetStateAction<SystemConfig>>;
+  /** Null until the server returns the system config. Nothing is substituted. */
+  systemConfig: SystemConfig | null;
+  setSystemConfig: React.Dispatch<React.SetStateAction<SystemConfig | null>>;
   isLoadingDB: boolean;
   isLoadingRFQs: boolean;
   isLoadingVendors: boolean;
@@ -212,11 +207,12 @@ interface AppContextType {
   createBuyerPaymentLink: (plan: string, billingDuration?: '6_months' | '12_months') => Promise<string | null>;
   /** Real status ('CREATED'|'PAID'|'CANCELED'|'EXPIRED') of one of the caller's own buyer payment links, or null if it can't be resolved. */
   checkBuyerPaymentLinkStatus: (linkId: string) => Promise<string | null>;
-  addBuyerAccount: (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>) => BuyerAccount;
+  /** Creates the account on the server. Resolves with the stored record, or null when the server did not confirm it. */
+  addBuyerAccount: (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>) => Promise<BuyerAccount | null>;
   updateBuyerAccount: (id: string, updates: Partial<BuyerAccount>) => void;
   deleteBuyerAccount: (id: string) => Promise<boolean>;
-  alignActiveBuyerAccount: (accountId: string) => void;
-  importPublicBuyerDatabase: (accounts: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>[]) => number;
+  /** Makes the account the session's active one through the server. Resolves true only after the server confirms. */
+  alignActiveBuyerAccount: (accountId: string) => Promise<boolean>;
 
   // Initial Setup & Historical Purchase Data Ingestion (1, 2, or 3 Years)
   initialSetupModalOpen: boolean;
@@ -234,8 +230,8 @@ interface AppContextType {
   // Buyer Uploaded Vendors, Database Check & Automated Onboarding Emails
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
-  updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
-  deleteBuyerVendor: (vendorId: string) => void;
+  updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => Promise<boolean>;
+  deleteBuyerVendor: (vendorId: string) => Promise<boolean>;
   deleteMultipleBuyerVendors: (vendorIds: string[]) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
   generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean) => VendorOnboardingEmailPayload;
@@ -244,8 +240,6 @@ interface AppContextType {
   onboardingEmailModalOpen: boolean;
   setOnboardingEmailModalOpen: (open: boolean) => void;
   openOnboardingEmailModal: (vendor: VendorEntry) => void;
-  triggerVendorReminder: (vendorId: string) => void;
-  completeVendorProfile: (vendorEmail: string, updatedCategories?: string[]) => void;
 
   // Dual-Stream Category Reconciliation (Client-Mapped vs Vendor-Selected up to 10)
   clientMappedCategories: string[];
@@ -278,7 +272,7 @@ interface AppContextType {
    * created timestamp and the generated summary. Rejects when the save fails, so
    * no RFQ appears on screen that the database does not hold.
    */
-  addNewRFQ: (rfq: NewRFQInput, customMatchedVendors?: VendorEntry[]) => Promise<RFQItem>;
+  addNewRFQ: (rfq: NewRFQInput) => Promise<RFQItem>;
   /**
    * Take a server-created RFQ into local state exactly as returned.
    *
@@ -304,10 +298,16 @@ interface AppContextType {
    * disappearing from a list the database still holds it in.
    */
   deleteRFQ: (identifier: string) => Promise<void>;
-  triggerWhatsAppChaser: (rfqNumber: string, vendorName?: string) => void;
-  triggerChannelChaser: (rfqNumber: string, channel: 'call' | 'whatsapp' | 'sms' | 'email', vendorName?: string, customNote?: string, suppressToast?: boolean) => void;
-  triggerBatchChannelChaser: (rfqNumber: string, channels: ('call' | 'whatsapp' | 'sms')[], suppressToast?: boolean) => void;
-  submitVendorBid: (rfqNumber: string, unitPrice: number, leadTimeDays: number, remarks: string) => void;
+  /**
+   * Chases every vendor assigned to the RFQ on the given channels, through POST /api/rfqs/:id/batch-chaser.
+   * Resolves true only when the server reports at least one message accepted by a provider.
+   */
+  triggerBatchChannelChaser: (rfqNumber: string, channels: ('call' | 'whatsapp' | 'sms')[], suppressToast?: boolean) => Promise<boolean>;
+  /**
+   * Single-vendor chaser. The server has no per-vendor chaser route, so this resolves false without contacting anyone
+   * and tells the user the chaser was not sent.
+   */
+  triggerChannelChaser: (rfqNumber: string, channel: 'call' | 'whatsapp' | 'sms' | 'email', vendorName?: string, customNote?: string, suppressToast?: boolean) => Promise<boolean>;
   approvePO: (
     rfqNumber: string,
     vendorId: string | null,
@@ -315,8 +315,13 @@ interface AppContextType {
     amount: number,
     approverNotes?: string
   ) => Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }>;
-  addAuditLog: (action: string, rfqNumber?: string, user?: string) => void;
-  addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system', channelDetails?: AIBotFeedItem['channelDetails']) => void;
+  /**
+   * Records an audit event. The server stamps the actor from the signed-in session, plus the IP address and the
+   * SHA-256 seal. The entry is added to `auditLogs` only after the server stores it.
+   */
+  addAuditLog: (action: string, rfqNumber?: string) => Promise<void>;
+  /** Saves a feed event. The event appears in `aiFeed` only once the server has stored it. */
+  addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system', channelDetails?: AIBotFeedItem['channelDetails']) => Promise<void>;
   selectedRFQForMatrix: RFQItem | null;
   setSelectedRFQForMatrix: (rfq: RFQItem | null) => void;
   /** Opportunity carried from the vendor feed into the quotation form route. */
@@ -348,20 +353,20 @@ interface AppContextType {
   showToast: (title: string, description: string, type?: 'success' | 'info' | 'warning') => void;
   dismissToast: () => void;
 
-  // Sourcing Free Tier RFQ Limits (Max 5 for Version 1 Free Trial)
-  remainingFreeRFQs: number;
-  setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number>>;
-  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited';
-  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>>;
-  vendorSubscription: VendorSubscriptionPlan;
-  setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
+  // Sourcing free-tier RFQ balance and plan. Each is null until the server has reported it.
+  remainingFreeRFQs: number | null;
+  setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number | null>>;
+  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited' | null;
+  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited' | null>>;
+  vendorSubscription: VendorSubscriptionPlan | null;
+  setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan | null>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   /** Real Zoho payment-link creation for the caller's own vendor profile. Returns the URL to redirect to, or null on failure (a toast is already shown). */
   createVendorPaymentLink: (plan: string, billingDuration?: '6_months' | '12_months') => Promise<string | null>;
   /** Real status ('CREATED'|'PAID'|'CANCELED'|'EXPIRED') of one of the caller's own vendor payment links, or null if it can't be resolved. */
   checkVendorPaymentLinkStatus: (linkId: string) => Promise<string | null>;
-  vendorRfqDownloadsUsed: number;
-  setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number>>;
+  vendorRfqDownloadsUsed: number | null;
+  setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number | null>>;
   vendorCatalogue: any[];
   setVendorCatalogue: React.Dispatch<React.SetStateAction<any[]>>;
 
@@ -369,7 +374,7 @@ interface AppContextType {
   // subscribers, otherwise the free-tier balance. null until first loaded.
   vendorFreeCreditsRemaining: number | null;
   vendorFreeCreditsAllocated: number | null;
-  vendorFreeCreditsUsed: number;
+  vendorFreeCreditsUsed: number | null;
   vendorUnlockedRfqIds: string[];
   refreshVendorCredits: () => Promise<void>;
   unlockRFQForVendor: (rfqIdOrNumber: string) => Promise<{ success: boolean; error?: string; exhausted?: boolean; alreadyUnlocked?: boolean }>;
@@ -377,14 +382,13 @@ interface AppContextType {
   // Vendor 360° AI Self-Evaluation & Infra Fee ($5 or $0 with Connect/Select)
   vendorSelfEvaluationCompleted: boolean;
   setVendorSelfEvaluationCompleted: (completed: boolean) => void;
-  vendorSelfEvaluationScore: number;
+  /** Score from the vendor's own questionnaire, held for this session only. Null until that questionnaire is completed. */
+  vendorSelfEvaluationScore: number | null;
   setVendorSelfEvaluationScore: (score: number) => void;
   isVendorEvaluationFeeWaived: boolean;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-
-// Helper to generate realistic SHA-256 format strings
 
 /** Whole days from today until a target date, or 0 when there is no date. */
 function daysUntilDate(target?: string): number {
@@ -394,15 +398,6 @@ function daysUntilDate(target?: string): number {
   const MS_PER_DAY = 86400000;
   const todayUtc = Date.parse(new Date().toISOString().slice(0, 10));
   return Math.round((Date.parse(target.slice(0, 10)) - todayUtc) / MS_PER_DAY);
-}
-
-function generateShaHash(): string {
-  let hash = '';
-  const chars = '0123456789abcdef';
-  for (let i = 0; i < 64; i++) {
-    hash += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return hash;
 }
 
 const inFlightPromises = new Map<string, Promise<any>>();
@@ -450,7 +445,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const initialRfqs = getSessionCache<RFQItem[]>('rfqs') || [];
   const initialActiveBuyer = getSessionCache<BuyerAccount>('activeBuyerAccount') || null;
   const initialAiFeed = getSessionCache<AIBotFeedItem[]>('aiFeed') || [];
-  const initialTaxonomy = getSessionCache<MajorMinorCategory[]>('taxonomy') || [];
+  // Not restored from the session. A build before the fallback removal could have cached the
+  // bundled seed under this key, and the master is re-read from the API on demand.
+  const initialTaxonomy: MajorMinorCategory[] = [];
 
   const loadedEntitiesRef = useRef<Record<string, boolean>>({
     vendors: initialVendors.length > 0,
@@ -479,13 +476,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [activeTab, setActiveTab] = useState<string>('command_center');
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
-  // Subscription State
-  const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number>(5);
-  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>('free_trial');
-  const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan>('premium');
-  // Was a fabricated "already used 3" starting point — real usage is hydrated
-  // from the vendor's actual record in refreshFromDB once it loads.
-  const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number>(0);
+  // Subscription state starts as null ("not loaded yet"). Each value is written only from the server
+  // response: the buyer account (GET /api/buyer-accounts/active) or the vendor record (GET /api/bootstrap).
+  const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number | null>(null);
+  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited' | null>(null);
+  const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan | null>(null);
+  const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number | null>(null);
 
   const resolveVendorId = async (sessionEmail?: string | null): Promise<string | null> => {
     if (!sessionEmail) return null;
@@ -545,7 +541,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     setVendorSubscription(plan);
-    setVendorRfqDownloadsUsed(data.data.rfqDownloadsUsed || 0);
+    setVendorRfqDownloadsUsed(typeof data.data.rfqDownloadsUsed === 'number' ? data.data.rfqDownloadsUsed : null);
     setBuyerVendors((prev) => prev.map((v) => (v.id === vendorId || v.email?.toLowerCase() === sessionEmail ? { ...v, ...data.data } : v)));
     return true;
   };
@@ -641,6 +637,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [rfqs, setRfqs] = useState<RFQItem[]>(initialRfqs);
   const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>(initialAiFeed);
+  const [aiFeedError, setAiFeedError] = useState<string | null>(null);
   const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>(
     initialRfqs.map(buildOpportunityFromRFQ)
   );
@@ -652,17 +649,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Vendor 360° AI Self-Evaluation & Infra Fee State
   const [vendorSelfEvaluationCompleted, setVendorSelfEvaluationCompleted] = useState<boolean>(false);
-  const [vendorSelfEvaluationScore, setVendorSelfEvaluationScore] = useState<number>(94.5);
+  const [vendorSelfEvaluationScore, setVendorSelfEvaluationScore] = useState<number | null>(null);
 
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [azureHealth, setAzureHealth] = useState<AzureServiceHealth[]>(INITIAL_AZURE_HEALTH);
+  // Empty until the server sends real probe results. No placeholder service rows.
+  const [azureHealth, setAzureHealth] = useState<AzureServiceHealth[]>([]);
   // Starts empty on purpose. The bundled categories.json this replaced meant a
   // screen could always render a full category tree, including when the master had
   // changed underneath it or the API was down.
   const [categoryTaxonomy, setCategoryTaxonomyState] = useState<MajorMinorCategory[]>(initialTaxonomy);
   const [categoryTaxonomyError, setCategoryTaxonomyError] = useState<string | null>(null);
   const [isLoadingCategoryTaxonomy, setIsLoadingCategoryTaxonomy] = useState<boolean>(false);
-  const [systemConfig, setSystemConfig] = useState<SystemConfig>(INITIAL_SYSTEM_CONFIG);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   const [selectedRFQForMatrix, setSelectedRFQForMatrix] = useState<RFQItem | null>(null);
   const [selectedVendorOpportunity, setSelectedVendorOpportunity] = useState<VendorOpportunity | null>(null);
   const [activeEvaluationRecord, setActiveEvaluationRecord] = useState<VendorEvaluationRecord | null>(null);
@@ -680,35 +678,57 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // balance arrived from refreshVendorCredits.
   const [vendorFreeCreditsRemaining, setVendorFreeCreditsRemaining] = useState<number | null>(null);
   const [vendorFreeCreditsAllocated, setVendorFreeCreditsAllocated] = useState<number | null>(null);
-  const [vendorFreeCreditsUsed, setVendorFreeCreditsUsed] = useState<number>(0);
+  const [vendorFreeCreditsUsed, setVendorFreeCreditsUsed] = useState<number | null>(null);
   const [vendorUnlockedRfqIds, setVendorUnlockedRfqIds] = useState<string[]>([]);
 
+  // Balances are copied from the server response. A failed read clears them to null, so the header
+  // shows "not loaded" instead of the last figure or a plan default.
   const refreshVendorCredits = async () => {
     if (!authClient.getToken()) return;
     try {
       const res = await fetchVendorRfqCredits();
       if (res.success && res.data) {
-        const isUnlimited = hasUnlimitedAccess(currentUserSession) || res.data.subscriptionPlan === 'unlimited';
-        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? VENDOR_FREE_CREDITS_LIMIT));
-        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? VENDOR_FREE_CREDITS_LIMIT));
-        setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
+        setVendorFreeCreditsRemaining(typeof res.data.freeCreditsRemaining === 'number' ? res.data.freeCreditsRemaining : null);
+        setVendorFreeCreditsAllocated(typeof res.data.freeCreditsAllocated === 'number' ? res.data.freeCreditsAllocated : null);
+        setVendorFreeCreditsUsed(typeof res.data.freeCreditsUsed === 'number' ? res.data.freeCreditsUsed : null);
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
+      } else {
+        setVendorFreeCreditsRemaining(null);
+        setVendorFreeCreditsAllocated(null);
+        setVendorFreeCreditsUsed(null);
       }
     } catch (err) {
+      setVendorFreeCreditsRemaining(null);
+      setVendorFreeCreditsAllocated(null);
+      setVendorFreeCreditsUsed(null);
       logger.log('ERROR', 'Failed to refresh vendor RFQ credits', { error: err }, 'VENDOR_CREDITS');
+    }
+  };
+
+  // Reads the vendor's own rfqDownloadsUsed from its record, which is the only source for that counter.
+  const refreshOwnVendorDownloadsUsed = async () => {
+    const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+    const vendorId = await resolveVendorId(sessionEmail);
+    if (!vendorId) return;
+    try {
+      const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, { headers: authFetchHeaders() });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success && json.data) {
+        setVendorRfqDownloadsUsed(typeof json.data.rfqDownloadsUsed === 'number' ? json.data.rfqDownloadsUsed : null);
+      }
+    } catch (err) {
+      logger.log('WARN', 'Failed to refresh vendor RFQ download count', { error: err }, 'VENDOR_CREDITS');
     }
   };
 
   const unlockRFQForVendor = async (rfqIdOrNumber: string) => {
     const res = await downloadAndUnlockRFQ(rfqIdOrNumber);
     if (res.success) {
-      if (res.freeCreditsRemaining !== undefined) {
-        const remaining = res.freeCreditsRemaining;
-        setVendorFreeCreditsRemaining(remaining);
-        setVendorFreeCreditsUsed(Math.max(0, (vendorFreeCreditsAllocated ?? VENDOR_FREE_CREDITS_LIMIT) - remaining));
-        // Keep the Subscription page's "used / quota" in step with the header.
-        const quota = VENDOR_PLAN_RFQ_QUOTA[vendorSubscription];
-        if (quota !== undefined) setVendorRfqDownloadsUsed(Math.max(0, quota - remaining));
+      // The balances are reloaded from the server. The remaining count from the unlock response is the server's
+      // own figure, so it is applied as reported. Nothing is computed from the request.
+      await Promise.all([refreshVendorCredits(), refreshOwnVendorDownloadsUsed()]);
+      if (typeof res.freeCreditsRemaining === 'number') {
+        setVendorFreeCreditsRemaining(res.freeCreditsRemaining);
       }
       setVendorUnlockedRfqIds((prev) => {
         const norm = String(rfqIdOrNumber);
@@ -800,6 +820,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         logApiResponseFailure('Reference data request failed', res, 'REFERENCE_DATA', {
           responseError: json?.error,
         });
+        setDbConnected(false);
       }
       if (json.success && json.data) {
         const d = json.data;
@@ -810,16 +831,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSessionCache('vendors', vendorsList);
 
         const sessionEmail = typeof authClient?.getSessionUser === 'function' ? authClient.getSessionUser()?.email?.toLowerCase() : null;
-        if (sessionEmail && Array.isArray(d.vendors)) {
-          const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
-          const isUnlimited = hasUnlimitedAccess(sessionEmail);
-          if (myVendor) {
-            setVendorSubscription(isUnlimited ? 'unlimited' : (myVendor.subscriptionPlan || 'premium'));
-            setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
-          } else if (isUnlimited) {
-            setVendorSubscription('unlimited');
-          }
-        }
+        // The plan and download count come only from the signed-in vendor's record. With no such record, or a
+        // missing value, both stay null rather than keeping a figure from an earlier load.
+        const myVendor = sessionEmail && Array.isArray(d.vendors)
+          ? d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail)
+          : undefined;
+        setVendorSubscription(myVendor?.subscriptionPlan ?? null);
+        setVendorRfqDownloadsUsed(myVendor && typeof myVendor.rfqDownloadsUsed === 'number' ? myVendor.rfqDownloadsUsed : null);
 
         setVendorEvaluations(evalsList);
         setSessionCache('evaluations', evalsList);
@@ -934,13 +952,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingCategoryTaxonomy(true);
     try {
       const result = await fetchCategoryTaxonomy();
+      // No substitute list. A failed or empty read leaves the list empty and sets the error for the screen.
       if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
-        const fallback = getDefaultCategoryTaxonomy();
-        setCategoryTaxonomy(fallback);
-        setCategoryTaxonomyState(fallback);
-        setSessionCache('taxonomy', fallback);
-        setCategoryTaxonomyError(null);
-        loadedEntitiesRef.current.taxonomy = true;
+        clearCategoryTaxonomy();
+        setCategoryTaxonomyState([]);
+        setSessionCache('taxonomy', []);
+        setCategoryTaxonomyError(
+          result.success
+            ? UI_STRINGS.buyerProfile.taxonomyEmpty
+            : result.error || UI_STRINGS.buyerProfile.taxonomyUnavailable
+        );
+        loadedEntitiesRef.current.taxonomy = false;
         return;
       }
       setCategoryTaxonomy(result.data);
@@ -965,6 +987,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refreshAIFeed = async () => {
     if (!authClient.getToken()) {
       setAiFeed([]);
+      setAiFeedError(null);
       setSessionCache('aiFeed', []);
       loadedEntitiesRef.current.aiFeed = false;
       return;
@@ -973,17 +996,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const activeBuyerId = activeBuyerAccount?.id;
       const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}&limit=50` : '?limit=50';
       const res = await fetch(`/api/ai-feed${queryParam}`, { headers: authFetchHeaders() });
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data)) {
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success && Array.isArray(json.data)) {
         setAiFeed(json.data);
+        setAiFeedError(null);
         setSessionCache('aiFeed', json.data);
-      } else {
-        setAiFeed([]);
-        setSessionCache('aiFeed', []);
+        loadedEntitiesRef.current.aiFeed = true;
+        return;
       }
-      loadedEntitiesRef.current.aiFeed = true;
+      // A failed read keeps the events already loaded and reports the failure. An empty list would read as "no activity".
+      logApiResponseFailure('AI feed request failed', res, 'AI_FEED', { responseError: json?.error });
+      setAiFeedError(json?.error || STORE_MESSAGES.aiFeedLoadFailed);
     } catch (err) {
       logger.log('ERROR', 'Failed to load AI feed', { error: err }, 'AI_FEED');
+      setAiFeedError(STORE_MESSAGES.aiFeedLoadFailed);
     }
   };
 
@@ -1049,7 +1075,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const r = currentRoleOverride || currentRole || 'buyer';
     const path = pathname || (typeof window !== 'undefined' ? window.location.pathname : '');
 
-    const tasks: Promise<any>[] = [];
+    const tasks: Promise<unknown>[] = [];
 
     if (r === 'buyer') {
       tasks.push(loaders.ensureActiveBuyerAccount());
@@ -1180,30 +1206,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [activeBuyerAccount]);
 
   // Integrated Buyer Accounts Management & Public Database Sync
-  const addBuyerAccount = (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>): BuyerAccount => {
-    const newAcc: BuyerAccount = {
-      ...account,
-      id: `buyer-acc-${Date.now().toString().slice(-4)}`,
-      totalRFQsCreated: 0,
-      totalSpend: '₹0',
-      syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
-      createdDate: new Date().toISOString().substring(0, 10),
-    };
-    setBuyerAccounts((prev) => [newAcc, ...prev]);
-    setActiveBuyerAccount(newAcc);
+  // The record shown is the one the server stores. Its id, totals and timestamps are not made up here.
+  const addBuyerAccount = async (
+    account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>
+  ): Promise<BuyerAccount | null> => {
+    let res: Response;
+    try {
+      res = await fetch('/api/buyer-accounts', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify(account),
+      });
+    } catch (e) {
+      logger.log('ERROR', 'Failed to save buyer account to backend', { error: e }, 'BUYER_ACCOUNT');
+      showToast(STORE_MESSAGES.buyerAccountCreateFailedTitle, STORE_MESSAGES.buyerAccountUnreachable, 'warning');
+      return null;
+    }
 
-    // Persist to PostgreSQL
-    fetch('/api/buyer-accounts', {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify(newAcc),
-    }).then((res) => {
-      if (!res.ok) logApiResponseFailure('Buyer account creation request failed', res, 'BUYER_ACCOUNT');
-    }).catch((e) => logger.log('ERROR', 'Failed to save buyer account to backend', { error: e }, 'BUYER_ACCOUNT'));
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success || !json.data) {
+      logApiResponseFailure('Buyer account creation request failed', res, 'BUYER_ACCOUNT', {
+        responseError: json?.error,
+      });
+      showToast(
+        STORE_MESSAGES.buyerAccountCreateFailedTitle,
+        json?.error || STORE_MESSAGES.buyerAccountCreateFailed,
+        'warning'
+      );
+      return null;
+    }
 
-    addAuditLog(`Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail}) with source ${newAcc.accountSource}`);
-    showToast('Buyer Account Created', `${newAcc.organizationName} registered and added to buyer master database.`, 'success');
-    return newAcc;
+    const created: BuyerAccount = json.data;
+    setBuyerAccounts((prev) => [created, ...prev]);
+    setActiveBuyerAccount(created);
+    loadedEntitiesRef.current.activeBuyerAccount = true;
+
+    void addAuditLog(`Created buyer account for ${created.organizationName}`);
+    showToast('Buyer Account Created', `${created.organizationName} registered and added to buyer master database.`, 'success');
+    return created;
   };
 
   const updateBuyerAccount = (id: string, updates: Partial<BuyerAccount>) => {
@@ -1313,48 +1353,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const alignActiveBuyerAccount = (accountId: string) => {
+  // Switching accounts is persisted by the server (POST /api/buyer-accounts/:id/activate). The local
+  // active account is reloaded from the server afterwards, and the success notice only follows that.
+  const alignActiveBuyerAccount = async (accountId: string): Promise<boolean> => {
     const acc = buyerAccounts.find((a) => a.id === accountId);
-    if (!acc) return;
-    setActiveBuyerAccount(acc);
-    setCurrentMode(acc.sourcingMode);
-    setActiveSubscription(acc.subscriptionPlan);
-    setRemainingFreeRFQs(acc.remainingFreeRFQs);
-    addAuditLog(`Switched active buyer session context to ${acc.organizationName} (${acc.corporateEmail})`);
-    showToast('Session Aligned', `Active session aligned to: ${acc.organizationName} (${acc.corporateEmail})`, 'success');
-  };
-
-  const importPublicBuyerDatabase = (accounts: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>[]): number => {
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
-    const dateStr = new Date().toISOString().substring(0, 10);
-    const created: BuyerAccount[] = accounts.map((a, i) => ({
-      ...a,
-      id: `buyer-acc-sync-${Date.now()}-${i}`,
-      totalRFQsCreated: a.totalRFQsCreated || 0,
-      totalSpend: a.totalSpend || '₹0',
-      syncTimestamp: timestamp,
-      createdDate: dateStr,
-    }));
-    setBuyerAccounts((prev) => [...created, ...prev]);
-
-    // Persist batch to DB
-    created.forEach((acc) => {
-      fetch('/api/buyer-accounts', {
+    let res: Response;
+    try {
+      res = await fetch(`/api/buyer-accounts/${encodeURIComponent(accountId)}/activate`, {
         method: 'POST',
         headers: authFetchHeaders(),
-        body: JSON.stringify(acc),
-      }).then((res) => {
-        if (!res.ok) {
-          logApiResponseFailure('Imported buyer account creation request failed', res, 'BUYER_ACCOUNT', {
-            accountId: acc.id,
-          });
-        }
-      }).catch((e) => logger.log('ERROR', 'Failed to sync buyer account to backend', { error: e }, 'BUYER_ACCOUNT'));
-    });
-
-    addAuditLog(`Synced and imported ${created.length} legacy buyer accounts from Public System Database.`);
-    showToast('Database Synced', `${created.length} existing buyer accounts aligned from public system.`, 'success');
-    return created.length;
+      });
+    } catch (e) {
+      logger.log('ERROR', 'Buyer account switch could not reach the backend', { error: e, accountId }, 'BUYER_ACCOUNT');
+      showToast(STORE_MESSAGES.alignFailedTitle, STORE_MESSAGES.alignUnreachable, 'warning');
+      return false;
+    }
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Buyer account switch request failed', res, 'BUYER_ACCOUNT', {
+        accountId,
+        responseError: json?.error,
+      });
+      showToast(STORE_MESSAGES.alignFailedTitle, json?.error || STORE_MESSAGES.alignFailed, 'warning');
+      return false;
+    }
+    await refreshActiveBuyerAccount();
+    if (acc) setCurrentMode(acc.sourcingMode);
+    void addAuditLog(`Switched active buyer session context to ${acc?.organizationName || accountId}`);
+    showToast('Session Aligned', formatString(STORE_MESSAGES.alignedMessage, { name: acc?.organizationName || accountId }), 'success');
+    return true;
   };
 
   const [vendorCatalogue, setVendorCatalogue] = useState<any[]>([]);
@@ -1415,11 +1442,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     vendor: VendorEntry,
     isExisting: boolean
   ): VendorOnboardingEmailPayload => {
-    const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
-    const buyerContact = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
-    const buyerEmail = activeBuyerAccount?.corporateEmail || 'client@procucev.com';
-    const emailId = `EML-ONBOARD-${Date.now().toString().slice(-6)}-${vendor.id}`;
-    const nextDate = vendor.nextReminderDate || new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
+    // Buyer identity comes only from the active account. A missing field stays empty; nothing is substituted.
+    const buyerCompany = activeBuyerAccount?.organizationName ?? '';
+    const buyerContact = activeBuyerAccount?.contactPerson ?? '';
+    const buyerEmail = activeBuyerAccount?.corporateEmail ?? '';
+    const nextDate = vendor.nextReminderDate ?? '';
 
     const hasMappedCategories = Boolean(
       vendor.majorCategory &&
@@ -1429,8 +1456,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       vendor.minorCategories.length > 0
     );
 
-    const assignedMajor = hasMappedCategories ? vendor.majorCategory! : '(None Assigned by Buyer)';
-    const assignedMinors = hasMappedCategories ? vendor.minorCategories! : [];
+    const assignedMajor = hasMappedCategories ? (vendor.majorCategory ?? '') : '(None Assigned by Buyer)';
+    const assignedMinors = hasMappedCategories ? (vendor.minorCategories ?? []) : [];
 
     let subject = '';
     let authInstructions = '';
@@ -1442,13 +1469,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       subject = `[Action Required] Set Up Categories: ${buyerCompany} added you to their Preferred Vendor Network`;
       authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network from their vendor master records. Because no past pre-purchase orders were found in their historical dump, the buyer did not map any product categories for your company. Sign in with your registered email and follow the verification steps shown on the portal.`;
       profileUpdateInstructions = `Please log in to complete your enterprise compliance profile (factory specs, GSTIN/PAN, plant location, capacity).`;
-      categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across our 13 Major Categories and 280+ Minor Category taxonomy in order to receive enquiries and RFQ opportunities.`;
+      categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across the Major and Minor Category taxonomy in order to receive enquiries and RFQ opportunities.`;
       unmappedSelfServiceMessage = `The buyer didn't map any categories for you, so please map yourself in order to receive enquiries.`;
     } else if (isExisting) {
       subject = `[Network Association] ${buyerCompany} has added you to their Preferred Vendor Network on Procucev`;
       authInstructions = `A buyer from ${buyerCompany} has associated your verified enterprise profile into their private preferred supplier network. Sign in using your existing credentials or follow the account verification and password recovery steps on the portal.`;
       profileUpdateInstructions = `Please log in to review the buyer association and verify that your plant locations, operational capabilities, and statutory certifications are up to date.`;
-      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across our 280+ standard minor categories.`;
+      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across the standard minor categories.`;
     } else {
       subject = `[Action Required] Welcome to Procucev: ${buyerCompany} has added you to their Preferred Vendor Network`;
       authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network based on their past pre-purchase orders. Sign in with your registered email and follow the verification steps shown on the portal.`;
@@ -1457,7 +1484,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     return {
-      emailId,
+      // The preview has no server id or seal yet, so these stay empty rather than being generated here.
+      emailId: '',
       vendorId: vendor.id,
       vendorName: vendor.name,
       recipientEmail: vendor.email,
@@ -1476,13 +1504,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       categoryUpdateInstructions,
       assignedMajorCategory: assignedMajor,
       assignedMinorCategories: assignedMinors,
-      assignedSecondaryMajors: hasMappedCategories ? ['Engineering Spares - Electrical', 'Civil Works'] : [],
+      assignedSecondaryMajors: [],
       reminderScheduleNote: `Automated recurring reminders are scheduled on every 3rd day until your profile completion and category taxonomy updates are confirmed.`,
-      dispatchedAt: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+      // This preview has not been sent, so no dispatch time and no server seal (sha) are shown.
+      dispatchedAt: '',
       nextReminderDate: nextDate,
-      portalLoginUrl: 'http://localhost:3000',
-      shaSignature: generateShaHash(),
-      reminderCount: vendor.remindersSentCount || 0,
+      // The portal is the app that produced this preview, so its own origin is the login link.
+      portalLoginUrl: typeof window !== 'undefined' ? window.location.origin : '',
+      shaSignature: '',
+      reminderCount: vendor.remindersSentCount ?? 0,
     };
   };
 
@@ -1533,7 +1563,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             // the onboarding email (Template A vs B) on this flag directly.
             categoriesMappedByBuyer: Boolean(v.categoriesMappedByBuyer),
             majorCategory: v.categoriesMappedByBuyer
-              ? v.firstSetMajorCategory || 'Engineering Spares - Mechanical'
+              ? v.firstSetMajorCategory || ''
               : 'Uncategorized (No Past POs)',
             minorCategories: v.categoriesMappedByBuyer && v.secondSetMinorCategories?.length ? v.secondSetMinorCategories : [],
             rating: v.vendorRatingScore ? Number((v.vendorRatingScore / 20).toFixed(1)) : undefined,
@@ -1541,9 +1571,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           })),
         }),
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
       logger.log('ERROR', 'Failed to ingest historical purchase data', { error: e }, 'HISTORICAL_INGESTION');
-      const errText = e?.message || 'Could not reach the server. Please check your network connection and server status.';
+      const errText = e instanceof Error && e.message ? e.message : STORE_MESSAGES.historicalUnreachable;
       _lastHistoricalDataError = errText;
       setLastIngestionError(errText);
       showToast('Import Failed', errText, 'warning');
@@ -1565,14 +1595,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     _lastHistoricalDataError = null;
     setLastIngestionError(null);
 
+    // The server returns every count below on success (storeService.processHistoricalPurchaseData). Email
+    // counts are read straight from it. A missing count is shown as 0 and never filled with the number of
+    // rows submitted, because that would read as "sent" when no provider reported it.
     const summary: IngestionSummary = {
       importedCount: data.importedCount ?? 0,
       totalProcessed: data.totalProcessed ?? vendors.length,
       mappedCount: data.mappedCount ?? mappedCount,
-      mappedEmailsSent: data.mappedEmailsSent ?? (data.mappedCount ?? mappedCount),
+      mappedEmailsSent: data.mappedEmailsSent ?? 0,
       mappedEmailsQueued: data.mappedEmailsQueued ?? 0,
       unmappedCount: data.unmappedCount ?? unmappedCount,
-      unmappedEmailsSent: data.unmappedEmailsSent ?? (data.unmappedCount ?? unmappedCount),
+      unmappedEmailsSent: data.unmappedEmailsSent ?? 0,
       unmappedEmailsQueued: data.unmappedEmailsQueued ?? 0,
       failedEmailCount: data.failedEmailCount ?? (Array.isArray(data.failedEmails) ? data.failedEmails.length : 0),
       failedEmails: Array.isArray(data.failedEmails) ? data.failedEmails : [],
@@ -1580,7 +1613,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       skipped: Array.isArray(data.skipped) ? data.skipped : [],
       period: data.period ?? period,
       totalVendors: data.totalVendors ?? vendors.length,
-      overallStatus: data.overallStatus ?? (data.failedEmailCount > 0 ? 'COMPLETED_WITH_FAILURES' : 'COMPLETED'),
+      overallStatus: data.overallStatus ?? 'FAILED',
     };
     setLastIngestionSummary(summary);
 
@@ -1596,20 +1629,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       failed: summary.failedEmailCount,
     });
 
-    addFeedItem(
-      `Historical Purchase & Vendor Master Ingestion Complete: ${data.importedCount} Vendors`,
+    void addFeedItem(
+      `Historical Purchase & Vendor Master Ingestion Complete: ${summary.importedCount} Vendors`,
       formatString(UI_STRINGS.historicalIngestion.feedSummary, { periodLabel, deliverySummary }),
       'invitation',
       undefined,
-      `${data.importedCount} Ingested Vendors`,
+      `${summary.importedCount} Ingested Vendors`,
       'email'
     );
 
-    addAuditLog(
+    void addAuditLog(
       formatString(UI_STRINGS.historicalIngestion.auditSummary, {
         periodLabel,
         submitted: vendors.length,
-        imported: data.importedCount,
+        imported: summary.importedCount,
         deliverySummary,
       })
     );
@@ -1628,48 +1661,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const payload = generateVendorOnboardingEmail(vendor, isExisting);
     setSelectedOnboardingEmail(payload);
     setOnboardingEmailModalOpen(true);
-  };
-
-  const triggerVendorReminder = (vendorId: string) => {
-    const targetVendor = buyerVendors.find((v) => v.id === vendorId);
-    if (!targetVendor) return;
-
-    const nextCount = (targetVendor.remindersSentCount || 0) + 1;
-    const dayNumber = nextCount * 3;
-    const nextDate = new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ` (Day ${dayNumber + 3})`;
-
-    setBuyerVendors((prev) =>
-      prev.map((v) =>
-        v.id === vendorId
-          ? {
-              ...v,
-              remindersSentCount: nextCount,
-              nextReminderDate: nextDate,
-            }
-          : v
-      )
-    );
-
-    addFeedItem(
-      `Every-3rd-Day Reminder Dispatched: ${targetVendor.name}`,
-      `Automated Day-${dayNumber} profile & category update reminder email dispatched to ${targetVendor.email} on behalf of ${targetVendor.addedByBuyerCompany || 'Larsen & Toubro Limited'}.`,
-      'reminder',
-      undefined,
-      targetVendor.name,
-      'email'
-    );
-
-    addAuditLog(
-      `Dispatched automated Day-${dayNumber} profile & category reminder email to ${targetVendor.name} (${targetVendor.email})`,
-      undefined,
-      targetVendor.email
-    );
-
-    showToast(
-      'Day-3 Reminder Sent',
-      `Sent Day ${dayNumber} profile & category reminder to ${targetVendor.email}. Next reminder: Day ${dayNumber + 3}.`,
-      'info'
-    );
   };
 
   const [clientMappedCategories, setClientMappedCategories] = useState<string[]>([]);
@@ -1699,8 +1690,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       prev.map((v) => {
         const vEmail = (v.email || '').toLowerCase();
         const targetEmail = (email || '').toLowerCase();
-        const vName = (v.name || '').toLowerCase();
-        if ((vEmail && targetEmail && vEmail === targetEmail) || (vName && vName.includes('apex'))) {
+        if (vEmail && targetEmail && vEmail === targetEmail) {
           return {
             ...v,
             clientMappedCategories: clientCats,
@@ -1720,7 +1710,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })
     );
 
-    addFeedItem(
+    // Called by the vendor profile page after its real categories save has succeeded, so this feed line
+    // records a saved change. The page writes the audit line and the toast itself.
+    void addFeedItem(
       `Vendor Category Reconciliation Saved: ${email}`,
       `Client Mapped: [${clientCats.join(', ')}] | Vendor Selected (Max 10): [${limitedVendorCats.join(', ')}]. ${isAligned ? 'Status: 100% Aligned.' : `Status: Dual-Stream Stored (${common.length} matching, ${vendorOnly.length} vendor-extended). RFQs will be dispatched across both sets.`}`,
       'system',
@@ -1729,63 +1721,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       'system'
     );
 
-    addAuditLog(
-      `Vendor Category Taxonomy Updated for ${email}: Client Mapped (${clientCats.length}) vs Vendor Selected (${limitedVendorCats.length}). Alignment Status: ${isAligned ? 'ALIGNED' : 'DISCREPANCY PRESERVED (Both Streams Saved)'}`,
-      undefined,
-      email
-    );
-
-    showToast(
-      isAligned ? 'Categories Aligned & Saved' : 'Dual Categories Saved & Reconciled',
-      isAligned
-        ? `Both client mapped and vendor profile categories match (${common.length} categories).`
-        : `Stored both Client Mapped (${clientCats.length}) and Vendor Profile (${limitedVendorCats.length}) categories. RFQs will be routed across both sets!`,
-      'success'
-    );
-  };
-
-  const completeVendorProfile = (vendorEmail: string, updatedCategories?: string[]) => {
-    if (updatedCategories && updatedCategories.length > 0) {
-      saveVendorProfileCategories(vendorEmail, clientMappedCategories, updatedCategories);
-      return;
-    }
-
-    setBuyerVendors((prev) =>
-      prev.map((v) => {
-        const vEmail = (v.email || '').toLowerCase();
-        const targetEmail = (vendorEmail || '').toLowerCase();
-        return (vEmail && targetEmail && vEmail === targetEmail)
-          ? {
-              ...v,
-              profileCompletionStatus: 'completed',
-              firstLoginCompleted: true,
-              minorCategories: updatedCategories || v.minorCategories,
-            }
-          : v;
-      })
-    );
-
-    addFeedItem(
-      `Vendor Profile & Taxonomy Updated: ${vendorEmail}`,
-      `Supplier updated minor category specializations and compliance credentials. Automated 3-day reminder schedule terminated.`,
-      'system',
-      undefined,
-      vendorEmail,
-      'system'
-    );
-
-    addAuditLog(`Vendor ${vendorEmail} completed category taxonomy & compliance profile update.`);
-    showToast('Profile Updated', `Supplier profile & minor categories verified. 3-day reminders deactivated.`, 'success');
   };
 
   const [selectedRatingRevisionEmail, setSelectedRatingRevisionEmail] = useState<VendorRatingRevisionEmailPayload | null>(null);
   const [ratingRevisionEmailModalOpen, setRatingRevisionEmailModalOpen] = useState<boolean>(false);
 
   const openRatingRevisionEmailModal = (revision: VendorRatingRevisionRecord) => {
+    // The revision record does not carry the vendor's contact details, so they come from the vendor record. A missing one stays empty.
+    const vendorRecord = buyerVendors.find((v) => v.id === revision.vendorId);
     setSelectedRatingRevisionEmail({
       vendorName: revision.vendorName,
-      vendorEmail: revision.buyerEmail ? 'rajesh@apexsupplies.in' : 'vendor@apex.com',
-      vendorContactPerson: 'Rajesh Nair',
+      vendorEmail: vendorRecord?.email ?? '',
+      vendorContactPerson: vendorRecord?.contactPerson ?? '',
       buyerCompany: revision.buyerCompany,
       buyerContactName: revision.buyerName,
       buyerContactEmail: revision.buyerEmail,
@@ -1810,11 +1757,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     deliveryScore: number,
     remarks: string
   ): Promise<VendorRatingRevisionRecord | null> => {
-    const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
-    const buyerName = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
-    const buyerEmail = activeBuyerAccount?.corporateEmail || 'buyer@procucev.com';
-    const targetVendor = buyerVendors.find((v) => v.id === vendorId) || buyerVendors[0];
-    const trimmedRemarks = remarks.trim() || 'Quarterly operational performance review & ratings alignment.';
+    const buyerCompany = activeBuyerAccount?.organizationName ?? '';
+    const buyerName = activeBuyerAccount?.contactPerson ?? '';
+    const buyerEmail = activeBuyerAccount?.corporateEmail ?? '';
+    // Only the vendor that was asked for. There is no fallback to another vendor in the list.
+    const targetVendor = buyerVendors.find((v) => v.id === vendorId);
+    const trimmedRemarks = remarks.trim();
 
     // Persist rating revision to the backend and use ITS canonical result —
     // this used to PATCH '/api/vendors' with a client-computed payload; that
@@ -1876,14 +1824,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setVendorEvaluations((prev) =>
       prev.map((e) => {
         if (e.vendorId === vendorId || e.vendorName === targetVendor?.name) {
-          const modScores = e.moduleScores || {
-            commercial: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
-            technical: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
-            quality: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
-            delivery: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
-            financial: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
-            governance: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
-          };
+          // Module scores are changed only where the evaluation already has them. None are invented.
+          if (!e.moduleScores) return { ...e, overallScore: revisionRecord.newCompositeScore };
+          const modScores = e.moduleScores;
           return {
             ...e,
             overallScore: revisionRecord.newCompositeScore,
@@ -1899,32 +1842,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })
     );
 
-    // AI Bot Feed item
-    addFeedItem(
-      `Vendor Rating Revised: ${targetVendor?.name}`,
-      `Buyer ${buyerName} (${buyerCompany}) revised performance rating. Quality: ${qualityScore}/100, Cost: ${costScore}/100, Delivery: ${deliveryScore}/100 (Buyer Avg: ${revisionRecord.buyerAverage}%). New Platform Aggregate Rating: ${revisionRecord.newRating} / 5.0 (${revisionRecord.newCompositeScore}%). Remarks: "${revisionRecord.remarks}". Notification email dispatched to ${targetVendor?.email}.`,
+    // The feed and audit lines describe the saved revision only. The server queues the vendor notification
+    // separately, and `emailDispatched` there is not a provider result, so no delivery is claimed here.
+    void addFeedItem(
+      `Vendor Rating Revised: ${revisionRecord.vendorName}`,
+      `Buyer ${buyerName} (${buyerCompany}) revised the performance rating. Quality: ${qualityScore}/100, Cost: ${costScore}/100, Delivery: ${deliveryScore}/100 (Buyer Avg: ${revisionRecord.buyerAverage}%). Platform rating: ${revisionRecord.newRating} / 5.0 (${revisionRecord.newCompositeScore}%). Remarks: "${revisionRecord.remarks}".`,
       'system',
       undefined,
-      targetVendor?.name,
-      'email'
+      revisionRecord.vendorName,
+      'system'
     );
 
-    // Immutable Audit Log
-    addAuditLog(
-      `Buyer Rating Revision for ${targetVendor?.name}: Q=${qualityScore}, C=${costScore}, D=${deliveryScore} (Buyer Avg: ${revisionRecord.buyerAverage}%). Previous: ${revisionRecord.previousScore}% (${revisionRecord.previousRating}★) -> New Composite: ${revisionRecord.newCompositeScore}% (${revisionRecord.newRating}★). Remarks: "${revisionRecord.remarks}". Dispatched notification email to ${targetVendor?.email}.`,
-      undefined,
-      buyerEmail
+    void addAuditLog(
+      `Buyer Rating Revision for ${revisionRecord.vendorName}: Q=${qualityScore}, C=${costScore}, D=${deliveryScore} (Buyer Avg: ${revisionRecord.buyerAverage}%). Previous: ${revisionRecord.previousScore}% (${revisionRecord.previousRating}★) -> New Composite: ${revisionRecord.newCompositeScore}% (${revisionRecord.newRating}★). Remarks: "${revisionRecord.remarks}".`
     );
 
     // Set email payload and open preview modal
     setSelectedRatingRevisionEmail({
-      vendorName: targetVendor?.name || 'Apex Supplies Ltd.',
-      vendorEmail: targetVendor?.email || 'rajesh@apexsupplies.in',
-      vendorContactPerson: targetVendor?.contactPerson || 'Rajesh Nair',
+      vendorName: revisionRecord.vendorName,
+      vendorEmail: targetVendor?.email ?? '',
+      vendorContactPerson: targetVendor?.contactPerson ?? '',
       buyerCompany,
       buyerContactName: buyerName,
       buyerContactEmail: buyerEmail,
-      dispatchedAt: revisionRecord.timestamp,
+      dispatchedAt: '',
       qualityScore,
       costScore,
       deliveryScore,
@@ -1938,8 +1879,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setRatingRevisionEmailModalOpen(true);
 
     showToast(
-      'Vendor Rating Revised & Email Dispatched',
-      `Updated ${targetVendor?.name} rating to ${revisionRecord.newRating}★ (${revisionRecord.newCompositeScore}%). Performance notification email dispatched.`,
+      STORE_MESSAGES.ratingRevisionSavedTitle,
+      formatString(STORE_MESSAGES.ratingRevisionSavedMessage, {
+        vendorName: revisionRecord.vendorName,
+        newRating: revisionRecord.newRating,
+        newCompositeScore: revisionRecord.newCompositeScore,
+      }),
       'success'
     );
 
@@ -2025,113 +1970,97 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return newV;
   };
 
-  const updateBuyerVendor = (vendorId: string, updates: Partial<VendorEntry>) => {
-    setBuyerVendors((prev) =>
-      prev.map((v) => (v.id === vendorId ? { ...v, ...updates } : v))
-    );
-
-    // Asynchronously persist updates to backend database
-    fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
-      method: 'PUT',
-      headers: { ...authFetchHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    }).then((res) => {
-      if (!res.ok) {
-        logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId });
-      }
-    }).catch((err) => {
+  // The local list changes only after the server confirms the write, and it takes the record the server returns.
+  const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
+        method: 'PUT',
+        headers: authFetchHeaders(),
+        body: JSON.stringify(updates),
+      });
+    } catch (err) {
       logger.log('ERROR', 'Failed to sync vendor update to backend', { error: err, vendorId }, 'VENDOR_PROFILE');
-    });
+      showToast(STORE_MESSAGES.vendorUpdateFailedTitle, STORE_MESSAGES.vendorUnreachable, 'warning');
+      return false;
+    }
 
-    addAuditLog(`Updated vendor profile record for ID ${vendorId}.`);
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId, responseError: json?.error });
+      showToast(STORE_MESSAGES.vendorUpdateFailedTitle, json?.error || STORE_MESSAGES.vendorUpdateFailed, 'warning');
+      return false;
+    }
+
+    const saved: Partial<VendorEntry> = json.data && typeof json.data === 'object' ? json.data : updates;
+    setBuyerVendors((prev) => prev.map((v) => (v.id === vendorId ? { ...v, ...saved } : v)));
+    void addAuditLog(`Updated vendor profile record for ID ${vendorId}.`);
     showToast('Vendor Profile Updated', 'Vendor information saved successfully.', 'success');
+    return true;
   };
 
-  const deleteBuyerVendor = (vendorId: string) => {
-    setBuyerVendors((prev) => prev.filter((v) => v.id !== vendorId));
-
-    // Asynchronously delete from backend database
-    fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
-      method: 'DELETE',
-      headers: authFetchHeaders(),
-    }).then((res) => {
-      if (!res.ok) {
-        logApiResponseFailure('Vendor deletion request failed', res, 'VENDOR_PROFILE', { vendorId });
-      }
-    }).catch((err) => {
+  // The vendor leaves the list only after the server confirms the delete.
+  const deleteBuyerVendor = async (vendorId: string): Promise<boolean> => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
+        method: 'DELETE',
+        headers: authFetchHeaders(),
+      });
+    } catch (err) {
       logger.log('ERROR', 'Failed to sync vendor deletion to backend', { error: err, vendorId }, 'VENDOR_PROFILE');
-    });
+      showToast(STORE_MESSAGES.vendorDeleteFailedTitle, STORE_MESSAGES.vendorUnreachable, 'warning');
+      return false;
+    }
 
-    addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Vendor deletion request failed', res, 'VENDOR_PROFILE', { vendorId, responseError: json?.error });
+      showToast(STORE_MESSAGES.vendorDeleteFailedTitle, json?.error || STORE_MESSAGES.vendorDeleteFailed, 'warning');
+      return false;
+    }
+
+    setBuyerVendors((prev) => prev.filter((v) => v.id !== vendorId));
+    void addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
+    return true;
   };
 
   const deleteMultipleBuyerVendors = async (vendorIds: string[]) => {
     if (!Array.isArray(vendorIds) || vendorIds.length === 0) return;
-    const idsSet = new Set(vendorIds);
-    setBuyerVendors((prev) => prev.filter((v) => !idsSet.has(v.id)));
-
-    // Asynchronously delete from backend database
+    // Only the ids the server reports as deleted leave the list. A failed request leaves every row in place.
+    let res: Response;
     try {
-      const res = await fetch('/api/vendors/bulk-delete', {
+      res = await fetch('/api/vendors/bulk-delete', {
         method: 'POST',
-        headers: {
-          ...authFetchHeaders(),
-          'Content-Type': 'application/json',
-        },
+        headers: authFetchHeaders(),
         body: JSON.stringify({ vendorIds }),
       });
-      if (!res.ok) {
-        logApiResponseFailure('Bulk vendor deletion request failed; using individual delete fallback', res, 'VENDOR_PROFILE', {
-          requestedCount: vendorIds.length,
-        });
-        // Fallback to sequential deletion if endpoint returned error
-        const fallbackResults = await Promise.allSettled(
-          vendorIds.map((id) =>
-            fetch(`/api/vendors/${encodeURIComponent(id)}`, {
-              method: 'DELETE',
-              headers: authFetchHeaders(),
-            })
-          )
-        );
-        const rejectedCount = fallbackResults.filter((result) => result.status === 'rejected').length;
-        const unsuccessfulCount = fallbackResults.filter((result) =>
-          result.status === 'fulfilled' && !result.value.ok
-        ).length;
-        if (rejectedCount > 0 || unsuccessfulCount > 0) {
-          logger.log('ERROR', 'Individual vendor delete fallback was incomplete', {
-            requestedCount: vendorIds.length,
-            rejectedCount,
-            unsuccessfulCount,
-          }, 'VENDOR_PROFILE');
-        }
-      }
     } catch (err) {
       logger.log('ERROR', 'Failed to sync bulk vendor deletion to backend', { error: err }, 'VENDOR_PROFILE');
-      // Fallback
-      const fallbackResults = await Promise.allSettled(
-        vendorIds.map((id) =>
-          fetch(`/api/vendors/${encodeURIComponent(id)}`, {
-            method: 'DELETE',
-            headers: authFetchHeaders(),
-          })
-        )
-      );
-      const rejectedCount = fallbackResults.filter((result) => result.status === 'rejected').length;
-      const unsuccessfulCount = fallbackResults.filter((result) =>
-        result.status === 'fulfilled' && !result.value.ok
-      ).length;
-      if (rejectedCount > 0 || unsuccessfulCount > 0) {
-        logger.log('ERROR', 'Individual vendor delete fallback was incomplete', {
-          requestedCount: vendorIds.length,
-          rejectedCount,
-          unsuccessfulCount,
-        }, 'VENDOR_PROFILE');
-      }
+      showToast(STORE_MESSAGES.vendorDeleteFailedTitle, STORE_MESSAGES.vendorUnreachable, 'warning');
+      return;
     }
 
-    addAuditLog(`Removed ${vendorIds.length} vendor record(s) from buyer vendor master.`);
-    showToast('Vendors Removed', `Successfully deleted ${vendorIds.length} supplier record(s).`, 'info');
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Bulk vendor deletion request failed', res, 'VENDOR_PROFILE', {
+        requestedCount: vendorIds.length,
+        responseError: json?.error,
+      });
+      showToast(STORE_MESSAGES.vendorDeleteFailedTitle, json?.error || STORE_MESSAGES.vendorDeleteFailed, 'warning');
+      return;
+    }
+
+    const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : [];
+    const deletedSet = new Set(deletedIds);
+    setBuyerVendors((prev) => prev.filter((v) => !deletedSet.has(v.id)));
+    void addAuditLog(`Removed ${deletedIds.length} vendor record(s) from buyer vendor master.`);
+    showToast(
+      'Vendors Removed',
+      formatString(STORE_MESSAGES.vendorsRemovedMessage, { count: deletedIds.length }),
+      'info'
+    );
   };
 
   // Dynamic Matching Logic based on Minor & Major Categories
@@ -2144,151 +2073,104 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const targetMinorCategories = entities.map(e => (e.minorCategory || '').toLowerCase().trim()).filter(Boolean);
     const targetMajorCategories = entities.map(e => (e.majorCategory || e.category || '').toLowerCase().trim()).filter(Boolean);
 
-    const isCategoryMatch = (v: VendorEntry) => {
-      const vMajor = (v.majorCategory || '').toLowerCase();
-      
-      // Dual-Stream resolution
-      const clientMapped = (v.clientMappedCategories && v.clientMappedCategories.length > 0 
-        ? v.clientMappedCategories 
-        : ((v.email || '').includes('apex') ? clientMappedCategories : v.minorCategories || [])).map(m => (m || '').toLowerCase().trim());
-        
-      const vendorSelected = (v.vendorSelectedCategories && v.vendorSelectedCategories.length > 0 
-        ? v.vendorSelectedCategories 
-        : ((v.email || '').includes('apex') ? vendorSelectedCategories : [])).map(m => (m || '').toLowerCase().trim());
-      
+    const isRosterSource = (v: VendorEntry) =>
+      v.source === 'buyer_manual' || v.source === 'buyer_excel' || v.source === 'manual' || v.source === 'excel';
+
+    // Uses only the vendor's own category fields. A vendor with no category data does not match.
+    const matchInfo = (v: VendorEntry): { matched: boolean; source?: VendorEntry['categoryMatchSource'] } => {
+      const vMajor = (v.majorCategory || '').toLowerCase().trim();
+      const clientMapped = (v.clientMappedCategories && v.clientMappedCategories.length > 0
+        ? v.clientMappedCategories
+        : v.minorCategories || []
+      ).map(m => (m || '').toLowerCase().trim()).filter(Boolean);
+      const vendorSelected = (v.vendorSelectedCategories || []).map(m => (m || '').toLowerCase().trim()).filter(Boolean);
       const allMinors = Array.from(new Set([...clientMapped, ...vendorSelected]));
 
-      const isClientMappedMatch = targetMinorCategories.some(tMin => 
+      const isClientMappedMatch = targetMinorCategories.some(tMin =>
         clientMapped.some(vMin => vMin.includes(tMin) || tMin.includes(vMin))
       );
-
-      const isVendorSelectedMatch = targetMinorCategories.some(tMin => 
+      const isVendorSelectedMatch = targetMinorCategories.some(tMin =>
         vendorSelected.some(vMin => vMin.includes(tMin) || tMin.includes(vMin))
       );
-
-      const hasMinorMatch = isClientMappedMatch || isVendorSelectedMatch || targetMinorCategories.some(tMin => 
+      const hasMinorMatch = isClientMappedMatch || isVendorSelectedMatch || targetMinorCategories.some(tMin =>
         allMinors.some(vMin => vMin.includes(tMin) || tMin.includes(vMin))
       );
 
       if (hasMinorMatch) {
         if (isClientMappedMatch && isVendorSelectedMatch) {
-          v.categoryMatchSource = 'Aligned Buyer & Vendor Category Match';
-        } else if (isClientMappedMatch) {
-          v.categoryMatchSource = 'Buyer Empanelled Category Match';
-        } else {
-          v.categoryMatchSource = 'Vendor Profile Self-Declared Category Match';
+          return { matched: true, source: 'Aligned Buyer & Vendor Category Match' };
         }
-        return true;
+        if (isClientMappedMatch) return { matched: true, source: 'Buyer Empanelled Category Match' };
+        return { matched: true, source: 'Vendor Profile Self-Declared Category Match' };
       }
 
-      const hasMajorMatch = targetMajorCategories.some(tMaj => 
+      // An empty major category never matches. An empty string is contained in every string.
+      const hasMajorMatch = vMajor !== '' && targetMajorCategories.some(tMaj =>
         vMajor.includes(tMaj) || tMaj.includes(vMajor)
       );
-      if (hasMajorMatch) return true;
+      if (hasMajorMatch) return { matched: true };
 
-      return entities.some(e => {
+      const hasItemMatch = entities.some(e => {
         const itemLower = (e.itemName + ' ' + (e.technicalSpecs || '')).toLowerCase();
-        return allMinors.some(m => itemLower.includes(m)) || (vMajor && itemLower.includes(vMajor));
+        return allMinors.some(m => itemLower.includes(m)) || (vMajor !== '' && itemLower.includes(vMajor));
       });
+      return { matched: hasItemMatch };
     };
 
+    const withMatchReason = (v: VendorEntry, matchReason: string): VendorEntry => ({
+      ...v,
+      matchReason,
+      categoryMatchSource: matchInfo(v).source,
+    });
+
+    // Evaluated vendors (those with a rating) come first. Duplicate records (same email, name or id) are dropped.
+    const dedupeAndRank = (list: VendorEntry[]): VendorEntry[] => {
+      const seen = new Set<string>();
+      const deduplicated = list.filter((v) => {
+        const key = ((v.email || v.name || v.id) || '').toLowerCase().trim();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return deduplicated.sort((a, b) => Number(Boolean(b.rating)) - Number(Boolean(a.rating)));
+    };
+
+    // No fallback list. When nothing matches, the result is empty, so an unmatched request never gets
+    // unrelated vendors.
     if (mode === 'mode_1') {
-      const matched = vendorPool.filter(v => 
-        (v.source === 'buyer_manual' || v.source === 'buyer_excel' || v.source === 'manual' || v.source === 'excel') &&
-        isCategoryMatch(v)
-      );
-      return (matched.length > 0 ? matched : vendorPool.slice(0, 3)).map(v => {
-        const loc = v.location || '';
-        return {
-          ...v,
-          matchReason: 'Buyer Approved Roster (Minor Category Match)',
-          proximity: loc.includes('MH') || loc.includes('Mumbai') || loc.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
-          proximityMatch: true,
-        };
-      });
+      return vendorPool
+        .filter(v => isRosterSource(v) && matchInfo(v).matched)
+        .map(v => withMatchReason(v, 'Buyer Approved Roster (Minor Category Match)'));
     } else if (mode === 'mode_2') {
-      const matchedBuyer = vendorPool.filter(v => isCategoryMatch(v)).map(v => {
-        const loc = v.location || '';
-        return {
-          ...v,
-          matchReason: 'Buyer Roster (Minor Category Match)',
-          proximity: loc.includes('MH') || loc.includes('Mumbai') || loc.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
-          proximityMatch: true,
-        };
-      });
-
-      const networkVendors: VendorEntry[] = [
-        { id: 'v-net-1', name: 'Global Pipe Solutions', contactPerson: 'John Doe', email: 'john@globalpipes.com', phone: '+1 415 555 2671', majorCategory: 'Engineering Spares - Mechanical', minorCategories: ['Pipes & Pipe Fittings', 'Hoses, Valves & Fittings'], location: 'Houston, TX', rating: 4.5, source: 'procucev_network' as const, matchReason: 'Procucev Base Network (Minor Category Match)', proximity: 'International / US Hub', proximityMatch: false },
-        { id: 'v-net-2', name: 'Titanium Castings Corp', contactPerson: 'Sarah Jenkins', email: 'sarah@titaniumcast.com', phone: '+44 20 7946 0958', majorCategory: 'Engineering Spares - Mechanical', minorCategories: ['Machinery Parts', 'Customised Parts'], location: 'Sheffield, UK', rating: 4.7, source: 'procucev_network' as const, matchReason: 'Procucev Base Network (Minor Category Match)', proximity: 'International / UK Hub', proximityMatch: false },
-      ].filter(v => isCategoryMatch(v));
-
-      const combined = [...matchedBuyer, ...networkVendors];
-      const rawList = combined.length > 0 ? combined : vendorPool.slice(0, 4);
-      const seen = new Set<string>();
-      const deduplicated = rawList.filter((v) => {
-        const key = ((v.email || v.name || v.id) || '').toLowerCase().trim();
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
-      // 1st Priority Rule: Evaluated vendors are given first priority automatically irrespective of rating
-      return deduplicated.sort((a, b) => {
-        const aEval = Boolean(a.rating || (a.name && a.name.includes('Apex')));
-        const bEval = Boolean(b.rating || (b.name && b.name.includes('Apex')));
-        if (aEval && !bEval) return -1;
-        if (!aEval && bEval) return 1;
-        return 0;
-      });
+      // Buyer roster matches only. The hardcoded Procucev network vendors and the first-four fallback were removed.
+      const matchedBuyer = vendorPool
+        .filter(v => matchInfo(v).matched)
+        .map(v => withMatchReason(v, 'Buyer Roster (Minor Category Match)'));
+      return dedupeAndRank(matchedBuyer);
     } else {
-      const matched = vendorPool.filter(v => 
-        (v.source === 'buyer_manual' || v.source === 'buyer_excel' || v.source === 'manual' || v.source === 'excel') &&
-        isCategoryMatch(v)
-      );
-      const rawList = (matched.length > 0 ? matched : vendorPool.slice(0, 3)).map(v => {
-        const loc = v.location || '';
-        return {
-          ...v,
-          matchReason: 'Buyer Approved Roster (360° Qualification & RFQ)',
-          proximity: loc.includes('MH') || loc.includes('Mumbai') || loc.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
-          proximityMatch: true,
-        };
-      });
-      const seen = new Set<string>();
-      const deduplicated = rawList.filter((v) => {
-        const key = ((v.email || v.name || v.id) || '').toLowerCase().trim();
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
-      // 1st Priority Rule: Evaluated vendors are given first priority automatically irrespective of rating
-      return deduplicated.sort((a, b) => {
-        const aEval = Boolean(a.rating || (a.name && a.name.includes('Apex')));
-        const bEval = Boolean(b.rating || (b.name && b.name.includes('Apex')));
-        if (aEval && !bEval) return -1;
-        if (!aEval && bEval) return 1;
-        return 0;
-      });
+      const matched = vendorPool
+        .filter(v => isRosterSource(v) && matchInfo(v).matched)
+        .map(v => withMatchReason(v, 'Buyer Approved Roster (360° Qualification & RFQ)'));
+      return dedupeAndRank(matched);
     }
   };
 
   // Standard RFQ Email Generator Engine
   const generateStandardRFQEmail = (rfq: RFQItem, vendor: VendorEntry): StandardRFQEmailPayload => {
     const modeDetail = SOURCING_MODES.find(m => m.id === rfq.sourcingMode) || SOURCING_MODES[0];
-    const emailId = `EML-${rfq.rfqNumber}-${vendor.id || Date.now()}`;
-    const shaSignature = generateShaHash();
-    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' IST';
-    const major = vendor.majorCategory || rfq.extractedEntities[0]?.majorCategory || rfq.category || 'Industrial Procurement';
+    // This is a preview built from the RFQ and the vendor record. Nothing is sent here, so it has no server
+    // seal (sha) and no dispatch time.
+    const emailId = `EML-${rfq.rfqNumber}-${vendor.id}`;
+    const major = vendor.majorCategory || rfq.extractedEntities[0]?.majorCategory || rfq.category || '';
     const minors = vendor.minorCategories && vendor.minorCategories.length > 0 
       ? vendor.minorCategories 
       : rfq.extractedEntities.map(e => e.minorCategory || e.category).filter(Boolean);
 
     let specialInstructions = '';
     if (rfq.sourcingMode === 'mode_1') {
-      specialInstructions = 'Strict Single-Roster Submission: As an approved enterprise partner in our private roster, please submit your competitive line-item quotation directly against the enclosed BOQ. Pre-negotiated corporate rates & frame agreements apply.';
+      specialInstructions = 'Strict Single-Roster Submission: As an approved enterprise partner in our private roster, please submit your competitive line-item quotation directly against the enclosed BOQ.';
     } else if (rfq.sourcingMode === 'mode_2') {
-      specialInstructions = 'Hybrid Competitive Sourcing: Your quotation will be benchmarked side-by-side on unit prices, verified lead time, and warranty terms. Pre-negotiated payment terms (Net 30/60) apply.';
+      specialInstructions = 'Hybrid Competitive Sourcing: Your quotation will be benchmarked side-by-side on unit prices, lead time and the terms you state.';
     } else {
       specialInstructions = 'Mode 3 360-Degree Vendor Qualification Protocol: This RFQ is dispatched under high-governance double-blind compliance evaluation (M1 Commercial, M2 Technical, M3 Quality & Warranty, M4 Delivery, M5 Financial, M6 Governance/ESG). Please complete the linked qualification survey alongside your quotation.';
     }
@@ -2300,47 +2182,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       sourcingMode: rfq.sourcingMode,
       sourcingModeName: modeDetail.name,
       sourcingModeCode: modeDetail.code,
-      buyerCompany: 'Larsen & Toubro Limited (Heavy Engineering)',
-      buyerContactName: 'Rajesh Sharma (CPO)',
-      buyerContactEmail: 'buyer@procucev.com',
-      buyerContactPhone: '+91 98201 44820',
+      // Buyer identity comes from the active account. A missing field stays empty.
+      buyerCompany: activeBuyerAccount?.organizationName ?? '',
+      buyerContactName: activeBuyerAccount?.contactPerson ?? '',
+      buyerContactEmail: activeBuyerAccount?.corporateEmail ?? '',
+      buyerContactPhone: activeBuyerAccount?.mobileNumber ?? '',
       recipientVendorName: vendor.name,
       recipientContactPerson: vendor.contactPerson,
-      recipientEmail: vendor?.email || 'navinchaudhary.dev@gmail.com',
-      subject: `[RFQ Invitation] ${rfq.rfqNumber}: ${rfq.title} | Larsen & Toubro Sourcing (${modeDetail.code})`,
+      recipientEmail: vendor.email ?? '',
+      subject: [`[RFQ Invitation] ${rfq.rfqNumber}: ${rfq.title}`, activeBuyerAccount?.organizationName ? `| ${activeBuyerAccount.organizationName} Sourcing (${modeDetail.code})` : `(${modeDetail.code})`].join(' '),
       matchedMajorCategory: major,
       matchedMinorCategories: minors,
-      requisitionDate: rfq.createdAt || new Date().toISOString().slice(0, 10),
+      requisitionDate: rfq.createdAt ?? '',
       submissionDeadline: rfq.targetDeliveryDate,
       targetDeliveryDate: rfq.targetDeliveryDate,
-      deliveryLocation: 'Enterprise Logistics Hub (Navi Mumbai CIF Site)',
-      paymentTerms: 'Net 30 / 60 Days from Inspection & Acceptance',
+      deliveryLocation: rfq.deliveryLocation ?? '',
+      // Payment terms are not stored on the RFQ, so none are stated here.
+      paymentTerms: '',
       lineItems: rfq.extractedEntities.map((e, idx) => ({
         itemNumber: idx + 1,
         itemName: e.itemName,
         technicalSpecs: e.technicalSpecs,
         quantity: e.quantity,
         unit: e.unit,
-        minorCategory: e.minorCategory || 'General Industrial Item',
+        minorCategory: e.minorCategory || '',
         targetDate: e.targetDate,
       })),
       specialInstructions,
-      complianceChecklist: [
-        'Mandatory GST Tax Invoice with HSN / SAC breakdown',
-        'Manufacturer Test Certificate (MTC) / Certificate of Analysis (COA)',
-        'Minimum 24 to 36 Months Comprehensive Warranty Undertaking',
-        'Guaranteed Delivery SLA commitment with transit insurance included',
-        rfq.sourcingMode === 'mode_3' ? 'Mandatory ISO 9001:2015 & Statutory KYC documents upload' : 'Roster Compliance verification',
-      ],
+      // The RFQ does not store compliance requirements, so none are invented. The list stays empty.
+      complianceChecklist: [],
       replyInstructions: 'Please reply directly to this RFQ email with your quotation attachment (PDF/Excel). DO NOT alter or change the subject line to ensure automated AI parsing into the comparative matrix.',
-      replyToEmail: activeBuyerAccount?.corporateEmail || 'navinchaudhary.dev@gmail.com',
-      shaSignature,
-      dispatchedAt: timeNow,
+      replyToEmail: activeBuyerAccount?.corporateEmail ?? '',
+      shaSignature: '',
+      dispatchedAt: '',
     };
   };
 
   const openStandardEmailModal = (rfq: RFQItem, vendor?: VendorEntry) => {
-    const targetVendor = vendor || buyerVendors.find(v => v.name === rfq.followUpData?.vendors[0]?.vendorName) || buyerVendors[0];
+    const targetVendor = vendor || buyerVendors.find(v => v.name === rfq.followUpData?.vendors[0]?.vendorName);
+    // Without a recipient the email is not built. No vendor is picked at random from the directory.
+    if (!targetVendor) {
+      showToast(STORE_MESSAGES.emailNoRecipientTitle, STORE_MESSAGES.emailNoRecipient, 'warning');
+      return;
+    }
     const emailPayload = generateStandardRFQEmail(rfq, targetVendor);
     setSelectedEmailForModal(emailPayload);
     setEmailModalOpen(true);
@@ -2359,38 +2243,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setToastMessage(null);
   };
 
-  const addAuditLog = (action: string, rfqNumber?: string, user?: string) => {
-    const defaultUser =
-      currentRole === 'buyer'
-        ? 'client@procucev.com (Enterprise Buyer)'
-        : currentRole === 'category_manager'
-        ? 'catmanager@procucev.com (Category Manager)'
-        : currentRole === 'vendor'
-        ? 'vendor@apex.com (Apex Supplies Ltd.)'
-        : 'admin@procucev.com (System Admin)';
-
-    const newLog: AuditLogEntry = {
-      id: `aud-${Date.now()}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
-      user: user || defaultUser,
-      action,
-      rfqNumber,
-      shaSignature: generateShaHash(),
-      status: 'VERIFIED',
-      ipAddress: '104.42.189.44',
-    };
-    setAuditLogs((prev) => [newLog, ...prev]);
-
-    fetch('/api/audit', {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify(newLog),
-    }).then((res) => {
-      if (!res.ok) logApiResponseFailure('Audit event persistence request failed', res, 'AUDIT_TRAIL');
-    }).catch((e) => logger.log('ERROR', 'Failed to save audit event to backend', { error: e }, 'AUDIT_TRAIL'));
+  // The server stamps the actor from the signed-in session, plus the IP address and the SHA-256 seal. The client
+  // sends only the action and the RFQ number. The entry joins `auditLogs` only after the server has stored it.
+  const addAuditLog = async (action: string, rfqNumber?: string): Promise<void> => {
+    if (!authClient.getToken()) {
+      logger.log('WARN', 'Audit event not recorded: no signed-in session', { action }, 'AUDIT_TRAIL');
+      return;
+    }
+    try {
+      const res = await fetch('/api/audit', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ action, rfqNumber: rfqNumber ?? null }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success || !json.data) {
+        logApiResponseFailure('Audit event persistence request failed', res, 'AUDIT_TRAIL', { responseError: json?.error });
+        showToast(STORE_MESSAGES.auditSaveFailedTitle, STORE_MESSAGES.auditSaveFailed, 'warning');
+        return;
+      }
+      const stored = json.data;
+      const entry: AuditLogEntry = {
+        id: String(stored.id),
+        timestamp: String(stored.timestamp),
+        user: stored.userEmail ?? undefined,
+        userEmail: stored.userEmail ?? undefined,
+        action: String(stored.action),
+        rfqNumber: stored.rfqNumber ?? undefined,
+        shaSignature: String(stored.shaSignature ?? ''),
+        previousHash: stored.previousHash ?? undefined,
+        status: stored.status ?? undefined,
+        ipAddress: stored.ipAddress ?? undefined,
+      };
+      setAuditLogs((prev) => [entry, ...prev]);
+    } catch (e) {
+      logger.log('ERROR', 'Failed to save audit event to backend', { error: e }, 'AUDIT_TRAIL');
+      showToast(STORE_MESSAGES.auditSaveFailedTitle, STORE_MESSAGES.auditSaveFailed, 'warning');
+    }
   };
 
-  const addFeedItem = (
+  // A feed event is shown only once the server has stored it. The stored copy, with the server's id and timestamps, is what appears.
+  const addFeedItem = async (
     title: string,
     message: string,
     type: AIBotFeedItem['type'],
@@ -2398,314 +2291,103 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     recipient?: string,
     channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system',
     channelDetails?: AIBotFeedItem['channelDetails']
-  ) => {
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const newFeed: AIBotFeedItem = {
-      id: `feed-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      timestamp: timeStr,
-      timeAgo: 'Just now',
-      type,
-      channel: channel || (type === 'call' || type === 'whatsapp' || type === 'sms' || type === 'email' ? type : undefined),
-      title,
-      message,
-      recipient,
-      rfqNumber,
-      buyerAccountId: activeBuyerAccount?.id,
-      status: 'completed',
-      channelDetails,
-    };
-    setAiFeed((prev) => [newFeed, ...prev]);
-
-    fetch('/api/ai-feed', {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify(newFeed),
-    }).then((res) => {
-      if (!res.ok) logApiResponseFailure('AI feed persistence request failed', res, 'AI_FEED');
-    }).catch((e) => logger.log('ERROR', 'Failed to save AI feed item to backend', { error: e }, 'AI_FEED'));
-  };
-
-  const triggerChannelChaser = (
-    rfqNumber: string,
-    channel: 'call' | 'whatsapp' | 'sms' | 'email',
-    vendorName = 'Vendor',
-    customNote?: string,
-    suppressToast = false
-  ) => {
-    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    
-    let title = '';
-    let message = '';
-    let toastTitle = '';
-    let toastDesc = '';
-
-    if (channel === 'call') {
-      title = `AI Voice Bot Call Dispatched`;
-      message = `Autonomous AI Voice Agent placed telephonic outreach to ${vendorName} for ${rfqNumber}. Line connected; confirmed quote turnaround SLA.`;
-      toastTitle = `AI Voice Call Initiated!`;
-      toastDesc = `Outbound phone call connected to ${vendorName} for ${rfqNumber}.`;
-    } else if (channel === 'whatsapp') {
-      title = `WhatsApp Interactive Chaser Dispatched`;
-      message = `Automated WhatsApp quotation prompt with 1-click bid link delivered to ${vendorName} for ${rfqNumber}.`;
-      toastTitle = `WhatsApp Chaser Sent!`;
-      toastDesc = `Vendor accessed the interactive 1-click bid link.`;
-    } else if (channel === 'sms') {
-      title = `Priority SMS Notice Dispatched`;
-      message = `DLT-verified priority SMS alert sent to ${vendorName} for ${rfqNumber}.`;
-      toastTitle = `SMS Alert Dispatched!`;
-      toastDesc = `Priority SMS notice delivered to ${vendorName}.`;
-    } else {
-      title = `24h Escalation Email Sent`;
-      message = `Standard RFQ reminder email with BOQ re-attached delivered to ${vendorName}.`;
-      toastTitle = `24h Email Reminder Sent!`;
-      toastDesc = `Escalation notice with BOQ specs delivered to ${vendorName}.`;
-    }
-
-    if (customNote) {
-      message += ` (Note: "${customNote}")`;
-    }
-
-    addFeedItem(title, message, channel, rfqNumber, vendorName, channel, {
-      duration: channel === 'call' ? '1m 30s' : undefined,
-      transcriptSummary: channel === 'call' ? `Vendor confirmed RFQ receipt and will submit bid before deadline.` : undefined,
-      actionOutcome: channel === 'whatsapp' ? 'Link delivered' : channel === 'sms' ? 'Carrier delivered' : channel === 'email' ? 'BOQ Specs re-attached · Immediate bid requested' : 'Voice connected',
-    });
-
-    addAuditLog(
-      `Triggered ${channel.toUpperCase()} automated follow-up for ${rfqNumber} to ${vendorName}`,
-      rfqNumber
-    );
-
-    setRfqs((prev) =>
-      prev.map((r) => {
-        if (r.rfqNumber === rfqNumber && r.followUpData) {
-          const baseFollowUp: RFQFollowUpBreakdown = {
-            ...r.followUpData,
-            callStats: {
-              total: r.followUpData.callStats?.total ?? 0,
-              connected: r.followUpData.callStats?.connected ?? 0,
-              avgDuration: r.followUpData.callStats?.avgDuration ?? '1m 30s',
-            },
-            whatsappStats: {
-              total: r.followUpData.whatsappStats?.total ?? 0,
-              delivered: r.followUpData.whatsappStats?.delivered ?? 0,
-              read: r.followUpData.whatsappStats?.read ?? 0,
-              replied: r.followUpData.whatsappStats?.replied ?? 0,
-            },
-            smsStats: {
-              total: r.followUpData.smsStats?.total ?? 0,
-              delivered: r.followUpData.smsStats?.delivered ?? 0,
-              clicked: r.followUpData.smsStats?.clicked ?? 0,
-            },
-            emailStats: {
-              total: r.followUpData.emailStats?.total ?? 5,
-              sent24h: r.followUpData.emailStats?.sent24h ?? 0,
-              opened: r.followUpData.emailStats?.opened ?? 1,
-            },
-            vendors: Array.isArray(r.followUpData.vendors) && r.followUpData.vendors.length > 0
-              ? r.followUpData.vendors
-              : [
-                  {
-                    vendorId: 'v-1',
-                    vendorName: vendorName || 'Vendor Pool',
-                    phone: '+91 98765 43210',
-                    contactPerson: 'Sales Coordinator',
-                    call: {
-                      status: 'scheduled',
-                      lastAttempt: timeNow,
-                      duration: '0m',
-                    },
-                    whatsapp: {
-                      status: 'delivered',
-                      lastAttempt: timeNow,
-                      messagePreview: 'RFQ Invitation dispatched.',
-                      linkClicked: false,
-                    },
-                    sms: {
-                      status: 'sent',
-                      lastAttempt: timeNow,
-                    },
-                    overallStatus: 'Pending',
-                    lastInteraction: timeNow,
-                    attemptsCount: 0,
-                    bidStatus: 'Pending',
-                  },
-                ],
-          };
-
-          const targetName = String(vendorName || '').trim().toLowerCase();
-
-          const updatedVendors = baseFollowUp.vendors.map((v) => {
-            const vName = String(v?.vendorName || (v as any)?.name || (v as any)?.companyName || 'Supplier').trim().toLowerCase();
-            const isMatch =
-              targetName === 'all pending suppliers' ||
-              !targetName ||
-              (vName && targetName && (vName.includes(targetName) || targetName.includes(vName)));
-
-            if (isMatch) {
-              return {
-                ...v,
-                vendorName: v?.vendorName || (v as any)?.name || (v as any)?.companyName || 'Supplier',
-                attemptsCount: (v.attemptsCount || 0) + 1,
-                lastInteraction: timeNow,
-                overallStatus: 'Follow-up Active' as const,
-                call: channel === 'call' ? {
-                  ...(v.call || {}),
-                  status: 'completed' as const,
-                  lastAttempt: timeNow,
-                  duration: '1m 30s',
-                  summary: 'AI Voice Call connected with sales coordinator. Acknowledged RFQ requirements.',
-                } : v.call,
-                whatsapp: channel === 'whatsapp' ? {
-                  ...(v.whatsapp || {}),
-                  status: 'read' as const,
-                  lastAttempt: timeNow,
-                  messagePreview: 'Urgent RFQ follow-up link delivered.',
-                  linkClicked: true,
-                } : v.whatsapp,
-                sms: channel === 'sms' ? {
-                  ...(v.sms || {}),
-                  status: 'delivered' as const,
-                  lastAttempt: timeNow,
-                } : v.sms,
-                email24h: channel === 'email' ? {
-                  ...(v.email24h || {}),
-                  status: 'reminded_24h' as const,
-                  lastAttempt: timeNow,
-                  is24hReminderSent: true,
-                  subject: `URGENT REMINDER: Quotation Request for ${rfqNumber}`,
-                } : v.email24h,
-              };
-            }
-            return v;
-          });
-
-          const targetTotal = r.assignedVendors?.length || baseFollowUp.totalInvited || (baseFollowUp.vendors?.length ?? 0);
-          const callTotal = channel === 'call' ? Math.max(baseFollowUp.callStats.total + 1, targetTotal) : Math.max(baseFollowUp.callStats.total, targetTotal);
-          const callConnected = channel === 'call' ? baseFollowUp.callStats.connected + 1 : baseFollowUp.callStats.connected;
-          const waTotal = Math.max(baseFollowUp.whatsappStats.total, targetTotal);
-          const waDelivered = channel === 'whatsapp' ? baseFollowUp.whatsappStats.delivered + 1 : baseFollowUp.whatsappStats.delivered;
-          const waRead = channel === 'whatsapp' ? baseFollowUp.whatsappStats.read + 1 : baseFollowUp.whatsappStats.read;
-          const smsTotal = Math.max(baseFollowUp.smsStats.total, targetTotal);
-          const smsDelivered = channel === 'sms' ? baseFollowUp.smsStats.delivered + 1 : baseFollowUp.smsStats.delivered;
-          const emailTotal = Math.max(baseFollowUp.emailStats?.total || 0, targetTotal);
-          const emailSent24h = channel === 'email' ? (baseFollowUp.emailStats?.sent24h || 0) + 1 : (baseFollowUp.emailStats?.sent24h || 0);
-          const emailDelivered = channel === 'email' ? ((baseFollowUp.emailStats?.delivered ?? targetTotal) + 1) : (baseFollowUp.emailStats?.delivered ?? targetTotal);
-
-          const updatedRfq: RFQItem = {
-            ...r,
-            chasingActive: true,
-            followUpData: {
-              ...baseFollowUp,
-              callStats: { ...baseFollowUp.callStats, total: callTotal, connected: callConnected },
-              whatsappStats: { ...baseFollowUp.whatsappStats, total: waTotal, delivered: waDelivered, read: waRead },
-              smsStats: { ...baseFollowUp.smsStats, total: smsTotal, delivered: smsDelivered },
-              emailStats: { total: emailTotal, delivered: emailDelivered, sent24h: emailSent24h, opened: (baseFollowUp.emailStats?.opened || 1) },
-              vendors: updatedVendors,
-            },
-          };
-
-          setSelectedRFQForDeepDive((cur) => (cur && cur.rfqNumber === rfqNumber ? updatedRfq : cur));
-          return updatedRfq;
-        }
-        return r;
-      })
-    );
-
-    if (!suppressToast) {
-      showToast(toastTitle, toastDesc, 'success');
+  ): Promise<void> => {
+    const resolvedChannel = channel || (type === 'call' || type === 'whatsapp' || type === 'sms' || type === 'email' ? type : undefined);
+    try {
+      const res = await fetch('/api/ai-feed', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ title, message, type, channel: resolvedChannel, recipient, rfqNumber, channelDetails }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success || !json.data) {
+        logApiResponseFailure('AI feed persistence request failed', res, 'AI_FEED', { responseError: json?.error });
+        showToast(STORE_MESSAGES.feedSaveFailedTitle, STORE_MESSAGES.feedSaveFailed, 'warning');
+        return;
+      }
+      setAiFeed((prev) => [json.data, ...prev]);
+    } catch (e) {
+      logger.log('ERROR', 'Failed to save AI feed item to backend', { error: e }, 'AI_FEED');
+      showToast(STORE_MESSAGES.feedSaveFailedTitle, STORE_MESSAGES.feedSaveFailed, 'warning');
     }
   };
 
-  const triggerBatchChannelChaser = (
+  // Sends the chasers through POST /api/rfqs/:id/batch-chaser. The server decides what reached a provider, per
+  // vendor and per channel, and it records the feed and audit entries itself. Nothing here is reported as sent
+  // unless the response counts it as sent.
+  const triggerBatchChannelChaser = async (
     rfqNumber: string,
     channels: ('call' | 'whatsapp' | 'sms')[],
     suppressToast = false
-  ) => {
-    channels.forEach((ch) => {
-      triggerChannelChaser(rfqNumber, ch, 'All Pending Suppliers', undefined, true);
-    });
-    if (!suppressToast) {
-      showToast(
-        'Multi-Channel Batch Broadcast Active!',
-        `AI chasing dispatched across ${channels.map((c) => c.toUpperCase()).join(' + ')} for ${rfqNumber}.`,
-        'success'
-      );
+  ): Promise<boolean> => {
+    const requestedChannels = Array.from(new Set(channels));
+    let res: Response;
+    try {
+      res = await fetch(`/api/rfqs/${encodeURIComponent(rfqNumber)}/batch-chaser`, {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ channels: requestedChannels }),
+      });
+    } catch (e) {
+      logger.log('ERROR', 'Batch chaser request could not reach the backend', { error: e, rfqNumber }, 'CHASER');
+      if (!suppressToast) showToast(STORE_MESSAGES.chaserNotSentTitle, STORE_MESSAGES.chaserUnreachable, 'warning');
+      return false;
     }
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      logApiResponseFailure('Batch chaser request failed', res, 'CHASER', { rfqNumber, responseError: json?.error });
+      if (!suppressToast) {
+        showToast(STORE_MESSAGES.chaserNotSentTitle, json?.error || STORE_MESSAGES.chaserRequestFailed, 'warning');
+      }
+      return false;
+    }
+
+    const results: Array<{ success?: boolean }> = Array.isArray(json?.results) ? json.results : [];
+    const sentCount = typeof json?.sentCount === 'number' ? json.sentCount : results.filter((r) => r.success).length;
+
+    // The server writes the RFQ follow-up outcome and the feed events, so both are reloaded from the server.
+    void refreshRFQs();
+    void refreshAIFeed();
+
+    if (!suppressToast) {
+      if (sentCount > 0) {
+        showToast(
+          STORE_MESSAGES.chaserSentTitle,
+          formatString(STORE_MESSAGES.chaserSentMessage, {
+            sent: sentCount,
+            total: results.length,
+            rfqNumber,
+            channels: requestedChannels.map((c) => c.toUpperCase()).join(' + '),
+          }),
+          'success'
+        );
+      } else {
+        showToast(STORE_MESSAGES.chaserNotSentTitle, json?.error || STORE_MESSAGES.chaserNoneSent, 'warning');
+      }
+    }
+    return sentCount > 0;
   };
 
-  const triggerWhatsAppChaser = (rfqNumber: string, vendorName = 'Vendor') => {
-    triggerChannelChaser(rfqNumber, 'whatsapp', vendorName);
-  };
-
-  const submitVendorBid = (
+  // The server has no route that chases one vendor, and the batch route contacts every assigned vendor. So a
+  // single-vendor chaser is never sent from here. It resolves false and tells the user nothing was sent.
+  const triggerChannelChaser = async (
     rfqNumber: string,
-    unitPrice: number,
-    leadTimeDays: number,
-    remarks: string
-  ) => {
-    const newQuote: QuoteComparison = {
-      vendorId: `v-${Date.now()}`,
-      vendorName: 'Apex Supplies Ltd. (Verified)',
-      vendorCategory: 'Procucev - AI Rec',
-      unitPrice,
-      totalPrice: unitPrice * 12,
-      leadTimeDays,
-      aiMatchScore: 95,
-      isBestPrice: true,
-      isPreferred: true,
-      warrantyYears: 3,
-      complianceStatus: 'Fully Compliant',
-      paymentTerms: 'Net 30 Days',
-      remarks,
-      source: 'portal',
-      submissionMethod: 'web_portal',
-    };
-
-    setRfqs((prev) =>
-      prev.map((r) => {
-        if (r.rfqNumber === rfqNumber) {
-          const updatedQuotes = [...r.quotes.map(q => ({ ...q, isBestPrice: false, isPreferred: false })), newQuote];
-          const updatedFollowUp = r.followUpData ? {
-            ...r.followUpData,
-            respondedCount: Math.max(r.followUpData.respondedCount || 0, updatedQuotes.length),
-          } : r.followUpData;
-          return {
-            ...r,
-            quotesCount: updatedQuotes.length,
-            status: 'AI Recommended',
-            quotes: updatedQuotes,
-            followUpData: updatedFollowUp,
-            aiScore: 95,
-          };
-        }
-        return r;
-      })
+    channel: 'call' | 'whatsapp' | 'sms' | 'email',
+    vendorName = '',
+    customNote?: string,
+    suppressToast = false
+  ): Promise<boolean> => {
+    logger.log(
+      'WARN',
+      'Single-vendor chaser requested. No per-vendor chaser route exists, so nothing was sent.',
+      { rfqNumber, channel, vendorName, hasNote: Boolean(customNote) },
+      'CHASER'
     );
-
-    setVendorOpportunities((prev) =>
-      prev.map((o) => (o.rfqNumber === rfqNumber ? { ...o, status: 'submitted' } : o))
-    );
-
-    addFeedItem(
-      `Bid Submitted by Apex Supplies Ltd.`,
-      `Apex Supplies submitted line-item quotation (${formatCurrency(unitPrice)}/unit, ${leadTimeDays}d lead time). AI Score: 95%.`,
-      'scoring',
-      rfqNumber,
-      'Apex Supplies Ltd.'
-    );
-
-    addAuditLog(
-      `Apex Supplies Ltd. submitted verified quotation for ${rfqNumber} (${formatCurrency(unitPrice)})`,
-      rfqNumber,
-      'vendor@apex.com'
-    );
-
-    showToast(
-      'Quotation Submitted Successfully!',
-      `Your bid for ${rfqNumber} has been validated and injected into the Buyer Comparative Matrix.`,
-      'success'
-    );
+    if (!suppressToast) {
+      showToast(STORE_MESSAGES.chaserNotSentTitle, STORE_MESSAGES.chaserVendorNotConnected, 'warning');
+    }
+    return false;
   };
 
   // Was entirely local-state — the real, already-working POST /:id/approve-po
@@ -2716,20 +2398,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // its real response so the modal can render the real document instead.
   const approvePO = async (
     rfqNumber: string,
-    vendorId: string | any,
-    vendorName: string | any,
-    amount?: number,
+    vendorId: string | null,
+    vendorName: string,
+    amount: number,
     approverNotes?: string
   ): Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }> => {
-    const effectiveVendorId = typeof vendorId === 'string'
-      ? vendorId
-      : (vendorId && typeof vendorId === 'object' ? (vendorId.id || vendorId.vendorId || null) : null);
-    const effectiveVendorName = typeof vendorName === 'string'
-      ? vendorName
-      : (vendorId && typeof vendorId === 'object' ? (vendorId.name || vendorId.vendorName || '') : String(vendorName || ''));
-    const effectiveAmount = typeof amount === 'number'
-      ? amount
-      : (typeof vendorName === 'number' ? vendorName : 0);
+    const effectiveVendorId = vendorId;
+    const effectiveVendorName = vendorName;
+    const effectiveAmount = amount;
 
     try {
       const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqNumber)}/approve-po`, {
@@ -2770,28 +2446,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         )
       );
 
-      addFeedItem(
+      // The approval endpoint writes its own audit entry on the server. It does not dispatch to an ERP or a
+      // vendor portal, so the feed line states only what was recorded.
+      void addFeedItem(
         `Pre-Purchase Order Generated: ${rfqNumber}`,
-        `Approved Pre-PO ${data.poNumber} generated for ${effectiveVendorName} totaling ${formatCurrency(effectiveAmount)}. Dispatched to ERP & Vendor Portal.`,
+        `Approved Pre-PO ${data.poNumber} generated for ${effectiveVendorName} totaling ${formatCurrency(effectiveAmount)}.`,
         'approval',
-        rfqNumber
-      );
-
-      addAuditLog(
-        `Approved Pre-Purchase Order (PO) Generation & Dispatched Contract for ${rfqNumber} to ${effectiveVendorName} (${formatCurrency(effectiveAmount)})`,
         rfqNumber
       );
 
       showToast(
         'Pre-Purchase Order Issued!',
-        `Official Pre-Purchase Order ${data.poNumber} generated and signed with a real SHA-256 digital stamp for ${vendorName}.`,
+        `Official Pre-Purchase Order ${data.poNumber} generated for ${effectiveVendorName}.`,
         'success'
       );
 
       return { success: true, poNumber: data.poNumber, issueDate: data.issueDate, shaSignature: data.shaSignature, lineItems: data.lineItems };
-    } catch (err: any) {
-      showToast('PO Approval Failed', err?.message || 'Network error while approving the pre-purchase order.', 'warning');
-      return { success: false, error: err?.message };
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : STORE_MESSAGES.poNetworkFailed;
+      showToast('PO Approval Failed', message, 'warning');
+      return { success: false, error: message };
     }
   };
 
@@ -2816,38 +2490,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return [opp, ...prev];
     });
 
-    const mode = String(rfq.sourcingMode || '').toLowerCase();
-    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
-    const serverRemaining = typeof remainingCredits === 'number'
-      ? remainingCredits
-      : (typeof (rfq as any)?.remainingFreeRFQs === 'number' ? (rfq as any).remainingFreeRFQs : null);
-
-    if (serverRemaining !== null && typeof serverRemaining === 'number') {
+    // Only a balance the server reported changes the count. If none was reported, the count is left as it was.
+    // Nothing is decremented or derived here.
+    if (typeof remainingCredits === 'number') {
+      const serverRemaining = remainingCredits;
       setRemainingFreeRFQs(serverRemaining);
       setActiveBuyerAccount((prev) => {
         if (!prev) return prev;
-        const updated = {
-          ...prev,
-          remainingFreeRFQs: serverRemaining,
-          freeRFQsUsed: Math.max(0, 5 - serverRemaining),
-        };
+        const updated = { ...prev, remainingFreeRFQs: serverRemaining };
         setSessionCache('activeBuyerAccount', updated);
         return updated;
-      });
-    } else if (!isV0 && (!activeSubscription || activeSubscription === 'free_trial')) {
-      setRemainingFreeRFQs((prev) => {
-        const next = Math.max(0, prev - 1);
-        setActiveBuyerAccount((prevAcc) => {
-          if (!prevAcc) return prevAcc;
-          const updated = {
-            ...prevAcc,
-            remainingFreeRFQs: next,
-            freeRFQsUsed: Math.max(0, 5 - next),
-          };
-          setSessionCache('activeBuyerAccount', updated);
-          return updated;
-        });
-        return next;
       });
     }
 
@@ -2931,32 +2583,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const addNewRFQ = async (
-    rfqData: NewRFQInput,
-    customMatchedVendors?: VendorEntry[]
-  ): Promise<RFQItem> => {
-    // Subscription Limits Validation
+  const addNewRFQ = async (rfqData: NewRFQInput): Promise<RFQItem> => {
+    // These gates refuse only what the loaded account already shows as refused. The server applies the same
+    // limits inside the RFQ create transaction and returns the reason when it refuses. No count is decremented
+    // here before the server has confirmed the RFQ.
     if (activeSubscription === 'none') {
       showToast('Subscription Upgrade Required', 'Your organization domain has already claimed its free trial. You must subscribe to a sourcing mode to dispatch RFQs.', 'warning');
       throw new Error('Subscription required');
     }
 
-    if (activeSubscription === 'free_trial') {
-      if (rfqData.sourcingMode === RFQ_MODES.MODE_0) {
-        showToast('Mode 0 RFQ Dispatched', 'Created RFQ via Mode 0 (Procucev Network Vendors). 0 free RFQ credits used.', 'success');
-      } else {
-        if (remainingFreeRFQs <= 0) {
-          showToast('Free RFQ Quota Exhausted', 'You have hit your limit on Mode 1, Mode 2, and Mode 3, but you can create multiple RFQs with Mode 0 (Procucev Network Vendors). Upgrade your plan to continue creating RFQs with Mode 1, Mode 2, or Mode 3.', 'warning');
-          throw new Error('Free account quota exhausted');
-        }
-        setRemainingFreeRFQs(prev => {
-          const next = Math.max(0, prev - 1);
-          const modeName = rfqData.sourcingMode === RFQ_MODES.MODE_1 ? `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Roster)` : rfqData.sourcingMode === RFQ_MODES.MODE_2 ? `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network)` : `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} (Autonomous AI)`;
-          showToast('Free RFQ Dispatched', `Used 1 Free RFQ via ${modeName}. You have ${next} free RFQs remaining across all versions.`, 'success');
-          return next;
-        });
-      }
-    } else {
+    if (
+      activeSubscription === 'free_trial' &&
+      rfqData.sourcingMode !== RFQ_MODES.MODE_0 &&
+      remainingFreeRFQs !== null &&
+      remainingFreeRFQs <= 0
+    ) {
+      showToast('Free RFQ Quota Exhausted', 'You have hit your limit on Mode 1, Mode 2, and Mode 3, but you can create multiple RFQs with Mode 0 (Procucev Network Vendors). Upgrade your plan to continue creating RFQs with Mode 1, Mode 2, or Mode 3.', 'warning');
+      throw new Error('Free account quota exhausted');
+    }
+
+    if (activeSubscription !== null && activeSubscription !== 'free_trial') {
       if (rfqData.sourcingMode === RFQ_MODES.MODE_2 && activeSubscription === 'version_1') {
         showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network) Plan subscription.`, 'warning');
         throw new Error('Subscription required');
@@ -2964,24 +2610,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (rfqData.sourcingMode === RFQ_MODES.MODE_3 && activeSubscription !== 'version_3') {
         showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} (Autonomous AI) Plan subscription.`, 'warning');
         throw new Error('Subscription required');
-      }
-    }
-
-    // An explicitly empty list means "attach no vendors" and must be honoured:
-    // only an omitted argument falls back to automatic matching. Treating [] as
-    // "no preference" would fire RFQ emails and chaser sequences at suppliers the
-    // buyer never selected.
-    const rawMatchedVendors = customMatchedVendors
-      ? customMatchedVendors
-      : matchSuitableVendors(rfqData.extractedEntities, rfqData.sourcingMode);
-
-    const seenKeys = new Set<string>();
-    const matchedVendors: VendorEntry[] = [];
-    for (const v of rawMatchedVendors) {
-      const key = ((v.email || v.name || v.id) || '').toLowerCase().trim();
-      if (key && !seenKeys.has(key)) {
-        seenKeys.add(key);
-        matchedVendors.push(v);
       }
     }
 
@@ -3041,55 +2669,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // two copies of one RFQ.
     setRfqs((prev) => [newRFQ, ...prev.filter((r) => r.rfqNumber !== newRFQ.rfqNumber)]);
 
-    // Derived from the saved RFQ by the same mapper the list uses, so the vendor
-    // portal shows the real buyer, delivery location and value rather than the
-    // hardcoded "Larsen & Toubro" and "Enterprise Logistics Hub" placeholders that
-    // used to be attached to every new RFQ.
+    // Built from the saved RFQ by the same mapper the list uses, so the vendor portal shows the buyer, location
+    // and value the server stored.
     setVendorOpportunities((prev) => [buildOpportunityFromRFQ(newRFQ), ...prev]);
 
-    // Dispatch Standard RFQ Email Package to each suitable vendor
-    matchedVendors.forEach((v) => {
-      const emailPayload = generateStandardRFQEmail(newRFQ, v);
-      addFeedItem(
-        `Standard RFQ Email Dispatched: ${v.name}`,
-        `Standard procurement RFQ email package sent to ${v.contactPerson} (${v.email}) for ${newRFQ.rfqNumber}. Categorized under ${emailPayload.matchedMajorCategory} > [${emailPayload.matchedMinorCategories.join(', ')}].`,
-        'email',
-        newRFQ.rfqNumber,
-        v.name,
-        'email'
-      );
-    });
-
-    addFeedItem(
-      `RFQ Dispatched: ${newRFQ.rfqNumber}`,
-      `Dispatched to ${matchedVendors.length} suitable vendors matching Minor Categories under ${SOURCING_MODES.find(m => m.id === newRFQ.sourcingMode)?.shortLabel}.`,
+    // The server assigns the vendors and queues their invitations, so the count here is the one it stored.
+    // No per-vendor send is reported, because the client cannot observe one.
+    const assignedCount = Array.isArray(newRFQ.assignedVendors) ? newRFQ.assignedVendors.length : 0;
+    void addFeedItem(
+      formatString(STORE_MESSAGES.rfqCreatedFeedTitle, { rfqNumber: newRFQ.rfqNumber }),
+      formatString(STORE_MESSAGES.rfqCreatedFeedMessage, { count: assignedCount }),
       'email',
       newRFQ.rfqNumber
     );
 
-    addAuditLog(
-      `Created and dispatched Standard RFQ Email for ${newRFQ.rfqNumber} to ${matchedVendors.length} suitable vendors (${matchedVendors.map(v => v.name).join(', ')})`,
-      newRFQ.rfqNumber
-    );
+    void addAuditLog(`Created ${newRFQ.rfqNumber} (${newRFQ.title})`, newRFQ.rfqNumber);
 
     showToast(
-      'Standard RFQ Email Dispatched!',
-      `${newRFQ.rfqNumber} dispatched to ${matchedVendors.length} suitable vendors.`,
+      STORE_MESSAGES.rfqCreatedTitle,
+      formatString(STORE_MESSAGES.rfqCreatedMessage, { rfqNumber: newRFQ.rfqNumber, count: assignedCount }),
       'success'
     );
 
+    // Only the balance the server returned is applied. It is not computed from the request.
     if (typeof saved.remainingFreeRFQs === 'number') {
       const remainingNum = saved.remainingFreeRFQs;
       setRemainingFreeRFQs(remainingNum);
-      setActiveBuyerAccount((prev) =>
-        prev
-          ? {
-              ...prev,
-              remainingFreeRFQs: remainingNum,
-              freeRFQsUsed: Math.max(0, 5 - remainingNum),
-            }
-          : prev
-      );
+      setActiveBuyerAccount((prev) => (prev ? { ...prev, remainingFreeRFQs: remainingNum } : prev));
     }
     void refreshActiveBuyerAccount();
 
@@ -3124,6 +2730,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setActiveTab,
         rfqs,
         aiFeed,
+        aiFeedError,
         vendorOpportunities,
         auditLogs,
         azureHealth,
@@ -3152,10 +2759,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         adoptCreatedRFQ,
         updateRFQ,
         deleteRFQ,
-        triggerWhatsAppChaser,
         triggerChannelChaser,
         triggerBatchChannelChaser,
-        submitVendorBid,
         approvePO,
         addAuditLog,
         addFeedItem,
@@ -3210,7 +2815,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         updateBuyerAccount,
         deleteBuyerAccount,
         alignActiveBuyerAccount,
-        importPublicBuyerDatabase,
         initialSetupModalOpen,
         setInitialSetupModalOpen,
         initialSetupCompleted,
@@ -3234,8 +2838,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         onboardingEmailModalOpen,
         setOnboardingEmailModalOpen,
         openOnboardingEmailModal,
-        triggerVendorReminder,
-        completeVendorProfile,
         clientMappedCategories,
         setClientMappedCategories,
         vendorSelectedCategories,

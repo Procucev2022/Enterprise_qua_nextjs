@@ -878,6 +878,8 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
           }),
         })
       );
+      // The import is attributed to the signed-in user, not to a built-in mailbox.
+      expect(storeService.bulkAddVendors).toHaveBeenCalledWith(expect.any(Array), 'buyer@authed.com');
     });
 
     test('isHydratedFromDB surfaces persisted source in getVendors and getVendorById', async () => {

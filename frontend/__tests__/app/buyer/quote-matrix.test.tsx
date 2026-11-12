@@ -428,7 +428,7 @@ describe('QuoteMatrix Component Tests', () => {
     });
     rerender(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
     expect(screen.getByText(/Received quotations remain hidden/i)).toBeInTheDocument();
-    expect(screen.getByText(/After 48 hours/i)).toBeInTheDocument();
+    expect(screen.getByText(/hidden from the buyer for 48 hours after release/i)).toBeInTheDocument();
   });
 
   test('renders quote attachments, vendor rank ties with lead time, and custom taxes/delivery charges', () => {
@@ -512,6 +512,46 @@ describe('QuoteMatrix Component Tests', () => {
     const selectAlphaBtn = screen.getByText(/\[ APPROVE & GENERATE PRE-PURCHASE ORDER \]/i);
     fireEvent.click(selectAlphaBtn);
     expect(screen.getByText(/PO Modal for Alpha Supplies/i)).toBeInTheDocument();
+  });
+
+  test('shows the GST estimate as not provided when a quote has no tax rate', () => {
+    const noRateRfq = {
+      ...mockRFQs[0],
+      extractedEntities: [
+        { id: 'li-1', itemName: 'Piping Spec', quantity: 2, technicalSpecs: 'Custom Heavy Grade', unit: 'Meters' },
+      ],
+      quotes: [
+        {
+          vendorId: 'v-no-rate',
+          vendorName: 'Delta Supplies',
+          vendorCategory: 'Verified Supplier',
+          unitPrice: 1000,
+          totalPrice: 2000,
+          leadTimeDays: 6,
+          attachments: [],
+          lineItemQuotes: [{ lineItemId: 'li-1', itemName: 'Piping Spec', unitPrice: 1000, totalPrice: 2000, leadTimeDays: 6 }],
+        },
+      ],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [noRateRfq],
+      selectedRFQForMatrix: noRateRfq,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+      activeBuyerAccount: { id: 'buyer-1', organizationName: 'Buyer Corp' },
+      buyerVendors: [],
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+    const gstLabel = screen.getByText('GST:');
+    expect(gstLabel.nextElementSibling).toHaveTextContent(UI_STRINGS.rfqDetails.unsetValue);
+    expect(screen.queryByText(/GST \(\d+%\)/)).not.toBeInTheDocument();
   });
 
   test('handles awarded vendor matching by awardedVendorId, awardedVendor name, and poFinalised flags', () => {

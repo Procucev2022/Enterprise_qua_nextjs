@@ -620,7 +620,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           if (vCat === 'Client List') {
             return false;
           }
-          if (isBuyerUploaded(matchedAssigned)) {
+          if (
+            isBuyerUploaded({
+              source: matchedAssigned.source ?? undefined,
+              buyerId: matchedAssigned.buyerId ?? undefined,
+              buyerAccountId: matchedAssigned.buyerAccountId ?? undefined,
+              addedByBuyerCompany: matchedAssigned.addedByBuyerCompany ?? undefined,
+            })
+          ) {
             return false;
           }
         }
@@ -641,7 +648,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
       // 5. Check if the provided object or ID qualifies as buyer uploaded
       if (extra && isBuyerUploaded(extra)) return false;
-      if (vendorId && isBuyerUploaded({ id: vendorId })) return false;
 
       // 6. If extra explicitly has Procucev sources
       const src = String(extra?.source || '').toLowerCase().trim();

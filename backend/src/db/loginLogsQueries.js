@@ -1,13 +1,19 @@
 // ==============================================================================
-// USER LOGIN LOGS QUERIES (PostgreSQL & Relational Pool with in-memory fallback)
+// USER LOGIN LOGS QUERIES (process memory)
 // ==============================================================================
-// Persistent repository for tracking real-time buyer and seller/vendor login
-// and session telemetry across the enterprise platform.
+// Session telemetry for buyer and vendor logins. The user_login_logs table was
+// dropped by migration 0029, so entries are kept in this process only. They are not
+// persisted, they do not survive a restart, and each server instance holds its own.
+// Each entry contains only values supplied by the request or the session. A value
+// that is not known is null.
 // ==============================================================================
 
-const pool = require('./pool');
 const crypto = require('crypto');
 const { logger } = require('../services/loggerService');
+
+const LOGIN_LOG_ERRORS = Object.freeze({
+  EMAIL_REQUIRED: 'An email address is required to record a login event.',
+});
 
 function escapeLikeWildcards(str) {
   if (typeof str !== 'string') return '';
@@ -20,131 +26,45 @@ function safeIsoDate(val) {
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+function toNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Only the two supported account types are classified. Any other role is null. */
+function normalizeUserType(value) {
+  const normalized = String(value || '').toLowerCase().trim();
+  if (normalized === 'vendor') return 'vendor';
+  if (normalized === 'buyer') return 'buyer';
+  return null;
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
-    id: String(row.id || ''),
-    userId: row.user_id || row.userId || '',
-    userName: row.user_name || row.userName || '',
-    email: row.email || '',
-    phoneNumber: row.phone_number || row.phoneNumber || '',
-    companyName: row.company_name || row.companyName || '',
-    userType: (row.user_type || row.userType || 'buyer').toLowerCase(),
-    loginAt: row.login_at ? new Date(row.login_at).toISOString() : (row.loginAt || new Date().toISOString()),
-    logoutAt: row.logout_at ? new Date(row.logout_at).toISOString() : (row.logoutAt || null),
-    durationSeconds: Number(row.duration_seconds !== undefined && row.duration_seconds !== null ? row.duration_seconds : (row.durationSeconds || 0)),
-    status: row.status || 'ACTIVE',
-    ipAddress: row.ip_address || row.ipAddress || '127.0.0.1',
-    deviceInfo: row.device_info || row.deviceInfo || 'Desktop Browser',
-    location: row.location || 'India (National)',
-    userAgent: row.user_agent || row.userAgent || '',
-    createdAt: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || new Date().toISOString()),
-    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || new Date().toISOString()),
+    id: row.id != null ? String(row.id) : null,
+    userId: row.user_id || row.userId || null,
+    userName: row.user_name || row.userName || null,
+    email: row.email || null,
+    phoneNumber: row.phone_number || row.phoneNumber || null,
+    companyName: row.company_name || row.companyName || null,
+    userType: normalizeUserType(row.user_type || row.userType),
+    loginAt: safeIsoDate(row.login_at ?? row.loginAt),
+    logoutAt: safeIsoDate(row.logout_at ?? row.logoutAt),
+    durationSeconds: toNumberOrNull(row.duration_seconds ?? row.durationSeconds),
+    status: row.status || null,
+    ipAddress: row.ip_address || row.ipAddress || null,
+    deviceInfo: row.device_info || row.deviceInfo || null,
+    location: row.location || null,
+    userAgent: row.user_agent || row.userAgent || null,
+    createdAt: safeIsoDate(row.created_at ?? row.createdAt),
+    updatedAt: safeIsoDate(row.updated_at ?? row.updatedAt),
   };
 }
 
-const DEFAULT_LOGS = [
-  {
-    id: 'log_sess_101',
-    userId: 'BUYER-001',
-    userName: 'Rajesh Sharma',
-    email: 'rajesh.sharma@tatamotors.com',
-    phoneNumber: '+91 98201 44521',
-    companyName: 'Tata Motors Ltd',
-    userType: 'buyer',
-    loginAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-    logoutAt: null,
-    durationSeconds: 900,
-    status: 'ACTIVE',
-    ipAddress: '103.21.244.12',
-    deviceInfo: 'Chrome 128 / Windows 11',
-    location: 'Mumbai, Maharashtra',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0.0.0 Safari/537.36',
-    createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-    updatedAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 'log_sess_102',
-    userId: 'VEND-201',
-    userName: 'Amit Patel',
-    email: 'amit.patel@apexindustrial.in',
-    phoneNumber: '+91 98980 12345',
-    companyName: 'Apex Industrial Solutions Pvt Ltd',
-    userType: 'vendor',
-    loginAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
-    logoutAt: null,
-    durationSeconds: 2700,
-    status: 'ACTIVE',
-    ipAddress: '49.36.128.88',
-    deviceInfo: 'Edge 128 / Windows 11',
-    location: 'Ahmedabad, Gujarat',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/128.0.0.0',
-    createdAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
-    updatedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 'log_sess_103',
-    userId: 'BUYER-002',
-    userName: 'Priya Iyer',
-    email: 'priya.iyer@relianceretail.com',
-    phoneNumber: '+91 98400 99881',
-    companyName: 'Reliance Retail Ventures',
-    userType: 'buyer',
-    loginAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
-    logoutAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
-    durationSeconds: 3600,
-    status: 'LOGGED_OUT',
-    ipAddress: '14.143.45.10',
-    deviceInfo: 'Safari 18 / macOS Sonoma',
-    location: 'Bengaluru, Karnataka',
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
-    createdAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
-    updatedAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
-  },
-  {
-    id: 'log_sess_104',
-    userId: 'VEND-202',
-    userName: 'Suresh Menon',
-    email: 'suresh@keralasteels.com',
-    phoneNumber: '+91 97455 33221',
-    companyName: 'Kerala Steels & Fabrication Ltd',
-    userType: 'vendor',
-    loginAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
-    logoutAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
-    durationSeconds: 3600,
-    status: 'LOGGED_OUT',
-    ipAddress: '117.218.67.92',
-    deviceInfo: 'Firefox 130 / Linux',
-    location: 'Kochi, Kerala',
-    userAgent: 'Mozilla/5.0 (X11; Linux x86_64; rv:130.0)',
-    createdAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
-    updatedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
-  },
-  {
-    id: 'log_sess_105',
-    userId: 'BUYER-003',
-    userName: 'Ananya Verma',
-    email: 'ananya.v@hindalco.adityabirla.com',
-    phoneNumber: '+91 99100 55443',
-    companyName: 'Hindalco Industries Ltd',
-    userType: 'buyer',
-    loginAt: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
-    logoutAt: new Date(Date.now() - 5 * 3600 * 1000).toISOString(),
-    durationSeconds: 1800,
-    status: 'TIMED_OUT',
-    ipAddress: '122.161.42.19',
-    deviceInfo: 'Chrome 128 / Windows 10',
-    location: 'New Delhi, NCR',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0.0.0',
-    createdAt: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
-    updatedAt: new Date(Date.now() - 5 * 3600 * 1000).toISOString(),
-  },
-];
-
+// Process-memory store. Starts empty: no seeded or sample sessions.
 const inMemoryLogs = new Map();
-if (process.env.NODE_ENV === 'test') {
-  DEFAULT_LOGS.forEach((item) => inMemoryLogs.set(item.id, { ...item }));
-}
 
 /**
  * List login logs with optional filters for role, status, date range, search, and pagination.
@@ -152,7 +72,6 @@ if (process.env.NODE_ENV === 'test') {
 async function listLoginLogs(options = {}) {
   const { userType, status, search, startDate, endDate, dateRangePreset, page = 1, limit = 50 } = options;
 
-  // In-memory telemetry repository (table user_login_logs dropped per migration 0029)
   let items = Array.from(inMemoryLogs.values());
 
   if (userType && userType !== 'all') {
@@ -165,10 +84,10 @@ async function listLoginLogs(options = {}) {
     const q = search.toLowerCase().trim();
     items = items.filter(
       (l) =>
-        l.userName.toLowerCase().includes(q) ||
-        l.email.toLowerCase().includes(q) ||
-        l.companyName.toLowerCase().includes(q) ||
-        l.phoneNumber.includes(q)
+        String(l.userName || '').toLowerCase().includes(q) ||
+        String(l.email || '').toLowerCase().includes(q) ||
+        String(l.companyName || '').toLowerCase().includes(q) ||
+        String(l.phoneNumber || '').includes(q)
     );
   }
 
@@ -214,12 +133,14 @@ async function listLoginLogs(options = {}) {
 
 /**
  * Returns summary KPI metrics for the real-time login logs dashboard.
+ * todayPeakHour is the hour of day (HH:00) with the most logins today, or null when
+ * there are no logins today.
  */
 async function getLoginLogsSummary() {
   const items = Array.from(inMemoryLogs.values());
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  const startOfToday = now.getTime();
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfTodayMs = startOfToday.getTime();
 
   let totalToday = 0;
   let activeNow = 0;
@@ -227,18 +148,22 @@ async function getLoginLogsSummary() {
   let sellerLogins = 0;
   let totalDurationSec = 0;
   let durationCount = 0;
+  const loginsByHour = new Map();
 
   items.forEach((item) => {
-    const t = new Date(item.loginAt).getTime();
-    if (t >= startOfToday) {
+    const loginDate = new Date(item.loginAt);
+    if (loginDate.getTime() >= startOfTodayMs) {
       totalToday++;
+      const hour = loginDate.getHours();
+      loginsByHour.set(hour, (loginsByHour.get(hour) || 0) + 1);
     }
     if (item.status === 'ACTIVE') {
       activeNow++;
     }
     if (item.userType === 'buyer') {
       buyerLogins++;
-    } else {
+    }
+    if (item.userType === 'vendor') {
       sellerLogins++;
     }
     if (item.durationSeconds && item.durationSeconds > 0) {
@@ -247,41 +172,57 @@ async function getLoginLogsSummary() {
     }
   });
 
-  const avgDurationMinutes = durationCount > 0 ? Math.round(totalDurationSec / durationCount / 60) : 0;
+  let peakHour = null;
+  let peakCount = 0;
+  loginsByHour.forEach((count, hour) => {
+    if (count > peakCount || (count === peakCount && hour < peakHour)) {
+      peakHour = hour;
+      peakCount = count;
+    }
+  });
 
   return {
     totalToday,
     activeNow,
     buyerLogins,
     sellerLogins,
-    avgDurationMinutes,
-    todayPeakHour: totalToday > 0 ? 'Live Telemetry Active' : 'None',
+    avgDurationMinutes: durationCount > 0 ? Math.round(totalDurationSec / durationCount / 60) : null,
+    todayPeakHour: peakHour === null ? null : `${String(peakHour).padStart(2, '0')}:00`,
   };
 }
 
 /**
- * Record a login event into the durable log store.
+ * Record a login event. Identity, network, and device values come from the caller's
+ * session and request. Values the caller does not supply are null.
  */
-async function recordLoginLog(data) {
+async function recordLoginLog(data = {}) {
+  const email = String(data.email || '').toLowerCase().trim();
+  if (!email) {
+    const error = new Error(LOGIN_LOG_ERRORS.EMAIL_REQUIRED);
+    error.code = 'VALIDATION_FAILED';
+    error.statusCode = 400;
+    throw error;
+  }
+
   const id = `log_sess_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   const now = new Date().toISOString();
 
   const entry = {
     id,
-    userId: data.userId || '',
-    userName: data.userName || data.name || 'Platform User',
-    email: (data.email || '').toLowerCase().trim(),
-    phoneNumber: data.phoneNumber || data.mobile || data.phone || '+91 99999 00000',
-    companyName: data.companyName || data.company || 'Enterprise Partner',
-    userType: (data.userType || data.role || 'buyer').toLowerCase() === 'vendor' ? 'vendor' : 'buyer',
+    userId: data.userId || null,
+    userName: data.userName || data.name || null,
+    email,
+    phoneNumber: data.phoneNumber || data.mobile || data.phone || null,
+    companyName: data.companyName || data.company || null,
+    userType: normalizeUserType(data.userType || data.role),
     loginAt: now,
     logoutAt: null,
     durationSeconds: 0,
     status: 'ACTIVE',
-    ipAddress: data.ipAddress || '127.0.0.1',
-    deviceInfo: data.deviceInfo || 'Chrome / Windows',
-    location: data.location || 'India (National)',
-    userAgent: data.userAgent || '',
+    ipAddress: data.ipAddress || null,
+    deviceInfo: data.deviceInfo || null,
+    location: data.location || null,
+    userAgent: data.userAgent || null,
     createdAt: now,
     updatedAt: now,
   };
@@ -289,7 +230,7 @@ async function recordLoginLog(data) {
   inMemoryLogs.set(id, entry);
 
   logger.info(
-    `Recorded login event for ${entry.email} (${entry.userType})`,
+    `Recorded login event for ${entry.email} (${entry.userType || 'unclassified'})`,
     { id: entry.id, email: entry.email, userType: entry.userType, ipAddress: entry.ipAddress },
     'AUTH_LOGIN'
   );
@@ -336,6 +277,5 @@ module.exports = {
   escapeLikeWildcards,
   safeIsoDate,
   mapRow,
-  DEFAULT_LOGS,
   inMemoryLogs,
 };

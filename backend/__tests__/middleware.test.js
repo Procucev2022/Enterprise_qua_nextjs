@@ -2,6 +2,25 @@ const logger = require('../src/middleware/logger');
 const errorHandler = require('../src/middleware/errorHandler');
 
 describe('Middleware Unit Tests', () => {
+  test('replaces a client X-Request-Id with unsafe characters by a generated UUID', () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    try {
+      const req = { method: 'GET', originalUrl: '/api/test', headers: { 'x-request-id': 'bad id\r\nINFO forged line' } };
+      const res = { statusCode: 200, writableEnded: true, setHeader: jest.fn(), on: jest.fn() };
+      const next = jest.fn();
+
+      logger(req, res, next);
+
+      expect(req.requestId).toMatch(/^req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(res.setHeader).toHaveBeenCalledWith('X-Request-Id', req.requestId);
+      expect(next).toHaveBeenCalled();
+    } finally {
+      if (originalEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalEnv;
+    }
+  });
+
   test('logger logs request duration on response finish when not test env', () => {
     const originalEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'development';

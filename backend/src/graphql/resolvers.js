@@ -135,7 +135,7 @@ function vendorForGraphQL(vendor, user, buyerId) {
   if (!vendor || typeof vendor !== 'object') return null;
   if (canReadPrivateVendor(vendor, user, buyerId)) return vendor;
   const safeVendor = sanitizePublicVendor(vendor);
-  return { ...safeVendor, email: safeVendor.email || 'contact@vendor.example.invalid' };
+  return { ...safeVendor, email: safeVendor.email || null };
 }
 
 async function requireVendorMutationScope(context, vendorId) {
@@ -158,6 +158,24 @@ async function requireVendorMutationScope(context, vendorId) {
   }
 
   throw new Error('You do not have permission to modify this vendor.');
+}
+
+/**
+ * Shapes one remediation outcome for the RemediationResult type. Every value is taken from
+ * the log error resolver's result. A refused action keeps remediationId null because the
+ * resolver records nothing for it.
+ */
+function toRemediationResult(result) {
+  const succeeded = result.success === true;
+  return {
+    remediationId: result.remediationId || null,
+    actionType: String(result.actionType || ''),
+    success: succeeded,
+    status: result.status || (succeeded ? 'applied' : 'failed'),
+    message: String(result.message || ''),
+    timestamp: String(result.timestamp || ''),
+    durationMs: Number.isFinite(result.durationMs) ? result.durationMs : null,
+  };
 }
 
 /**
@@ -469,14 +487,19 @@ const rootResolvers = {
   autoResolveLogErrors: async (args = {}, context) => {
     await requireAdmin(context);
     if (args.action) {
+      const issues = logErrorResolver.diagnoseErrors();
       const res = await logErrorResolver.executeRemediation(args.action);
       return {
-        diagnosedCount: 1,
-        issues: [],
-        remediationsApplied: [res],
+        diagnosedCount: issues.length,
+        issues,
+        remediationsApplied: [toRemediationResult(res)],
       };
     }
-    return await logErrorResolver.autoResolveAll();
+    const report = await logErrorResolver.autoResolveAll();
+    return {
+      ...report,
+      remediationsApplied: report.remediationsApplied.map(toRemediationResult),
+    };
   },
 
   optimizePerformance: async (args = {}, context) => {

@@ -3,8 +3,8 @@
 // ENTERPRISE QUA - ALWAYS-RUNNING AUTOMATED EMAIL POLLING SCHEDULER
 // ==============================================================================
 // Continuously monitors both configured email inboxes:
-//   1. rfq@procucev.com (Inbound Buyer Requisitions)
-//   2. srinu20252026@gmail.com (Vendor Quotations & Responses)
+//   1. Buyer requisitions mailbox (EMAIL_GATEWAY_USER / EMAIL_GATEWAY_ADDRESS)
+//   2. Vendor quotations mailbox (VENDOR_EMAIL_GATEWAY_USER / VENDOR_EMAIL_GATEWAY_ADDRESS)
 //
 // Automatically checks both inboxes every 1 minute (60,000 ms).
 // Features:
