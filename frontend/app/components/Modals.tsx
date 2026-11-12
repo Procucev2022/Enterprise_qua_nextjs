@@ -730,6 +730,7 @@ interface MultiChannelChaserModalProps {
   vendorName: string;
   vendorPhone?: string;
   initialChannel?: 'call' | 'whatsapp' | 'sms';
+  hidePhone?: boolean;
 }
 
 export function MultiChannelChaserModal({
@@ -739,6 +740,7 @@ export function MultiChannelChaserModal({
   vendorName,
   vendorPhone,
   initialChannel = 'whatsapp',
+  hidePhone = false,
 }: MultiChannelChaserModalProps) {
   const { triggerChannelChaser } = useApp();
   const [selectedChannel, setSelectedChannel] = useState<'call' | 'whatsapp' | 'sms'>(initialChannel);
@@ -845,15 +847,24 @@ export function MultiChannelChaserModal({
         </div>
 
         <div className="space-y-3.5 my-3 text-xs">
-          <div>
-            <label className="block text-slate-700 dark:text-gray-300 font-semibold mb-1">
-              Target Vendor & Phone Number
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <input type="text" value={vendorName} readOnly className="opacity-80 font-medium" />
-              <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          {hidePhone ? (
+            <div>
+              <label className="block text-slate-700 dark:text-gray-300 font-semibold mb-1">
+                Target Vendor
+              </label>
+              <input type="text" value={vendorName} readOnly className="w-full opacity-80 font-medium" />
             </div>
-          </div>
+          ) : (
+            <div>
+              <label className="block text-slate-700 dark:text-gray-300 font-semibold mb-1">
+                Target Vendor & Phone Number
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <input type="text" value={vendorName} readOnly className="opacity-80 font-medium" />
+                <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              </div>
+            </div>
+          )}
 
           {selectedChannel === 'call' ? (
             <div>
@@ -959,7 +970,6 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   const [activeChannelTab, setActiveChannelTab] = useState<'all' | 'call' | 'whatsapp' | 'sms'>('all');
   const [activeVendorModal, setActiveVendorModal] = useState<{
     vendorName: string;
-    phone: string;
     channel: 'call' | 'whatsapp' | 'sms';
   } | null>(null);
 
@@ -1262,9 +1272,6 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       <span className="font-extrabold text-slate-900 dark:text-white text-sm flex items-center gap-1.5">
                         <Building2 size={15} className="text-slate-400" /> {vendor.vendorName}
                       </span>
-                      {vendor.phone && (
-                        <span className="text-slate-500 dark:text-gray-400 text-xs mono">({vendor.phone})</span>
-                      )}
                       {(() => {
                         const vendorType = vendorTypeFor(vendor);
                         return (
@@ -1291,7 +1298,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1">
-                      Contact: <span className="text-slate-700 dark:text-gray-300 font-semibold">{vendor.contactPerson || UI_STRINGS.recordPlaceholders.notRecorded}</span> • Last Interaction: <span className="font-medium text-slate-700 dark:text-gray-300">{vendor.lastInteraction || UI_STRINGS.recordPlaceholders.notRecorded}</span> {typeof vendor.attemptsCount === 'number' && vendor.attemptsCount > 0 && `(Attempt #${vendor.attemptsCount})`}
+                      Last Interaction: <span className="font-medium text-slate-700 dark:text-gray-300">{vendor.lastInteraction || UI_STRINGS.recordPlaceholders.notRecorded}</span> {typeof vendor.attemptsCount === 'number' && vendor.attemptsCount > 0 && `(Attempt #${vendor.attemptsCount})`}
                     </p>
                   </div>
 
@@ -1299,7 +1306,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   <div className="flex items-center gap-2 flex-wrap shrink-0">
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'call' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'call' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-700/50 hover:bg-purple-100 dark:hover:bg-purple-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -1307,7 +1314,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                     </button>
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'whatsapp' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'whatsapp' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -1315,7 +1322,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                     </button>
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'sms' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'sms' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-sky-50 dark:bg-cyan-900/40 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-700/50 hover:bg-sky-100 dark:hover:bg-cyan-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -1449,7 +1456,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
           onClose={() => setActiveVendorModal(null)}
           rfqNumber={rfq.rfqNumber}
           vendorName={activeVendorModal.vendorName}
-          vendorPhone={activeVendorModal.phone}
+          hidePhone={true}
           initialChannel={activeVendorModal.channel}
         />
       )}

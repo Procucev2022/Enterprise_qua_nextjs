@@ -839,6 +839,12 @@ describe('Modals.tsx', () => {
 
       expect(screen.getByText('Vendor Follow-Up Details')).toBeInTheDocument();
       expect(screen.getByText('Apex Industrial Dynamics Pvt Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Precision Hydro Pumps')).toBeInTheDocument();
+
+      // Enforce confidentiality: vendor company name only; personal contact names and mobile numbers are hidden
+      expect(screen.queryByText('+91 98201 44999')).not.toBeInTheDocument();
+      expect(screen.queryByText('Karan Sharma')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Contact:/i)).not.toBeInTheDocument();
 
       // Test all channel filter tabs using button role
       const tabButtons = screen.getAllByRole('button');
@@ -854,11 +860,13 @@ describe('Modals.tsx', () => {
       const allTab = tabButtons.find((b) => b.textContent?.includes('All Channels ('));
       if (allTab) fireEvent.click(allTab);
 
-      // Click on vendor Call button (which opens submodal)
+      // Click on vendor Call button (which opens submodal with phone hidden)
       const callTextElements = screen.getAllByText('Call');
       if (callTextElements.length > 0) {
         fireEvent.click(callTextElements[0]);
         expect(screen.getByText(/Dispatch AI Follow-Up/)).toBeInTheDocument();
+        expect(screen.getByText('Target Vendor')).toBeInTheDocument();
+        expect(screen.queryByText('Target Vendor & Phone Number')).not.toBeInTheDocument();
         fireEvent.click(screen.getByText('Cancel'));
       }
 

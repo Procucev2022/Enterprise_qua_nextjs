@@ -5375,4 +5375,12 @@ In the Buyer flow, Incorrect vendor assignment in V1 and V2 – Matching vendors
 ```
 ---
 
+### Prompt 154
+**Timestamp**: 2026-11-12T18:29:24+05:30
+```text
+In the Buyer flow, Vendor contact details visibility – Vendor contact names and mobile numbers are visible in Buyer Follow-Up Details. Expected Behaviour/Solution: Display only the vendor company name. Hide personal contact names and mobile numbers. Please fix the issue
+```
+---
+
+
 
