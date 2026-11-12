@@ -3734,6 +3734,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'Total Spend (INR)': 25000,
         Category: 'Networking Equipment',
       },
+      {
+        'PO Number': 'PO-UNMAPPED-05',
+        'PO Date': '2024-01-14',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'Custom Nonstandard Fixture 999',
+        Quantity: 1,
+        'Total Spend (INR)': 15000,
+        Department: 'Administrative Services',
+      },
     ];
     const ws = XLSX.utils.json_to_sheet(poRows);
     XLSX.utils.book_append_sheet(wb, ws, 'PO Purchase Dump');
@@ -3761,11 +3770,19 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(headerTexts).toContain('Category');
     expect(headerTexts).not.toContain('Department');
 
+    // Verify mapped and unmapped summary indicators
+    expect(screen.getByText(/4 Mapped/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 Unmapped/i)).toBeInTheDocument();
+
     // Verify exact Minor Categories identified from line item descriptions and category database
     expect(screen.getByText('Hoses, Valves & Fittings')).toBeInTheDocument();
     expect(screen.getByText('Pumps & Accessories')).toBeInTheDocument();
     expect(screen.getByText('TMT BARS')).toBeInTheDocument();
     expect(screen.getByText('Networking Equipment')).toBeInTheDocument();
+
+    // Verify unmapped line item shows 'Unmapped' status instead of assigning an incorrect category
+    expect(screen.getByText('Unmapped')).toBeInTheDocument();
+    expect(screen.queryByText('Administrative Services')).not.toBeInTheDocument();
   });
 });
 

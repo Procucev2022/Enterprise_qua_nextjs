@@ -1971,6 +1971,8 @@ sellerDirectory: {
         'None of the uploaded PO rows fall inside the selected period. Check the period, or the date column in your file.',
       runJoinAction: 'Run Vendor & PO Match',
       runningJoin: 'Matching PO history to your vendor master…',
+      categoryUnmapped: 'Unmapped',
+      categoryMapped: 'Mapped',
     },
 
     join: {

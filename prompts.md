@@ -5496,3 +5496,12 @@ In the Buyer flow, Country Code Handling in Vendor Mobile Number: During Vendor 
 In the Buyer flow, Replace Department with Minor Category: Replace the Department column in the PO Line Items Preview with Category (Minor Category). Expected Behaviour/Solution: Identify the exact Minor Category from the line-item description or existing category database and display it in the Category column. Please fix the issue
 ```
 ---
+
+
+### Prompt 170
+**Timestamp**: 2026-11-12T19:50:30+05:30
+```text
+In the Buyer flow, PO Dump Preview – Category Mapping: Ensure all uploaded PO line items are mapped to the correct Minor Category. Expected Behaviour/Solution: Display the matched Minor Category for each line item. If no exact match is found, show an appropriate status instead of assigning an incorrect category. Please fix the issue
+```
+---
+

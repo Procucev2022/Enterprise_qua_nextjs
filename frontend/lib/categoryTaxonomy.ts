@@ -987,32 +987,38 @@ export function resolveMinorCategory(
     }
   }
 
-  // 3. Check if departmentOrCategory matches a known minor category or major category
-  if (safeDept) {
-    const deptLower = safeDept.toLowerCase();
-    for (const rule of KNOWN_KEYWORD_RULES) {
-      if (rule.minor.toLowerCase() === deptLower) {
-        return rule.minor;
+  // 3. Check if departmentOrCategory explicitly matches a known Minor Category
+  if (safeDept && safeDept.toLowerCase() !== 'unmapped' && safeDept.toLowerCase() !== 'uncategorized') {
+    // A known Major Category is not an exact Minor Category
+    if (!hasMajorCategory(safeDept)) {
+      const deptLower = safeDept.toLowerCase();
+      // 3a. Exact match against rule minor
+      for (const rule of KNOWN_KEYWORD_RULES) {
+        if (rule.minor.toLowerCase() === deptLower) {
+          return rule.minor;
+        }
       }
-    }
-    for (const group of groups) {
-      for (const minor of group.minorCategories) {
-        if (minor.toLowerCase() === deptLower) {
-          return minor;
+      // 3b. Match against dynamic taxonomy minor
+      for (const group of groups) {
+        for (const minor of group.minorCategories) {
+          if (minor.toLowerCase() === deptLower) {
+            return minor;
+          }
+        }
+      }
+      // 3c. Match against specific item keyword rules
+      const deptTokens = deptLower.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2);
+      for (const rule of KNOWN_KEYWORD_RULES) {
+        if (rule.keywords.some((kw) => matchesRuleKeyword(deptLower, deptTokens, kw))) {
+          if (!isCategoryTaxonomyLoaded() || hasMinorCategory(rule.major, rule.minor)) {
+            return rule.minor;
+          }
         }
       }
     }
-    const deptAuto = autoCategorizeItem(safeDept, '');
-    if (deptAuto.minorCategory) {
-      return deptAuto.minorCategory;
-    }
-    const defaultMinor = getDefaultMinorForMajor(safeDept);
-    if (defaultMinor) {
-      return defaultMinor;
-    }
-    return safeDept;
   }
 
+  // No exact Minor Category match found. Never assign an incorrect category.
   return '';
 }
 

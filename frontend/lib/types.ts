@@ -1288,6 +1288,7 @@ export interface PurchaseOrderLineItemRecord {
   department?: string;
   category?: string;
   minorCategory?: string;
+  categoryStatus?: 'MAPPED' | 'UNMAPPED';
 }
 
 export interface HistoricalPurchaseVendorRecord {

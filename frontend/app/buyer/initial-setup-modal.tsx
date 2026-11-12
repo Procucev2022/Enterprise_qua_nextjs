@@ -12,7 +12,7 @@ import {
 } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
-import { resolveMinorCategory } from '@/lib/categoryTaxonomy';
+import { resolveMinorCategory, findMajorForMinor } from '@/lib/categoryTaxonomy';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -1063,12 +1063,13 @@ export default function InitialSetupModal() {
             }
             // With neither a unit price nor a spend figure, the row is rejected below. It is not priced at a guess.
 
-            const department = getVal(['minor category', 'category', 'minor', 'sub category', 'sub-category', 'sub_category', 'department', 'dept', 'cost center', 'plant', 'division', 'function']);
-            const resolvedCategory = resolveMinorCategory(itemName, specs, department);
+            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'function']);
+            const categoryInput = getVal(['minor category', 'category', 'minor', 'sub category', 'sub-category', 'sub_category']);
+            const resolvedCategory = resolveMinorCategory(itemName, specs, categoryInput || department);
 
             // Rows the filter below would drop as blank are skipped here. Any other row must name every
             // required field it lacks. Nothing is substituted for a missing value.
-            const isBlankRow = !vendorIdentifier && !itemName && !department && !resolvedCategory;
+            const isBlankRow = !vendorIdentifier && !itemName && !department && !categoryInput;
             const missingFields: string[] = [];
             if (!poNumber) missingFields.push('PO Number');
             if (!poDate) missingFields.push('PO Date');
@@ -1096,9 +1097,10 @@ export default function InitialSetupModal() {
               unitPrice,
               totalSpend,
               spend: totalSpend,
-              department,
-              category: resolvedCategory || department || '',
-              minorCategory: resolvedCategory || department || '',
+              department: department || '',
+              category: resolvedCategory || '',
+              minorCategory: resolvedCategory || '',
+              categoryStatus: resolvedCategory ? ('MAPPED' as const) : ('UNMAPPED' as const),
             };
           })
             .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.category?.trim() || p.department?.trim()))
@@ -2450,10 +2452,28 @@ export default function InitialSetupModal() {
 
             {/* PO Line Items Preview */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                  PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
-                </span>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                    PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
+                  </span>
+                  {poLineItems.length > 0 && (() => {
+                    const mappedCount = poLineItems.filter((p) => Boolean(p.category || p.minorCategory)).length;
+                    const unmappedCount = poLineItems.length - mappedCount;
+                    return (
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-medium">
+                        <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold">
+                          {mappedCount} {UI_STRINGS.vendorPoIngestion.poDump.categoryMapped}
+                        </span>
+                        {unmappedCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 font-bold">
+                            {unmappedCount} {UI_STRINGS.vendorPoIngestion.poDump.categoryUnmapped}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
                   Total Spend: {formatCurrency(poLineItems.reduce((acc, p) => acc + p.totalSpend, 0))}
                 </span>
@@ -2489,7 +2509,17 @@ export default function InitialSetupModal() {
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {formatCurrency(p.totalSpend)}
                         </td>
-                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.category || p.minorCategory || p.department || '—'}</td>
+                        <td className="p-2.5 text-[10px]">
+                          {p.category || p.minorCategory ? (
+                            <span className="font-semibold text-slate-800 dark:text-gray-200">
+                              {p.category || p.minorCategory}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60">
+                              {UI_STRINGS.vendorPoIngestion.poDump.categoryUnmapped}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

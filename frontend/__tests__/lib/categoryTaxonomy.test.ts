@@ -320,9 +320,13 @@ describe('resolveMinorCategory', () => {
     expect(resolveMinorCategory('', 'ball valve 1 inch', '')).toBe('Hoses, Valves & Fittings');
   });
 
-  it('resolves minor category from departmentOrCategory when matching known minor or major category', () => {
+  it('resolves minor category from departmentOrCategory only when explicitly matching a known Minor Category', () => {
     expect(resolveMinorCategory('Custom Item', '', 'Networking Equipment')).toBe('Networking Equipment');
-    expect(resolveMinorCategory('Custom Item', '', 'Civil Works')).toBe(getDefaultMinorForMajor('Civil Works'));
+    expect(resolveMinorCategory('Custom Item', '', 'ball valve')).toBe('Hoses, Valves & Fittings');
+    // Does not assign an incorrect minor category when given a major category or arbitrary department
+    expect(resolveMinorCategory('Custom Item', '', 'Civil Works')).toBe('');
+    expect(resolveMinorCategory('Custom Item', '', 'Finance Department')).toBe('');
+    expect(resolveMinorCategory('Custom Item', '', 'Unmapped')).toBe('');
   });
 
   it('resolves minor category when taxonomy is not yet loaded', () => {
@@ -333,8 +337,9 @@ describe('resolveMinorCategory', () => {
     expect(resolveMinorCategory('', 'tmt bar fe500', '')).toBe('TMT BARS');
   });
 
-  it('falls back to provided departmentOrCategory if item is completely unrecognized', () => {
-    expect(resolveMinorCategory('Unknown Gizmo XYZ123', 'Model 999', 'Special Projects')).toBe('Special Projects');
+  it('does not assign an incorrect category if item is completely unrecognized and returns empty string', () => {
+    expect(resolveMinorCategory('Unknown Gizmo XYZ123', 'Model 999', 'Special Projects')).toBe('');
+    expect(resolveMinorCategory('Miscellaneous Service Charge', '', 'Admin')).toBe('');
   });
 
   it('returns empty string when all arguments are empty or no match is found', () => {
