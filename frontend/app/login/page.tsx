@@ -989,7 +989,9 @@ function LoginPageContent() {
                       >
                         <div>
                           <label htmlFor="reg-name" className={fieldLabel}>
-                            {selectedRegRole === 'buyer' ? 'Full Name / Procurement Lead' : 'Authorized Representative Name'}
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.fullNameBuyer
+                              : AUTH.registrationLabels.fullNameVendor}
                           </label>
                           <div className="relative">
                             <Users className={iconClass} size={14} />
@@ -1009,7 +1011,10 @@ function LoginPageContent() {
 
                         <div>
                           <label htmlFor="reg-org" className={fieldLabel}>
-                            {selectedRegRole === 'buyer' ? 'Company Name / Legal Name' : 'Vendor Enterprise / Company Name'} <span className="text-red-500">*</span>
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.companyNameBuyer
+                              : AUTH.registrationLabels.companyNameVendor}{' '}
+                            <span className="text-red-500">*</span>
                           </label>
                           <div className="relative">
                             <Building2 className={iconClass} size={14} />
@@ -1029,7 +1034,7 @@ function LoginPageContent() {
 
                         <div>
                           <label htmlFor="reg-gstin" className={fieldLabel}>
-                            GSTIN / GST Number <span className="text-red-500">*</span>
+                            {AUTH.registrationLabels.gstNumber} <span className="text-red-500">*</span>
                           </label>
                           <div className="relative">
                             <FileText className={iconClass} size={14} />
@@ -1052,7 +1057,7 @@ function LoginPageContent() {
                           <div>
                             <div className="flex items-center justify-between min-h-[20px]">
                               <label htmlFor="reg-pincode" className={fieldLabel}>
-                                Pincode <span className="text-red-500">*</span>
+                                {AUTH.registrationLabels.pincode} <span className="text-red-500">*</span>
                               </label>
                               {regPincodeValidating && (
                                 <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1 mb-1.5">
@@ -1088,7 +1093,7 @@ function LoginPageContent() {
                           <div>
                             <div className="flex items-center min-h-[20px]">
                               <label htmlFor="reg-city" className={fieldLabel}>
-                                City <span className="text-red-500">*</span>
+                                {AUTH.registrationLabels.city} <span className="text-red-500">*</span>
                               </label>
                             </div>
                             <input
@@ -1104,7 +1109,7 @@ function LoginPageContent() {
                           <div className="col-span-2">
                             <div className="flex items-center min-h-[20px]">
                               <label htmlFor="reg-state" className={fieldLabel}>
-                                State <span className="text-red-500">*</span>
+                                {AUTH.registrationLabels.state} <span className="text-red-500">*</span>
                               </label>
                             </div>
                             <input
@@ -1120,7 +1125,12 @@ function LoginPageContent() {
                         </div>
 
                         <div>
-                          <label htmlFor="reg-email" className={fieldLabel}>Corporate Email ID <span className="text-red-500">*</span></label>
+                          <label htmlFor="reg-email" className={fieldLabel}>
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.emailIdBuyer
+                              : AUTH.registrationLabels.emailIdVendor}{' '}
+                            <span className="text-red-500">*</span>
+                          </label>
                           <div className="relative">
                             <Mail className={iconClass} size={14} />
                             <input
@@ -1138,7 +1148,12 @@ function LoginPageContent() {
                         </div>
 
                         <div>
-                          <label htmlFor="reg-mobile" className={fieldLabel}>Mobile Number (WhatsApp Enabled) <span className="text-red-500">*</span></label>
+                          <label htmlFor="reg-mobile" className={fieldLabel}>
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.mobileNumberBuyer
+                              : AUTH.registrationLabels.mobileNumberVendor}{' '}
+                            <span className="text-red-500">*</span>
+                          </label>
                           <div className="relative">
                             <Phone className={iconClass} size={14} />
                             <input

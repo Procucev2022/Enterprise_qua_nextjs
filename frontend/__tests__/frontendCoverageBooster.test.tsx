@@ -929,11 +929,11 @@ describe('Frontend Master Coverage Booster Suite', () => {
 
     fireEvent.change(screen.getByLabelText(/Full Name/i), { target: { value: 'Rajesh Sharma' } });
     fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Larsen & Toubro Ltd' } });
-    fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAACL1234F1Z5' } });
+    fireEvent.change(screen.getByLabelText(/GST/i), { target: { value: '27AAACL1234F1Z5' } });
     fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400701' } });
     fireEvent.change(screen.getByLabelText(/^City/i), { target: { value: 'Mumbai' } });
     fireEvent.change(screen.getByLabelText(/^State/i), { target: { value: 'Maharashtra' } });
-    fireEvent.change(screen.getByLabelText(/Corporate Email ID/i), {
+    fireEvent.change(screen.getByLabelText(/Email ID/i), {
       target: { value: 'CLIENT@PROCUCEV.COM' },
     });
     fireEvent.change(screen.getByLabelText(/Mobile Number/i), { target: { value: '9157154504' } });

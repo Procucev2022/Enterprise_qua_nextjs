@@ -1410,6 +1410,22 @@ sellerDirectory: {
     registrationSuccessMessage:
       'Account created for {email}. You are signed in and can start configuring your workspace.',
 
+    // Registration Form Field Labels
+    registrationLabels: {
+      fullNameBuyer: 'Full Name',
+      fullNameVendor: 'Authorized Representative Name',
+      companyNameBuyer: 'Company Name',
+      companyNameVendor: 'Vendor Enterprise / Company Name',
+      gstNumber: 'GST Number',
+      pincode: 'Pincode',
+      city: 'City',
+      state: 'State',
+      emailIdBuyer: 'Email ID',
+      emailIdVendor: 'Corporate Email ID',
+      mobileNumberBuyer: 'Mobile Number',
+      mobileNumberVendor: 'Mobile Number (WhatsApp Enabled)',
+    },
+
     // Buyer First-Login Onboarding
     buyerOnboarding: {
       title: 'Complete Profile & Verify Account',
@@ -1430,13 +1446,13 @@ sellerDirectory: {
       currentPasswordLabel: 'Temporary Password',
       newPasswordLabel: 'New Password',
       confirmPasswordLabel: 'Confirm New Password',
-      companyNameLabel: 'Company Name / Legal Name',
-      contactNameLabel: 'Full Name / Procurement Lead',
+      companyNameLabel: 'Company Name',
+      contactNameLabel: 'Full Name',
       cityLabel: 'City',
       stateLabel: 'State',
       pincodeLabel: 'Pincode',
       addressLabel: 'Address / Street Location',
-      gstinLabel: 'GSTIN / GST Number',
+      gstinLabel: 'GST Number',
       panLabel: 'PAN Number',
       companyNamePlaceholder: 'Legal company name',
       contactNamePlaceholder: 'Full name of the contact person',
@@ -1445,8 +1461,8 @@ sellerDirectory: {
       cityPlaceholder: 'City',
       statePlaceholder: 'State',
       addressPlaceholder: 'Street address',
-      companyNameRequired: 'Company Name / Legal Name is required.',
-      gstinRequired: 'GSTIN / GST Number is required.',
+      companyNameRequired: 'Company Name is required.',
+      gstinRequired: 'GST Number is required.',
       gstinInvalid: 'GSTIN must be 15 characters in the format 99AAAAA9999A9Z9, for example 27AAAAA0000A1Z5.',
       pincodeRequired: 'Pincode is required.',
       pincodeInvalid: 'PIN Code must be 6 digits and cannot start with 0.',

@@ -5415,3 +5415,9 @@ In the Buyer flow, Buyer-uploaded vendor – Four vendors are selected for uploa
 2. Filtration Issue: Category "Civil Works 10" selected, but displaying 19 enquiries including "Others - New Product", "Engineering Spares - Electrical", and uncategorized enquiries.
 ```
 ---
+### Prompt 159
+**Timestamp**: 2026-11-12T18:37:31+05:30
+```text
+In the Buyer flow, Buyer Registration Form – Field Label Cleanup: Remove unnecessary wording such as “Procurement Lead” and “Legal Name” from the registration form. Expected Behaviour/Solution: Use simple field labels such as Full Name, Company Name, GST Number, Pincode, City, State, Email ID, and Mobile Number. Please fix the issue
+```
+---

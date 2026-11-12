@@ -104,11 +104,11 @@ describe('LoginPage', () => {
   const fillValidForm = () => {
     typeInto(/Full Name/i, 'Test Buyer');
     typeInto(/Company Name/i, 'Test Procurement Team');
-    typeInto(/GSTIN/i, '27AAAAA0000A1Z5');
+    typeInto(/GST Number/i, '27AAAAA0000A1Z5');
     typeInto(/City/i, 'Pune');
     typeInto(/State/i, 'Maharashtra');
     typeInto(/Pincode/i, '411001');
-    typeInto(/Corporate Email ID/i, BUYER_SESSION.email);
+    typeInto(/Email ID/i, BUYER_SESSION.email);
     typeInto(/Mobile Number/i, '9876543210');
     typeInto(/^Password$/i, 'Pass@1234');
   };
@@ -635,7 +635,7 @@ describe('LoginPage', () => {
 
       typeInto(/Authorized Representative Name/i, 'Test Vendor Lead');
       typeInto(/Vendor Enterprise/i, 'Test Vendor Works');
-      typeInto(/GSTIN/i, '27AAAAA0000A1Z5');
+      typeInto(/GST Number/i, '27AAAAA0000A1Z5');
       typeInto(/City/i, 'Pune');
       typeInto(/State/i, 'Maharashtra');
       typeInto(/Pincode/i, '411001');

@@ -9,9 +9,11 @@ import { UI_STRINGS } from '@/lib/uiStrings';
 import type { UserSession } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({ useApp: jest.fn(), clearSessionCache: jest.fn() }));
-jest.mock('@/lib/authClient', () => ({ authClient: {
-  loginWithPassword: jest.fn(), requestOtp: jest.fn(), verifyOtp: jest.fn(), register: jest.fn(),
-} }));
+jest.mock('@/lib/authClient', () => ({
+  authClient: {
+    loginWithPassword: jest.fn(), requestOtp: jest.fn(), verifyOtp: jest.fn(), register: jest.fn(),
+  }
+}));
 jest.mock('@/lib/validationSchemas', () => ({
   ...jest.requireActual('@/lib/validationSchemas'), validatePincode: jest.fn(),
 }));
@@ -256,5 +258,97 @@ describe('registration validation and OTP retry boundaries', () => {
     expect(authClient.register).toHaveBeenCalledWith(expect.objectContaining({ pan: '', gstin: 'SHORT' }));
     expect(setCurrentUserSession).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith(UI_STRINGS.auth.registrationFailedTitle, UI_STRINGS.auth.serverErrorFallback, 'warning');
+  });
+
+  test('extracts initialEmail from redirectParam and pre-fills login email', () => {
+    mockSearchParams = new URLSearchParams('redirect=%2Fbuyer%2Fcommand-center%3Femail%3Dparam%40redirect.test');
+    render(<LoginPage />);
+    expect(document.getElementById('login-email')).toHaveValue('param@redirect.test');
+  });
+
+  test('restores initialEmail when login-email input is cleared', async () => {
+    mockSearchParams = new URLSearchParams('email=preset%40example.com');
+    render(<LoginPage />);
+    expect(document.getElementById('login-email')).toHaveValue('preset@example.com');
+    change('login-email', '');
+    await waitFor(() => {
+      expect(document.getElementById('login-email')).toHaveValue('preset@example.com');
+    });
+  });
+
+  test('blocks registration submit when PIN code starts with 0', () => {
+    const { container } = render(<LoginPage />);
+    openRegister();
+    fillRegistration();
+    change('reg-pincode', '012345');
+    submit(container);
+    expect(authClient.requestOtp).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(
+      UI_STRINGS.auth.registrationFailedTitle,
+      'PIN Code must be 6 digits and cannot start with 0.',
+      'warning'
+    );
+  });
+
+  test('blocks registration submit when regPincodeError is active', async () => {
+    const { container } = render(<LoginPage />);
+    openRegister();
+    fillRegistration();
+    change('reg-pincode', '111111');
+    submit(container);
+    expect(authClient.requestOtp).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(
+      UI_STRINGS.auth.registrationFailedTitle,
+      'Invalid or dummy PIN code',
+      'warning'
+    );
+  });
+
+  test('reports failure when initiate register requestOtp returns false', async () => {
+    jest.mocked(authClient.requestOtp).mockResolvedValue({ success: false, error: 'Registration OTP failed' });
+    const { container } = render(<LoginPage />);
+    openRegister();
+    fillRegistration();
+    await act(async () => { submit(container); });
+    expect(showToast).toHaveBeenCalledWith(
+      UI_STRINGS.auth.registrationFailedTitle,
+      expect.stringContaining('Registration OTP failed'),
+      'warning'
+    );
+  });
+
+  test('reports failure when resending verification codes fails', async () => {
+    jest.mocked(authClient.requestOtp)
+      .mockResolvedValueOnce({ success: true, message: 'Codes sent' })
+      .mockResolvedValueOnce({ success: false, error: 'Resend limit exceeded' });
+    const { container } = render(<LoginPage />);
+    openRegister();
+    fillRegistration();
+    await act(async () => { submit(container); });
+    const resendBtn = screen.getByRole('button', { name: /Resend Verification Codes/i });
+    await act(async () => { fireEvent.click(resendBtn); });
+    expect(showToast).toHaveBeenCalledWith(
+      UI_STRINGS.auth.registrationFailedTitle,
+      expect.stringContaining('Resend limit exceeded'),
+      'warning'
+    );
+  });
+
+  test('completes registration for vendor role and triggers refreshFromDB', async () => {
+    jest.mocked(authClient.requestOtp).mockResolvedValue({ success: true });
+    jest.mocked(authClient.register).mockResolvedValue({
+      success: true,
+      user: { ...SESSION, role: 'vendor' },
+    });
+    const { container } = render(<LoginPage />);
+    openRegister();
+    const vendorTab = screen.getByRole('button', { name: /Vendor Partner/i });
+    fireEvent.click(vendorTab);
+    fillRegistration();
+    await act(async () => { submit(container); });
+    change('reg-email-otp', '123456');
+    change('reg-mobile-otp', '654321');
+    await act(async () => { submit(container); });
+    expect(refreshFromDB).toHaveBeenCalled();
   });
 });
