@@ -5421,3 +5421,10 @@ In the Buyer flow, Buyer-uploaded vendor – Four vendors are selected for uploa
 In the Buyer flow, Buyer Registration Form – Field Label Cleanup: Remove unnecessary wording such as “Procurement Lead” and “Legal Name” from the registration form. Expected Behaviour/Solution: Use simple field labels such as Full Name, Company Name, GST Number, Pincode, City, State, Email ID, and Mobile Number. Please fix the issue
 ```
 ---
+
+### Prompt 160
+**Timestamp**: 2026-11-12T18:54:26+05:30
+```text
+In the Buyer flow, Mobile Number Validation: The mobile number field should accept only 10-digit numbers. Expected Behaviour/Solution: Allow exactly 10 numeric digits. Prevent registration if the number contains fewer or more than 10 digits. Please fix the issue
+```
+---

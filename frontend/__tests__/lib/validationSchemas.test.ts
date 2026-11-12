@@ -6,6 +6,8 @@ import {
   GSTIN_PATTERN,
   PHONE_PATTERN,
   INDIAN_MOBILE_PATTERN,
+  EXACT_10_DIGIT_MOBILE_PATTERN,
+  sanitize10DigitMobile,
   PINCODE_PATTERN,
   INDIAN_PINCODE_PATTERN,
   isDummyPincode,
@@ -80,6 +82,32 @@ describe('Frontend validationSchemas Unit Tests', () => {
         expect(res.fieldErrors.mobile).toBe(UI_STRINGS.auth.mobileInvalid);
       }
     );
+
+    describe('EXACT_10_DIGIT_MOBILE_PATTERN and sanitize10DigitMobile', () => {
+      test('accepts valid 10-digit Indian numbers starting with 6, 7, 8, or 9', () => {
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('9876543210')).toBe(true);
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('8765432109')).toBe(true);
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('7654321098')).toBe(true);
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('6543210987')).toBe(true);
+      });
+
+      test('rejects numbers that have fewer or more than 10 digits or invalid starting digit', () => {
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('987654321')).toBe(false); // 9 digits
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('98765432101')).toBe(false); // 11 digits
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('1234567890')).toBe(false); // starts with 1
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('5432167890')).toBe(false); // starts with 5
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('+919876543210')).toBe(false);
+      });
+
+      test('sanitize10DigitMobile strips non-digits and trims country code prefixes', () => {
+        expect(sanitize10DigitMobile('+91 98765 43210')).toBe('9876543210');
+        expect(sanitize10DigitMobile('09876543210')).toBe('9876543210');
+        expect(sanitize10DigitMobile('919876543210')).toBe('9876543210');
+        expect(sanitize10DigitMobile('987654321012345')).toBe('9876543210');
+        expect(sanitize10DigitMobile('abc-123')).toBe('123');
+        expect(sanitize10DigitMobile('')).toBe('');
+      });
+    });
 
     test('rejects a malformed email address', () => {
       const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, email: 'not-an-email' });

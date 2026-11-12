@@ -20,6 +20,8 @@ import { authClient } from '@/lib/authClient';
 import { PASSWORD_MIN_LENGTH, PLACEHOLDER_MOBILE_NUMBER, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import {
   INDIAN_MOBILE_PATTERN,
+  EXACT_10_DIGIT_MOBILE_PATTERN,
+  sanitize10DigitMobile,
   INDIAN_PINCODE_PATTERN,
   GSTIN_PATTERN,
   validatePincode,
@@ -222,7 +224,7 @@ function BuyerFirstLoginContent() {
       setError(UI_STRINGS.auth.buyerOnboarding.placeholderPhoneWarning);
       return;
     }
-    if (!INDIAN_MOBILE_PATTERN.test(cleaned)) {
+    if (cleaned.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(cleaned)) {
       setError(UI_STRINGS.auth.mobileInvalid);
       return;
     }
@@ -259,7 +261,7 @@ function BuyerFirstLoginContent() {
       setError(UI_STRINGS.auth.buyerOnboarding.placeholderPhoneWarning);
       return;
     }
-    if (!INDIAN_MOBILE_PATTERN.test(cleaned)) {
+    if (cleaned.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(cleaned)) {
       setError(UI_STRINGS.auth.mobileInvalid);
       return;
     }
@@ -447,7 +449,7 @@ function BuyerFirstLoginContent() {
                     type="tel"
                     maxLength={10}
                     value={mobile}
-                    onChange={(e) => setMobile(e.target.value.replace(/\D/g, ''))}
+                    onChange={(e) => setMobile(sanitize10DigitMobile(e.target.value))}
                     placeholder="10-digit mobile"
                     className="flex-1 rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white font-mono"
                     required

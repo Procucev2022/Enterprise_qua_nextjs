@@ -9,6 +9,8 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   FORM_SCHEMAS,
   INDIAN_MOBILE_PATTERN,
+  EXACT_10_DIGIT_MOBILE_PATTERN,
+  sanitize10DigitMobile,
   validateFormData,
   validatePincode,
   PostOfficeDetail,
@@ -419,7 +421,7 @@ function LoginPageContent() {
     e.preventDefault();
 
     const rawMobile = regMobile.trim();
-    const mobile = rawMobile.replace(/[\s\-()]/g, '');
+    const mobile = rawMobile.replace(/\D/g, '');
 
     if (
       !regName.trim() ||
@@ -439,7 +441,7 @@ function LoginPageContent() {
       showToast(AUTH.registrationFailedTitle, AUTH.passwordTooShort, 'warning');
       return;
     }
-    if (!INDIAN_MOBILE_PATTERN.test(mobile)) {
+    if (mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.registrationFailedTitle, AUTH.mobileInvalid, 'warning');
       return;
     }
@@ -478,8 +480,8 @@ function LoginPageContent() {
   const handleResendRegOtp = async () => {
     if (submitting) return;
     const email = regEmail.trim().toLowerCase();
-    const mobile = regMobile.trim().replace(/[\s\-()]/g, '');
-    if (!email || !mobile) {
+    const mobile = regMobile.trim().replace(/\D/g, '');
+    if (!email || !mobile || mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.missingFieldsTitle, AUTH.registrationFieldsRequired, 'warning');
       return;
     }
@@ -1161,9 +1163,13 @@ function LoginPageContent() {
                               type="tel"
                               inputMode="numeric"
                               autoComplete="tel"
+                              maxLength={10}
                               placeholder={AUTH.fieldPlaceholders.mobileNumber}
                               value={regMobile}
-                              onChange={(e) => setRegMobile(e.target.value)}
+                              onChange={(e) => {
+                                const digits = sanitize10DigitMobile(e.target.value);
+                                setRegMobile(digits);
+                              }}
                               className={iconFieldInput}
                               style={ICON_PAD}
                               required

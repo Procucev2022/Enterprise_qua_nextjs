@@ -717,6 +717,50 @@ describe('LoginPage', () => {
       expect(authClient.register).not.toHaveBeenCalled();
     });
 
+    it('prevents registration when mobile contains fewer than 10 digits', () => {
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      typeInto(/Mobile Number/i, '987654321'); // 9 digits
+
+      submitForm(/Create Account/i);
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.registrationFailedTitle, AUTH.mobileInvalid, 'warning');
+      expect(authClient.requestOtp).not.toHaveBeenCalled();
+      expect(authClient.register).not.toHaveBeenCalled();
+    });
+
+    it('prevents registration when mobile has 10 digits starting with invalid digit', () => {
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      typeInto(/Mobile Number/i, '1234567890'); // starts with 1
+
+      submitForm(/Create Account/i);
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.registrationFailedTitle, AUTH.mobileInvalid, 'warning');
+      expect(authClient.requestOtp).not.toHaveBeenCalled();
+      expect(authClient.register).not.toHaveBeenCalled();
+    });
+
+    it('sanitizes mobile number input to allow only 10 numeric digits', () => {
+      render(<LoginPage />);
+      openRegister();
+      const mobileInput = screen.getByLabelText(/Mobile Number/i);
+
+      // Typing non-numeric characters strips them
+      fireEvent.change(mobileInput, { target: { value: '987abc654xyz' } });
+      expect(mobileInput).toHaveValue('987654');
+
+      // Pasting with +91 country prefix strips prefix and retains 10 digits
+      fireEvent.change(mobileInput, { target: { value: '+91 98765 43210' } });
+      expect(mobileInput).toHaveValue('9876543210');
+
+      // More than 10 digits are limited to 10
+      fireEvent.change(mobileInput, { target: { value: '9876543210999' } });
+      expect(mobileInput).toHaveValue('9876543210');
+    });
+
     it('requires every mandatory field', () => {
       render(<LoginPage />);
       openRegister();

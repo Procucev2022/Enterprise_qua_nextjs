@@ -316,6 +316,28 @@ describe('BuyerFirstLoginPage', () => {
       expect(authClient.requestOtp).not.toHaveBeenCalled();
     });
 
+    it('warns when mobile contains fewer than 10 digits', () => {
+      render(<BuyerFirstLoginPage />);
+      const mobileInput = screen.getByPlaceholderText('10-digit mobile');
+      fireEvent.change(mobileInput, { target: { value: '987654321' } }); // 9 digits
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendSmsOtpBtn }));
+
+      expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.mobileInvalid);
+      expect(authClient.requestOtp).not.toHaveBeenCalled();
+    });
+
+    it('sanitizes mobile input by stripping non-digits and trimming country codes', () => {
+      render(<BuyerFirstLoginPage />);
+      const mobileInput = screen.getByPlaceholderText('10-digit mobile');
+
+      fireEvent.change(mobileInput, { target: { value: '+91 98765 43210' } });
+      expect(mobileInput).toHaveValue('9876543210');
+
+      fireEvent.change(mobileInput, { target: { value: '9876543210123' } });
+      expect(mobileInput).toHaveValue('9876543210');
+    });
+
     it('dispatches SMS OTP successfully for valid mobile number', async () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
       render(<BuyerFirstLoginPage />);

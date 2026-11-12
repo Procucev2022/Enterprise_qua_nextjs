@@ -29,6 +29,25 @@ export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
  * +91 / 0 / 91.
  */
 export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
+
+/**
+ * Exact 10-digit Indian mobile number: exactly 10 numeric digits starting with 6, 7, 8, or 9.
+ */
+export const EXACT_10_DIGIT_MOBILE_PATTERN = /^[6-9]\d{9}$/;
+
+/**
+ * Normalizes input to at most 10 numeric digits, stripping non-numeric characters
+ * and trimming common Indian country code prefixes (+91, 91, 0) when entered.
+ */
+export function sanitize10DigitMobile(value: string): string {
+  let val = String(value || '').replace(/\D/g, '');
+  if (val.length === 11 && val.startsWith('0')) {
+    val = val.slice(1);
+  } else if (val.length === 12 && val.startsWith('91')) {
+    val = val.slice(2);
+  }
+  return val.slice(0, 10);
+}
 export const PROCUCEV_EMAIL_PATTERN = /^[a-zA-Z0-9._%+-]+@procucev\.com$/i;
 export const PROCUCEV_EMAIL_MESSAGE = 'Must be a valid Procucev corporate email address ending in @procucev.com';
 export const OTP_CODE_PATTERN = /^\d{6}$/;
