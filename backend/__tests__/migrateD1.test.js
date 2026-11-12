@@ -14,6 +14,7 @@ const {
   resolveD1Config,
   schemaChecksum,
   splitStatements,
+  purgeDeprecatedTables,
 } = require('../scripts/migrate-d1');
 const { ensureLocalAuditChainVerificationMigration } = require('../scripts/migrate-d1-local-audit-chain-verification');
 const { ensureLocalDossierAlignmentMigration } = require('../scripts/migrate-d1-local-dossier-alignment');
@@ -976,5 +977,18 @@ describe('D1 migration SQL handling', () => {
       process.exitCode = 0;
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test('purgeDeprecatedTables drops all configured deprecated tables and triggers', async () => {
+    const executed = [];
+    const query = jest.fn(async (sql) => {
+      executed.push(sql);
+      return { result: [{ results: [] }] };
+    });
+    await purgeDeprecatedTables(query);
+    expect(executed.some((s) => s.includes('DROP TRIGGER IF EXISTS vendors_search_fts_insert'))).toBe(true);
+    expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "vendors_search_fts"'))).toBe(true);
+    expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "system_error_logs"'))).toBe(true);
+    expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "audit_logs"'))).toBe(true);
   });
 });

@@ -460,6 +460,22 @@ async function reportRowCounts(query = d1Query) {
   }
 }
 
+async function purgeDeprecatedTables(query = d1Query) {
+  const { DEPRECATED_DATABASE_TABLES } = require('../src/config/constants');
+  for (const table of DEPRECATED_DATABASE_TABLES) {
+    try {
+      if (table === 'vendors_search_fts') {
+        await query('DROP TRIGGER IF EXISTS vendors_search_fts_insert');
+        await query('DROP TRIGGER IF EXISTS vendors_search_fts_delete');
+        await query('DROP TRIGGER IF EXISTS vendors_search_fts_update');
+      }
+      await query(`DROP TABLE IF EXISTS "${table}"`);
+    } catch {
+      // Ignore if table does not exist
+    }
+  }
+}
+
 async function migrate({
   query = d1Query,
   schemaPath = SCHEMA_PATH,
@@ -554,6 +570,7 @@ async function migrate({
     try {
       migrationSummary = await applyD1Migrations({ query: migrationQuery, migrationsPath });
       console.log(`[migrate-d1] Numbered migrations applied: ${migrationSummary.applied}; already applied: ${migrationSummary.skipped}.`);
+      await purgeDeprecatedTables(migrationQuery);
     } catch (err) {
       console.error('\n[migrate-d1] Numbered migration failed. The base schema may be present; fix the migration error and rerun safely.');
       console.error(`     Error : ${err.stack || err.message}`);
@@ -608,4 +625,5 @@ module.exports = {
   REPORTED_TABLES,
   acquireMigrationLock,
   resolveD1Config,
+  purgeDeprecatedTables,
 };

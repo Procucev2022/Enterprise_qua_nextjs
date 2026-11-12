@@ -220,6 +220,17 @@ async function reportRowCounts() {
   }
 }
 
+async function purgeDeprecatedTables(client) {
+  const { DEPRECATED_DATABASE_TABLES } = require('../config/constants');
+  for (const table of DEPRECATED_DATABASE_TABLES) {
+    try {
+      await client.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+    } catch {
+      // Ignore if table does not exist
+    }
+  }
+}
+
 async function migrate({ reportCounts = false, migrationsPath = MIGRATIONS_PATH } = {}) {
   if (!pool.pool) {
     logger.error('PostgreSQL migration cannot run because DATABASE_URL is not configured', {}, 'DATABASE_MIGRATION');
@@ -239,6 +250,7 @@ async function migrate({ reportCounts = false, migrationsPath = MIGRATIONS_PATH 
     const schemaSql = fs.readFileSync(SCHEMA_PATH, 'utf8');
     const migrations = loadMigrations(migrationsPath);
     await applyMigrations(client, schemaSql, migrations);
+    await purgeDeprecatedTables(client);
 
     if (reportCounts) await reportRowCounts();
     logger.info('PostgreSQL migrations completed', {

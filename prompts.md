@@ -5353,3 +5353,18 @@ it needs to be 145 RFQs awaiting response. Can you please check & fix
 Filtration Issue, chosen category Civil works but showing results of Uncategorised, Electrical, IT, as well
 ```
 ---
+
+### Prompt 152
+**Timestamp**: 2026-11-12T17:22:54+05:30
+```text
+Please proceed with github commits optimizations suggested as well. i.e., 
+
+Update .git/hooks/pre-commit and scripts/setup-git-hooks.js to run npm run check:fast on commits (reducing commit time from 9.5 minutes to 2–5 seconds)?
+Also optimize backend test worker parallelism (e.g. --maxWorkers=50% instead of sequential --runInBand when full suites run)?
+
+
+For D1 issue: 
+Why are we creating the vendor_search_fts? As a part of DB migration, it should just have created empty tables if any table is missing, but this seems to be creating this table with adding much data? Is this table even needed anywhere, if no, please remove this table. please add the configuration to remove all unnecessary tables from codebase in each deployment.
+```
+---
+

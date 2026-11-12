@@ -366,6 +366,17 @@ const DATABASE_QUERY_LOGGING = Object.freeze({
 const DATABASE_QUERY_CACHE = Object.freeze({
   VENDOR_PAGE_COUNT_TTL_MS: 30 * 1000,
 });
+/**
+ * Unnecessary / deprecated tables automatically purged during migrations and deployments.
+ */
+const DEPRECATED_DATABASE_TABLES = Object.freeze([
+  'vendors_search_fts',
+  'system_error_logs',
+  'ai_classification_logs',
+  'user_login_logs',
+  'audit_logs',
+  'audit_chain_state',
+]);
 const GRAPHQL_CONFIG = Object.freeze({
   MAX_BATCH_OPERATIONS: 5,
   MAX_QUERY_LENGTH: 20000,
@@ -3429,6 +3440,7 @@ module.exports = {
   INFRASTRUCTURE_HEALTH,
   DATABASE_QUERY_LOGGING,
   DATABASE_QUERY_CACHE,
+  DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
   SYSTEM_ACTOR_EMAIL,
