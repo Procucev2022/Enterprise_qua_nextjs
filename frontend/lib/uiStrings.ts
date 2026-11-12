@@ -3208,6 +3208,10 @@ sellerDirectory: {
   },
 
   vendorCategorySelect: {
+    divisionLabel: 'Division',
+    divisionSelectPlaceholder: 'Select division',
+    divisionSelectPlaceholderIngestion: 'Select Division...',
+    divisionViewPrefix: 'Division:',
     categoryHeader: 'Category',
     categoryLabel: 'Category',
     categoryBadgePrefix: 'Category:',

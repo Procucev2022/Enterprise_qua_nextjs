@@ -390,7 +390,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     ) {
       showToast(
         'Validation Error',
-        'Please complete all required fields including Major Category, City, State, Pincode, GSTIN and Rating (1.0 - 5.0).',
+        'Please complete all required fields including Division, City, State, Pincode, GSTIN and Rating (1.0 - 5.0).',
         'warning'
       );
       return;
@@ -1524,10 +1524,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
               <div>
                 <label htmlFor="add-vendor-major-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                  Major Category <span className="text-rose-500">*</span>
+                  {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
                 </label>
                 <select
                   id="add-vendor-major-category"
+                  aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
                   required
                   value={formMajorCategory}
                   onChange={(e) => {
@@ -1536,7 +1537,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   }}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                 >
-                  <option value="">Select major category</option>
+                  <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}</option>
                   {availableMajorCategories.map((cat) => (
                     <option key={cat} value={cat}>
                       {cat}
@@ -1842,14 +1843,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                      Major Category <span className="text-rose-500">*</span>
+                    <label htmlFor="edit-vendor-major-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                      {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
                     </label>
                     <select
+                      id="edit-vendor-major-category"
+                      aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
                       value={formMajorCategory}
                       onChange={(e) => setFormMajorCategory(e.target.value)}
                       className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                     >
+                      <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}</option>
                       {availableMajorCategories.map((c) => (
                         <option key={c} value={c}>
                           {c}
@@ -2351,7 +2355,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-700 dark:text-gray-300">
                   <div>
-                    <span className="text-slate-400 block text-[10px] font-semibold">Major Category:</span>
+                    <span className="text-slate-400 block text-[10px] font-semibold">{UI_STRINGS.vendorCategorySelect.divisionViewPrefix}</span>
                     <strong className="text-slate-900 dark:text-white">
                       {selectedVendorForCrud.majorCategory || '—'}
                     </strong>

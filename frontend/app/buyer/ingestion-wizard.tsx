@@ -3212,10 +3212,12 @@ export default function IngestionWizard({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                  Major Category <span className="text-rose-500">*</span>
+                <label htmlFor="ingestion-vendor-division" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
                 </label>
                 <select
+                  id="ingestion-vendor-division"
+                  aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
                   required
                   value={vendorFormMajorCategory}
                   onChange={(e) => {
@@ -3224,7 +3226,7 @@ export default function IngestionWizard({
                   }}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
                 >
-                  <option value="">Select Major Category...</option>
+                  <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholderIngestion}</option>
                   {taxonomyMajors().map((cat) => (
                     <option key={cat} value={cat}>
                       {cat}

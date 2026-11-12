@@ -5583,3 +5583,11 @@ In the Buyer flow, Add Vendor Description: Change the text "Add a vendor you dea
 In the Buyer flow, Minor Category Field: Rename "Minor Categories" to "Category". Expected Behaviour/Solution: Provide a searchable dropdown that fetches the 305+ available minor categories from the backend and displays matching suggestions after the user enters at least 3 characters. Allow the user to select the required category from the suggestions. Please fix the issue
 ```
 ---
+
+
+### Prompt 181
+**Timestamp**: 2026-11-12T20:18:01+05:30
+```text
+In the Buyer flow, Major Category Field: Rename "Major Category" to "Division". Expected Behaviour/Solution: Display the Division dropdown with the existing major category options. Please fix the issue
+```
+---

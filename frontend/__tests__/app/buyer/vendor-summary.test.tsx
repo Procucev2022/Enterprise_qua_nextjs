@@ -634,7 +634,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Priya Singh' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'new-direct@vendor.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
-      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
@@ -690,7 +690,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Someone' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'rejected@vendor.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
-      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
@@ -1461,7 +1461,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
-      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
@@ -2906,7 +2906,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'John Doe' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'john@fallback.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 99999 11111' } });
-      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Mechanical' } });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '800001' } });
@@ -2948,7 +2948,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'John Doe' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'fail@add.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 99999 22222' } });
-      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Mechanical' } });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Delhi' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Delhi' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '800001' } });
@@ -3626,7 +3626,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Cables')).toBeInTheDocument();
 
       // Verify Major Category was auto-set to Electrical
-      const majorSelect = screen.getByLabelText(/Major Category/i) as HTMLSelectElement;
+      const majorSelect = screen.getByLabelText(/Division/i) as HTMLSelectElement;
       expect(majorSelect.value).toBe('Electrical');
 
       // Close modal via Cancel
@@ -3721,7 +3721,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Agent' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'agent@invalid.com' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 90000 00000' } });
-      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Mechanical' } });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
