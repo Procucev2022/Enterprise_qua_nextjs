@@ -5480,3 +5480,11 @@ In the Buyer flow, Vendor Mobile Number Validation: During Vendor Master Excel u
 In the Buyer flow, Vendor Code Generation and Validation: Handle vendor codes during Vendor Master upload. Expected Behaviour/Solution: If a vendor code is provided in the uploaded file, retain and use that code. If no vendor code is provided, automatically generate sequential vendor codes such as 1, 2, 3, and so on. Ensure generated codes are unique and do not overwrite existing vendor codes. Please fix the issue
 ```
 ---
+
+
+### Prompt 168
+**Timestamp**: 2026-11-12T19:15:48+05:30
+```text
+In the Buyer flow, Country Code Handling in Vendor Mobile Number: During Vendor Master Excel upload, vendor mobile numbers may be provided with the +91 country code or without it. Expected Behaviour/Solution: Accept both formats, with or without +91. Validate the mobile number as exactly 10 digits after the country code. Store the country code and mobile number correctly without duplication. Please fix the issue
+```
+---

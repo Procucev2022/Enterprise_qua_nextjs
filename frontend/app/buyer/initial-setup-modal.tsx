@@ -216,6 +216,59 @@ const getUniqueEmails = (raw?: string | null): string[] => {
     });
 };
 
+// Parse vendor mobile number: accepts with or without +91 country code,
+// validates exactly 10 digits after country code, and stores country code without duplication.
+export interface ParsedVendorMobile {
+  isValid: boolean;
+  nationalNumber: string;
+  storedNumber: string;
+}
+
+export const parseVendorMobile = (phone: string | undefined | null): ParsedVendorMobile => {
+  if (!phone || typeof phone !== 'string') {
+    return { isValid: true, nationalNumber: '', storedNumber: '' };
+  }
+  const trimmed = phone.trim();
+  if (trimmed === '') {
+    return { isValid: true, nationalNumber: '', storedNumber: '' };
+  }
+
+  // Reject alphanumeric characters
+  if (/[a-zA-Z]/.test(trimmed)) {
+    return { isValid: false, nationalNumber: '', storedNumber: trimmed };
+  }
+
+  // Reject invalid symbols (only digits, +, -, spaces, parentheses allowed)
+  if (!/^[\d\s+\-()]+$/.test(trimmed)) {
+    return { isValid: false, nationalNumber: '', storedNumber: trimmed };
+  }
+
+  // Strip duplicate or multiple leading country code indicators (+91, + 91, (+91), leading +, etc.)
+  let remainder = trimmed;
+  while (/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/.test(remainder)) {
+    remainder = remainder.replace(/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/, '').trim();
+  }
+
+  // Extract all digits from remainder
+  let digits = remainder.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  // Must be numeric value with exactly 10 digits after country code
+  if (digits.length === 10 && /^\d{10}$/.test(digits)) {
+    return {
+      isValid: true,
+      nationalNumber: digits,
+      storedNumber: `+91 ${digits}`,
+    };
+  }
+
+  return { isValid: false, nationalNumber: '', storedNumber: trimmed };
+};
+
 export default function InitialSetupModal() {
   const {
     initialSetupModalOpen,
@@ -276,28 +329,13 @@ export default function InitialSetupModal() {
   const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
   const [apiJoinedVendors, setApiJoinedVendors] = useState<HistoricalPurchaseVendorRecord[] | null>(null);
 
-  // Validate vendor mobile number: exactly 10 numeric digits, rejects alphanumeric values
+  // Validate vendor mobile number: accepts with or without +91, exactly 10 numeric digits after country code
   const isValidVendorMobile = (phone: string | undefined | null): boolean => {
     if (!phone || typeof phone !== 'string') return true;
     const trimmed = phone.trim();
     if (trimmed === '') return true;
 
-    // Alphanumeric values containing alphabetic characters are rejected
-    if (/[a-zA-Z]/.test(trimmed)) return false;
-
-    // Reject invalid symbols (only digits, +, -, space, parentheses allowed)
-    if (!/^[\d\s+\-()]+$/.test(trimmed)) return false;
-
-    // Normalize Indian prefixes (+91, 91, 0)
-    let digits = trimmed.replace(/\D/g, '');
-    if (digits.length === 11 && digits.startsWith('0')) {
-      digits = digits.slice(1);
-    } else if (digits.length === 12 && digits.startsWith('91')) {
-      digits = digits.slice(2);
-    }
-
-    // Must be numeric value with exactly 10 digits
-    return digits.length === 10 && /^\d{10}$/.test(digits);
+    return parseVendorMobile(trimmed).isValid;
   };
 
   // Validate a vendor row for required fields
@@ -680,7 +718,12 @@ export default function InitialSetupModal() {
             const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier name', 'supplier', 'company', 'organization', 'vendor', 'name'], ['email', 'mail', 'phone', 'contactperson', 'code']);
             const contactPerson = getVal(['contactperson', 'contact person', 'contact person name', 'representative', 'person name', 'contact name', 'person', 'poc'], ['email', 'mail', 'phone', 'mobile']);
             const email = getVal(['email', 'email id', 'email_id', 'emailid', 'email address', 'emailaddress', 'mail', 'corporate email', 'company email', 'vendor email']);
-            const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']);
+            const rawPhone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']);
+            const parsedPhone = parseVendorMobile(rawPhone);
+            // Accept mobile numbers with or without +91, validate 10 digits after country code, and store with country code without duplication
+            const phone = parsedPhone.isValid && parsedPhone.nationalNumber
+              ? `+91 ${parsedPhone.nationalNumber}`
+              : rawPhone;
             const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address', 'plant', 'state', 'pincode', 'pin code']);
             const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']);
             const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
@@ -1272,13 +1315,16 @@ export default function InitialSetupModal() {
         secondSetMinors = Array.from(new Set(secondSetMinors));
       }
 
+      const parsedP = parseVendorMobile(v.phone);
+      const cleanPhone = parsedP.isValid && parsedP.nationalNumber ? `+91 ${parsedP.nationalNumber}` : v.phone;
+
       return {
         id: v.id,
         vendorCode: v.vendorCode,
         companyName: v.companyName,
         email: v.email,
         contactPerson: v.contactPerson,
-        phone: v.phone,
+        phone: cleanPhone,
         address: v.address,
         gstNumber: v.gstNumber,
         vendorRatingScore: v.vendorRatingScore,
@@ -2004,6 +2050,12 @@ export default function InitialSetupModal() {
                                   type="text"
                                   value={v.phone || ''}
                                   onChange={(e) => handleUpdateVendorField(v.id, 'phone', e.target.value)}
+                                  onBlur={(e) => {
+                                    const parsed = parseVendorMobile(e.target.value);
+                                    if (parsed.isValid && parsed.nationalNumber) {
+                                      handleUpdateVendorField(v.id, 'phone', `+91 ${parsed.nationalNumber}`);
+                                    }
+                                  }}
                                   placeholder="+91 Phone"
                                   className={`w-full text-[10px] px-1.5 py-1 rounded focus:outline-none transition-all ${
                                     isPhoneInvalid

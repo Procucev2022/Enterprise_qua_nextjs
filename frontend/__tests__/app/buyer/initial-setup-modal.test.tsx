@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import * as XLSX from 'xlsx';
-import InitialSetupModal, { IngestionProgressCard } from '@/app/buyer/initial-setup-modal';
+import InitialSetupModal, { IngestionProgressCard, parseVendorMobile } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
@@ -3537,6 +3537,134 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     const codeInputs = screen.getAllByPlaceholderText('VND-CODE');
     const codes = codeInputs.map((i: any) => i.value);
     expect(codes).toContain('4');
+  });
+
+  it('handles country code in vendor mobile number: accepts with or without +91, validates 10 digits after country code, and stores without duplication', async () => {
+    // 1. Direct helper function unit testing covering all boundary branches
+    expect(parseVendorMobile(null).isValid).toBe(true);
+    expect(parseVendorMobile(undefined).isValid).toBe(true);
+    expect(parseVendorMobile('' as any).isValid).toBe(true);
+    expect(parseVendorMobile('   ').isValid).toBe(true);
+    expect(parseVendorMobile(12345 as any).isValid).toBe(true);
+    expect(parseVendorMobile('98765abcde').isValid).toBe(false);
+    expect(parseVendorMobile('98765#$@!').isValid).toBe(false);
+    expect(parseVendorMobile('+91 12345').isValid).toBe(false);
+    expect(parseVendorMobile('+91 981122334455').isValid).toBe(false);
+
+    // Valid formats with and without +91
+    expect(parseVendorMobile('+91 9811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('9811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('+91+91 9811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('919811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('09811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('+91 9157154504')).toEqual({
+      isValid: true,
+      nationalNumber: '9157154504',
+      storedNumber: '+91 9157154504',
+    });
+
+    // 2. Integration test in InitialSetupModal via Excel upload
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-CC-1',
+        'Company Name': 'Standard Country Code Supplier',
+        Email: 'standard@supplier.com',
+        Phone: '+91 9811223344',
+      },
+      {
+        'Vendor Code': 'V-CC-2',
+        'Company Name': 'No Country Code Supplier',
+        Email: 'nocountry@supplier.com',
+        Phone: '9822334455',
+      },
+      {
+        'Vendor Code': 'V-CC-3',
+        'Company Name': 'Duplicate Country Code Supplier',
+        Email: 'duplicate@supplier.com',
+        Phone: '+91+91 9833344455',
+      },
+      {
+        'Vendor Code': 'V-CC-4',
+        'Company Name': 'Numeric 91 Prefix Supplier',
+        Email: 'numeric91@supplier.com',
+        Phone: '919844455566',
+      },
+      {
+        'Vendor Code': 'V-CC-5',
+        'Company Name': 'Zero Prefixed Supplier',
+        Email: 'zero@supplier.com',
+        Phone: '09855566677',
+      },
+      {
+        'Vendor Code': 'V-CC-6',
+        'Company Name': 'Indian 91 National Number Supplier',
+        Email: 'in91@supplier.com',
+        Phone: '9157154504',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_mobile_country_codes.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Zero validation errors or warning banners
+    expect(screen.queryByTestId('vendor-upload-error-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vendor-validation-warning-banner')).not.toBeInTheDocument();
+
+    // Verify all mobile numbers are stored with +91 country code and 10 digits without duplication
+    expect(screen.getByText('+91 9811223344')).toBeInTheDocument();
+    expect(screen.getByText('+91 9822334455')).toBeInTheDocument();
+    expect(screen.getByText('+91 9833344455')).toBeInTheDocument();
+    expect(screen.getByText('+91 9844455566')).toBeInTheDocument();
+    expect(screen.getByText('+91 9855566677')).toBeInTheDocument();
+    expect(screen.getByText('+91 9157154504')).toBeInTheDocument();
+
+    // Ensure no duplicated country code text exists in table
+    expect(screen.queryByText(/\+91\s*\+91/)).not.toBeInTheDocument();
+
+    // Test Edit Data onBlur formatting
+    fireEvent.click(screen.getByText('Edit Data'));
+    const phoneInputs = screen.getAllByPlaceholderText('+91 Phone');
+    // Change first input without +91 and blur to format
+    await act(async () => {
+      fireEvent.change(phoneInputs[0], { target: { value: '9899988877' } });
+      fireEvent.blur(phoneInputs[0]);
+    });
+    expect(phoneInputs[0]).toHaveValue('+91 9899988877');
   });
 });
 
