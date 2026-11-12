@@ -262,6 +262,8 @@ describe('app/buyer/command-center.tsx', () => {
     // Click AI RFQ Create filter
     fireEvent.click(screen.getByText(/AI RFQ Create \(2\)/i));
     expect(screen.getByText('Centrifugal Slurry Pumps')).toBeInTheDocument();
+    expect(screen.queryByText('Titanium Valves')).not.toBeInTheDocument();
+    expect(screen.queryByText('Electrical Transformers')).not.toBeInTheDocument();
 
     // Click Manual RFQ filter
     fireEvent.click(screen.getByText(/Manual RFQ \(1\)/i));
@@ -270,6 +272,123 @@ describe('app/buyer/command-center.tsx', () => {
     // Click All Sources
     fireEvent.click(screen.getByText(/All Sources \(4\)/i));
     expect(screen.getByText('Centrifugal Slurry Pumps')).toBeInTheDocument();
+  });
+
+  it('strictly isolates AI Extraction RFQs and excludes Email RFQs and other sources when filtered', () => {
+    const mixedRfqs: RFQItem[] = [
+      {
+        id: 'rfq-ai-1',
+        rfqNumber: 'RFQ-AI-001',
+        title: 'Precision CNC Machined Parts',
+        category: 'Mechanical',
+        createdAt: '2026-09-01',
+        targetDeliveryDate: '2026-10-01',
+        status: 'In Evaluation',
+        sourcingMode: 'mode_2',
+        quotesCount: 3,
+        budget: 600000,
+        source: 'ai_extraction',
+        sourceFileName: 'BOQ_Requisition.pdf',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: true,
+      },
+      {
+        id: 'rfq-em-1',
+        rfqNumber: 'RFQ-EMAIL-001',
+        title: 'Gate Valves Requisition',
+        category: 'Piping',
+        createdAt: '2026-09-02',
+        targetDeliveryDate: '2026-10-05',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_1',
+        quotesCount: 1,
+        budget: 250000,
+        source: 'email_gateway',
+        sourceEmail: 'rfq-gateway@enterprise.com',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+      },
+      {
+        id: 'rfq-em-2',
+        rfqNumber: 'RFQ-EMAIL-002',
+        title: 'Flanges and Fittings',
+        category: 'Piping',
+        createdAt: '2026-09-03',
+        targetDeliveryDate: '2026-10-10',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        budget: 180000,
+        source: 'email_upload',
+        sourceFileName: 'email_attachment.eml',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+      },
+      {
+        id: 'rfq-man-1',
+        rfqNumber: 'RFQ-MAN-001',
+        title: 'Workshop Consumables',
+        category: 'Tools',
+        createdAt: '2026-09-04',
+        targetDeliveryDate: '2026-10-15',
+        status: 'PO Generated',
+        sourcingMode: 'mode_3',
+        quotesCount: 4,
+        budget: 120000,
+        source: 'manual_entry',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: mixedRfqs,
+      aiFeed: [],
+      currentMode: 'mode_2',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 10,
+      activeSubscription: 'version_2',
+      activeBuyerAccount: null,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    // Filter by AI RFQ Create / AI Extraction
+    const aiFilterBtn = screen.getByRole('button', { name: /AI RFQ Create/i });
+    fireEvent.click(aiFilterBtn);
+
+    // AI Extraction RFQ must be present
+    expect(screen.getByText('Precision CNC Machined Parts')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-AI-001')).toBeInTheDocument();
+
+    // All Email RFQs must be excluded
+    expect(screen.queryByText('Gate Valves Requisition')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-EMAIL-001')).not.toBeInTheDocument();
+    expect(screen.queryByText('Flanges and Fittings')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-EMAIL-002')).not.toBeInTheDocument();
+
+    // Manual RFQs must also be excluded
+    expect(screen.queryByText('Workshop Consumables')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-MAN-001')).not.toBeInTheDocument();
   });
 
   it('handles channel filter tabs for AI live feed', () => {

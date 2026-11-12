@@ -53,7 +53,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   } = useApp();
 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
-  const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry'>('all');
+  const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry' | 'ai_extraction'>('all');
   const [rfqSearchTerm, setRfqSearchTerm] = useState('');
   const [activePipelineModalOpen, setActivePipelineModalOpen] = useState(false);
   const [intakeSourcesModalOpen, setIntakeSourcesModalOpen] = useState(false);
@@ -112,7 +112,12 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   };
 
   const filteredRFQs = rfqs.filter((rfq) => {
-    if (rfqSourceFilter === 'web_portal' && rfq.source !== 'web_portal' && rfq.source !== 'ai_extraction' && rfq.source && rfq.source === 'manual_entry') return false;
+    if (
+      (rfqSourceFilter === 'web_portal' || (rfqSourceFilter as string) === 'ai_extraction') &&
+      rfq.source !== 'web_portal' &&
+      rfq.source !== 'ai_extraction' &&
+      Boolean(rfq.source)
+    ) return false;
     if (rfqSourceFilter === 'manual_entry' && rfq.source !== 'manual_entry') return false;
     if (rfqSourceFilter === 'email_gateway' && rfq.source !== 'email_gateway' && rfq.source !== 'email_upload') return false;
 
@@ -438,8 +443,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               </button>
               <button
                 onClick={() => setRfqSourceFilter('web_portal')}
+                title="AI Extraction RFQs"
+                aria-label="AI Extraction / AI RFQ Create"
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 ${
-                  rfqSourceFilter === 'web_portal'
+                  rfqSourceFilter === 'web_portal' || (rfqSourceFilter as string) === 'ai_extraction'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/40 hover:bg-indigo-100'
                 }`}
