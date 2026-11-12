@@ -1957,7 +1957,7 @@ sellerDirectory: {
 
     poDump: {
       heading: 'Step 3 — Upload File 2: Historical PO Purchase Dump',
-      hint: 'Required columns: PO Number, PO Date, Vendor Code or Vendor Name, Line Item Description, Quantity, UOM, Spend, Department. Material Code, Existing Category, Subcategory and Currency are optional.',
+      hint: 'Required columns: PO Number, PO Date, Vendor Code or Vendor Name, Line Item Description, Quantity, UOM, Spend, Category. Material Code, Subcategory, Department and Currency are optional.',
       dropzone: 'Click to browse or drag and drop your PO dump (.xlsx, .xls, .csv)',
       dropzoneParsing: 'Reading and validating PO line items…',
       templateAction: 'Download Template',

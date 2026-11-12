@@ -12,6 +12,7 @@ import {
 } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
+import { resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -1062,11 +1063,12 @@ export default function InitialSetupModal() {
             }
             // With neither a unit price nor a spend figure, the row is rejected below. It is not priced at a guess.
 
-            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category', 'function']);
+            const department = getVal(['minor category', 'category', 'minor', 'sub category', 'sub-category', 'sub_category', 'department', 'dept', 'cost center', 'plant', 'division', 'function']);
+            const resolvedCategory = resolveMinorCategory(itemName, specs, department);
 
             // Rows the filter below would drop as blank are skipped here. Any other row must name every
             // required field it lacks. Nothing is substituted for a missing value.
-            const isBlankRow = !vendorIdentifier && !itemName && !department;
+            const isBlankRow = !vendorIdentifier && !itemName && !department && !resolvedCategory;
             const missingFields: string[] = [];
             if (!poNumber) missingFields.push('PO Number');
             if (!poDate) missingFields.push('PO Date');
@@ -1095,9 +1097,11 @@ export default function InitialSetupModal() {
               totalSpend,
               spend: totalSpend,
               department,
+              category: resolvedCategory || department || '',
+              minorCategory: resolvedCategory || department || '',
             };
           })
-            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.department?.trim()))
+            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.category?.trim() || p.department?.trim()))
             .sort((a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime());
 
           // Any incomplete row rejects the whole file, so no partial PO dump is stored.
@@ -1423,7 +1427,7 @@ export default function InitialSetupModal() {
         'Unit',
         'Unit Price (INR)',
         'Total Spend (INR)',
-        'Department',
+        'Category',
       ],
     ]);
     const workbook: XLSX.WorkBook = {
@@ -2306,7 +2310,7 @@ export default function InitialSetupModal() {
               <div className="flex items-center gap-2 min-w-0">
                 <span className="badge badge-purple font-bold text-[10px] shrink-0">Required Columns</span>
                 <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
-                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Department
+                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Category
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -2468,7 +2472,7 @@ export default function InitialSetupModal() {
                       <th className="p-2.5">Unit</th>
                       <th className="p-2.5">Unit Price</th>
                       <th className="p-2.5">Total Spend</th>
-                      <th className="p-2.5">Department</th>
+                      <th className="p-2.5">Category</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
@@ -2485,7 +2489,7 @@ export default function InitialSetupModal() {
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {formatCurrency(p.totalSpend)}
                         </td>
-                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.department || '—'}</td>
+                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.category || p.minorCategory || p.department || '—'}</td>
                       </tr>
                     ))}
                   </tbody>

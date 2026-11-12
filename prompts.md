@@ -5488,3 +5488,11 @@ In the Buyer flow, Vendor Code Generation and Validation: Handle vendor codes du
 In the Buyer flow, Country Code Handling in Vendor Mobile Number: During Vendor Master Excel upload, vendor mobile numbers may be provided with the +91 country code or without it. Expected Behaviour/Solution: Accept both formats, with or without +91. Validate the mobile number as exactly 10 digits after the country code. Store the country code and mobile number correctly without duplication. Please fix the issue
 ```
 ---
+
+
+### Prompt 169
+**Timestamp**: 2026-11-12T19:49:58+05:30
+```text
+In the Buyer flow, Replace Department with Minor Category: Replace the Department column in the PO Line Items Preview with Category (Minor Category). Expected Behaviour/Solution: Identify the exact Minor Category from the line-item description or existing category database and display it in the Category column. Please fix the issue
+```
+---

@@ -3666,5 +3666,106 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
     expect(phoneInputs[0]).toHaveValue('+91 9899988877');
   });
+
+  it('replaces Department column with Category (Minor Category) in PO Line Items Preview and resolves exact minor categories', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 1 -> Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
+
+    // Step 2: Upload valid vendor master file
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Step 3: Go to PO Dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // Required columns banner lists Spend & Category
+    expect(screen.getByText(/Spend & Category/i)).toBeInTheDocument();
+
+    // Test template download contains Category header
+    const origCreateObjectURL = global.URL.createObjectURL;
+    global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
+    fireEvent.click(screen.getByText(/Download PO Dump Template/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
+    global.URL.createObjectURL = origCreateObjectURL;
+
+    // Create a PO file with line items to verify minor category auto-resolution
+    const wb = XLSX.utils.book_new();
+    const poRows = [
+      {
+        'PO Number': 'PO-VALVE-01',
+        'PO Date': '2024-01-10',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'Stainless Steel Ball Valve 2 inch',
+        Quantity: 10,
+        'Total Spend (INR)': 45000,
+      },
+      {
+        'PO Number': 'PO-PUMP-02',
+        'PO Date': '2024-01-11',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'High Head Centrifugal Pump',
+        Quantity: 2,
+        'Total Spend (INR)': 120000,
+      },
+      {
+        'PO Number': 'PO-STEEL-03',
+        'PO Date': '2024-01-12',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'TMT Steel Rebar 16mm',
+        Quantity: 50,
+        'Total Spend (INR)': 75000,
+      },
+      {
+        'PO Number': 'PO-NET-04',
+        'PO Date': '2024-01-13',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'Generic Item with Category',
+        Quantity: 5,
+        'Total Spend (INR)': 25000,
+        Category: 'Networking Equipment',
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(poRows);
+    XLSX.utils.book_append_sheet(wb, ws, 'PO Purchase Dump');
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const poFile: any = new File([buf], 'po_minor_categories.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = buf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Verify PO Dump uploaded successfully
+    expect(screen.getByText(/PO Dump Uploaded Successfully/i)).toBeInTheDocument();
+
+    // Verify Category header is in the preview table (and Department is not in the header)
+    const tableHeaders = screen.getAllByRole('columnheader');
+    const headerTexts = tableHeaders.map((th) => th.textContent?.trim());
+    expect(headerTexts).toContain('Category');
+    expect(headerTexts).not.toContain('Department');
+
+    // Verify exact Minor Categories identified from line item descriptions and category database
+    expect(screen.getByText('Hoses, Valves & Fittings')).toBeInTheDocument();
+    expect(screen.getByText('Pumps & Accessories')).toBeInTheDocument();
+    expect(screen.getByText('TMT BARS')).toBeInTheDocument();
+    expect(screen.getByText('Networking Equipment')).toBeInTheDocument();
+  });
 });
 

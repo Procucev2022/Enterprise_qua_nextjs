@@ -1286,6 +1286,8 @@ export interface PurchaseOrderLineItemRecord {
   unitPrice: number;
   totalSpend: number;
   department?: string;
+  category?: string;
+  minorCategory?: string;
 }
 
 export interface HistoricalPurchaseVendorRecord {

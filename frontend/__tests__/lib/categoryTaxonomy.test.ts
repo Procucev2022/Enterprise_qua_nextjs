@@ -13,6 +13,7 @@ import {
   autoCategorizeItem,
   dominantMajorCategory,
   KNOWN_KEYWORD_RULES,
+  resolveMinorCategory,
 } from '@/lib/categoryTaxonomy';
 import { MASTER_CATEGORY_TAXONOMY, MASTER_CATEGORY_GROUPS } from '@/lib/categoryTaxonomySeed';
 
@@ -294,5 +295,50 @@ describe('categoryTaxonomy registry normalisation', () => {
     expect(hasMinorCategory('IT', '')).toBe(false);
     expect(findMajorForMinor('')).toBe('');
     expect(findMajorForMinor('Nothing')).toBe('');
+  });
+});
+
+describe('resolveMinorCategory', () => {
+  beforeEach(() => {
+    setCategoryTaxonomy(MASTER_CATEGORY_GROUPS);
+  });
+
+  afterEach(() => {
+    setCategoryTaxonomy(MASTER_CATEGORY_GROUPS);
+  });
+
+  it('resolves exact minor category from line item description', () => {
+    expect(resolveMinorCategory('Centrifugal Pump SS316', '', '')).toBe('Pumps & Accessories');
+    expect(resolveMinorCategory('Stainless Steel Ball Valve 2 inch', '', '')).toBe('Hoses, Valves & Fittings');
+    expect(resolveMinorCategory('TMT Steel Rebar 12mm', '', '')).toBe('TMT BARS');
+    expect(resolveMinorCategory('Dell Latitude 5420 Laptop', '', '')).toBe('Laptop');
+    expect(resolveMinorCategory('Schneider 32A MCB Circuit Breaker', '', '')).toBe('Circuit Breakers');
+  });
+
+  it('resolves minor category from specifications when item name is generic', () => {
+    expect(resolveMinorCategory('Industrial Equipment', 'Centrifugal pump high pressure', '')).toBe('Pumps & Accessories');
+    expect(resolveMinorCategory('', 'ball valve 1 inch', '')).toBe('Hoses, Valves & Fittings');
+  });
+
+  it('resolves minor category from departmentOrCategory when matching known minor or major category', () => {
+    expect(resolveMinorCategory('Custom Item', '', 'Networking Equipment')).toBe('Networking Equipment');
+    expect(resolveMinorCategory('Custom Item', '', 'Civil Works')).toBe(getDefaultMinorForMajor('Civil Works'));
+  });
+
+  it('resolves minor category when taxonomy is not yet loaded', () => {
+    clearCategoryTaxonomy();
+    expect(isCategoryTaxonomyLoaded()).toBe(false);
+    expect(resolveMinorCategory('Industrial Gate Valve', '', '')).toBe('Hoses, Valves & Fittings');
+    expect(resolveMinorCategory('Submersible Pump', '', '')).toBe('Pumps & Accessories');
+    expect(resolveMinorCategory('', 'tmt bar fe500', '')).toBe('TMT BARS');
+  });
+
+  it('falls back to provided departmentOrCategory if item is completely unrecognized', () => {
+    expect(resolveMinorCategory('Unknown Gizmo XYZ123', 'Model 999', 'Special Projects')).toBe('Special Projects');
+  });
+
+  it('returns empty string when all arguments are empty or no match is found', () => {
+    expect(resolveMinorCategory('', '', '')).toBe('');
+    expect(resolveMinorCategory('Unknown Gizmo XYZ123', 'Model 999', '')).toBe('');
   });
 });
