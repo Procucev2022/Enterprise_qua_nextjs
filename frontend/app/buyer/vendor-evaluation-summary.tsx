@@ -24,6 +24,7 @@ import {
   Check,
   ChevronDown,
   Clock,
+  FileCheck,
   FileText,
   Mail,
   Paperclip,
@@ -588,141 +589,213 @@ export default function VendorEvaluationSummary({
         </div>
       </div>
 
-      {/* Main Vendor Executive Header Card */}
-      <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-md relative z-10 overflow-hidden">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
-          {/* Vendor Info */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
-                {summary.vendorId ?? NOT_RECORDED}
-              </span>
-              <span className="text-slate-400">•</span>
-              <span className="text-slate-600 dark:text-gray-400 font-medium flex items-center gap-1">
-                <Tag size={12} /> {summary.category ?? NOT_RECORDED}
-              </span>
-            </div>
-
-            <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-              <CompanyHoverTooltip
-                name={summary.vendorName ?? ''}
-                type="vendor"
-                contact={{
-                  contactPerson: summary.contactPerson ?? undefined,
-                  mobile: summary.phone ?? undefined,
-                  email: summary.email ?? undefined,
-                  verified: summary.status === 'PREFERRED ENTERPRISE SUPPLIER',
-                }}
-              />
-              <ShieldCheck className="text-emerald-500" size={22} />
-            </h2>
-
-            <div className="flex items-center gap-3 sm:gap-4 text-xs text-slate-500 dark:text-gray-400 flex-wrap">
-              <span className="flex items-center gap-1">
-                <Building2 size={13} /> {SUMMARY.contactLabel}{' '}
-                <strong className="text-slate-700 dark:text-gray-200">{summary.contactPerson ?? NOT_RECORDED}</strong>
-              </span>
-              <span className="flex items-center gap-1"><Mail size={13} /> {summary.email ?? NOT_RECORDED}</span>
-              <span className="flex items-center gap-1"><Phone size={13} /> {summary.phone ?? NOT_RECORDED}</span>
-              <span className="flex items-center gap-1">
-                <Clock size={13} /> {SUMMARY.submittedLabel} {summary.submissionDate ?? NOT_RECORDED}
-              </span>
-            </div>
-          </div>
-
-          {/* Computed Rating Gauge */}
-          <div className="flex items-center gap-4 p-3 sm:p-3.5 rounded-xl bg-slate-900 text-white shadow-lg shrink-0 border border-slate-800">
-            <div className="text-center">
-              <div className="text-[10px] uppercase font-bold text-indigo-300 tracking-wider">
-                {SUMMARY.scoreLabel}
-              </div>
-              <div className="text-3xl sm:text-4xl font-black mono text-emerald-400 mt-0.5">
-                {overallScore === null ? NOT_EVALUATED : `${overallScore}%`}
-              </div>
-            </div>
-
-            <div className="space-y-1 border-l border-slate-800 pl-3.5">
-              {renderStatusBadge(summary.status)}
-              <div className="text-[10px] text-indigo-300">
-                {SUMMARY.gateLabel} <span className="font-bold text-emerald-400">{gateText}</span>
-              </div>
-            </div>
-          </div>
+      {/* Main Vendor Evaluation Summary Table */}
+      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm relative z-10 space-y-2">
+        <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 dark:border-gray-800">
+          <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
+            <FileCheck size={15} className="text-indigo-600 dark:text-indigo-400" />
+            {SUMMARY.tableHeading}
+          </h3>
         </div>
 
-        {/* Automated System Execution Action Banner */}
-        <div className="mt-3.5 p-2.5 sm:p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/30 flex items-center justify-between text-xs flex-wrap gap-2">
-          <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-semibold">
-            <Zap size={14} className="text-emerald-600 dark:text-emerald-400 animate-pulse" />
-            <span>{SUMMARY.executionLabel}</span>
-            <span className="font-normal text-emerald-900 dark:text-emerald-200">{summary.systemAction ?? NOT_RECORDED}</span>
-          </div>
-          {documents.length === 0 ? (
-            <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40 flex items-center gap-1 font-mono">
-              <Clock size={11} /> {SUMMARY.documentsEmptyTitle}
-            </span>
-          ) : (
-            <span className="badge badge-emerald font-mono">
-              {formatString(SUMMARY.attachmentsSummaryTotal, { verified: verifiedDocumentCount, total: documents.length })}
-            </span>
-          )}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse" data-testid="vendor-evaluation-summary-table">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] bg-slate-50/70 dark:bg-gray-950/70">
+                <th className="py-2 px-2.5 min-w-[200px]">{SUMMARY.colVendorDetails}</th>
+                <th className="py-2 px-2.5 text-center min-w-[140px]">{SUMMARY.colEvaluationStatus}</th>
+                <th className="py-2 px-2.5 text-center min-w-[130px]">{SUMMARY.colOverallScore}</th>
+                <th className="py-2 px-2.5 min-w-[220px]">{SUMMARY.colCategoryScores}</th>
+                <th className="py-2 px-2.5 min-w-[180px]">{SUMMARY.colReviewStatus}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
+              <tr className="hover:bg-slate-50/50 dark:hover:bg-gray-800/30 transition-colors align-top">
+                {/* 1. Vendor Details */}
+                <td className="py-2.5 px-2.5 space-y-1">
+                  <div className="flex items-center gap-1.5 flex-wrap text-xs">
+                    <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px]">
+                      {summary.vendorId ?? NOT_RECORDED}
+                    </span>
+                    <span className="text-slate-400">•</span>
+                    <span className="text-slate-600 dark:text-gray-400 font-medium flex items-center gap-1 text-[11px]">
+                      <Tag size={11} /> {summary.category ?? NOT_RECORDED}
+                    </span>
+                  </div>
+
+                  <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <CompanyHoverTooltip
+                      name={summary.vendorName ?? ''}
+                      type="vendor"
+                      contact={{
+                        contactPerson: summary.contactPerson ?? undefined,
+                        mobile: summary.phone ?? undefined,
+                        email: summary.email ?? undefined,
+                        verified: summary.status === 'PREFERRED ENTERPRISE SUPPLIER',
+                      }}
+                    />
+                    <ShieldCheck className="text-emerald-500 shrink-0" size={16} />
+                  </div>
+
+                  <div className="space-y-0.5 text-[11px] text-slate-500 dark:text-gray-400">
+                    <div className="flex items-center gap-1">
+                      <Building2 size={11} /> {SUMMARY.contactLabel}{' '}
+                      <strong className="text-slate-700 dark:text-gray-200">{summary.contactPerson ?? NOT_RECORDED}</strong>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="flex items-center gap-1"><Mail size={11} /> {summary.email ?? NOT_RECORDED}</span>
+                      <span>•</span>
+                      <span className="flex items-center gap-1"><Phone size={11} /> {summary.phone ?? NOT_RECORDED}</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-gray-500">
+                      <Clock size={10} /> {SUMMARY.submittedLabel} {summary.submissionDate ?? NOT_RECORDED}
+                    </div>
+                  </div>
+                </td>
+
+                {/* 2. Evaluation Status */}
+                <td className="py-2.5 px-2.5 text-center align-middle">
+                  <div className="inline-block">
+                    {renderStatusBadge(summary.status)}
+                  </div>
+                </td>
+
+                {/* 3. Overall Score */}
+                <td className="py-2.5 px-2.5 text-center align-middle space-y-0.5">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 tracking-wider">
+                    {SUMMARY.scoreLabel}
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black mono text-emerald-600 dark:text-emerald-400">
+                    {overallScore === null ? NOT_EVALUATED : `${overallScore}%`}
+                  </div>
+                  <div className="text-[10px] text-slate-600 dark:text-gray-400 font-medium">
+                    {SUMMARY.gateLabel} <span className="font-bold text-emerald-600 dark:text-emerald-400">{gateText}</span>
+                  </div>
+                </td>
+
+                {/* 4. Category Scores Preview */}
+                <td className="py-2.5 px-2.5 align-middle">
+                  <div className="grid grid-cols-2 gap-1 text-[10px]">
+                    {VENDOR_EVALUATION_PILLARS.map((p) => {
+                      const viewPillar = summary.pillars.find((pi) => pi.pillarId === p.id);
+                      const weighted = viewPillar?.weightedScore;
+                      return (
+                        <div key={p.id} className="p-1 rounded bg-slate-50 dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 flex items-center justify-between gap-1">
+                          <span className="font-semibold text-slate-700 dark:text-gray-300 truncate">
+                            <span className={`inline-block w-3.5 h-3.5 rounded text-[8px] font-bold text-center leading-3.5 mr-1 ${p.accent.badge}`}>{p.id}</span>
+                            {p.name.split(' ')[0]}
+                          </span>
+                          <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
+                            {weighted !== null && weighted !== undefined ? `${weighted}/${p.weight}` : '—'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </td>
+
+                {/* 5. Review Status */}
+                <td className="py-2.5 px-2.5 space-y-1.5 align-middle">
+                  <div className="p-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-[11px] space-y-0.5">
+                    <div className="flex items-center gap-1 font-bold text-emerald-800 dark:text-emerald-300">
+                      <Zap size={12} className="text-emerald-600 dark:text-emerald-400 shrink-0 animate-pulse" />
+                      <span>{SUMMARY.executionLabel}</span>
+                    </div>
+                    <div className="text-slate-700 dark:text-gray-300 font-medium text-[10px]">
+                      {summary.systemAction ?? NOT_RECORDED}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 text-[10px]">
+                    {documents.length === 0 ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40 flex items-center gap-1 font-mono">
+                        <Clock size={10} /> {SUMMARY.documentsEmptyTitle}
+                      </span>
+                    ) : (
+                      <span className="badge badge-emerald font-mono text-[10px]">
+                        {formatString(SUMMARY.attachmentsSummaryTotal, { verified: verifiedDocumentCount, total: documents.length })}
+                      </span>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      {/* 6 Subtotal Pillar Summary Cards */}
-      <div>
-        <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 mb-2.5 flex items-center gap-2">
-          <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400" />
-          {SUMMARY.pillarsHeading}
-        </h3>
+      {/* 6-Pillar Subtotal Summary & Auditor Remarks Table */}
+      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm space-y-2">
+        <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 dark:border-gray-800">
+          <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
+            <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400" />
+            {SUMMARY.pillarsHeading}
+          </h3>
+        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">
-          {VENDOR_EVALUATION_PILLARS.map((pillar) => {
-            const viewPillar = summary.pillars.find((p) => p.pillarId === pillar.id);
-            const weightedScore = viewPillar?.weightedScore ?? null;
-            const remarks = viewPillar?.remarks ?? null;
-            const attachment = attachmentSummaryFor(questions, pillar.id);
-            const barPercent = weightedScore === null ? 0 : Math.min(100, (weightedScore / pillar.weight) * 100);
-            return (
-              <div
-                key={pillar.id}
-                className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5 flex flex-col justify-between"
-              >
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-5 h-5 rounded-md font-bold text-xs flex items-center justify-center ${pillar.accent.badge}`}>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] bg-slate-50/70 dark:bg-gray-950/70">
+                <th className="py-2 px-2.5">{SUMMARY.colPillarName}</th>
+                <th className="py-2 px-2.5 text-center">{SUMMARY.colPillarWeight}</th>
+                <th className="py-2 px-2.5 text-center">{SUMMARY.colPillarScore}</th>
+                <th className="py-2 px-2.5 min-w-[120px]">{SUMMARY.colPillarBar}</th>
+                <th className="py-2 px-2.5 min-w-[140px]">{SUMMARY.colPillarAttachments}</th>
+                <th className="py-2 px-2.5 min-w-[200px]">{SUMMARY.colPillarRemarks}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
+              {VENDOR_EVALUATION_PILLARS.map((pillar) => {
+                const viewPillar = summary.pillars.find((p) => p.pillarId === pillar.id);
+                const weightedScore = viewPillar?.weightedScore ?? null;
+                const remarks = viewPillar?.remarks ?? null;
+                const attachment = attachmentSummaryFor(questions, pillar.id);
+                const barPercent = weightedScore === null ? 0 : Math.min(100, (weightedScore / pillar.weight) * 100);
+                return (
+                  <tr key={pillar.id} className="hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors">
+                    <td className="py-2 px-2.5 font-bold text-slate-800 dark:text-gray-200 whitespace-nowrap">
+                      <span className={`inline-flex items-center justify-center w-5 h-5 rounded mr-2 text-[10px] font-bold ${pillar.accent.badge}`}>
                         {pillar.id}
                       </span>
-                      <span className="font-bold text-xs text-slate-800 dark:text-gray-200">{pillar.name}</span>
-                    </div>
-                    <span
-                      className={`text-xs font-mono font-bold ${
+                      <span>{pillar.name}</span>
+                    </td>
+                    <td className="py-2 px-2.5 text-center font-mono text-slate-600 dark:text-gray-400 font-semibold">
+                      {pillar.weight}%
+                    </td>
+                    <td
+                      className={`py-2 px-2.5 text-center font-mono font-bold whitespace-nowrap ${
                         weightedScore === null ? 'text-slate-500 dark:text-gray-400' : pillar.accent.score
                       }`}
                     >
                       {weightedScore === null
                         ? NOT_EVALUATED
                         : formatString(SUMMARY.pillarPoints, { score: weightedScore, weight: pillar.weight })}
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                    <div className={`${pillar.accent.bar} h-full rounded-full`} style={{ width: `${barPercent}%` }} />
-                  </div>
-                  <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                    <span>{attachment.label}</span>
-                    <span className={attachment.statusClass}>{attachment.statusLabel}</span>
-                  </div>
-                </div>
-                <div className={`p-2 rounded-lg text-[10px] ${pillar.accent.remarksBox}`}>
-                  <div className={`font-bold mb-0.5 ${pillar.accent.remarksTitle}`}>
-                    💬 {formatString(SUMMARY.pillarRemarksTitle, { pillarId: pillar.id })}
-                  </div>
-                  {remarks ?? NOT_RECORDED}
-                </div>
-              </div>
-            );
-          })}
+                    </td>
+                    <td className="py-2 px-2.5">
+                      <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                        <div className={`${pillar.accent.bar} h-full rounded-full`} style={{ width: `${barPercent}%` }} />
+                      </div>
+                    </td>
+                    <td className="py-2 px-2.5 text-[10px]">
+                      <div className="flex flex-col">
+                        <span className="text-slate-500">{attachment.label}</span>
+                        <span className={attachment.statusClass}>{attachment.statusLabel}</span>
+                      </div>
+                    </td>
+                    <td className="py-2 px-2.5 text-[10px]">
+                      <div className={`p-1.5 rounded ${pillar.accent.remarksBox}`}>
+                        <div className={`font-bold mb-0.5 ${pillar.accent.remarksTitle}`}>
+                          💬 {formatString(SUMMARY.pillarRemarksTitle, { pillarId: pillar.id })}
+                        </div>
+                        <span className="text-slate-700 dark:text-gray-300 italic">{remarks ?? NOT_RECORDED}</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -843,8 +916,8 @@ export default function VendorEvaluationSummary({
         </div>
       </div>
 
-      {/* Mandatory Attachments Overview Card */}
-      <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5">
+      {/* Mandatory Compliance Documents Table */}
+      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm space-y-2">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
             <Paperclip size={15} className="text-indigo-600 dark:text-indigo-400" />

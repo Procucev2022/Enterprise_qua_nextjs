@@ -5607,3 +5607,11 @@ In the Buyer flow, Deleted Vendor Reappearing: When a buyer deletes a vendor fro
 In the Buyer flow, Vendor Rating Update Issue: After the buyer submits a revised supplier performance rating, the updated rating is also changing on the Vendor Portal. The rating update should follow the intended rating visibility and calculation rules. Expected Behaviour/Solution: Verify that the revised rating is saved and displayed correctly. Also, after clicking "Submit Revision & Dispatch Email", successfully submit the rating, dispatch the email, and automatically close the popup. Prevent duplicate submissions and display a success confirmation. Please fix the issue
 ```
 ---
+
+
+### Prompt 184
+**Timestamp**: 2026-11-12T20:21:08+05:30
+```text
+In the Buyer flow, Vendor Evaluation Summary – Table Layout: Convert the entire Vendor Evaluation Summary page from the current card-based layout into a compact table format with proper columns and rows. Expected Behaviour/Solution: Display vendor details, evaluation status, overall score, category scores, and review status in a clean, aligned table with reduced spacing. Please fix the issue
+```
+---
