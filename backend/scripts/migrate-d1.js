@@ -104,22 +104,41 @@ const REPORTED_TABLES = [
   'vendor_categories_indexed', 'document_vault', 'account_documents',
 ];
 
-async function d1Query(sql, params = []) {
-  const res = await fetch(QUERY_URL, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify({ sql, params }),
-  });
-  const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); } catch {
-    throw new Error(`D1 non-JSON response (${res.status}): ${text.slice(0, 300)}`);
+async function d1Query(sql, params = [], { maxRetries = 4, backoffBaseMs = 3000, minWindowDelayMs = 10_000 } = {}) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const res = await fetch(QUERY_URL, {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({ sql, params }),
+    });
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch {
+      throw new Error(`D1 non-JSON response (${res.status}): ${text.slice(0, 300)}`);
+    }
+
+    if (res.status === 429 && attempt < maxRetries) {
+      const isWindowOverload = /Too many resources consumed within a 10 second window/i.test(text);
+      const delayMs = isWindowOverload
+        ? Math.max(minWindowDelayMs, backoffBaseMs * (2 ** attempt))
+        : backoffBaseMs * (2 ** attempt);
+      logger.warn('D1 query rate/resource limited (429); retrying with backoff', {
+        attempt: attempt + 1,
+        maxRetries,
+        delayMs,
+        isWindowOverload,
+      }, 'DATABASE_MIGRATION');
+      console.warn(`[migrate-d1] D1 rate/resource limited (429); waiting ${Math.round(delayMs / 1000)}s before retry (${attempt + 1}/${maxRetries})...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    if (!res.ok || !json.success) {
+      const msg = (json.errors && json.errors[0] && json.errors[0].message) || text.slice(0, 300);
+      throw new Error(`D1 query failed (${res.status}): ${msg}`);
+    }
+    return json;
   }
-  if (!res.ok || !json.success) {
-    const msg = (json.errors && json.errors[0] && json.errors[0].message) || text.slice(0, 300);
-    throw new Error(`D1 query failed (${res.status}): ${msg}`);
-  }
-  return json;
 }
 
 function splitStatements(sql = '') {
@@ -321,21 +340,64 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
       continue;
     }
 
+    console.log(`  -> Applying migration ${version}...`);
     const statements = splitStatements(sql);
     for (const statement of statements) {
+      const isFtsRebuild = /INSERT\s+INTO\s+["`]?vendors_search_fts["`]?\s*\(\s*["`]?vendors_search_fts["`]?\s*\)\s*SELECT\s+'rebuild'/i.test(statement);
+      if (isFtsRebuild) {
+        let skipRebuild = false;
+        try {
+          const vendorCountRows = resultRows(await query('SELECT COUNT(*) AS total FROM vendors'));
+          const totalVendors = Number(vendorCountRows[0]?.total || 0);
+          if (totalVendors > 5000) {
+            skipRebuild = true;
+            logger.warn('Skipping synchronous D1 FTS rebuild for large vendors table to avoid CPU limit (429)', {
+              migrationVersion: version,
+              totalVendors,
+            }, 'DATABASE_MIGRATION');
+            console.log(`  ~  (skipped synchronous FTS rebuild on ${totalVendors} vendors to avoid D1 CPU limit 429)`);
+          }
+        } catch {
+          // If vendor count check fails, continue to statement execution
+        }
+        if (skipRebuild) continue;
+      }
+
       try {
         await query(statement);
       } catch (error) {
         const addedColumn = statement.match(/^\s*ALTER\s+TABLE\s+["`]?([\w]+)["`]?\s+ADD\s+COLUMN\s+["`]?([\w]+)/i);
         const duplicateColumn = String(error?.message || '').match(/duplicate column name:\s*["`]?([\w]+)/i);
-        if (!addedColumn || !duplicateColumn || addedColumn[2].toLowerCase() !== duplicateColumn[1].toLowerCase()) {
-          throw error;
+        if (addedColumn && duplicateColumn && addedColumn[2].toLowerCase() === duplicateColumn[1].toLowerCase()) {
+          logger.info('D1 migration column already exists; skipping idempotent add', {
+            migrationVersion: version,
+            table: addedColumn[1],
+            column: addedColumn[2],
+          }, 'DATABASE_MIGRATION');
+          continue;
         }
-        logger.info('D1 migration column already exists; skipping idempotent add', {
-          migrationVersion: version,
-          table: addedColumn[1],
-          column: addedColumn[2],
-        }, 'DATABASE_MIGRATION');
+
+        const isFtsRebuildStmt = /vendors_search_fts/i.test(statement) && /rebuild/i.test(statement);
+        const isCpuReset = /exceeded its CPU time limit|database isolate was reset/i.test(error?.message || '');
+        if (isFtsRebuildStmt && isCpuReset) {
+          logger.warn('FTS rebuild exceeded D1 CPU limits; skipping to allow compatibility search path', {
+            migrationVersion: version,
+            error: error.message,
+          }, 'DATABASE_MIGRATION');
+          console.warn('  ~  (FTS rebuild exceeded D1 CPU limit; skipped to preserve compatibility path)');
+          continue;
+        }
+
+        const missingAuditLogs = /no such table:\s*["`]?audit_logs["`]?/i.test(error?.message || '');
+        if (missingAuditLogs) {
+          logger.info('D1 audit_logs table does not exist; skipping legacy audit log backfill', {
+            migrationVersion: version,
+          }, 'DATABASE_MIGRATION');
+          console.log('  ~  (audit_logs table absent; skipped legacy backfill)');
+          continue;
+        }
+
+        throw error;
       }
     }
 

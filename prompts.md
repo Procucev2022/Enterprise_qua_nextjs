@@ -5311,3 +5311,23 @@ Please keep commiting the changes as soon as you achieve something, for now, ple
 resume
 ```
 ---
+
+### Prompt 148
+**Timestamp**: 2026-11-12T15:57:53+05:30
+```text
+Please check this issue:  in github actions
+
+38s
+Run node scripts/migrate-d1.js --dev
+[INFO] [DATABASE_MIGRATION] D1 migration lease acquired {"leaseSeconds":300,"renewalIntervalMs":60000}
+[migrate-d1] Schema baseline matches; skipping the full schema replay.
+[migrate-d1] Numbered migration failed. The base schema may be present; fix the migration error and rerun safely.
+     Error : Error: D1 query failed (429): D1 DB exceeded its CPU time limit and was reset.
+[migrate-d1] Row-count scans skipped to avoid repeated full-table reads; pass --report-row-counts when needed.
+    at d1Query (/home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/scripts/migrate-d1.js:120:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async applyD1Migrations (/home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/scripts/migrate-d1.js:327:9)
+    at async migrate (/home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/scripts/migrate-d1.js:493:26)
+[INFO] [DATABASE_MIGRATION] D1 migration lease released
+```
+---
