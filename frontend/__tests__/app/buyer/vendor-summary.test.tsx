@@ -336,6 +336,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(screen.getByText(/ismail@rigor\.co\.in/i)).toBeInTheDocument();
     expect(screen.getByText(/\+91 98112 33445/i)).toBeInTheDocument();
 
+    // Verify "Internal Vendor" label is displayed instead of "Uploaded by Buyer"
+    expect(screen.getByText('Internal Vendor')).toBeInTheDocument();
+    expect(screen.queryByText('Uploaded by Buyer')).not.toBeInTheDocument();
+
     // Verify internal vendor code is NOT displayed
     expect(screen.queryByText('v-1792579884052-6in9')).not.toBeInTheDocument();
   });

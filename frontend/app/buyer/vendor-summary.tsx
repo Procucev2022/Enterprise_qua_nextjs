@@ -826,7 +826,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {isUploaded ? (
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 flex items-center gap-1 shadow-xs">
                 <UploadCloud size={11} className="text-indigo-600 dark:text-indigo-400" />
-                Uploaded by Buyer
+                Internal Vendor
               </span>
             ) : (
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 flex items-center gap-1 shadow-xs">
@@ -1991,7 +1991,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Roster Origin</span>
                   <div className="font-bold text-[10.5px] text-slate-700 dark:text-gray-300 mt-0.5 truncate">
-                    {isBuyerUploaded(selectedVendorForCrud) ? 'Buyer Uploaded' : 'Procucev Network'}
+                    {isBuyerUploaded(selectedVendorForCrud) ? 'Internal Vendor' : 'Procucev Network'}
                   </div>
                 </div>
               </div>

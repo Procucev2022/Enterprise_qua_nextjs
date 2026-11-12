@@ -498,7 +498,7 @@ describe('buyer evaluation summary: supplier picker', () => {
     render(<VendorEvaluationSummary />);
 
     expect(screen.getAllByText('Alpha Machining Works').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Uploaded by Buyer')).toBeInTheDocument();
+    expect(screen.getByText('Internal Vendor')).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(PICKER_LABEL));
     expect(screen.queryByRole('button', { name: /Procucev Net Co/ })).not.toBeInTheDocument();

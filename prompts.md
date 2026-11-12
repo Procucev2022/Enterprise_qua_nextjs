@@ -5521,3 +5521,10 @@ In the Buyer flow, Remove all existing summary cards and test data displayed bel
 In the Buyer flow, Remove Vendor Code: Remove vendor codes such as "v-1792579884052-6in9" and other similar IDs from the Vendor Directory display. Expected Behaviour/Solution: Display only the relevant vendor information without showing internal vendor codes. Please fix the issue
 ```
 ---
+
+### Prompt 173
+**Timestamp**: 2026-11-12T20:02:58+05:30
+```text
+In the Buyer flow, Change Vendor Label: Replace the "Uploaded by Buyer" label with "Internal Vendor" for internally uploaded vendors. Expected Behaviour/Solution: Display the correct "Internal Vendor" label consistently across all relevant vendor records. Please fix the issue
+```
+---
