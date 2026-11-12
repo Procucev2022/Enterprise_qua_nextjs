@@ -5472,3 +5472,11 @@ In the Buyer flow, Move Required Columns to Vendor Master Page: Move the Require
 In the Buyer flow, Vendor Mobile Number Validation: During Vendor Master Excel upload, mobile number fields are accepting alphanumeric values without proper validation. Expected Behaviour/Solution: Validate mobile numbers as numeric values with exactly 10 digits. Reject invalid or alphanumeric mobile numbers and display clear validation errors. Please fix the issue
 ```
 ---
+
+
+### Prompt 167
+**Timestamp**: 2026-11-12T19:15:17+05:30
+```text
+In the Buyer flow, Vendor Code Generation and Validation: Handle vendor codes during Vendor Master upload. Expected Behaviour/Solution: If a vendor code is provided in the uploaded file, retain and use that code. If no vendor code is provided, automatically generate sequential vendor codes such as 1, 2, 3, and so on. Ensure generated codes are unique and do not overwrite existing vendor codes. Please fix the issue
+```
+---

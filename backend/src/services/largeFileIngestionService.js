@@ -383,6 +383,25 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
   const valid = [];
   const invalid = [];
 
+  // Track existing vendor codes to prevent collisions and generate sequential codes
+  const usedCodes = new Set();
+  for (const row of batch) {
+    if (row.vendorCode && String(row.vendorCode).trim()) {
+      usedCodes.add(String(row.vendorCode).trim().toLowerCase());
+    }
+  }
+
+  let nextSeq = 1;
+  const getNextSequentialCode = () => {
+    while (usedCodes.has(String(nextSeq).toLowerCase())) {
+      nextSeq++;
+    }
+    const code = String(nextSeq);
+    usedCodes.add(code.toLowerCase());
+    nextSeq++;
+    return code;
+  };
+
   for (const row of batch) {
     const companyName = row.companyName || row.company_name || row.vendorName || row.name || '';
     if (!companyName || String(companyName).trim() === '') {
@@ -403,8 +422,14 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
         continue;
       }
     }
+
+    const vendorCode = (row.vendorCode && String(row.vendorCode).trim())
+      ? String(row.vendorCode).trim()
+      : getNextSequentialCode();
+
     valid.push({
       ...row,
+      vendorCode,
       companyName: String(companyName).trim(),
     });
   }

@@ -1713,8 +1713,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
 
     expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
-    // Auto-assigned vendor code VND-1001 should be rendered, not the email address in vendor code cell
-    expect(screen.getByText('VND-1001')).toBeInTheDocument();
+    // Auto-assigned sequential vendor code '1' should be rendered in the table cell, not the email address
+    expect(screen.getByRole('cell', { name: '1' })).toBeInTheDocument();
     expect(screen.getByText('govardhan.kilari@procucev.com')).toBeInTheDocument();
   });
 
@@ -2249,7 +2249,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
 
     // Verify read-only table fallbacks (lines 2132, 2142, 2149, 2153, 2155, 2156)
-    expect(screen.getByText('VND-1001')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '1' })).toBeInTheDocument();
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
 
     // Toggle Edit Data mode (lines 2032, 2048, 2057, 2069-2076)
@@ -2437,8 +2437,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         fireEvent.change(vInput, { target: { files: [richFile] } });
       }
 
-      // Check that vendorCode fallback was used for first row (line 677: VND-1001)
-      expect(screen.getByText('VND-1001')).toBeInTheDocument();
+      // Check that vendorCode fallback was used for first row (line 677: 1)
+      expect(screen.getByRole('cell', { name: '1' })).toBeInTheDocument();
 
       // Step 3: Upload PO Dump that matches Duplicate Email Vendor Ltd
       fireEvent.click(screen.getByText('3. PO Dump'));
@@ -3466,6 +3466,77 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(alphaInput, { target: { value: '9876543210' } });
       expect(alphaInput).toHaveValue('9876543210');
     }
+  });
+
+  it('handles vendor codes during Vendor Master upload: retains provided codes, generates sequential 1, 2, 3 codes when absent, and prevents collisions', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Upload an Excel file where:
+    // - Row 1 has an explicit code '2'
+    // - Row 2 has NO vendor code
+    // - Row 3 has an explicit code 'VND-CUSTOM-99'
+    // - Row 4 has NO vendor code
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': '2',
+        'Company Name': 'Existing Code Two Supplier',
+        Email: 'two@supplier.com',
+        Phone: '9811223344',
+      },
+      {
+        'Company Name': 'No Code First Supplier',
+        Email: 'first@supplier.com',
+        Phone: '9822334455',
+      },
+      {
+        'Vendor Code': 'VND-CUSTOM-99',
+        'Company Name': 'Custom Coded Supplier',
+        Email: 'custom@supplier.com',
+        Phone: '9833445566',
+      },
+      {
+        'Company Name': 'No Code Second Supplier',
+        Email: 'second@supplier.com',
+        Phone: '9844556677',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_codes.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Verify Row 1 retained '2'
+    expect(screen.getByText('2')).toBeInTheDocument();
+    // Verify Row 3 retained 'VND-CUSTOM-99'
+    expect(screen.getByText('VND-CUSTOM-99')).toBeInTheDocument();
+
+    // Verify unassigned Row 2 received generated sequential code '1' (since '2' was already taken)
+    expect(screen.getByText('1')).toBeInTheDocument();
+
+    // Verify unassigned Row 4 received generated sequential code '3' (skipping '1' and '2')
+    expect(screen.getByText('3')).toBeInTheDocument();
+
+    // Enter Edit Data mode and click Add Vendor Row to verify the next generated code is '4'
+    fireEvent.click(screen.getByText('Edit Data'));
+    fireEvent.click(screen.getByText(/Add Vendor Row/i));
+
+    const codeInputs = screen.getAllByPlaceholderText('VND-CODE');
+    const codes = codeInputs.map((i: any) => i.value);
+    expect(codes).toContain('4');
   });
 });
 

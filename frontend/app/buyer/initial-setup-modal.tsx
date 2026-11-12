@@ -596,46 +596,87 @@ export default function InitialSetupModal() {
             return;
           }
 
-          const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
+          const vendorCodeAliases = [
+            'vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code',
+            'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no',
+            'vendor number', 'supplier number', 'vendor identifier'
+          ];
+
+          const getRowVal = (row: any, possibleKeys: string[], excludeSubstrings: string[] = []): string => {
             const keys = Object.keys(row);
-            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string => {
-              // Pass 1: Exact matches (after stripping non-alphanumeric)
-              for (const pk of possibleKeys) {
-                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                const matchedKey = keys.find((k) => {
-                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
-                  return kClean === pkClean;
-                });
-                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
-                }
+            // Pass 1: Exact matches (after stripping non-alphanumeric)
+            for (const pk of possibleKeys) {
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const matchedKey = keys.find((k) => {
+                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                return kClean === pkClean;
+              });
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
               }
-              // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars to avoid short false matches like 'id' or 'code')
-              for (const pk of possibleKeys) {
-                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!pkClean || pkClean.length < 4) continue;
-                const matchedKey = keys.find((k) => {
-                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
-                  return kClean.includes(pkClean);
-                });
-                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
-                }
+            }
+            // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars)
+            for (const pk of possibleKeys) {
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (!pkClean || pkClean.length < 4) continue;
+              const matchedKey = keys.find((k) => {
+                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                return kClean.includes(pkClean);
+              });
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
               }
-              return '';
-            };
+            }
+            return '';
+          };
+
+          // Collect all explicitly provided vendor codes to avoid overwriting or duplicate collisions
+          const explicitlyProvidedCodes = new Set<string>();
+          storedVendors.forEach((v) => {
+            if (v.vendorCode && v.vendorCode.trim()) {
+              explicitlyProvidedCodes.add(v.vendorCode.trim().toLowerCase());
+            }
+          });
+
+          rawJson.forEach((row) => {
+            let code = getRowVal(row, vendorCodeAliases, ['email', 'mail', 'phone', 'contact', 'gst']);
+            if (code && (code.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(code))) {
+              code = '';
+            }
+            if (code.trim()) {
+              explicitlyProvidedCodes.add(code.trim().toLowerCase());
+            }
+          });
+
+          // Unique sequential code generator: 1, 2, 3, etc. skipping any explicitly provided codes
+          let nextSequentialVendorCode = 1;
+          const getNextUniqueSequentialVendorCode = (): string => {
+            while (explicitlyProvidedCodes.has(String(nextSequentialVendorCode).toLowerCase())) {
+              nextSequentialVendorCode++;
+            }
+            const generated = String(nextSequentialVendorCode);
+            explicitlyProvidedCodes.add(generated.toLowerCase());
+            nextSequentialVendorCode++;
+            return generated;
+          };
+
+          const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
+            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string =>
+              getRowVal(row, possibleKeys, excludeSubstrings);
 
             let rawVendorCode = getVal(
-              ['vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code', 'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no', 'vendor number', 'supplier number', 'vendor identifier'],
+              vendorCodeAliases,
               ['email', 'mail', 'phone', 'contact', 'gst']
             );
             // If the resolved vendorCode is an email address, discard it so it doesn't take email as vendor code
             if (rawVendorCode && (rawVendorCode.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawVendorCode))) {
               rawVendorCode = '';
             }
-            const vendorCode = rawVendorCode || `VND-${1000 + idx + 1}`;
+            // If a vendor code is provided, retain and use that code.
+            // If no vendor code is provided, automatically generate sequential vendor codes: 1, 2, 3, etc.
+            const vendorCode = rawVendorCode.trim() ? rawVendorCode.trim() : getNextUniqueSequentialVendorCode();
             const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier name', 'supplier', 'company', 'organization', 'vendor', 'name'], ['email', 'mail', 'phone', 'contactperson', 'code']);
             const contactPerson = getVal(['contactperson', 'contact person', 'contact person name', 'representative', 'person name', 'contact name', 'person', 'poc'], ['email', 'mail', 'phone', 'mobile']);
             const email = getVal(['email', 'email id', 'email_id', 'emailid', 'email address', 'emailaddress', 'mail', 'corporate email', 'company email', 'vendor email']);
@@ -1273,9 +1314,16 @@ export default function InitialSetupModal() {
   };
 
   const handleAddVendorRow = () => {
+    const usedCodes = new Set(
+      storedVendors.map((v) => String(v.vendorCode || '').trim().toLowerCase()).filter(Boolean)
+    );
+    let nextSeq = 1;
+    while (usedCodes.has(String(nextSeq).toLowerCase())) {
+      nextSeq++;
+    }
     const newVendor: VendorMasterUploadRecord = {
       id: globalThis.crypto.randomUUID(),
-      vendorCode: '',
+      vendorCode: String(nextSeq),
       companyName: '',
       contactPerson: '',
       email: '',
@@ -2055,7 +2103,7 @@ export default function InitialSetupModal() {
                                   : 'hover:bg-slate-50 dark:hover:bg-gray-800/40'
                               }`}
                             >
-                              <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
+                              <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || '1'}</td>
                               <td className="p-2.5 font-bold text-slate-800 dark:text-white">
                                 {isNameInvalid ? (
                                   <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
