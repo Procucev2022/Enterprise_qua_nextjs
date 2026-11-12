@@ -5528,3 +5528,10 @@ In the Buyer flow, Remove Vendor Code: Remove vendor codes such as "v-1792579884
 In the Buyer flow, Change Vendor Label: Replace the "Uploaded by Buyer" label with "Internal Vendor" for internally uploaded vendors. Expected Behaviour/Solution: Display the correct "Internal Vendor" label consistently across all relevant vendor records. Please fix the issue
 ```
 ---
+
+### Prompt 174
+**Timestamp**: 2026-11-12T20:03:59+05:30
+```text
+In the Buyer flow, Compact Table Layout: Convert the current vendor cards into a compact table format with reduced spacing and aligned columns. Expected Behaviour/Solution: Display vendor information in a clean, space-efficient table with consistent row heights and column alignment. Please fix the issue
+```
+---

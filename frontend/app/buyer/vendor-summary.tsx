@@ -797,89 +797,134 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const isSelected = selectedVendorIds.includes(vendor.id);
 
     return (
-      <div
+      <tr
         key={vendor.id}
-        className={
-          'glass-panel p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 ' +
-          (isSelected
-            ? 'border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/20 ring-1 ring-indigo-500/30'
-            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm hover:border-indigo-500/40 dark:hover:border-indigo-400/40')
-        }
+        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${
+          isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
+        }`}
       >
-        <div className="flex items-start md:items-center gap-3 flex-1">
+        {/* Selection Checkbox */}
+        <td className="py-2.5 px-3 w-10 text-center align-middle">
           <input
             type="checkbox"
             checked={isSelected}
             onChange={() => handleToggleSelectVendor(vendor.id)}
             data-testid={`select-vendor-${vendor.id}`}
             aria-label={`Select ${vendor.name}`}
-            className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer mt-1 md:mt-0 shrink-0"
+            className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
           />
+        </td>
 
-          {/* Left: Vendor Brand & Info */}
-          <div className="space-y-1.5 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-slate-500 font-semibold">{vendor.majorCategory}</span>
-            <span className="text-slate-400">•</span>
+        {/* Supplier & Details */}
+        <td className="py-2.5 px-3 min-w-[240px] align-middle">
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] text-slate-500 dark:text-gray-400 font-semibold">{vendor.majorCategory}</span>
+              <span className="text-slate-300 dark:text-gray-600">•</span>
 
-            {/* Primary Source Badge */}
-            {isUploaded ? (
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 flex items-center gap-1 shadow-xs">
-                <UploadCloud size={11} className="text-indigo-600 dark:text-indigo-400" />
-                Internal Vendor
-              </span>
-            ) : (
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 flex items-center gap-1 shadow-xs">
-                <ShieldCheck size={11} className="text-emerald-600 dark:text-emerald-400" />
-                Procucev Vendor
-              </span>
-            )}
+              {/* Primary Source Badge */}
+              {isUploaded ? (
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
+                  <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
+                  Internal Vendor
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-1 shadow-xs">
+                  <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
+                  Procucev Vendor
+                </span>
+              )}
 
-            {/* Secondary Origin Tag */}
-            <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
-              {originDetails.origin}
-            </span>
+              {/* Secondary Origin Tag */}
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
+                {originDetails.origin}
+              </span>
 
-            {/* RFQ Engagement & Upload Status Badge */}
-            {engagement.isEngaged ? (
-              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 flex items-center gap-1">
-                <CheckCircle2 size={10} /> {engagement.qualificationReason}
-              </span>
-            ) : (
-              <span
-                className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 flex items-center gap-1"
-                title="Vendor neither uploaded nor used in any RFQs by your organization"
-              >
-                <Lock size={10} /> No RFQs / Not Uploaded
-              </span>
-            )}
+              {/* RFQ Engagement & Upload Status Badge */}
+              {engagement.isEngaged ? (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
+                  <CheckCircle2 size={9} /> {engagement.qualificationReason}
+                </span>
+              ) : (
+                <span
+                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 inline-flex items-center gap-0.5"
+                  title="Vendor neither uploaded nor used in any RFQs by your organization"
+                >
+                  <Lock size={9} /> No RFQs / Not Uploaded
+                </span>
+              )}
 
-            {isLockedForProcucevV2 && (
-              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 flex items-center gap-1">
-                <Lock size={10} /> Quote Submission Pending
-              </span>
+              {isLockedForProcucevV2 && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 inline-flex items-center gap-0.5">
+                  <Lock size={9} /> Quote Submission Pending
+                </span>
+              )}
+            </div>
+
+            <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+              {vendor.name}
+              {showEvaluation && vendor.score && vendor.score >= 80 && (
+                <ShieldCheck className="text-emerald-500" size={14} />
+              )}
+            </h3>
+
+            {/* Performance Rating Revision Badge / History Line */}
+            {vendor.latestRatingRevision && (
+              <div className="mt-1 p-2 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
+                <div className="flex items-center justify-between gap-1">
+                  <div className="flex items-center gap-1 font-bold text-amber-900 dark:text-amber-300">
+                    <Star size={11} className="fill-amber-500 text-amber-500" />
+                    <span>
+                      Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
+                      {vendor.latestRatingRevision.newCompositeScore}%)
+                    </span>
+                    <span className="text-[9px] font-normal text-slate-500">
+                      by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
+                    }
+                    className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5 shrink-0"
+                  >
+                    <Mail size={10} /> View Dispatched Email Notice
+                  </button>
+                </div>
+                <p className="text-slate-600 dark:text-gray-300 italic text-[9.5px]">
+                  &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality:{' '}
+                  {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery:{' '}
+                  {vendor.latestRatingRevision.deliveryScore})
+                </p>
+              </div>
             )}
           </div>
+        </td>
 
-          <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-1.5">
-            {vendor.name}
-            {showEvaluation && vendor.score && vendor.score >= 80 && (
-              <ShieldCheck className="text-emerald-500" size={16} />
-            )}
-          </h3>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-slate-500 dark:text-gray-400">
-            <span className="truncate">👤 Contact: {vendor.contactPerson}</span>
-            <span className="truncate">✉️ {vendor.email}</span>
-            <span className="truncate">📞 {vendor.phone}</span>
-            <span className="flex items-center gap-1">
-              <MapPin size={12} /> {vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`}
-            </span>
+        {/* Contact & Location */}
+        <td className="py-2.5 px-3 min-w-[200px] align-middle">
+          <div className="space-y-0.5 text-[11px] text-slate-600 dark:text-gray-300">
+            <div className="truncate font-medium text-slate-700 dark:text-slate-200">
+              👤 Contact: {vendor.contactPerson}
+            </div>
+            <div className="truncate text-slate-500 dark:text-gray-400">
+              ✉️ {vendor.email}
+            </div>
+            <div className="truncate text-slate-500 dark:text-gray-400">
+              📞 {vendor.phone}
+            </div>
+            <div className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate">
+              <MapPin size={11} className="shrink-0" /> {vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`}
+            </div>
           </div>
+        </td>
 
-          {vendor.minorCategories && vendor.minorCategories.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1 pt-1">
-              <span className="text-[10px] text-slate-400 font-semibold">Minors:</span>
+        {/* Minor Categories */}
+        <td className="py-2.5 px-3 min-w-[150px] align-middle">
+          {vendor.minorCategories && vendor.minorCategories.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[9px] text-slate-400 font-semibold">Minors:</span>
               {vendor.minorCategories.map((m: string) => (
                 <span
                   key={m}
@@ -889,168 +934,138 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </span>
               ))}
             </div>
+          ) : (
+            <span className="text-[10px] text-slate-400 italic">None</span>
           )}
+        </td>
 
-          {/* Performance Rating Revision Badge / History Line */}
-          {vendor.latestRatingRevision && (
-            <div className="mt-2 p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-300">
-                  <Star size={12} className="fill-amber-500 text-amber-500" />
-                  <span>
-                    Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
-                    {vendor.latestRatingRevision.newCompositeScore}%)
-                  </span>
-                  <span className="text-[10px] font-normal text-slate-500">
-                    by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
-                  </span>
-                </div>
-                <p className="text-slate-600 dark:text-gray-300 italic text-[10.5px]">
-                  &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality:{' '}
-                  {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery:{' '}
-                  {vendor.latestRatingRevision.deliveryScore})
-                </p>
+        {/* AI Score & Rating */}
+        <td className="py-2.5 px-3 min-w-[140px] text-center align-middle">
+          {showEvaluation && vendor.score ? (
+            <div className="space-y-0.5">
+              <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
+              <div className="text-base font-mono font-black text-indigo-600 dark:text-indigo-400">
+                {vendor.score}%
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
-                }
-                className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
-              >
-                <Mail size={11} /> View Dispatched Email Notice
-              </button>
+              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
+                <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
+                {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
+              <div className="text-[11px] font-semibold text-slate-400 italic">
+                {currentMode === 'mode_1' && !isUploaded
+                  ? 'Hidden (V1 Restriction)'
+                  : isLockedForProcucevV2
+                  ? 'Locked (Awaiting Quote)'
+                  : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                  ? 'Locked (Buyer Roster Only)'
+                  : 'Not Evaluated'}
+              </div>
+              {vendor.rating && (
+                <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
+                  <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
+                </div>
+              )}
             </div>
           )}
-          </div>
-        </div>
+        </td>
 
-        {/* Right: Score Gauge & View Actions */}
-        <div className="flex items-center gap-4 shrink-0 border-t md:border-t-0 pt-3 md:pt-0 border-slate-100 dark:border-gray-800">
-          <div className="text-right">
-            {showEvaluation && vendor.score ? (
-              <>
-                <div className="text-[10px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
-                <div className="text-xl font-mono font-black text-indigo-600 dark:text-indigo-400">
-                  {vendor.score}%
-                </div>
-                <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-end gap-0.5">
-                  <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
-                  {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="text-[10px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
-                <div className="text-xs font-semibold text-slate-400 italic">
-                  {currentMode === 'mode_1' && !isUploaded
-                    ? 'Hidden (V1 Restriction)'
-                    : isLockedForProcucevV2
-                    ? 'Locked (Awaiting Quote)'
-                    : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                    ? 'Locked (Buyer Roster Only)'
-                    : 'Not Evaluated'}
-                </div>
-                {vendor.rating && (
-                  <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-end gap-0.5">
-                    <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+        {/* Status */}
+        <td className="py-2.5 px-3 min-w-[130px] text-center align-middle">
+          <span
+            className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${
+              currentMode === 'mode_1' && !isUploaded
+                ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
+                : getStatusStyle(vendor.status || '')
+            }`}
+          >
+            {currentMode === 'mode_1' && !isUploaded
+              ? 'UNAVAILABLE IN V1'
+              : isLockedForProcucevV2
+              ? 'LOCKED (PENDING BID)'
+              : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+              ? 'BUYER ROSTER (NO EVAL)'
+              : vendor.status}
+          </span>
+        </td>
 
-          <div className="flex flex-col items-end gap-1.5">
-            <span
-              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                currentMode === 'mode_1' && !isUploaded
-                  ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
-                  : getStatusStyle(vendor.status || '')
-              }`}
+        {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
+        <td className="py-2.5 px-3 min-w-[200px] text-right align-middle">
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            {/* View Profile Modal Button */}
+            <button
+              type="button"
+              onClick={() => handleOpenViewModal(vendor)}
+              className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 shadow-xs"
+              title="View complete supplier profile, commercial details, and contact scorecard"
             >
-              {currentMode === 'mode_1' && !isUploaded
-                ? 'UNAVAILABLE IN V1'
-                : isLockedForProcucevV2
-                ? 'LOCKED (PENDING BID)'
-                : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                ? 'BUYER ROSTER (NO EVAL)'
-                : vendor.status}
-            </span>
+              <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
+            </button>
 
-            {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
-            <div className="flex items-center gap-1.5 flex-wrap justify-end">
-              {/* View Profile Modal Button */}
+            {/* Edit Vendor Button - Only for buyer-uploaded vendors */}
+            {isUploaded && (
               <button
                 type="button"
-                onClick={() => handleOpenViewModal(vendor)}
-                className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 shadow-xs"
-                title="View complete supplier profile, commercial details, and contact scorecard"
+                onClick={() => handleOpenEditModal(vendor)}
+                className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
+                title="Edit vendor company information, categories, and contact details"
               >
-                <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
+                <Pencil size={11} /> Edit
               </button>
+            )}
 
-              {/* Edit Vendor Button - Only for buyer-uploaded vendors */}
-              {isUploaded && (
-                <button
-                  type="button"
-                  onClick={() => handleOpenEditModal(vendor)}
-                  className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
-                  title="Edit vendor company information, categories, and contact details"
-                >
-                  <Pencil size={11} /> Edit
-                </button>
-              )}
-
-              {/* Delete Vendor Button - Only for buyer-uploaded vendors */}
-              {isUploaded && (
-                <button
-                  type="button"
-                  onClick={() => handleOpenDeleteModal(vendor)}
-                  className="btn btn-ghost btn-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-1"
-                  title="Delete vendor from directory and database"
-                >
-                  <Trash2 size={11} /> Delete
-                </button>
-              )}
-
-              {/* Rate Vendor / AI Rating Button */}
+            {/* Delete Vendor Button - Only for buyer-uploaded vendors */}
+            {isUploaded && (
               <button
                 type="button"
-                onClick={() => openRevisionModal(vendor)}
-                className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
-                title="Rate supplier manually or generate AI rating based on performance & quotation parameters"
+                onClick={() => handleOpenDeleteModal(vendor)}
+                className="btn btn-ghost btn-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-1"
+                title="Delete vendor from directory and database"
               >
-                <Star size={11} className="fill-current" /> Revise Rating
+                <Trash2 size={11} /> Delete
               </button>
+            )}
 
-              {showEvaluation ? (
-                <button
-                  onClick={() => {
-                    // Opens only a stored evaluation record. No record means no evaluation.
-                    const evalRec = (vendor as any).storeRecord || vendorEvaluations.find((e) => e.vendorId === vendor.id);
-                    if (!evalRec) {
-                      showToast('Not evaluated', 'No evaluation record exists for this vendor yet.', 'info');
-                      return;
-                    }
-                    onViewEvaluation(evalRec);
-                  }}
-                  className="btn btn-secondary btn-xs flex items-center gap-1"
-                >
-                  <FileCheck size={11} /> View 360° Evaluation <ChevronRight size={11} />
-                </button>
-              ) : isLockedForProcucevV2 ? (
-                <button
-                  disabled
-                  className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed"
-                  title="Quote submission is required from this Procucev network partner before evaluation can be triggered."
-                >
-                  <Lock size={10} /> Evaluation Locked (Pending Quote)
-                </button>
-              ) : null}
-            </div>
+            {/* Rate Vendor / AI Rating Button */}
+            <button
+              type="button"
+              onClick={() => openRevisionModal(vendor)}
+              className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
+              title="Rate supplier manually or generate AI rating based on performance & quotation parameters"
+            >
+              <Star size={11} className="fill-current" /> Revise Rating
+            </button>
+
+            {showEvaluation ? (
+              <button
+                onClick={() => {
+                  // Opens only a stored evaluation record. No record means no evaluation.
+                  const evalRec = (vendor as any).storeRecord || vendorEvaluations.find((e) => e.vendorId === vendor.id);
+                  if (!evalRec) {
+                    showToast('Not evaluated', 'No evaluation record exists for this vendor yet.', 'info');
+                    return;
+                  }
+                  onViewEvaluation(evalRec);
+                }}
+                className="btn btn-secondary btn-xs flex items-center gap-1"
+              >
+                <FileCheck size={11} /> View 360° Evaluation <ChevronRight size={11} />
+              </button>
+            ) : isLockedForProcucevV2 ? (
+              <button
+                disabled
+                className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed"
+                title="Quote submission is required from this Procucev network partner before evaluation can be triggered."
+              >
+                <Lock size={10} /> Evaluation Locked (Pending Quote)
+              </button>
+            ) : null}
           </div>
-        </div>
-      </div>
+        </td>
+      </tr>
     );
   };
 
@@ -1213,7 +1228,30 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
       {/* Vendors Display List */}
       <div className="space-y-2.5">
-        {buyerFilteredVendors.map(renderVendorCard)}
+        {buyerFilteredVendors.length > 0 && (
+          <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse min-w-[1100px]">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-gray-800/60 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-2.5 px-3 w-10 text-center">
+                      <span className="sr-only">Select</span>
+                    </th>
+                    <th className="py-2.5 px-3 min-w-[240px]">Supplier &amp; Details</th>
+                    <th className="py-2.5 px-3 min-w-[200px]">Contact &amp; Location</th>
+                    <th className="py-2.5 px-3 min-w-[150px]">Minor Categories</th>
+                    <th className="py-2.5 px-3 min-w-[140px] text-center">AI Score &amp; Rating</th>
+                    <th className="py-2.5 px-3 min-w-[130px] text-center">Status</th>
+                    <th className="py-2.5 px-3 min-w-[200px] text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-gray-800/60">
+                  {buyerFilteredVendors.map(renderVendorCard)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         {isLoadingVendors && buyerFilteredVendors.length === 0 && (
           <div className="p-12 text-center text-slate-500 border border-slate-200 dark:border-gray-800 rounded-2xl bg-white dark:bg-gray-900/60 shadow-xs space-y-3">
             <Loader2 size={24} className="animate-spin text-indigo-600 dark:text-indigo-400 mx-auto" />
