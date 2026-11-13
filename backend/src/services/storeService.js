@@ -104,6 +104,62 @@ function resolveCanonicalCategory(cat) {
   return trimmed;
 }
 
+/**
+ * Comparison key for a minor category name. Letter case, surrounding spaces,
+ * repeated spaces, ampersands and the punctuation listed below are ignored, so
+ * "Bearings & Accessories" and "bearings and accessories" compare equal.
+ * Mirrors normalizeCategory in frontend/lib/vendorMatching.ts, so the browser
+ * and the server agree on which vendor matches which minor.
+ */
+function minorCategoryKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[/_.,-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Lookup key for the taxonomy maps above, which are keyed by trimmed lower case. */
+function taxonomyKeyOf(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+/** True when the name is a taxonomy minor and not also a taxonomy major. */
+function isTaxonomyMinor(value) {
+  const key = taxonomyKeyOf(value);
+  return Boolean(key) && MINOR_TO_MAJOR_MAP.has(key) && !MAJOR_TO_MINORS_MAP.has(key);
+}
+
+/**
+ * Whether two minor-category keys (from minorCategoryKey) name the same minor. A key
+ * matches itself and its singular or plural form ("Box" and "Boxes", "Steel" and
+ * "Steels"). A longer name that merely contains the other does not match, so
+ * "Accessories" is not "Bearings & Accessories".
+ */
+function minorKeysMatch(a, b) {
+  if (a === b) return true;
+  return a + 's' === b || a + 'es' === b || b + 's' === a || b + 'es' === a;
+}
+
+/**
+ * Lower-case search terms for a list of minors, for the substring lookups in domainQueries.
+ * Each minor is included with its singular/plural stem, so a vendor filed as "Box" is still
+ * found for an RFQ minor "Boxes". Every minor that minorKeysMatch accepts contains one of
+ * these terms at the start of its name, so the lookup never drops a vendor the exact check
+ * would accept.
+ */
+function minorSearchTerms(minors) {
+  const terms = new Set();
+  for (const minor of minors) {
+    const term = taxonomyKeyOf(minor);
+    terms.add(term);
+    if (term.endsWith('es')) terms.add(term.slice(0, -2));
+    else if (term.endsWith('s')) terms.add(term.slice(0, -1));
+  }
+  return Array.from(terms);
+}
+
 function extractCategories(val) {
   if (!val) return [];
   if (Array.isArray(val)) return val.map((s) => String(s || '').trim()).filter(Boolean);
@@ -2664,11 +2720,7 @@ class StoreService {
     const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
     const isNetworkMode = isV0 || isV2 || isV3;
 
-    const signals = this._rfqCategorySignals(rfq);
-    const categoryMatches =
-      signals.length === 0 ||
-      !vendor.majorCategory ||
-      signals.some((c) => this.vendorCoversCategory(vendor, c));
+    const categoryMatches = this._vendorCoversRFQCategories(vendor, rfq);
 
     if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq) && !(isNetworkMode && categoryMatches)) {
       return {
@@ -4211,6 +4263,8 @@ class StoreService {
     // 2. Dispatch an email to the vendor requesting them to update their category/business details.
     // 3. Record an audit log.
     const rfqCategorySignals = this._rfqCategorySignals(newRFQ);
+    const rfqMinorCategories = this._rfqMinorCategories(newRFQ);
+    const minorScoped = rfqMinorCategories.length > 0;
     const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY;
     const distinctCategories = this._rfqDistinctCategories(newRFQ);
 
@@ -4263,6 +4317,7 @@ class StoreService {
 
     if (!newRFQ.needsCategoryManagerAssignment && !newRFQ.categoryNotAvailable && rfqCategorySignals.length > 0 && Array.isArray(newRFQ.assignedVendors) && newRFQ.assignedVendors.length > 0) {
       const shortlisted = [];
+      const matchesRfq = this._rfqVendorMatcher(newRFQ);
       const mismatched = [];
 
       for (const v of newRFQ.assignedVendors) {
@@ -4275,7 +4330,7 @@ class StoreService {
           extractCategories(resolved.clientMappedCategories).length > 0 ||
           extractCategories(resolved.categories).length > 0
         );
-        const isMatch = !hasCategory || rfqCategorySignals.some((sig) => this.vendorCoversCategory(resolved, sig));
+        const isMatch = !hasCategory || matchesRfq(resolved);
         if (isMatch) {
           shortlisted.push(resolved);
         } else {
@@ -4333,7 +4388,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
-        if (clientMatches.length === 0 && clientCandidates.length > 0) {
+        if (clientMatches.length === 0 && clientCandidates.length > 0 && !minorScoped) {
           clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
         }
         if (clientMatches.length > 0) {
@@ -4374,10 +4429,11 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       const signals = this._rfqCategorySignals(newRFQ);
       const categories = this._rfqDistinctCategories(newRFQ);
       if (signals.length > 0 && categories.length > 0) {
+        const matchesRfq = this._rfqVendorMatcher(newRFQ);
         for (const v of this.vendors) {
           if (this.isProcucevVendor(v)) {
             const hasCategory = v.majorCategory || (Array.isArray(v.minorCategories) && v.minorCategories.length > 0);
-            const isMatch = signals.some((sig) => this.vendorCoversCategory(v, sig));
+            const isMatch = matchesRfq(v);
             if (hasCategory && !isMatch) {
               this.addAuditLog({
                 userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
@@ -4492,11 +4548,11 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       const procucevCandidates = allCandidates.filter((v) => this.isProcucevVendor(v));
 
       let clientMatches = this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, targetLocation);
-      if (clientMatches.length === 0 && clientCandidates.length > 0) {
+      if (clientMatches.length === 0 && clientCandidates.length > 0 && !minorScoped) {
         clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
       }
       let procucevMatches = this.selectVendorsForRFQ(procucevCandidates, newRFQ, maxProcucevPerCat, targetLocation);
-      if (procucevMatches.length === 0 && procucevCandidates.length > 0) {
+      if (procucevMatches.length === 0 && procucevCandidates.length > 0 && !minorScoped) {
         procucevMatches = procucevCandidates.slice(0, targetCategories.length * maxProcucevPerCat);
       }
       const categoryMatches = [...clientMatches, ...procucevMatches];
@@ -4550,7 +4606,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       const procucevCandidates = this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v));
       const v3Matches = this.selectVendorsPerCategory(
         procucevCandidates,
-        targetCategories,
+        minorScoped ? rfqMinorCategories : targetCategories,
         maxProcucevPerCat,
         {
           pincode: newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null,
@@ -6541,6 +6597,128 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
   }
 
   /**
+   * Minor categories the RFQ names, taken from its header and every line item,
+   * with repeats removed. Unlike _rfqCategorySignals this is not expanded to the
+   * sibling minors or the parent major, so it is the list a vendor must match.
+   * A `category` value only counts when it is a taxonomy minor, because that
+   * field carries a major on other paths.
+   *
+   * @param {Object} rfq
+   * @returns {string[]}
+   */
+  _rfqMinorCategories(rfq) {
+    if (!rfq) return [];
+    const items = [
+      ...(Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []),
+      ...(Array.isArray(rfq.lineItems) ? rfq.lineItems : []),
+    ];
+    const candidates = [
+      rfq.minorCategory,
+      ...(Array.isArray(rfq.minorCategories) ? rfq.minorCategories : []),
+      isTaxonomyMinor(rfq.category) ? rfq.category : null,
+    ];
+    for (const ent of items) {
+      if (!ent) continue;
+      candidates.push(ent.minorCategory || ent.subCategory || (isTaxonomyMinor(ent.category) ? ent.category : null));
+    }
+    const byKey = new Map();
+    for (const candidate of candidates) {
+      const name = String(candidate || '').trim();
+      const key = minorCategoryKey(name);
+      if (key && !byKey.has(key)) byKey.set(key, name);
+    }
+    return Array.from(byKey.values());
+  }
+
+  /**
+   * The category rule a vendor has to meet for this RFQ, as a predicate. When the
+   * RFQ names minor categories, only a minor-level match counts: a vendor's major
+   * category, or another minor under the same major, does not qualify. An RFQ
+   * without any minor falls back to the major-level rule.
+   *
+   * @param {Object} rfq
+   * @returns {(vendor: Object) => boolean}
+   */
+  _rfqVendorMatcher(rfq) {
+    const minors = this._rfqMinorCategories(rfq);
+    if (minors.length > 0) {
+      return (vendor) => minors.some((minor) => this.vendorCoversMinorCategory(vendor, minor));
+    }
+    const signals = this._rfqCategorySignals(rfq);
+    return (vendor) => signals.some((signal) => this.vendorCoversCategory(vendor, signal));
+  }
+
+  /**
+   * The search terms a database lookup should use for this RFQ. An RFQ that names
+   * minor categories is searched by those minors only (with their singular/plural
+   * stems), never by its major.
+   *
+   * @param {Object} rfq
+   * @returns {string[]}
+   */
+  _rfqMatchSignals(rfq) {
+    const minors = this._rfqMinorCategories(rfq);
+    return minors.length > 0 ? minorSearchTerms(minors) : this._rfqCategorySignals(rfq);
+  }
+
+  /**
+   * Keeps the database rows that the RFQ's category rule accepts. The SQL category
+   * match is a substring test, so an RFQ with minor categories re-checks every row
+   * here. An RFQ without minor categories keeps every row, as before.
+   *
+   * @param {Object} rfq
+   * @param {Array<Object>} vendors
+   * @returns {Array<Object>}
+   */
+  _narrowDbVendorsToRFQ(rfq, vendors) {
+    const list = Array.isArray(vendors) ? vendors : [];
+    if (this._rfqMinorCategories(rfq).length === 0) return list;
+    return list.filter(this._rfqVendorMatcher(rfq));
+  }
+
+  /**
+   * Parent major categories of an RFQ's minors, including the legacy alias
+   * spellings of those majors. The V0 lookup filters by these majors.
+   *
+   * @param {string[]} minors
+   * @returns {string[]} Lower-case major names.
+   */
+  _majorCategoriesForMinors(minors) {
+    const majors = new Set();
+    for (const minor of minors) {
+      const parent = MINOR_TO_MAJOR_MAP.get(taxonomyKeyOf(minor));
+      if (!parent) continue;
+      const parentKey = parent.toLowerCase();
+      majors.add(parentKey);
+      for (const [alias, canonical] of Object.entries(MAJOR_CATEGORY_ALIASES || {})) {
+        if (String(canonical).trim().toLowerCase() === parentKey) majors.add(alias.toLowerCase());
+      }
+    }
+    return Array.from(majors);
+  }
+
+  /**
+   * Category rule for seeing an RFQ and being notified about it, before any explicit
+   * invitation. An RFQ with no category is open to every vendor. For an RFQ that names
+   * minor categories only a minor match counts, so a vendor with no category at all no
+   * longer passes. For a major-only RFQ a vendor with no major category (or one marked
+   * Uncategorized) still passes, as before.
+   *
+   * @param {Object} vendor
+   * @param {Object} rfq
+   * @returns {boolean}
+   */
+  _vendorCoversRFQCategories(vendor, rfq) {
+    if (!vendor || !rfq) return false;
+    if (this._rfqMinorCategories(rfq).length > 0) {
+      return this._rfqVendorMatcher(rfq)(vendor);
+    }
+    if (this._rfqCategorySignals(rfq).length === 0) return true;
+    const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
+    return isUncategorized || this._rfqVendorMatcher(rfq)(vendor);
+  }
+
+  /**
    * Returns distinct category strings representing the line item / RFQ categories.
    * Priority:
    * 1. Line item majorCategory or category
@@ -6579,11 +6757,15 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
 
   /**
    * Checks whether a vendor covers a specific minor category.
-   * Matches across:
-   * 1. vendor.minorCategories (exact or token/substring)
-   * 2. vendor.vendorSelectedCategories
-   * 3. vendor.clientMappedCategories
-   * 4. vendor.majorCategory if it matches the minorCategory directly
+   *
+   * Counts the vendor's category labels: minorCategories, vendorSelectedCategories,
+   * clientMappedCategories, the singular or plural `categories` / `category` fields,
+   * and majorCategory. The major counts only when it names the same minor, which
+   * legacy records sometimes do. A vendor filed under the minor's parent major does
+   * not match on that alone. A name matches when it is the same minor, ignoring
+   * case, spacing, ampersand and singular/plural form (see minorKeysMatch). A longer
+   * name that merely contains the minor does not match, so "Accessories" is not
+   * "Bearings & Accessories".
    *
    * @param {Object} vendor
    * @param {string} minorCategory
@@ -6591,19 +6773,11 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    */
   vendorCoversMinorCategory(vendor, minorCategory) {
     if (!vendor || !minorCategory) return false;
-    const target = String(minorCategory).trim().toLowerCase();
+    const target = minorCategoryKey(minorCategory);
     if (!target) return false;
 
-    // Check direct major category equality or token match
-    if (vendor.majorCategory) {
-      const vMaj = String(vendor.majorCategory).trim().toLowerCase();
-      if (vMaj === target) return true;
-      if (target.length >= 4 && vMaj.length >= 4 && (target.includes(vMaj) || vMaj.includes(target))) {
-        return true;
-      }
-    }
-
     const pools = [
+      ...extractCategories(vendor.majorCategory),
       ...extractCategories(vendor.minorCategories),
       ...extractCategories(vendor.vendorSelectedCategories),
       ...extractCategories(vendor.clientMappedCategories),
@@ -6611,17 +6785,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       ...extractCategories(vendor.category),
     ];
 
-    return pools.some((c) => {
-      if (!c) return false;
-      const normalized = String(c).trim().toLowerCase();
-      if (!normalized) return false;
-      if (normalized === target) return true;
-      if (target.length >= 4 && normalized.length >= 4) {
-        if (target.includes(normalized) || normalized.includes(target)) {
-          return true;
-        }
-      }
-      return false;
+    return pools.some((category) => {
+      const key = minorCategoryKey(category);
+      return Boolean(key) && minorKeysMatch(key, target);
     });
   }
 
@@ -6636,60 +6802,11 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    */
   _rfqTaxonomyGroups(rfq) {
     if (!rfq) return [];
-    const groups = [];
-    const seenMinors = new Set();
-    const items = Array.isArray(rfq.extractedEntities)
-      ? rfq.extractedEntities
-      : Array.isArray(rfq.lineItems)
-      ? rfq.lineItems
-      : [];
-
-    for (const ent of items) {
-      if (!ent) continue;
-      const minor = ent.minorCategory || ent.subCategory;
-      if (minor && typeof minor === 'string' && minor.trim()) {
-        const mTrimmed = minor.trim();
-        const mKey = mTrimmed.toLowerCase();
-        if (!seenMinors.has(mKey)) {
-          seenMinors.add(mKey);
-          const parentMajor = MINOR_TO_MAJOR_MAP.get(mKey);
-          groups.push({
-            minorCategory: mTrimmed,
-            majorCategory: ent.majorCategory || parentMajor || null,
-          });
-        }
-      }
-    }
-
-    // Check RFQ header minorCategory / minorCategories
-    if (rfq.minorCategory && typeof rfq.minorCategory === 'string' && rfq.minorCategory.trim()) {
-      const mTrimmed = rfq.minorCategory.trim();
-      const mKey = mTrimmed.toLowerCase();
-      if (!seenMinors.has(mKey)) {
-        seenMinors.add(mKey);
-        const parentMajor = MINOR_TO_MAJOR_MAP.get(mKey);
-        groups.push({
-          minorCategory: mTrimmed,
-          majorCategory: parentMajor || null,
-        });
-      }
-    }
-    if (Array.isArray(rfq.minorCategories)) {
-      for (const m of rfq.minorCategories) {
-        if (m && typeof m === 'string' && m.trim()) {
-          const mTrimmed = m.trim();
-          const mKey = mTrimmed.toLowerCase();
-          if (!seenMinors.has(mKey)) {
-            seenMinors.add(mKey);
-            const parentMajor = MINOR_TO_MAJOR_MAP.get(mKey);
-            groups.push({
-              minorCategory: mTrimmed,
-              majorCategory: parentMajor || null,
-            });
-          }
-        }
-      }
-    }
+    // One group per minor the RFQ names (line items, header and minorCategories).
+    const groups = this._rfqMinorCategories(rfq).map((minorCategory) => ({
+      minorCategory,
+      majorCategory: MINOR_TO_MAJOR_MAP.get(taxonomyKeyOf(minorCategory)) || null,
+    }));
 
     // Fallback: If no minor categories were found on the RFQ, fallback to distinct major categories
     if (groups.length === 0) {
@@ -6825,31 +6942,6 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
             groupSelected.push(v);
           }
         }
-        // Major category fallback: if fewer than limit vendors matched minor category and majorCategory exists,
-        // fill remaining slots with vendors matching the parent major category
-        if (groupSelected.length < limit && majorCategory) {
-          const majorCandidates = candidatePool.filter((candidate) => {
-            const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
-            const hasCategory = Boolean(
-              v.majorCategory ||
-              (Array.isArray(v.minorCategories) && v.minorCategories.length > 0) ||
-              (Array.isArray(v.vendorSelectedCategories) && v.vendorSelectedCategories.length > 0) ||
-              (Array.isArray(v.clientMappedCategories) && v.clientMappedCategories.length > 0)
-            );
-            return !hasCategory || this.vendorCoversCategory(v, majorCategory);
-          });
-
-          sortCandidates(majorCandidates);
-
-          for (const v of majorCandidates) {
-            if (groupSelected.length >= limit) break;
-            const key = (v.id || v.email || v.name || '').toLowerCase().trim();
-            if (key && !groupSeenKeys.has(key)) {
-              groupSeenKeys.add(key);
-              groupSelected.push(v);
-            }
-          }
-        }
       } else if (majorCategory) {
         // Pure major category matching (used only when no minor category is present)
         const majorCandidates = candidatePool.filter((candidate) => {
@@ -6983,7 +7075,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     // line item's major/minor/category (an email/BOQ-ingested RFQ often tags
     // only the line items, with a null header category, which is exactly the
     // shape that produced the zero).
-    const signals = this._rfqCategorySignals(rfq);
+    const signals = this._rfqMatchSignals(rfq);
 
     let dbCount = 0;
     if (Array.isArray(signals) && signals.length > 0) {
@@ -7062,6 +7154,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
     const signals = this._rfqCategorySignals(rfq);
     const categories = this._rfqDistinctCategories(rfq);
+    const minors = this._rfqMinorCategories(rfq);
+    const minorScoped = minors.length > 0;
 
     // If a V0 RFQ was submitted without selecting a category, do NOT automatically assign
     // vendors or fallback to the general public directory. It routes to Category Manager for manual assignment.
@@ -7078,40 +7172,60 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
         needsCategoryManagerAssignment: true,
       };
     }
-    const targetCategories = categories.length > 0 ? categories : signals;
+    // An RFQ that names minor categories is matched by those minors only. The
+    // legacy major-level lookup and the unfiltered public page are used only for
+    // RFQs without a minor.
+    const targetCategories = minorScoped ? minors : (categories.length > 0 ? categories : signals);
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
 
     let dbMatches = [];
     if (pool.hasStorage()) {
-      // 1. Category-matched public vendors from the whole directory.
-      if (Array.isArray(signals) && signals.length > 0) {
+      if (minorScoped) {
+        // 1. Public vendors carrying one of the RFQ's minor categories, under the minors' parent majors.
         try {
-          // Indexed major-category lookup. The LIKE scan over the raw JSON read about a million
-          // rows per call on D1 and was the query that failed under overload, leaving the RFQ with no vendors.
-          dbMatches = await domainQueries.getPublicVendorsByMajorCategoryFromDB(signals, limit);
+          dbMatches = await domainQueries.getPublicVendorsByMinorCategoryFromDB(
+            minorSearchTerms(minors),
+            this._majorCategoriesForMinors(minors),
+            limit
+          );
         } catch (err) {
           logger.warn(
-            'V0 DB-backed vendor assignment query failed',
+            'V0 DB-backed minor category lookup failed',
             { rfqNumber: rfq.rfqNumber, error: err.message },
             'STORE_SERVICE'
           );
         }
-      }
-      if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
-        try {
-          const page = await domainQueries.getVendorsPageFromDB({
-            limit,
-            offset: 0,
-            publicOnly: true,
-            skipCount: true,
-          });
-          dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
-        } catch (err) {
-          logger.warn(
-            'V0 DB-backed network fallback query failed',
-            { rfqNumber: rfq.rfqNumber, error: err.message },
-            'STORE_SERVICE'
-          );
+      } else {
+        // 1. Category-matched public vendors from the whole directory.
+        if (Array.isArray(signals) && signals.length > 0) {
+          try {
+            // Indexed major-category lookup. The LIKE scan over the raw JSON read about a million
+            // rows per call on D1 and was the query that failed under overload, leaving the RFQ with no vendors.
+            dbMatches = await domainQueries.getPublicVendorsByMajorCategoryFromDB(signals, limit);
+          } catch (err) {
+            logger.warn(
+              'V0 DB-backed vendor assignment query failed',
+              { rfqNumber: rfq.rfqNumber, error: err.message },
+              'STORE_SERVICE'
+            );
+          }
+        }
+        if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+          try {
+            const page = await domainQueries.getVendorsPageFromDB({
+              limit,
+              offset: 0,
+              publicOnly: true,
+              skipCount: true,
+            });
+            dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+          } catch (err) {
+            logger.warn(
+              'V0 DB-backed network fallback query failed',
+              { rfqNumber: rfq.rfqNumber, error: err.message },
+              'STORE_SERVICE'
+            );
+          }
         }
       }
     }
@@ -7121,7 +7235,13 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
     }
 
-    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+    // Only Procucev vendors that satisfy the RFQ's category rule are candidates. When none do,
+    // the RFQ is routed to the Category Manager instead of being widened to other vendors.
+    const candidatePool = this._narrowDbVendorsToRFQ(
+      rfq,
+      (Array.isArray(dbMatches) ? dbMatches : []).filter((v) => this.isProcucevVendor(v))
+    );
+    if (candidatePool.length === 0) {
       const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
       if (existing.length > 0) return rfq;
       const updated = await this.updateRFQDurably(rfq.id, (current) => ({
@@ -7136,7 +7256,6 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
       location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
-    const candidatePool = dbMatches.filter((v) => this.isProcucevVendor(v));
     let sorted = this.selectVendorsForRFQ(
       candidatePool,
       rfq,
@@ -7144,7 +7263,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       targetLocation
     );
 
-    if (!sorted || sorted.length === 0) {
+    // Legacy major-only RFQs keep their last-resort fill. An RFQ with minors never takes a vendor
+    // that did not match one of its minors.
+    if (!minorScoped && (!sorted || sorted.length === 0)) {
       sorted = candidatePool
         .sort((a, b) => {
           if (targetLocation.pincode || targetLocation.location) {
@@ -7337,11 +7458,14 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY || 5;
     const signals = this._rfqCategorySignals(rfq);
     const categories = this._rfqDistinctCategories(rfq);
+    const minors = this._rfqMinorCategories(rfq);
+    const minorScoped = minors.length > 0;
 
     if (!Array.isArray(signals) || signals.length === 0) {
       return rfq;
     }
-    const targetCategories = categories.length > 0 ? categories : signals;
+    // A minor-level RFQ is matched by its minors only, and never widened to other vendors.
+    const targetCategories = minorScoped ? minors : (categories.length > 0 ? categories : signals);
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
 
     const targetLocation = {
@@ -7388,7 +7512,7 @@ let clientCandidates = [];
         maxClientPerCat,
         targetLocation
       ) || [];
-      if (sortedClient.length === 0) {
+      if (sortedClient.length === 0 && !minorScoped) {
         sortedClient = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
       }
     }
@@ -7398,7 +7522,7 @@ let clientCandidates = [];
       let dbMatches = [];
       if (pool.hasStorage()) {
         try {
-          dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit * 2);
+          dbMatches = await domainQueries.getPublicVendorsMatchingCategories(this._rfqMatchSignals(rfq), limit * 2);
         } catch (err) {
           logger.warn(
             'Auto-assign DB-backed vendor assignment query failed',
@@ -7412,14 +7536,17 @@ let clientCandidates = [];
         dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
       }
 
-      const candidatePool = (dbMatches || []).filter((v) => this.isProcucevVendor(v));
+      const candidatePool = this._narrowDbVendorsToRFQ(
+        rfq,
+        (dbMatches || []).filter((v) => this.isProcucevVendor(v))
+      );
       sortedProcucev = this.selectVendorsForRFQ(
         candidatePool,
         rfq,
         maxProcucevPerCat,
         targetLocation
       ) || [];
-      if (sortedProcucev.length === 0 && candidatePool.length > 0) {
+      if (!minorScoped && sortedProcucev.length === 0 && candidatePool.length > 0) {
         sortedProcucev = candidatePool.slice(0, targetCategories.length * maxProcucevPerCat);
       }
     }
@@ -7638,26 +7765,16 @@ let clientCandidates = [];
     const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
 
-    // V0 (Free Starter): category-matched vendors, uncategorized vendors, or invited vendors
+    // V0 (Free Starter): category-matched vendors or invited vendors
     if (isV0) {
-      const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
-      const signals = this._rfqCategorySignals(rfq);
-      if (signals.length === 0 || isUncategorized || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
-        return true;
-      }
-      return this._isInvitedVendor(vendor, rfq);
+      return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
 
     // Buyer-specific vendor access rule:
     // When a buyer uploads or adds a vendor to their vendor list, that vendor can view and cover
     // RFQs created by that respective buyer across all modes.
     if (this.isVendorMappedToRfqBuyer(vendor, rfq)) {
-      const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
-      const signals = this._rfqCategorySignals(rfq);
-      if (signals.length === 0 || isUncategorized || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
-        return true;
-      }
-      return this._isInvitedVendor(vendor, rfq);
+      return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
 
     if (
@@ -7665,11 +7782,7 @@ let clientCandidates = [];
       rfq.buyerAccountName &&
       vendor.addedByBuyerCompany.trim().toLowerCase() === rfq.buyerAccountName.trim().toLowerCase()
     ) {
-      const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
-      const signals = this._rfqCategorySignals(rfq);
-      if (signals.length === 0 || isUncategorized || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
-        return true;
-      }
+      if (this._vendorCoversRFQCategories(vendor, rfq)) return true;
     }
 
     return this._isInvitedVendor(vendor, rfq);
@@ -7699,21 +7812,10 @@ let clientCandidates = [];
       pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
       location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
-    const hasMinorSignals = Boolean(
-      (rfq && rfq.minorCategory) ||
-      (rfq && Array.isArray(rfq.minorCategories) && rfq.minorCategories.length > 0) ||
-      (rfq && Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((e) => e && e.minorCategory)) ||
-      (rfq && Array.isArray(rfq.lineItems) && rfq.lineItems.some((e) => e && e.minorCategory))
-    );
+    const matches = this._rfqVendorMatcher(rfq);
     const candidates = this.vendors
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
-      .filter((v) => {
-        if (signals.length === 0) return true;
-        if (hasMinorSignals && signals.some((sig) => this.vendorCoversMinorCategory(v, sig))) {
-          return true;
-        }
-        return signals.some((c) => this.vendorCoversCategory(v, c));
-      })
+      .filter((v) => signals.length === 0 || matches(v))
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
 
     if (destination.pincode || destination.location) {
@@ -7738,13 +7840,16 @@ let clientCandidates = [];
   async candidateVendorsForRFQAsync(rfq, limit = null) {
     let candidates = this.candidateVendorsForRFQ(rfq, limit);
     if ((!candidates || candidates.length === 0) && pool.hasStorage()) {
-      const signals = this._rfqCategorySignals(rfq);
+      const signals = this._rfqMatchSignals(rfq);
       if (Array.isArray(signals) && signals.length > 0) {
         try {
           const fetchLimit = (limit && Number.isInteger(Number(limit)) && Number(limit) > 0)
             ? Number(limit)
             : 100;
-          const dbVendors = await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit);
+          const dbVendors = this._narrowDbVendorsToRFQ(
+            rfq,
+            await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit)
+          );
           if (Array.isArray(dbVendors) && dbVendors.length > 0) {
             const destination = {
               pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
@@ -7800,6 +7905,7 @@ let clientCandidates = [];
     const overrideVendors = [];
     const excludedVendors = [];
     const signals = this._rfqCategorySignals(rfq);
+    const matchesRfq = this._rfqVendorMatcher(rfq);
 
     for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
       let vendor = this.getVendorById(id, 'all');
@@ -7831,19 +7937,7 @@ let clientCandidates = [];
         (Array.isArray(vendor.vendorSelectedCategories) && vendor.vendorSelectedCategories.length > 0) ||
         (Array.isArray(vendor.clientMappedCategories) && vendor.clientMappedCategories.length > 0)
       );
-      const hasMinorSignals = Boolean(
-        (rfq && rfq.minorCategory) ||
-        (rfq && Array.isArray(rfq.minorCategories) && rfq.minorCategories.length > 0) ||
-        (rfq && Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((e) => e && e.minorCategory)) ||
-        (rfq && Array.isArray(rfq.lineItems) && rfq.lineItems.some((e) => e && e.minorCategory))
-      );
-      const isMatch = signals.length === 0 || (
-        hasCategory && (
-          hasMinorSignals
-            ? (signals.some((c) => this.vendorCoversMinorCategory(vendor, c)) || signals.some((c) => this.vendorCoversCategory(vendor, c)))
-            : signals.some((c) => this.vendorCoversCategory(vendor, c))
-        )
-      );
+      const isMatch = signals.length === 0 || (hasCategory && matchesRfq(vendor));
 
       if (!isMatch) {
         overrideVendors.push(vendor);
@@ -8008,6 +8102,7 @@ let clientCandidates = [];
   validateAndShortlistVendors(rfq, vendorList, buyerEmail) {
     if (!rfq || !Array.isArray(vendorList)) return { shortlisted: [], excluded: [] };
     const signals = this._rfqCategorySignals(rfq);
+    const matchesRfq = this._rfqVendorMatcher(rfq);
     const shortlisted = [];
     const excluded = [];
 
@@ -8019,7 +8114,7 @@ let clientCandidates = [];
         (Array.isArray(vendorRecord.vendorSelectedCategories) && vendorRecord.vendorSelectedCategories.length > 0) ||
         (Array.isArray(vendorRecord.clientMappedCategories) && vendorRecord.clientMappedCategories.length > 0)
       );
-      const isMatch = signals.length === 0 || (hasCategory && signals.some((sig) => this.vendorCoversCategory(vendorRecord, sig)));
+      const isMatch = signals.length === 0 || (hasCategory && matchesRfq(vendorRecord));
 
       if (isMatch) {
         shortlisted.push(v);
@@ -8322,8 +8417,12 @@ let clientCandidates = [];
    */
   selectVendorsForRFQEmail(rfq, limit = 10) {
     const pincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
-    const rawSignals = this._rfqCategorySignals(rfq);
+    const minors = this._rfqMinorCategories(rfq);
+    const rawSignals = minors.length > 0 ? minors : this._rfqCategorySignals(rfq);
     const distinctSignals = Array.from(new Set(rawSignals.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean)));
+    const coversSignal = (vendor, signal) => (minors.length > 0
+      ? this.vendorCoversMinorCategory(vendor, signal)
+      : this.vendorCoversCategory(vendor, signal));
 
     const rankVendor = (v) => ({
       vendor: v,
@@ -8339,7 +8438,7 @@ let clientCandidates = [];
       const selected = new Map();
       for (const sig of distinctSignals) {
         const catMatched = eligible
-          .filter((v) => this.vendorCoversCategory(v, sig))
+          .filter((v) => coversSignal(v, sig))
           .map(rankVendor)
           .sort((a, b) => b.score - a.score)
           .slice(0, 5)

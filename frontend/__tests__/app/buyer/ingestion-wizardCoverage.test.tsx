@@ -1022,7 +1022,7 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
           majorCategory: MECHANICAL,
           minorCategories: [MECHANICAL_MINOR],
         }),
-        vendor({ id: 'net-9', name: 'Network Fabricators', source: 'procucev_network', majorCategory: MECHANICAL }),
+        vendor({ id: 'net-9', name: 'Network Fabricators', source: 'procucev_network', majorCategory: MECHANICAL, minorCategories: [MECHANICAL_MINOR] }),
       ],
     });
     renderWizard();
@@ -1128,7 +1128,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
     });
     renderWizard();
     chooseSourcingMode('mode_3');
-    fillValidForm({ major: MECHANICAL });
+    fillValidForm({ major: MECHANICAL, minor: 'Pumps & Accessories' });
     fireEvent.click(await cardFor('Dup Network Twin'));
     expect(await screen.findByText('1 of 1 selected')).toBeInTheDocument();
 
@@ -1214,7 +1214,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
       });
       renderWizard();
       chooseSourcingMode('mode_3');
-      fillValidForm({ major: MECHANICAL });
+      fillValidForm({ major: MECHANICAL, minor: 'Pumps & Accessories' });
       fireEvent.click(await cardFor('Alpha Pumps'));
       expect(await screen.findByText('1 of 1 selected')).toBeInTheDocument();
 

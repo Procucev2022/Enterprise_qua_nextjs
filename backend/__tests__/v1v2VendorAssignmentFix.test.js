@@ -31,7 +31,7 @@ describe('V1 & V2 Vendor Assignment and Outreach Dispatch', () => {
       email: 'cement@alphavendor.com',
       phone: '+919876543210',
       majorCategory: 'Civil Works',
-      minorCategories: ['Cement & Concrete'],
+      minorCategories: ['Cement & Concrete', 'TMT BARS'],
       addedByBuyerCompany: 'Alpha Infra Corp',
       source: 'buyer_uploaded',
       buyerAccountId: buyerAccount.id,
@@ -53,7 +53,7 @@ describe('V1 & V2 Vendor Assignment and Outreach Dispatch', () => {
       email: 'network@procucevpartner.com',
       phone: '+919876543220',
       majorCategory: 'Civil Works',
-      minorCategories: ['Cement & Concrete'],
+      minorCategories: ['Cement & Concrete', 'TMT BARS'],
       source: 'procucev_network',
       isProcucevDirect: true,
     });

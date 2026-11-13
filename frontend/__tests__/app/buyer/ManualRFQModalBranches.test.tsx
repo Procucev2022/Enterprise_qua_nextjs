@@ -532,6 +532,7 @@ describe('ManualRFQModal: saving branches', () => {
       name: 'Network Supplier',
       source: 'self_onboarded',
       majorCategory: HOME_CATEGORY.majorCategory,
+      minorCategories: [HOME_CATEGORY.minorCategories[0]],
     };
     mockedUseApp.mockReturnValue(storeWith({ buyerVendors: [networkSupplier] }));
     renderModal();

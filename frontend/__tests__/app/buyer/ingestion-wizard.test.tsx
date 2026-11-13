@@ -1147,6 +1147,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
         name: 'Apex Industrial Dynamics',
         source: 'historical_purchase_dump',
         majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Abrasives'],
       },
     ]);
     renderWizard();
@@ -2388,6 +2389,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         email: 'match@corp.com',
         source: 'buyer_uploaded',
         majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Abrasives'],
       },
       {
         id: 'v-m2-mismatch',
@@ -3330,7 +3332,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         email: 'v1@test.com',
         source: 'buyer_uploaded',
         majorCategory: 'Engineering Spares - Mechanical',
-        minorCategories: ['Pumps & Accessories'],
+        minorCategories: ['Pumps & Accessories', 'Bearings & Accessories'],
         rating: 4.5,
       };
       const v2 = {
@@ -3339,7 +3341,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         email: 'v2@test.com',
         source: 'buyer_uploaded',
         majorCategory: 'Engineering Spares - Mechanical',
-        minorCategories: 'Pumps & Accessories, Valves',
+        minorCategories: 'Pumps & Accessories, Valves, Bearings & Accessories',
         rating: 4.8,
       };
       const v3 = {

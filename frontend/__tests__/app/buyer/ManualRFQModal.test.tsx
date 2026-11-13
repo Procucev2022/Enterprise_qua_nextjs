@@ -51,6 +51,7 @@ jest.mock('@/lib/store', () => ({
         // never match any RFQ's category and every generic save test in this
         // file (not specifically testing category-matching) would break.
         majorCategory: require('../../../test-fixtures/categoryTaxonomy').CATEGORY_TAXONOMY_FIXTURE[0].majorCategory,
+        minorCategories: [require('../../../test-fixtures/categoryTaxonomy').CATEGORY_TAXONOMY_FIXTURE[0].minorCategories[0]],
       },
     ],
   })),
@@ -217,10 +218,10 @@ beforeEach(() => {
         name: 'Default Enterprise Vendor',
         email: 'vendor@test.com',
         source: 'buyer_uploaded',
-        // Matches categoriesData[0], the category fillRow()/extractionResult()
-        // always set — Mode 1 assignment is category-scoped now, so a vendor
-        // with no category would never match any RFQ's category here.
+        // Carries the minor fillRow()/extractionResult() always set on the RFQ row. Mode 1
+        // assignment is minor-scoped, so a vendor without that minor would never match here.
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       },
     ],
   });
@@ -666,7 +667,7 @@ describe('ManualRFQModal: sourcing mode', () => {
 
   it('locks Mode 2 and Mode 3 for a version_1 buyer and blocks selecting them', async () => {
     (useApp as jest.Mock).mockReturnValue({
-      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded', majorCategory: categoriesData[0].majorCategory }],
+      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] }],
       activeBuyerAccount: { subscriptionPlan: 'version_1' },
     });
     renderModal();
@@ -984,11 +985,12 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           phone: '+91 98200 11111',
           source: 'historical_purchase_dump',
           majorCategory: categoriesData[0].majorCategory,
+          minorCategories: [categoriesData[0].minorCategories[0]],
         },
         // No name/email/phone/contactPerson: the payload carries an empty name, never an invented one.
-        { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory },
+        { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] },
         // Not buyer-uploaded: must be excluded from both the preview and the payload.
-        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory },
+        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] },
       ],
     });
     renderModal();
@@ -1632,6 +1634,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'alpha@eng.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-matched-2',
@@ -1639,6 +1642,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'beta@auto.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v3 = {
         id: 'v-other-3',
@@ -1696,6 +1700,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'omega@elec.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-mode2-2',
@@ -1887,7 +1892,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     it('covers categoryFetchSignals debounced fetchAllVendors execution', async () => {
       (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
         success: true,
-        candidates: [{ id: 'cand-1', name: 'Auto Fetched Vendor', majorCategory: categoriesData[0].majorCategory }],
+        candidates: [{ id: 'cand-1', name: 'Auto Fetched Vendor', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] }],
       });
       renderModal();
       fillRow();
@@ -2073,6 +2078,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
               id: 'non-matching-id',
               itemName: 'Something Else',
               majorCategory: categoriesData[0].majorCategory,
+              minorCategories: [categoriesData[0].minorCategories[0]],
             },
             {
               id: items[0]?.id,
@@ -2338,6 +2344,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         mobile: '9876543210',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-mode1-select-2',
@@ -2347,6 +2354,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         mobileNumber: '9123456789',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       useApp.mockReturnValue({
         activeSubscription: 'version_3',

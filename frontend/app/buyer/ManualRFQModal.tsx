@@ -252,7 +252,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   // never looked past the first 500 rows of an 80k+-row table. Fetched from
   // the real paginated/searchable directory instead, scoped to the RFQ's
   // own category signals, same as every other screen fixed this session.
-  const { rawSignals: categoryFetchSignals } = useMemo(() => extractRfqCategorySignals(form), [form]);
+  const categorySignalSet = useMemo(() => extractRfqCategorySignals(form), [form]);
+  const categoryFetchSignals = categorySignalSet.rawSignals;
   const [fetchedCategoryVendors, setFetchedCategoryVendors] = useState<VendorEntry[]>([]);
   const lastFetchedCategorySignalsRef = useRef<string>('');
   useEffect(() => {
@@ -633,7 +634,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
-        const { signals } = extractRfqCategorySignals(form);
+        const { signals, minorOnly } = extractRfqCategorySignals(form);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -642,7 +643,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         const mismatchedVendors: typeof candidatePool = [];
 
         for (const v of candidatePool) {
-          if (signals.length === 0 || matchVendorAgainstSignals(v, signals).isMatch) {
+          if (signals.length === 0 || matchVendorAgainstSignals(v, signals, minorOnly).isMatch) {
             matchingVendors.push(v);
           } else {
             mismatchedVendors.push(v);
@@ -662,7 +663,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               matchingVendors,
               signals,
               VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: form.deliveryLocation, pincode: form.deliveryPincode }
+              { location: form.deliveryLocation, pincode: form.deliveryPincode },
+              minorOnly
             ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
@@ -1573,10 +1575,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   }
 
                   const matchingVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                     : allMyVendors;
                   const mismatchedVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                     : [];
 
                   let pool = allMyVendors;
@@ -1710,7 +1712,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             : [];
 
                           const matchResult = categoryFetchSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                            ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
                             : { isMatch: true };
                           const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 
@@ -1937,10 +1939,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       ) : (() => {
                         const matchingVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                           : allMyVendors;
                         const mismatchedVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                           : [];
 
                         let pool = allMyVendors;
@@ -2075,7 +2077,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   : [];
 
                                 const matchResult = categoryFetchSignals.length > 0
-                                  ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                                  ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
                                   : { isMatch: true };
                                 const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 

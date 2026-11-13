@@ -1795,7 +1795,7 @@ describe('Store Service & Business Operations', () => {
       const covering = storeService.addVendor({
         name: 'Pumps R Us',
         email: 'pumps@example.com',
-        majorCategory: 'Pumps & Accessories',
+        majorCategory: 'Engineering Spares - Mechanical',
         minorCategories: [],
       });
       const minorMatch = storeService.addVendor({
@@ -1809,10 +1809,12 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getNotificationsFor('vendor', covering.id)).toHaveLength(0);
       expect(storeService.getNotificationsFor('vendor', minorMatch.id)).toHaveLength(0);
 
-      // Both are real candidates, and inviting either fires exactly one
-      // 'rfq_category_match' notification for that vendor.
+      // Only the vendor carrying the RFQ's minor is a candidate. The vendor whose
+      // major category alone matches is not. A Category Manager can still invite it
+      // by hand, and that fires exactly one 'rfq_category_match' notification.
       const candidates = storeService.candidateVendorsForRFQ(rfq).map((c) => c.id);
-      expect(candidates).toEqual(expect.arrayContaining([covering.id, minorMatch.id]));
+      expect(candidates).toContain(minorMatch.id);
+      expect(candidates).not.toContain(covering.id);
 
       await storeService.inviteVendorsToRFQ(rfq.id, [covering.id], 'cm@ex.com');
       const forCovering = storeService.getNotificationsFor('vendor', covering.id);
@@ -2320,9 +2322,10 @@ describe('Store Service & Business Operations', () => {
           const count = await storeService.resolveProcucevVendorCountFromDB(rfqV2);
 
           expect(count).toBe(20);
-          // Called with every signal the RFQ carries, including the minor one.
+          // An RFQ that names a minor is counted by that minor only (lower-case, with its
+          // singular/plural stem), not by its major.
           const passedSignals = countSpy.mock.calls[0][0];
-          expect(passedSignals).toEqual(expect.arrayContaining(['Raw Material', 'Steels']));
+          expect(passedSignals).toEqual(['steels', 'steel']);
         } finally {
           domainPool.pool = originalPool;
         }

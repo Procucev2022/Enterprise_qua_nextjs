@@ -942,7 +942,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const vendorRes = await request(app)
         .post('/api/vendors')
         .set(authHeader('vendor'))
-        .send({ name: 'Scoping Test Vendor', majorCategory: 'Civil Works' });
+        .send({ name: 'Scoping Test Vendor', majorCategory: 'Civil Works', minorCategories: ['Plumbing'] });
       vendorId = vendorRes.body.data.id;
 
       const buyerRes = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({

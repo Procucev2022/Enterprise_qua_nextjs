@@ -40,7 +40,44 @@ export function normalizeCategory(cat?: string | null): string {
 }
 
 /**
- * Extract all unique normalized category signals from an RFQ form or payload.
+ * Category labels from a vendor field that may hold an array or a comma-separated
+ * string. The server reads both forms, so the browser does too.
+ */
+function categoryLabels(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((label) => String(label ?? '').trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(',').map((label) => label.trim()).filter(Boolean);
+  return [];
+}
+
+/**
+ * Whether two normalized category names are the same minor category, allowing a
+ * singular or plural difference ("Box" and "Boxes"). A longer name that only
+ * contains the other does not match. Mirrors minorKeysMatch in
+ * backend/src/services/storeService.js so the browser and the server agree.
+ */
+export function minorNamesMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return a + 's' === b || a + 'es' === b || b + 's' === a || b + 'es' === a;
+}
+
+/** Category signals an RFQ carries, and whether they are minor-level. */
+export interface RfqCategorySignals {
+  /**
+   * Normalized signals to match vendors against. When the RFQ names minor
+   * categories these are only those minors. Otherwise they are every major and
+   * category label the RFQ carries.
+   */
+  signals: string[];
+  /** Every raw category label the RFQ carries, for display and for fetching the directory. */
+  rawSignals: string[];
+  /** True when `signals` are minor categories. A vendor then has to match a minor, never a major alone. */
+  minorOnly: boolean;
+}
+
+/**
+ * Extract the unique normalized category signals from an RFQ form or payload.
+ * An RFQ that names minor categories is matched by those minors only.
  */
 export function extractRfqCategorySignals(form: {
   majorCategory?: string | null;
@@ -48,24 +85,35 @@ export function extractRfqCategorySignals(form: {
   category?: string | null;
   lineItems?: Array<{ majorCategory?: string | null; minorCategory?: string | null; category?: string | null }>;
   extractedEntities?: Array<{ majorCategory?: string | null; minorCategory?: string | null; category?: string | null }>;
-}): { signals: string[]; rawSignals: string[] } {
+}): RfqCategorySignals {
   const rawSet = new Set<string>();
+  const minorSet = new Set<string>();
 
   if (form.majorCategory?.trim()) rawSet.add(form.majorCategory.trim());
-  if (form.minorCategory?.trim()) rawSet.add(form.minorCategory.trim());
+  if (form.minorCategory?.trim()) {
+    rawSet.add(form.minorCategory.trim());
+    minorSet.add(form.minorCategory.trim());
+  }
   if (form.category?.trim()) rawSet.add(form.category.trim());
 
   const items = form.lineItems || form.extractedEntities || [];
   for (const item of items) {
     if (item.majorCategory?.trim()) rawSet.add(item.majorCategory.trim());
-    if (item.minorCategory?.trim()) rawSet.add(item.minorCategory.trim());
+    if (item.minorCategory?.trim()) {
+      rawSet.add(item.minorCategory.trim());
+      minorSet.add(item.minorCategory.trim());
+    }
     if (item.category?.trim()) rawSet.add(item.category.trim());
   }
 
   const rawSignals = Array.from(rawSet);
+  const minorSignals = Array.from(new Set(Array.from(minorSet).map(normalizeCategory).filter(Boolean)));
+  if (minorSignals.length > 0) {
+    return { signals: minorSignals, rawSignals, minorOnly: true };
+  }
   const signals = Array.from(new Set(rawSignals.map(normalizeCategory).filter(Boolean)));
 
-  return { signals, rawSignals };
+  return { signals, rawSignals, minorOnly: false };
 }
 
 function matchesCategoryToken(target: string, signal: string): boolean {
@@ -84,25 +132,29 @@ function matchesCategoryToken(target: string, signal: string): boolean {
 
 /**
  * Checks if a vendor's categories match the given RFQ category signals.
+ *
+ * With `minorOnly` the signals are minor categories. Only a minor-level label
+ * then counts: a vendor's major category or a related minor does not, and the
+ * loose token and taxonomy-association matches are not used. Without it the
+ * legacy major-level rules apply.
  */
 export function matchVendorAgainstSignals(
   vendor: VendorEntry,
-  signals: string[]
+  signals: string[],
+  minorOnly = false
 ): CategoryMatchResult {
+  const sameName = (a: string, b: string): boolean => (minorOnly ? minorNamesMatch(a, b) : a === b);
   if (!vendor || !signals || signals.length === 0) {
     return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: vendor?.majorCategory || '' };
   }
 
   const vendorMajor = vendor.majorCategory ? normalizeCategory(vendor.majorCategory) : '';
-  const vendorMinors = (Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])
-    .map(normalizeCategory)
-    .filter(Boolean);
-  const vendorSelected = (Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : [])
-    .map(normalizeCategory)
-    .filter(Boolean);
-  const vendorMapped = (Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : [])
-    .map(normalizeCategory)
-    .filter(Boolean);
+  const minorLabels = categoryLabels(vendor.minorCategories).filter((label) => normalizeCategory(label));
+  const selectedLabels = categoryLabels(vendor.vendorSelectedCategories).filter((label) => normalizeCategory(label));
+  const mappedLabels = categoryLabels(vendor.clientMappedCategories).filter((label) => normalizeCategory(label));
+  const vendorMinors = minorLabels.map(normalizeCategory);
+  const vendorSelected = selectedLabels.map(normalizeCategory);
+  const vendorMapped = mappedLabels.map(normalizeCategory);
 
   const hasAnyCategory = Boolean(vendorMajor || vendorMinors.length > 0 || vendorSelected.length > 0 || vendorMapped.length > 0);
   if (!hasAnyCategory) {
@@ -120,11 +172,11 @@ export function matchVendorAgainstSignals(
     // 1. Check Minor Categories match (highest specificity -> 98%)
     for (let i = 0; i < vendorMinors.length; i++) {
       const vMinor = vendorMinors[i];
-      if (vMinor === normSignal) {
-        matched.add(vendor.minorCategories![i]);
+      if (sameName(vMinor, normSignal)) {
+        matched.add(minorLabels[i]);
         highestScore = Math.max(highestScore, 98);
-      } else if (matchesCategoryToken(vMinor, normSignal)) {
-        matched.add(vendor.minorCategories![i]);
+      } else if (!minorOnly && matchesCategoryToken(vMinor, normSignal)) {
+        matched.add(minorLabels[i]);
         highestScore = Math.max(highestScore, 92);
       }
     }
@@ -132,21 +184,22 @@ export function matchVendorAgainstSignals(
     // 2. Check Client Mapped Categories (from PO history -> 96%)
     for (let i = 0; i < vendorMapped.length; i++) {
       const vMapped = vendorMapped[i];
-      if (vMapped === normSignal) {
-        matched.add(vendor.clientMappedCategories![i]);
+      if (sameName(vMapped, normSignal)) {
+        matched.add(mappedLabels[i]);
         highestScore = Math.max(highestScore, 96);
-      } else if (matchesCategoryToken(vMapped, normSignal)) {
-        matched.add(vendor.clientMappedCategories![i]);
+      } else if (!minorOnly && matchesCategoryToken(vMapped, normSignal)) {
+        matched.add(mappedLabels[i]);
         highestScore = Math.max(highestScore, 90);
       }
     }
 
-    // 3. Check Major Category match (95%)
+    // 3. Check Major Category match (95%). In minor-only mode it counts only
+    // when the major is itself named like the minor.
     if (vendorMajor) {
-      if (vendorMajor === normSignal) {
+      if (sameName(vendorMajor, normSignal)) {
         matched.add(vendor.majorCategory!);
         highestScore = Math.max(highestScore, 95);
-      } else if (matchesCategoryToken(vendorMajor, normSignal)) {
+      } else if (!minorOnly && matchesCategoryToken(vendorMajor, normSignal)) {
         matched.add(vendor.majorCategory!);
         highestScore = Math.max(highestScore, 88);
       }
@@ -155,27 +208,30 @@ export function matchVendorAgainstSignals(
     // 4. Check Vendor Profile Selected Categories (94%)
     for (let i = 0; i < vendorSelected.length; i++) {
       const vSel = vendorSelected[i];
-      if (vSel === normSignal) {
-        matched.add(vendor.vendorSelectedCategories![i]);
+      if (sameName(vSel, normSignal)) {
+        matched.add(selectedLabels[i]);
         highestScore = Math.max(highestScore, 94);
-      } else if (matchesCategoryToken(vSel, normSignal)) {
-        matched.add(vendor.vendorSelectedCategories![i]);
+      } else if (!minorOnly && matchesCategoryToken(vSel, normSignal)) {
+        matched.add(selectedLabels[i]);
         highestScore = Math.max(highestScore, 86);
       }
     }
 
-    // 5. Check taxonomy major/minor association
-    const signalMajor = findMajorForMinor(signal);
-    if (signalMajor && vendorMajor && normalizeCategory(signalMajor) === vendorMajor) {
-      matched.add(vendor.majorCategory!);
-      highestScore = Math.max(highestScore, 93);
-    }
-    for (let i = 0; i < vendorMinors.length; i++) {
-      const vMinor = vendorMinors[i];
-      const vMinorMajor = findMajorForMinor(vMinor);
-      if (vMinorMajor && normalizeCategory(vMinorMajor) === normSignal) {
-        matched.add(vendor.minorCategories![i]);
+    // 5. Legacy only: taxonomy major/minor association. A minor-level RFQ never
+    // reaches a vendor through the parent major of its minor.
+    if (!minorOnly) {
+      const signalMajor = findMajorForMinor(signal);
+      if (signalMajor && vendorMajor && normalizeCategory(signalMajor) === vendorMajor) {
+        matched.add(vendor.majorCategory!);
         highestScore = Math.max(highestScore, 93);
+      }
+      for (let i = 0; i < vendorMinors.length; i++) {
+        const vMinor = vendorMinors[i];
+        const vMinorMajor = findMajorForMinor(vMinor);
+        if (vMinorMajor && normalizeCategory(vMinorMajor) === normSignal) {
+          matched.add(minorLabels[i]);
+          highestScore = Math.max(highestScore, 93);
+        }
       }
     }
   }
@@ -265,7 +321,8 @@ export function rankProcucevVendorsForV3(
   signals: string[],
   destination: { location?: string | null; pincode?: string | null },
   limit = 10,
-  preferredMinors: string[] = []
+  preferredMinors: string[] = [],
+  minorOnly = false
 ): RankedProcucevVendor[] {
   if (!Array.isArray(vendors)) return [];
 
@@ -278,16 +335,14 @@ export function rankProcucevVendorsForV3(
   if (signals.length === 0) return [];
 
   for (const vendor of procucevPool) {
-    const match = matchVendorAgainstSignals(vendor, signals);
+    const match = matchVendorAgainstSignals(vendor, signals, minorOnly);
     const categoryScore = match.matchScore;
     if (categoryScore <= 0) continue;
 
-    const vendorMinors = Array.isArray(vendor.minorCategories)
-      ? vendor.minorCategories.map(normalizeCategory).filter(Boolean)
-      : [];
+    const vendorMinors = categoryLabels(vendor.minorCategories).map(normalizeCategory).filter(Boolean);
 
     const hasMinorMatch = normMinors.length > 0 && normMinors.some((nm) =>
-      vendorMinors.some((vm) => vm === nm || matchesCategoryToken(vm, nm))
+      vendorMinors.some((vm) => minorNamesMatch(vm, nm))
     );
 
     const loc = scoreVendorLocation(vendor, destination);
@@ -328,7 +383,8 @@ export function rankProcucevVendorsForV3(
 export function getCategoryMatchedProcucevVendors(
   vendors: VendorEntry[],
   signals: string[],
-  minScore = 80
+  minScore = 80,
+  minorOnly = false
 ): MatchedVendorResult[] {
   if (!Array.isArray(vendors)) return [];
 
@@ -336,7 +392,7 @@ export function getCategoryMatchedProcucevVendors(
   const results: MatchedVendorResult[] = [];
 
   for (const vendor of procucevPool) {
-    const match = matchVendorAgainstSignals(vendor, signals);
+    const match = matchVendorAgainstSignals(vendor, signals, minorOnly);
     if (match.isMatch && match.matchScore >= minScore) {
       results.push({
         vendor,
@@ -364,7 +420,8 @@ export function selectVendorsForCategories(
   vendors: VendorEntry[],
   signals: string[],
   maxPerCategory = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-  destination?: { location?: string | null; pincode?: string | null }
+  destination?: { location?: string | null; pincode?: string | null },
+  minorOnly = false
 ): MatchedVendorResult[] {
   if (!Array.isArray(vendors) || !signals || signals.length === 0) return [];
 
@@ -375,7 +432,7 @@ export function selectVendorsForCategories(
   for (const signal of rawSignals) {
     const catMatches: MatchedVendorResult[] = [];
     for (const vendor of vendors) {
-      const match = matchVendorAgainstSignals(vendor, [signal]);
+      const match = matchVendorAgainstSignals(vendor, [signal], minorOnly);
       if (match.isMatch) {
         catMatches.push({
           vendor,

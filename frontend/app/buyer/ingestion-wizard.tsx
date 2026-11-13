@@ -635,7 +635,7 @@ export default function IngestionWizard({
       setProcucevV3Ranked([]);
       return;
     }
-    const { signals } = extractRfqCategorySignals(form);
+    const { signals, minorOnly } = extractRfqCategorySignals(form);
     const lineItemMinors = Array.from(
       new Set(
         (form.lineItems || [])
@@ -661,7 +661,8 @@ export default function IngestionWizard({
           signals,
           { location: form.deliveryLocation, pincode: form.deliveryPincode },
           10,
-          lineItemMinors
+          lineItemMinors,
+          minorOnly
         );
         setProcucevV3Ranked(ranked);
         // Drop any prior selection that is no longer in the new top-10.
@@ -1212,7 +1213,7 @@ export default function IngestionWizard({
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
-        const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
+        const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -1221,7 +1222,7 @@ export default function IngestionWizard({
         const mismatchedVendors: typeof candidatePool = [];
 
         for (const v of candidatePool) {
-          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals).isMatch) {
+          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
             matchingVendors.push(v);
           } else {
             mismatchedVendors.push(v);
@@ -1241,7 +1242,8 @@ export default function IngestionWizard({
               matchingVendors,
               dispatchSignals,
               VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode }
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
+              dispatchMinorOnly
             ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
@@ -2064,12 +2066,12 @@ export default function IngestionWizard({
                 );
               }
 
-              const { signals: mode1Signals } = extractRfqCategorySignals(form);
+              const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
               const matchingVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
                 : allMyVendors;
               const mismatchedVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
                 : [];
 
               let pool = allMyVendors;
@@ -2149,7 +2151,7 @@ export default function IngestionWizard({
                         onClick={() => {
                           const selectableIds = myVendors.filter((v) => {
                             if (mode1Signals.length === 0) return true;
-                            return matchVendorAgainstSignals(v, mode1Signals).isMatch;
+                            return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
                           }).map((v) => v.id);
 
                           if (allSelected) {
@@ -2202,7 +2204,7 @@ export default function IngestionWizard({
                         : [];
                       
                       const matchResult = mode1Signals.length > 0
-                        ? matchVendorAgainstSignals(vendor, mode1Signals)
+                        ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
                         : { isMatch: true };
                       const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
 
@@ -2381,12 +2383,12 @@ export default function IngestionWizard({
                 );
               }
 
-              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
               const matchingVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
                 : allMyVendors;
               const mismatchedVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
                 : [];
 
               let pool = allMyVendors;
@@ -2535,7 +2537,7 @@ export default function IngestionWizard({
                           onClick={() => {
                             const selectableIds = myVendors.filter((v) => {
                               if (rfqSignals.length === 0) return true;
-                              return matchVendorAgainstSignals(v, rfqSignals).isMatch;
+                              return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
                             }).map((v) => v.id);
 
                             if (allSelected) {
@@ -2581,7 +2583,7 @@ export default function IngestionWizard({
                             : [];
 
                           const matchResult = rfqSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, rfqSignals)
+                            ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
                             : { isMatch: true };
                           const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
 
@@ -2760,7 +2762,7 @@ export default function IngestionWizard({
           <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
               const allMyVendors = buyerVendors.filter(isBuyerUploaded);
-              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
               const lineItemMinors = Array.from(
                 new Set(
                   (form.lineItems || [])
@@ -2773,15 +2775,15 @@ export default function IngestionWizard({
               let myVendors = allMyVendors;
               if (lineItemMinors.length > 0) {
                 const minorMatched = allMyVendors.filter((v) =>
-                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m]).isMatch)
+                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
                 );
                 if (minorMatched.length > 0) {
                   myVendors = minorMatched;
                 } else if (rfqSignals.length > 0) {
-                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
                 }
               } else if (rfqSignals.length > 0) {
-                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
               }
 
               return (

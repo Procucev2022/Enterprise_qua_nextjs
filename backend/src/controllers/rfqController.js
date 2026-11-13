@@ -209,15 +209,7 @@ function canVendorViewRfq(vendor, rfq) {
   // RFQ details should be visible to all vendors (including buyer-uploaded vendors behaving as normal vendors)
   // across network modes (V0, V2, V3), even if they have not received an explicit invitation.
   if (isV0 || isV2 || isV3) {
-    const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
-    const signals = storeService._rfqCategorySignals(rfq);
-    if (
-      signals.length === 0 ||
-      isUncategorized ||
-      signals.some((c) => storeService.vendorCoversCategory(vendor, c))
-    ) {
-      return true;
-    }
+    if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
   }
 
   return false;

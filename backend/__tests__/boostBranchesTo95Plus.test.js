@@ -1523,7 +1523,9 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(storeService.vendorCoversMinorCategory({}, '')).toBe(false);
     expect(storeService.vendorCoversMinorCategory({ majorCategory: 'Corrugated Box' }, 'Corrugated Boxes')).toBe(true);
     expect(storeService.vendorCoversMinorCategory({ vendorSelectedCategories: ['Valves'] }, 'Valves')).toBe(true);
-    expect(storeService.vendorCoversMinorCategory({ clientMappedCategories: ['Plumbing Fixtures'] }, 'Plumbing')).toBe(true);
+    // A minor is not matched as a substring of a longer name.
+    expect(storeService.vendorCoversMinorCategory({ clientMappedCategories: ['Plumbing Fixtures'] }, 'Plumbing')).toBe(false);
+    expect(storeService.vendorCoversMinorCategory({ clientMappedCategories: ['Plumbing'] }, 'Plumbing')).toBe(true);
     expect(storeService.vendorCoversMinorCategory({ minorCategories: [null, ''] }, 'Pipes')).toBe(false);
 
     // 2. _rfqTaxonomyGroups edge cases

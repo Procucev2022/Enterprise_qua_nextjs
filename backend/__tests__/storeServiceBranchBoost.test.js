@@ -137,7 +137,8 @@ describe('storeService comprehensive branch boost tests', () => {
       const vMatch = {
         id: 'v-cat-match',
         name: 'Matching Vendor',
-        majorCategory: 'Transformers',
+        majorCategory: 'Engineering Spares - Electrical',
+        minorCategories: ['Transformers'],
       };
       const vMismatch = {
         id: 'v-cat-mismatch',
@@ -1685,7 +1686,8 @@ describe('storeService comprehensive branch boost tests', () => {
         id: 'v-proc-v0-cand',
         name: 'Proc Cand',
         source: 'procucev_network',
-        majorCategory: 'Transformers',
+        majorCategory: 'Engineering Spares - Electrical',
+        minorCategories: ['Transformers'],
       };
       storeService.vendors = [pVendor];
       jest.spyOn(storeService, 'selectVendorsPerCategory').mockReturnValue([]);
@@ -1707,6 +1709,7 @@ describe('storeService comprehensive branch boost tests', () => {
         name: 'Proc V3 Cand',
         source: 'procucev_network',
         majorCategory: 'Industrial Valves',
+        minorCategories: ['Industrial Valves'],
       };
       storeService.vendors = [pVendor];
 

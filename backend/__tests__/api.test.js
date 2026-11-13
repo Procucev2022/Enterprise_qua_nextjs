@@ -1793,6 +1793,12 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
 
     test('rejects vendor requests to close or update an RFQ with 403', async () => {
       const rfq = await createOwnRFQ();
+      // The vendor must be able to see the RFQ for a write to be refused with 403 rather than 404.
+      // The RFQ names the minor 'Bearings & Accessories', so the vendor carries that minor.
+      storeService.updateVendor('vendor@apexsupplies.com', {
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Bearings & Accessories'],
+      });
 
       const res = await request(app)
         .put(`/api/rfqs/${rfq.id}`)

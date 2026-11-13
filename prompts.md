@@ -5734,3 +5734,12 @@ po dump needs only vendor name, line item description & specifications. but comp
 ```
 
 ---
+### Prompt 199
+
+**Timestamp**: 2026-11-13T16:59:08+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded)
+
+```text
+After creating an RFQ, RFQ invitations seems like going to vendors based on major category, but it should go based on minor category. please check once & fix if there is issue.
+```
+
+---

@@ -101,17 +101,7 @@ function rfqInScope(scope, rfq) {
     if (storeService.isVendorMappedToRfqBuyer(scope.vendor, rfq)) return true;
     const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
     const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
-    if (!isV1) {
-      const isUncategorized = !scope.vendor?.majorCategory || String(scope.vendor?.majorCategory).toLowerCase().includes('uncategorized');
-      const signals = storeService._rfqCategorySignals(rfq);
-      if (
-        signals.length === 0 ||
-        isUncategorized ||
-        signals.some((c) => storeService.vendorCoversCategory(scope.vendor, c))
-      ) {
-        return true;
-      }
-    }
+    if (!isV1 && storeService._vendorCoversRFQCategories(scope.vendor, rfq)) return true;
     return false;
   }
   return rfq.buyerAccountId === scope.buyerAccountId;
