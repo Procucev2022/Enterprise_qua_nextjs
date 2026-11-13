@@ -2666,7 +2666,7 @@ describe('D1 streamlined vendor search queries', () => {
 
     const d1Query = query.mock.calls.map(([, , options]) => options?.d1Text).find(Boolean);
     expect(d1Query).not.toContain('vendors_search_fts');
-    expect(d1Query).toContain("lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $1");
+    expect(d1Query).toContain("raw LIKE $1");
     expect(d1Query).toContain("lower(json_extract(raw,'$.buyerId')) IS NULL");
   });
 

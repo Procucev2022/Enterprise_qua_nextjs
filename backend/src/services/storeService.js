@@ -157,6 +157,7 @@ function savePersistedInquiries(list) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INQUIRIES_PERSISTENCE_FILE, JSON.stringify(list, null, 2), 'utf8');
   } catch (_) { }
+}
 
 function normalizeRFQForRead(rfq) {
   const normalized = { ...rfq };
