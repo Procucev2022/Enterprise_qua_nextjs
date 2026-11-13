@@ -41,6 +41,7 @@ import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 const SUMMARY = UI_STRINGS.vendorEvaluationSummary;
 const NOT_RECORDED = UI_STRINGS.recordPlaceholders.notRecorded;
 const NOT_EVALUATED = UI_STRINGS.recordPlaceholders.notEvaluated;
+const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
 
 // Classification helper: a supplier the buyer uploaded. Reads only the ownership fields the supplier record carries.
 // The supplier ID is never parsed for a prefix.
@@ -592,7 +593,7 @@ export default function VendorEvaluationSummary({
                                 : 'text-amber-600 dark:text-amber-400'
                             }`}
                           >
-                            {c.overallScore === null ? SUMMARY.scoreNotApplicable : `${c.overallScore}%`}
+                            {c.overallScore === null ? NOT_APPLICABLE : `${c.overallScore}%`}
                           </span>
                           {isSelected && <Check size={14} className="text-indigo-600 dark:text-indigo-400" />}
                         </div>
@@ -681,7 +682,7 @@ export default function VendorEvaluationSummary({
                     {SUMMARY.scoreLabel}
                   </div>
                   <div className="text-2xl sm:text-3xl font-black mono text-emerald-600 dark:text-emerald-400">
-                    {overallScore === null ? SUMMARY.scoreNotApplicable : `${overallScore}%`}
+                    {overallScore === null ? NOT_APPLICABLE : `${overallScore}%`}
                   </div>
                   <div className="text-[10px] text-slate-600 dark:text-gray-400 font-medium">
                     {SUMMARY.gateLabel} <span className="font-bold text-emerald-600 dark:text-emerald-400">{gateText}</span>

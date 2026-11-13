@@ -2804,6 +2804,12 @@ const VENDOR_INGESTION_AI_STATUS = {
   FAILED: 'FAILED',
 };
 
+/**
+ * Statutory identifiers on a vendor record. They come from the supplier's own registration, so a buyer may read them
+ * but may not write them. The supplier can still change them through its self-service profile.
+ */
+const BUYER_LOCKED_STATUTORY_FIELDS = Object.freeze(['gst', 'gstin', 'pan', 'msme', 'annualTurnover']);
+
 /** How a PO line was attributed to a vendor-master row. */
 const VENDOR_MATCH_STRATEGY = {
   VENDOR_CODE: 'VENDOR_CODE',
@@ -3567,6 +3573,7 @@ module.exports = {
   VENDOR_AI_PROCESSING_STATUS,
   VENDOR_INGESTION_AI_STATUS,
   VENDOR_MATCH_STRATEGY,
+  BUYER_LOCKED_STATUTORY_FIELDS,
   VENDOR_DISPATCH_TEMPLATE,
   VENDOR_EMAIL_STATUS,
   VENDOR_DISPATCH_STATUS,

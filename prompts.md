@@ -5767,3 +5767,11 @@ Remove entire 4th AI category join page as mentioned in image below
 Please remove the vendor code from both places, change the Overall Score from *Not Evaluated* to *NA*, and remove the **Submitted: Not recorded* text from the Vendor Evaluation Summary.
 ```
 ---
+### Prompt 204
+**Timestamp**: 2026-11-13T22:51:40+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. Two screenshots of the vendor profile modal for Veera Solutions Pvt LTD were attached.)
+```text
+Please lock the Statutory Details section from editing. Fetch the mandatory GST number from vendor registration and display it automatically. Show "NA" for unavailable PAN, MSME, and Turnover details. Keep the remaining profile sections editable.
+
+some vendor dummy pan data also coming sir.
+```
+---

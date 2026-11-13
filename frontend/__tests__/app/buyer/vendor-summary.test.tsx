@@ -8,6 +8,32 @@ import { logger } from '@/lib/logger';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { VendorEntry } from '@/lib/types';
 
+const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
+
+// A buyer-uploaded vendor that holds the statutory identifiers its supplier registered. Tests override the parts they need.
+function statutoryVendor(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'v-statutory',
+    name: 'Veera Solutions Pvt LTD',
+    contactPerson: 'Veera Babu',
+    email: 'veerababu.v@procucev.com',
+    phone: '+91 9381877013',
+    majorCategory: 'Mechanical',
+    minorCategories: [],
+    location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560038',
+    source: 'buyer_uploaded',
+    rating: 3.4,
+    score: 11,
+    status: 'DISQUALIFIED SUPPLIER',
+    gst: '29AAMCP4349L1Z0',
+    gstin: '29AAMCP4349L1Z0',
+    pan: '',
+    msme: '',
+    annualTurnover: '',
+    ...overrides,
+  };
+}
+
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
@@ -769,7 +795,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
     });
 
-    it('handles Section 3 (Statutory & Commercial Identifiers) independent edit and save', () => {
+    it('keeps the statutory identifiers locked in the Edit Vendor modal, with no edit controls', () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -777,82 +803,30 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      // Open Edit modal for first vendor
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
-      // Find the Section 3 Edit button
-      const editStatutoryBtn = screen.getByTestId('edit-statutory-section-button');
-      expect(editStatutoryBtn).toBeInTheDocument();
-      fireEvent.click(editStatutoryBtn);
-
-      // Now inputs should be editable, and Cancel / Save Section buttons should appear
-      const saveSectionBtn = screen.getByTestId('save-statutory-section-button');
-      expect(saveSectionBtn).toBeInTheDocument();
-
-      // Find Section 3 inputs (GSTIN, PAN, MSME, Turnover)
-      const gstInput = screen.getByTestId('edit-vendor-gst-input');
-      const panInput = screen.getByTestId('edit-vendor-pan-input');
-      const msmeInput = screen.getByTestId('edit-vendor-msme-input');
-      const turnoverInput = screen.getByTestId('edit-vendor-turnover-input');
-
-      fireEvent.change(gstInput, { target: { value: '29ABCDE1234F1Z5' } });
-      fireEvent.change(panInput, { target: { value: 'ABCDE1234F' } });
-      fireEvent.change(msmeInput, { target: { value: 'UDYAM-KR-03-0012345' } });
-      fireEvent.change(turnoverInput, { target: { value: '₹10 Cr - ₹50 Cr' } });
-
-      // Click Save Section
-      fireEvent.click(saveSectionBtn);
-
-      expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
-        'v-1',
-        expect.objectContaining({
-          gst: '29ABCDE1234F1Z5',
-          gstin: '29ABCDE1234F1Z5',
-          pan: 'ABCDE1234F',
-          msme: 'UDYAM-KR-03-0012345',
-          annualTurnover: '₹10 Cr - ₹50 Cr',
-        })
-      );
-      expect(mockShowToast).toHaveBeenCalledWith(
-        'Statutory Details Saved',
-        expect.stringContaining('Statutory & commercial identifiers have been updated independently'),
-        'success'
-      );
-      expect(screen.getByTestId('edit-statutory-section-button')).toBeInTheDocument();
-    });
-
-    it('handles Section 3 independent edit cancellation and reverts values', () => {
-      render(
-        <VendorSummary
-          onViewEvaluation={mockOnViewEvaluation}
-          onNavigateToWizard={mockOnNavigateToWizard}
-        />
-      );
-
-      // Open Edit modal for first vendor
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
-
-      // Click Edit on Section 3
-      const editStatutoryBtn = screen.getByTestId('edit-statutory-section-button');
-      fireEvent.click(editStatutoryBtn);
-
-      const gstInput = screen.getByTestId('edit-vendor-gst-input');
-      fireEvent.change(gstInput, { target: { value: 'TEMPORARY_CHANGED_VALUE' } });
-      expect(gstInput).toHaveValue('TEMPORARY_CHANGED_VALUE');
-
-      // Click Cancel in Section 3
-      const cancelSectionBtn = screen.getByTestId('cancel-statutory-section-button');
-      fireEvent.click(cancelSectionBtn);
-
-      // Value should revert to original vendor gst/gstin
+      expect(screen.getByText(UI_STRINGS.vendorStatutory.editHeading)).toBeInTheDocument();
+      expect(screen.getByTestId('statutory-locked-badge')).toHaveTextContent(UI_STRINGS.vendorStatutory.lockedBadge);
+      expect(screen.queryByTestId('edit-statutory-section-button')).not.toBeInTheDocument();
       expect(screen.queryByTestId('save-statutory-section-button')).not.toBeInTheDocument();
-      expect(screen.getByTestId('edit-statutory-section-button')).toBeInTheDocument();
+      expect(screen.queryByTestId('cancel-statutory-section-button')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('edit-vendor-gst-input')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('edit-vendor-pan-input')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('edit-vendor-msme-input')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('edit-vendor-turnover-input')).not.toBeInTheDocument();
+
+      // The Apex fixture holds no statutory identifiers, so each one reads as not applicable.
+      for (const testId of ['edit-statutory-gstin', 'edit-statutory-pan', 'edit-statutory-msme', 'edit-statutory-turnover']) {
+        expect(screen.getByTestId(testId)).toHaveTextContent(new RegExp(`^${NOT_APPLICABLE}$`));
+      }
     });
 
-    it('opens Edit Vendor Profile with Section 3 unlocked from View Profile modal shortcut', () => {
+    it('shows the GST from the supplier registration and shows a placeholder PAN as NA in the View Profile', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        ...(useApp as jest.Mock)(),
+        buyerVendors: [statutoryVendor({ pan: 'ABCPE1234F' })],
+      });
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -860,19 +834,66 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      // Click View Profile on first buyer vendor
-      const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
-      fireEvent.click(viewBtns[0]);
+      fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
 
-      expect(screen.getByText(/Comprehensive supplier registration, compliance, and taxonomy profile/i)).toBeInTheDocument();
-      const editStatutoryShortcut = screen.getByTestId('view-modal-edit-statutory-button');
-      expect(editStatutoryShortcut).toBeInTheDocument();
+      expect(screen.getByTestId('view-statutory-gstin')).toHaveTextContent('29AAMCP4349L1Z0');
+      expect(screen.getByTestId('view-statutory-pan')).toHaveTextContent(new RegExp(`^${NOT_APPLICABLE}$`));
+      expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+    });
 
-      fireEvent.click(editStatutoryShortcut);
+    it('shows a real PAN, MSME number and turnover from the record in the View Profile', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        ...(useApp as jest.Mock)(),
+        buyerVendors: [
+          statutoryVendor({ pan: 'aaacl0140p', msme: 'UDYAM-KA-01-0000001', annualTurnover: '₹10 Cr - ₹50 Cr' }),
+        ],
+      });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
 
-      // View modal closed, edit modal open with Section 3 in edit mode
-      expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
-      expect(screen.getByTestId('save-statutory-section-button')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
+
+      expect(screen.getByTestId('view-statutory-pan')).toHaveTextContent('AAACL0140P');
+      expect(screen.getByTestId('view-statutory-msme')).toHaveTextContent('UDYAM-KA-01-0000001');
+      expect(screen.getByTestId('view-statutory-turnover')).toHaveTextContent('₹10 Cr - ₹50 Cr');
+    });
+
+    it('opens the View Profile without an Edit Statutory shortcut', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: /View Profile/i })[0]);
+
+      expect(screen.getByText(UI_STRINGS.vendorStatutory.viewHeading)).toBeInTheDocument();
+      expect(screen.queryByTestId('view-modal-edit-statutory-button')).not.toBeInTheDocument();
+    });
+
+    it('saves the profile without sending any statutory identifier', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      fireEvent.change(screen.getByDisplayValue('Rajesh Nair'), { target: { value: 'Rajesh Nair Updated' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+
+      expect(mockUpdateBuyerVendor).toHaveBeenCalledTimes(1);
+      const [, payload] = mockUpdateBuyerVendor.mock.calls[0];
+      expect(payload).toEqual(expect.objectContaining({ contactPerson: 'Rajesh Nair Updated' }));
+      for (const field of ['gst', 'gstin', 'pan', 'msme', 'annualTurnover']) {
+        expect(payload).not.toHaveProperty(field);
+      }
     });
 
     it('handles Delete Vendor modal workflow (open, confirm deletion)', () => {
@@ -1410,7 +1431,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getAllByText('—').length).toBeGreaterThan(0);
       expect(screen.getByText('No specific minors tagged')).toBeInTheDocument();
       expect(screen.queryByText('General Industrial')).not.toBeInTheDocument();
-      expect(screen.getAllByText('Not Provided').length).toBeGreaterThan(0);
+      // GSTIN, PAN, MSME and turnover are all missing for this vendor, so each one reads as not applicable.
+      expect(screen.getAllByText(NOT_APPLICABLE)).toHaveLength(4);
     });
 
     it('opens the Edit modal with vendor default fallbacks when most fields are missing', () => {

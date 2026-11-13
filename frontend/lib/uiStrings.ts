@@ -3070,6 +3070,23 @@ sellerDirectory: {
     notAvailable: 'Not available',
     notEvaluated: 'Not evaluated',
     notDispatched: 'Not dispatched',
+    notApplicable: 'NA',
+  },
+
+  /** Statutory identifiers on the buyer's vendor profile. They come from the supplier's own registration and are read-only here. */
+  vendorStatutory: {
+    viewHeading: 'Statutory & Financial Registration',
+    editHeading: '3. Statutory & Commercial Identifiers',
+    lockedBadge: 'Locked',
+    lockedNote: 'Set from the supplier registration. Buyers can view these details but cannot change them.',
+    gstLabel: 'GSTIN:',
+    panLabel: 'PAN:',
+    msmeLabel: 'MSME / UDYAM:',
+    turnoverLabel: 'Turnover:',
+    editGstLabel: 'GSTIN Number',
+    editPanLabel: 'PAN Card Number',
+    editMsmeLabel: 'MSME / UDYAM Reg. Number',
+    editTurnoverLabel: 'Annual Turnover',
   },
 
   /** Buyer evaluation summary (Screen 2.3). Scores, remarks and contact values come only from the evaluation record or the supplier record. */
@@ -3098,7 +3115,6 @@ sellerDirectory: {
     companySelectedTitle: 'Company Selected',
     companySelectedMessage: 'Loaded 360° evaluation summary for {name}.',
     scoreLabel: '360° AI Rating Score',
-    scoreNotApplicable: 'NA',
     gateLabel: 'Gate Pass Status:',
     gateUnlocked: '≥ {score}% Unlocked',
     gateLocked: 'Below {score}% Locked',

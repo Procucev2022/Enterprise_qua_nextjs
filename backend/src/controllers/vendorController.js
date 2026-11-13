@@ -28,6 +28,7 @@ const {
   PERSISTENCE_MESSAGES,
   EVENT_OUTBOX_TYPES,
   VENDOR_EVALUATION_REQUEST,
+  BUYER_LOCKED_STATUTORY_FIELDS,
   formatMessage,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
@@ -179,6 +180,21 @@ function pickVendorSelfEditFields(body) {
     }
   });
   return picked;
+}
+
+// A buyer may read a vendor's statutory identifiers but may not write them. Those identifiers come from the supplier's
+// own registration, so a buyer's update keeps every other field and reports which locked fields it dropped.
+function splitBuyerLockedFields(body) {
+  const kept = {};
+  const dropped = [];
+  Object.keys(body || {}).forEach((field) => {
+    if (BUYER_LOCKED_STATUTORY_FIELDS.includes(field)) {
+      dropped.push(field);
+    } else {
+      kept[field] = body[field];
+    }
+  });
+  return { kept, dropped };
 }
 
 // A buyer adding a vendor they already deal with directly may set these
@@ -643,9 +659,18 @@ async function updateVendor(req, res, next) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
     if (!(await assertVendorOwnership(req, res, existing))) return;
-    // A vendor editing their own record only gets the self-service field set;
-    // an admin or buyer retains full field access.
-    const updates = req.user.role === 'vendor' ? pickVendorSelfEditFields(req.body) : req.body;
+    // A vendor editing their own record only gets the self-service field set. A buyer's edit drops the locked
+    // statutory identifiers. An admin keeps full field access.
+    let updates = req.body;
+    if (req.user.role === 'vendor') {
+      updates = pickVendorSelfEditFields(req.body);
+    } else if (req.user.role === 'buyer') {
+      const { kept, dropped } = splitBuyerLockedFields(req.body);
+      updates = kept;
+      if (dropped.length > 0) {
+        logger.info(`Ignored buyer changes to locked statutory fields on vendor ${id}`, { id, droppedFields: dropped }, 'VENDOR_CONTROLLER');
+      }
+    }
     logger.info(`Updating vendor ${id}`, { id, updatedFields: Object.keys(updates || {}) }, 'VENDOR_CONTROLLER');
     const updated = await storeService.updateVendorDurably(existing.id, updates);
     res.json({ success: true, data: withoutTemporaryPassword(updated) });

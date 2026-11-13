@@ -19,6 +19,7 @@ const mockedUseApp = useApp as jest.Mock;
 const SUMMARY = UI_STRINGS.vendorEvaluationSummary;
 const NOT_RECORDED = UI_STRINGS.recordPlaceholders.notRecorded;
 const NOT_EVALUATED = UI_STRINGS.recordPlaceholders.notEvaluated;
+const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
 const PICKER_LABEL = SUMMARY.pickerAriaLabel;
 const SEARCH_PLACEHOLDER = SUMMARY.searchPlaceholder;
 
@@ -411,7 +412,7 @@ describe('buyer evaluation summary: values not on record', () => {
       const view = render(
         <VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: score as unknown as number })} />
       );
-      expect(screen.getByText(SUMMARY.scoreNotApplicable)).toBeInTheDocument();
+      expect(screen.getByText(NOT_APPLICABLE)).toBeInTheDocument();
       // The gate status still reads not evaluated, because the overall score is missing.
       expect(screen.getByText(NOT_EVALUATED)).toBeInTheDocument();
       view.unmount();
@@ -529,7 +530,7 @@ describe('buyer evaluation summary: supplier picker', () => {
     expect(screen.getAllByText(NOT_EVALUATED).length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText('Authorized Representative')).not.toBeInTheDocument();
     expect(store.setActiveEvaluationRecord).not.toHaveBeenCalled();
-    expect(screen.getByText(SUMMARY.scoreNotApplicable)).toBeInTheDocument();
+    expect(screen.getByText(NOT_APPLICABLE)).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(PICKER_LABEL));
     fireEvent.click(screen.getByRole('button', { name: /Beta Polymer Systems/ }));
@@ -543,7 +544,7 @@ describe('buyer evaluation summary: supplier picker', () => {
     render(<VendorEvaluationSummary />);
 
     fireEvent.click(screen.getByLabelText(PICKER_LABEL));
-    expect(screen.getByRole('button', { name: /Alpha Machining Works/ })).toHaveTextContent(SUMMARY.scoreNotApplicable);
+    expect(screen.getByRole('button', { name: /Alpha Machining Works/ })).toHaveTextContent(NOT_APPLICABLE);
     expect(screen.getByRole('button', { name: /Beta Polymer Systems/ })).toHaveTextContent('76%');
     expect(screen.getByRole('button', { name: /Gamma Fabrication/ })).toHaveTextContent('94%');
   });
@@ -747,7 +748,7 @@ describe('buyer evaluation summary: vendor code, overall score and submitted lin
     render(<VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: null as unknown as number })} />);
 
     expect(screen.getByText(SUMMARY.scoreLabel)).toBeInTheDocument();
-    expect(screen.getByText(SUMMARY.scoreNotApplicable)).toBeInTheDocument();
+    expect(screen.getByText(NOT_APPLICABLE)).toBeInTheDocument();
     expect(screen.queryByText('94%')).not.toBeInTheDocument();
   });
 
