@@ -966,6 +966,8 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
  * count — instead of vanishing. That row is exactly the SELF_MAP_REQUIRED case,
  * and it has to be visible to be flagged.
  *
+ * A line with no PO number counts as an order of its own, so po_count is not zero for a
+ * vendor whose lines carry no numbers.
  * Descriptions are aggregated here in one grouped query rather than by reading
  * every PO row into Node and reducing it, so the AI aggregation is one round
  * trip regardless of how many line items the dump held.
@@ -1008,7 +1010,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
             v.gstin,
             v.rating,
             count(p.id)::int          as po_line_count,
-            count(distinct p.po_number)::int as po_count,
+            count(distinct coalesce(p.po_number, p.id))::int as po_count,
             coalesce(sum(p.spend), 0) as total_spend,
             min(p.po_date)            as first_po_date,
             max(p.po_date)            as last_po_date,
@@ -1056,7 +1058,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
             v.gstin,
             v.rating,
             CAST(count(p.id) AS INTEGER)          as po_line_count,
-            CAST(count(distinct p.po_number) AS INTEGER) as po_count,
+            CAST(count(distinct coalesce(p.po_number, p.id)) AS INTEGER) as po_count,
             coalesce(sum(p.spend), 0) as total_spend,
             min(p.po_date)            as first_po_date,
             max(p.po_date)            as last_po_date,

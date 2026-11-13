@@ -1972,7 +1972,15 @@ sellerDirectory: {
 
     poDump: {
       heading: 'Step 3 — Upload File 2: Historical PO Purchase Dump',
-      hint: 'Required columns: PO Number, PO Date, Vendor Code or Vendor Name, Line Item Description, Quantity, UOM, Spend, Category. Material Code, Subcategory, Department and Currency are optional.',
+      hint: 'Required columns: Vendor Name, Line Item Description and Specifications. Vendor Code can be used instead of Vendor Name. PO Number, PO Date, Quantity, UOM, Spend and Category are optional, and so are Department, Material Code, Subcategory and Currency.',
+      requiredColumnsBadge: 'Required Columns',
+      requiredColumnsBanner: 'Vendor Name, Line Item Description & Specifications',
+      fieldVendor: 'Vendor Name',
+      fieldDescription: 'Line Item Description',
+      fieldSpecs: 'Specifications',
+      missingColumnsTemplate: 'Missing required columns: {columns}. (Found: [{found}]). Download the PO Dump template and use its headers.',
+      invalidHeadersTitle: 'Invalid PO Sheet Headers',
+      noHeadersFound: 'None',
       dropzone: 'Click to browse or drag and drop your PO dump (.xlsx, .xls, .csv)',
       dropzoneParsing: 'Reading and validating PO line items…',
       templateAction: 'Download Template',

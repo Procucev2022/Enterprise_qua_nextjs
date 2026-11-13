@@ -9,6 +9,7 @@ const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const r2Client = require('../src/services/r2Client');
 const { logger } = require('../src/services/loggerService');
 const { VENDOR_INGESTION_SESSION_STATUS, VENDOR_INGESTION_STEP } = require('../src/config/constants');
+const { VALIDATION_SCHEMAS } = require('../src/config/validationSchemas');
 
 /**
  * Stands in for r2Client.getClient() — the real R2 upload/download/delete
@@ -229,7 +230,7 @@ describe('largeFileIngestionService unit tests', () => {
       expect(mapped.department).toBe('Piping');
     });
 
-    it('calculates spend from unit price when spend is 0, and leaves it 0 (not invented) when both are 0', () => {
+    it('calculates spend from unit price when spend is 0, and leaves spend and quantity null when the row gives neither', () => {
       const headers = ['PO Number', 'PO Date', 'Vendor Name', 'Item Description', 'Quantity', 'Unit Price', 'Total Spend'];
       const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
 
@@ -237,9 +238,14 @@ describe('largeFileIngestionService unit tests', () => {
       const mapped1 = largeFileIngestionService.mapRowValues(['PO-1', '2025-01-01', 'Supplier A', 'Bolts', '5', '100', '0'], headerMap, 'PO_DUMP', 0);
       expect(mapped1.spend).toBe(500);
 
-      // Neither spend nor unit price supplied — left at 0, not a guessed default.
+      // Neither spend nor unit price supplied: spend stays null, not a guessed zero.
       const mapped2 = largeFileIngestionService.mapRowValues(['PO-2', '2025-01-01', 'Supplier B', 'Nuts', '4', '0', '0'], headerMap, 'PO_DUMP', 1);
-      expect(mapped2.spend).toBe(0);
+      expect(mapped2.spend).toBeNull();
+
+      // A row that gives no quantity keeps it null rather than being set to 1.
+      const mapped3 = largeFileIngestionService.mapRowValues(['PO-3', '2025-01-01', 'Supplier C', 'Clips', '', '100', '0'], headerMap, 'PO_DUMP', 2);
+      expect(mapped3.quantity).toBeNull();
+      expect(mapped3.spend).toBeNull();
     });
 
     it('normalizes the PO number and date to one standard shape', () => {
@@ -326,23 +332,39 @@ describe('largeFileIngestionService unit tests', () => {
     it('processes valid and invalid po dump batches', async () => {
       jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }]);
       const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
-        { vendorName: 'Apex', poDate: '2025-01-01', itemDescription: 'Valves', department: 'Piping' },
-        { itemDescription: 'No Vendor', department: 'Piping' },
+        { vendorName: 'Apex', poDate: '2025-01-01', itemDescription: 'Valves', specification: 'DN50, flanged', department: 'Piping' },
+        { itemDescription: 'No Vendor', specification: 'DN50', department: 'Piping' },
       ], { horizonStart: '2025-01-01', horizonEnd: '2025-12-31' });
       expect(res.imported).toBe(1);
       expect(res.skipped).toBe(1);
       expect(res.failed).toBe(1);
     });
 
-    it('rejects a po dump row missing item details or category even when vendor identity is present', async () => {
+    it('rejects a po dump row missing its line item description or its specification, even when vendor identity is present', async () => {
       const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
-        { vendorName: 'Apex', department: 'Piping' }, // no item details
-        { vendorName: 'Apex', itemDescription: 'Valves' }, // no category
+        { vendorName: 'Apex', department: 'Piping', specification: 'DN50' }, // no item description
+        { vendorName: 'Apex', itemDescription: 'Valves' }, // no specification
       ], null);
       expect(res.imported).toBe(0);
       expect(res.failed).toBe(2);
-      expect(res.errors[0].reason).toBe('Item Details are required');
-      expect(res.errors[1].reason).toBe('Category is required');
+      expect(res.errors[0].reason).toBe(VALIDATION_SCHEMAS.poLineItemRow.itemDescription.message);
+      expect(res.errors[1].reason).toBe(VALIDATION_SCHEMAS.poLineItemRow.specification.message);
+    });
+
+    it('accepts a po dump row that gives only vendor name, line item description and specification, and keeps the rest null', async () => {
+      const bulkSpy = jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }]);
+      const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
+        { vendorName: 'Apex', itemDescription: 'Valves', specification: 'DN50, flanged' },
+      ], { horizonStart: '2025-01-01', horizonEnd: '2025-12-31' });
+      expect(res).toMatchObject({ imported: 1, failed: 0, skipped: 0 });
+      expect(bulkSpy.mock.calls[0][2][0]).toMatchObject({
+        poDate: null,
+        quantity: null,
+        spend: null,
+        department: null,
+        // A line without a date is kept inside the period, so it is still used.
+        inHorizon: true,
+      });
     });
 
     it('handles bulkInsertPoLineItems failure', async () => {
@@ -350,7 +372,7 @@ describe('largeFileIngestionService unit tests', () => {
       const res = await largeFileIngestionService.processPoDumpBatch(
         's1',
         'o1',
-        [{ vendorName: 'Apex', itemDescription: 'Valves', department: 'Piping' }],
+        [{ vendorName: 'Apex', itemDescription: 'Valves', specification: 'DN50', department: 'Piping' }],
         null
       );
       expect(res.imported).toBe(0);
@@ -546,7 +568,7 @@ describe('largeFileIngestionService unit tests', () => {
         sessionId: 'sess-arr-po',
         organizationId: 'org-1',
         rows: [
-          { vendorName: 'Apex', poDate: '2025-06-01', itemDescription: 'Valves', department: 'Piping' },
+          { vendorName: 'Apex', poDate: '2025-06-01', itemDescription: 'Valves', specification: 'DN50', department: 'Piping' },
           { itemDescription: 'No vendor' },
         ], // 1 valid, 1 invalid
         fileName: 'po.xlsx',

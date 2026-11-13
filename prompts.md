@@ -5714,3 +5714,23 @@ All RFQ fields except Estimated Budget should be mandatory. Also, clicking anywh
 ```
 
 ---
+
+### Prompt 197
+
+**Timestamp**: 2026-11-13T15:39:00+05:30 (approximate: the message was re-sent and its exact send time was not recorded)
+
+```text
+All RFQ fields except Estimated Budget should be mandatory. Also, clicking anywhere inside the Target Delivery Date field should open the calendar picker.
+```
+
+---
+
+### Prompt 198
+
+**Timestamp**: 2026-11-13T16:09:03+05:30
+
+```text
+po dump needs only vendor name, line item description & specifications. but complete PO dump is optional
+```
+
+---

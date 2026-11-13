@@ -638,6 +638,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-01-01',
           'Vendor Name': 'Apex Supplies Ltd.',
           'Item Name': 'Special Valves',
+          Specifications: 'Standard grade',
           Quantity: 10,
           'Unit Price': '$500',
           'Total Spend': '$0',
@@ -647,6 +648,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-01-02',
           'Vendor Name': 'Apex Supplies Ltd.',
           'Item Name': 'Special Valves 2',
+          Specifications: 'Standard grade',
           Quantity: 10,
           'Unit Price': '0',
           'Total Spend': '$5000',
@@ -656,6 +658,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-01-03',
           'Vendor Name': 'Delta Compressors Ltd',
           'Item Name': 'General Non-Matching Item',
+          Specifications: 'Standard grade',
           Quantity: 1,
           'Unit Price': 100,
           'Total Spend': 100,
@@ -665,6 +668,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': 45995.00011574074,
           'Vendor Name': 'Apex Supplies Ltd.',
           'Item Name': 'Decimal Date Test',
+          Specifications: 'Standard grade',
           Quantity: 1,
           'Unit Price': 100,
           'Total Spend': 100,
@@ -813,6 +817,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-7001',
         'PO Date': '2025-02-01',
         'Vendor Name': 'CloudTech Solutions',
+        Specifications: 'Enterprise licence terms',
         'Item Name': 'Microsoft 365 workspace license subscription renewal, Azure cloud storage credits, BigQuery analytics data platform, Datacenter infrastructure server',
         Quantity: 1,
         'Unit Price': 100000,
@@ -822,6 +827,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-7002',
         'PO Date': '2025-02-02',
         'Vendor Name': 'Zenith Traders',
+        Specifications: 'Office consumables',
         'Item Name': 'Office stationery and miscellaneous supplies',
         Quantity: 5,
         'Unit Price': 100,
@@ -834,6 +840,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-7003',
         'PO Date': '2025-02-03',
         'Vendor Name': 'Plain Software House',
+        Specifications: 'Generic software licence',
         'Item Name': 'Generic software',
         Quantity: 1,
         'Unit Price': 1000,
@@ -1419,6 +1426,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       'PO Date': '2025-01-01',
       'Supplier Name': `Supplier ${i}`,
       'Item Description': `Item ${i}`,
+      Specifications: `Spec ${i}`,
       Quantity: 10,
       Price: 100,
       Total: 1000,
@@ -1789,8 +1797,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
 
     expect(mockShowToast).toHaveBeenCalledWith(
-      'Invalid PO Sheet Headers',
-      expect.stringContaining('Sheet headers do not match PO Purchase Dump required fields'),
+      UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle,
+      expect.stringContaining(UI_STRINGS.vendorPoIngestion.poDump.missingColumnsTemplate.split('{columns}')[0]),
       'warning'
     );
     expect(screen.getByTestId('po-upload-error-banner')).toBeInTheDocument();
@@ -2270,24 +2278,26 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Clear rating input to test raw === '' branch (line 2074)
     fireEvent.change(ratingInput, { target: { value: '' } });
 
-    // Step 3: Upload PO with zero unit price and omitted specs/department (lines 2446, 2449, 2452, 2456)
+    // Step 3: Upload PO with omitted unit price and department (lines 2446, 2449, 2452, 2456)
     fireEvent.click(screen.getByText('3. PO Dump'));
     const sparsePoWb = XLSX.utils.book_new();
     const sparsePoWs = XLSX.utils.json_to_sheet([
       {
-        'PO Number': 'PO-SPARSE-1',
+        'PO Number': '',
         'PO Date': '2025-04-10',
         'Vendor Name': 'Minimalist Vendor Pvt Ltd',
         'Item Name': 'Electrical switchgear panel and breaker mccb', // lines 1222-1223
         Quantity: 2,
         'Total Spend': 2000,
-        // Specs, Unit Price, Department omitted
+        Specifications: 'Switchgear panel, 415 V',
+        // Unit Price and Department omitted
       },
       {
         'PO Number': 'PO-SPARSE-2',
         'PO Date': '2025-04-11',
         'Vendor Name': 'Minimalist Vendor Pvt Ltd',
         'Item Name': 'Civil works peb tmt steel structure', // lines 1226-1227
+        Specifications: 'Steel structure, Fe 500',
         Quantity: 1,
         'Total Spend': 5000,
       },
@@ -2308,7 +2318,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    // Department is not defaulted. Rows that omit it show a dash.
+    // Nothing is defaulted. A column that a row leaves empty shows a dash.
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 
@@ -2451,6 +2461,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-15',
           'Vendor Name': 'Duplicate Email Vendor Ltd',
           'Item Name': 'Industrial stainless steel valve',
+          Specifications: 'DN50, flanged',
           Quantity: 10,
           'Total Spend': 25000,
           Department: 'Mechanical Engineering',
@@ -2845,6 +2856,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Date': '2025-06-01',
         'Vendor Name': 'Apex Supplies Ltd.',
         'Item Name': 'Rotary air compressor and induction electric motor', // lines 1218, 1219
+        Specifications: 'Induction motor, 15 HP',
         Quantity: 1,
         'Unit Price': 45000,
         'Total Spend': 45000,
@@ -2855,6 +2867,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Date': '2025-06-02',
         'Vendor Name': 'Apex Supplies Ltd.',
         'Item Name': 'Substation switchgear control panel with power cable and mccb breaker', // lines 1222, 1223
+        Specifications: 'Panel, 415 V, 50 Hz',
         Quantity: 3,
         'Unit Price': 15000,
         'Total Spend': 45000,
@@ -2865,6 +2878,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Date': '2025-06-03',
         'Vendor Name': 'Apex Supplies Ltd.',
         'Item Name': 'Civil industrial steel works with peb structure and tmt bars', // lines 1226, 1227
+        Specifications: 'Fe 500 TMT bars',
         Quantity: 10,
         'Unit Price': 5000,
         'Total Spend': 50000,
@@ -2882,8 +2896,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [diversePoFile] } });
     }
 
-    // An empty PO date rejects the file. The message names the row and the missing field, and no row is inserted.
-    expect(screen.getByText(/Row 2: PO Date/)).toBeInTheDocument();
+    // A row without a specification rejects the file. The message names the row and the missing field, and no row is inserted.
+    expect(screen.getByText(/Row 2: Specifications/)).toBeInTheDocument();
 
     // A valid dump replaces the rejected one, so the reset control below is rendered.
     if (poInput) {
@@ -2938,6 +2952,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Centrifugal pump and valve with hydraulic hose',
+          Specifications: 'DN50, cast iron',
           Quantity: 2,
           'Total Spend': 12000,
           Department: 'Mechanical',
@@ -2947,6 +2962,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Rotary compressor and electric motor',
+          Specifications: 'Motor, 7.5 kW',
           Quantity: 1,
           'Total Spend': 25000,
           Department: 'Mechanical',
@@ -2956,6 +2972,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Gate unit with hydraulic hose',
+          Specifications: 'Gate, PN16',
           Quantity: 1,
           'Total Spend': 8000,
           Department: 'Mechanical',
@@ -2965,6 +2982,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Globe component with compressor',
+          Specifications: 'Globe, PN16',
           Quantity: 1,
           'Total Spend': 6000,
           Department: 'Mechanical',
@@ -2975,6 +2993,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-02',
           'Vendor Name': 'Volt Panels Electricals',
           'Item Name': 'Electrical panel and circuit breaker with armored cable',
+          Specifications: 'Panel, 415 V',
           Quantity: 3,
           'Total Spend': 35000,
           Department: 'Electrical',
@@ -2984,6 +3003,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-03',
           'Vendor Name': 'Switchgear Only Ltd',
           'Item Name': 'Switchgear and mccb unit with armored cable',
+          Specifications: 'Switchgear, 1 kA',
           Quantity: 2,
           'Total Spend': 20000,
           Department: 'Electrical',
@@ -2994,6 +3014,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-04',
           'Vendor Name': 'Infra Civil Structures',
           'Item Name': 'Civil works peb structure and tmt steel reinforcement bars',
+          Specifications: 'Fe 500 TMT',
           Quantity: 10,
           'Total Spend': 45000,
           Department: 'Civil',
@@ -3003,6 +3024,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-05',
           'Vendor Name': 'Plain Civil Works Ltd',
           'Item Name': 'Civil industrial steel structure',
+          Specifications: 'IS 2062 steel',
           Quantity: 5,
           'Total Spend': 30000,
           Department: 'Civil',
@@ -3013,6 +3035,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-06',
           'Vendor Name': 'General Hardware Works',
           'Item Name': 'Standard fasteners and office hardware supplies',
+          Specifications: 'Standard grade',
           Quantity: 50,
           'Total Spend': 5000,
           Department: 'General',
@@ -3023,6 +3046,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-07',
           'Vendor Name': 'Cloud Tech Corp',
           'Item Name': 'Azure cloud storage compute credits and office 365 subscription renewal with power bi data analytics in datacenter',
+          Specifications: 'Subscription licence',
           Quantity: 1,
           'Total Spend': 90000,
           Department: 'IT',
@@ -3033,6 +3057,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-08',
           'Vendor Name': 'Minimal Software Corp',
           'Item Name': 'Microsoft custom software utility',
+          Specifications: 'Custom utility',
           Quantity: 1,
           'Total Spend': 8000,
           Department: 'IT',
@@ -3668,6 +3693,51 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(phoneInputs[0]).toHaveValue('+91 9899988877');
   });
 
+  it('accepts a PO dump that gives only vendor name, line item description and specifications, and shows a dash for the columns it omits', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [createValidVendorMasterFile()] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+
+    // Only the three required columns are present: no PO number, date, quantity, spend, unit price or category.
+    const poWb = XLSX.utils.book_new();
+    const poWs = XLSX.utils.json_to_sheet([
+      { 'Vendor Name': 'Minimal Supply Co', 'Line Item Description': 'Gate valve', Specifications: 'DN50, flanged' },
+      { 'Vendor Name': 'Minimal Supply Co', 'Line Item Description': 'Hydraulic hose', Specifications: 'Class 150' },
+    ]);
+    XLSX.utils.book_append_sheet(poWb, poWs, 'PO');
+    const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'xlsx' });
+    const poFile: any = new File([poBuf], 'minimal_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = poBuf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(screen.getAllByText('Minimal Supply Co').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    expect(mockShowToast).not.toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle,
+      expect.anything(),
+      'warning'
+    );
+  });
+
   it('replaces Department column with Category (Minor Category) in PO Line Items Preview and resolves exact minor categories', async () => {
     const { container } = render(<InitialSetupModal />);
 
@@ -3689,8 +3759,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText('3. PO Dump'));
     expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
 
-    // Required columns banner lists Spend & Category
-    expect(screen.getByText(/Spend & Category/i)).toBeInTheDocument();
+    // The required columns banner lists the three mandatory columns
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner)).toBeInTheDocument();
 
     // Test template download contains Category header
     const origCreateObjectURL = global.URL.createObjectURL;
@@ -3706,7 +3776,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-VALVE-01',
         'PO Date': '2024-01-10',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Description': 'Stainless Steel Ball Valve 2 inch',
+        'Item Description': 'Stainless Steel Ball Valve 2 inch', Specifications: 'SS316, 2 inch',
         Quantity: 10,
         'Total Spend (INR)': 45000,
       },
@@ -3714,7 +3784,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-PUMP-02',
         'PO Date': '2024-01-11',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Description': 'High Head Centrifugal Pump',
+        'Item Description': 'High Head Centrifugal Pump', Specifications: 'Multistage, 15 HP',
         Quantity: 2,
         'Total Spend (INR)': 120000,
       },
@@ -3722,7 +3792,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-STEEL-03',
         'PO Date': '2024-01-12',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Description': 'TMT Steel Rebar 16mm',
+        'Item Description': 'TMT Steel Rebar 16mm', Specifications: 'Fe 500D, 16 mm',
         Quantity: 50,
         'Total Spend (INR)': 75000,
       },
@@ -3730,7 +3800,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-NET-04',
         'PO Date': '2024-01-13',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Description': 'Generic Item with Category',
+        'Item Description': 'Generic Item with Category', Specifications: 'Standard grade',
         Quantity: 5,
         'Total Spend (INR)': 25000,
         Category: 'Networking Equipment',
@@ -3739,7 +3809,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-UNMAPPED-05',
         'PO Date': '2024-01-14',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Description': 'Custom Nonstandard Fixture 999',
+        'Item Description': 'Custom Nonstandard Fixture 999', Specifications: 'Made to drawing',
         Quantity: 1,
         'Total Spend (INR)': 15000,
         Department: 'Administrative Services',

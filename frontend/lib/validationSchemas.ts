@@ -721,3 +721,56 @@ export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
 export const REQUEST_VENDOR_EVALUATION_SCHEMA = {
   notes: { maxLength: 1000 },
 } as const;
+
+// ==============================================================================
+// HISTORICAL PO DUMP (Step 3 of the vendor ingestion wizard)
+// ==============================================================================
+// Three columns are required: the vendor, the line item description and the
+// specification. Every other PO column is optional, and a complete dump is still
+// accepted. The server applies the same rule in backend/src/config/validationSchemas.js
+// (poLineItemRow).
+
+/** The parsed PO row fields a line must carry before it is accepted. */
+export const PO_DUMP_REQUIRED_FIELDS = ['vendorIdentifier', 'itemName', 'specs'] as const;
+
+export type PoDumpRequiredField = (typeof PO_DUMP_REQUIRED_FIELDS)[number];
+
+/**
+ * Header aliases that satisfy each required column. Headers are compared with spaces and
+ * punctuation removed, and a header matches when it equals an alias or contains one.
+ */
+export const PO_DUMP_REQUIRED_HEADER_ALIASES: Record<PoDumpRequiredField, readonly string[]> = {
+  vendorIdentifier: ['vendorname', 'vendoridentifier', 'vendor', 'suppliername', 'supplier', 'companyname', 'vendorcode', 'vendorid'],
+  itemName: [
+    'lineitemdescription', 'lineitem', 'itemdescription', 'description', 'itemname', 'productdescription',
+    'productname', 'materialdescription', 'material', 'servicedescription', 'service', 'item',
+  ],
+  specs: ['specs', 'specification', 'technicalspecs', 'specifications', 'details', 'itemspecs', 'grade'],
+};
+
+function cleanPoDumpHeader(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function poDumpFieldLabel(field: PoDumpRequiredField): string {
+  const labels = UI_STRINGS.vendorPoIngestion.poDump;
+  if (field === 'vendorIdentifier') return labels.fieldVendor;
+  if (field === 'itemName') return labels.fieldDescription;
+  return labels.fieldSpecs;
+}
+
+/** Labels of the required columns that no header in the sheet satisfies. */
+export function findMissingPoDumpHeaders(headerKeys: readonly string[]): string[] {
+  const cleaned = headerKeys.map(cleanPoDumpHeader);
+  return PO_DUMP_REQUIRED_FIELDS.filter(
+    (field) =>
+      !cleaned.some((header) =>
+        PO_DUMP_REQUIRED_HEADER_ALIASES[field].some((alias) => header === alias || header.includes(alias))
+      )
+  ).map(poDumpFieldLabel);
+}
+
+/** Labels of the required fields a parsed row lacks. An empty list means the row is complete. */
+export function findMissingPoDumpFields(row: Partial<Record<PoDumpRequiredField, string>>): string[] {
+  return PO_DUMP_REQUIRED_FIELDS.filter((field) => String(row[field] ?? '').trim() === '').map(poDumpFieldLabel);
+}

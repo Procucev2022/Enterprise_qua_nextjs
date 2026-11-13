@@ -31,6 +31,8 @@ import {
   ACCOUNT_DOCUMENT_UPLOAD_SCHEMA,
   SELLER_ADD_QUOTE_CREDITS_SCHEMA,
   BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA,
+  findMissingPoDumpFields,
+  findMissingPoDumpHeaders,
 } from '../../lib/validationSchemas';
 import { UI_STRINGS } from '../../lib/uiStrings';
 
@@ -796,5 +798,43 @@ describe('validationSchemas edge branches', () => {
       global.AbortController = originalAbortController;
       global.fetch = originalFetch;
     }
+  });
+});
+
+describe('PO dump required columns', () => {
+  it('reports no missing header when a sheet has the vendor, description and specifications columns', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Vendor Name', 'Line Item Description', 'Specifications', 'Quantity'])).toEqual([]);
+  });
+
+  it('accepts the other spellings of each required column', () => {
+    expect(findMissingPoDumpHeaders(['Vendor Code', 'Item Description', 'Technical Specs'])).toEqual([]);
+  });
+
+  it('names each required column that no header satisfies', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Quantity'])).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
+    ]);
+  });
+
+  it('names only the specifications column when that is the one missing', () => {
+    expect(findMissingPoDumpHeaders(['Vendor Name', 'Item Description'])).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
+    ]);
+  });
+
+  it('reports no missing field for a complete row and names each blank required field', () => {
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: 'Valve', specs: 'DN50' })).toEqual([]);
+    expect(findMissingPoDumpFields({ vendorIdentifier: '  ', itemName: 'Valve', specs: undefined })).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
+    ]);
+  });
+
+  it('treats the description as missing when only the description is blank', () => {
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: '', specs: 'DN50' })).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+    ]);
   });
 });

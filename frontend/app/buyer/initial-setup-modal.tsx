@@ -13,6 +13,7 @@ import {
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 import { resolveMinorCategory, findMajorForMinor } from '@/lib/categoryTaxonomy';
+import { findMissingPoDumpFields, findMissingPoDumpHeaders } from '@/lib/validationSchemas';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -975,28 +976,17 @@ export default function InitialSetupModal() {
           }
 
           const headerKeys = Object.keys(rawJson[0]);
-          const hasPoNumber = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['ponumber', 'po', 'pono', 'orderid', 'ordernumber', 'orderno', 'purchaseorder'].some((c) => clean === c || clean.includes(c));
-          });
-          const hasVendor = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['vendorname', 'vendoridentifier', 'vendor', 'suppliername', 'supplier', 'companyname', 'vendorcode', 'vendorid'].some((c) => clean === c || clean.includes(c));
-          });
-          const hasItem = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['lineitemdescription', 'lineitem', 'itemdescription', 'description', 'itemname', 'productdescription', 'productname', 'materialdescription', 'material', 'servicedescription', 'service', 'item'].some((c) => clean === c || clean.includes(c));
-          });
-          const hasSpendOrQty = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['quantity', 'qty', 'spend', 'totalspend', 'totalspendinr', 'totalamount', 'totalamountinr', 'totalinr', 'unitprice', 'price', 'rate', 'amount', 'totalvalue', 'poamount', 'total'].some((c) => clean === c || clean.includes(c));
-          });
+          // The three required columns must each be present. Other PO columns are optional.
+          const missingHeaders = findMissingPoDumpHeaders(headerKeys);
 
-          if (!hasPoNumber && !hasVendor && !hasItem && !hasSpendOrQty) {
-            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || 'None';
-            const errMsg = `Sheet headers do not match PO Purchase Dump required fields. Expected: PO Number, Vendor Name, Item Description, Quantity / Spend. (Found: [${foundHeaders}]). Please download and use the provided PO Dump Excel template.`;
+          if (missingHeaders.length > 0) {
+            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || UI_STRINGS.vendorPoIngestion.poDump.noHeadersFound;
+            const errMsg = formatString(UI_STRINGS.vendorPoIngestion.poDump.missingColumnsTemplate, {
+              columns: missingHeaders.join(', '),
+              found: foundHeaders,
+            });
             setPoUploadError(errMsg);
-            showToast('Invalid PO Sheet Headers', errMsg, 'warning');
+            showToast(UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle, errMsg, 'warning');
             setIsParsingPo(false);
             setPoJob(null);
             if (poFileInputRef.current) poFileInputRef.current.value = '';
@@ -1070,13 +1060,7 @@ export default function InitialSetupModal() {
             // Rows the filter below would drop as blank are skipped here. Any other row must name every
             // required field it lacks. Nothing is substituted for a missing value.
             const isBlankRow = !vendorIdentifier && !itemName && !department && !categoryInput;
-            const missingFields: string[] = [];
-            if (!poNumber) missingFields.push('PO Number');
-            if (!poDate) missingFields.push('PO Date');
-            if (!vendorIdentifier) missingFields.push('Vendor');
-            if (!itemName) missingFields.push('Line Item Description');
-            if (quantity < 1) missingFields.push('Quantity');
-            if (totalSpend <= 0) missingFields.push('Spend');
+            const missingFields = findMissingPoDumpFields({ vendorIdentifier, itemName, specs });
             if (!isBlankRow && missingFields.length > 0) {
               invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
             }
@@ -2330,9 +2314,9 @@ export default function InitialSetupModal() {
             {/* Single-line Simplified PO Dump Info & Download Banner */}
             <div className="p-3.5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-blue-50/70 dark:from-purple-950/40 dark:via-indigo-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="badge badge-purple font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="badge badge-purple font-bold text-[10px] shrink-0">{UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBadge}</span>
                 <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
-                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Category
+                  {UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -2518,7 +2502,7 @@ export default function InitialSetupModal() {
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
                     {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                        <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[120px] truncate" title={p.poNumber}>{p.poNumber}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[120px] truncate" title={p.poNumber}>{p.poNumber || '—'}</td>
                         <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{normalizePoDate(p.poDate) || p.poDate || '—'}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[160px]">
                           <span className="truncate block" title={p.vendorIdentifier}>{p.vendorIdentifier}</span>
@@ -2529,11 +2513,11 @@ export default function InitialSetupModal() {
                         <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px]">
                           <span className="truncate block" title={p.specs || undefined}>{p.specs || '—'}</span>
                         </td>
-                        <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity.toLocaleString('en-IN')}</td>
+                        <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity > 0 ? p.quantity.toLocaleString('en-IN') : '—'}</td>
                         <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.unit}</td>
                         <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
-                          {formatCurrency(p.totalSpend)}
+                          {p.totalSpend > 0 ? formatCurrency(p.totalSpend) : '—'}
                         </td>
                         <td className="p-2.5 text-[10px] max-w-[160px]">
                           {p.category || p.minorCategory ? (

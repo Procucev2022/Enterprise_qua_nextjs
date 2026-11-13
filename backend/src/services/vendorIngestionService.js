@@ -602,9 +602,11 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
     return null;
   });
 
+  // A row without a PO date cannot be placed before or after the window. It is kept
+  // inside, because a dump no longer has to carry dates to be used.
   const stamped = valid.map((row) => ({
     ...row,
-    inHorizon: row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd,
+    inHorizon: !row.poDate || (row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd),
   }));
 
   if (replaceExisting) {

@@ -1005,12 +1005,13 @@ const VALIDATION_SCHEMAS = {
     rating: { type: 'number', required: false, min: 0, max: 100 },
   },
 
-  // One historical PO line item. The description is the single most important
-  // field in the whole module — it is the evidence the categoriser reads — so a
-  // line with no description is invalid rather than merely unhelpful.
+  // One historical PO line item. Three fields are required: the vendor (a name or a
+  // code, checked by the service), the line item description and the specification.
+  // Every other PO column is optional, so a dump with only those three is accepted,
+  // and a complete dump is accepted too.
   poLineItemRow: {
-    poNumber: { type: 'string', required: true, minLength: 1, maxLength: 120, message: 'PO Number is required.' },
-    poDate: { type: 'string', required: true, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
+    poNumber: { type: 'string', required: false, minLength: 1, maxLength: 120 },
+    poDate: { type: 'string', required: false, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
     itemDescription: {
       type: 'string',
       required: true,
@@ -1018,16 +1019,22 @@ const VALIDATION_SCHEMAS = {
       maxLength: 4000,
       message: 'Line Item Description is required — it is the evidence the categoriser reads.',
     },
-    quantity: { type: 'number', required: true, min: 0, message: 'Quantity is required.' },
-    uom: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'UOM is required.' },
-    spend: { type: 'number', required: true, min: 0, message: 'Spend / Amount is required.' },
-    department: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Department is required.' },
+    quantity: { type: 'number', required: false, min: 0 },
+    uom: { type: 'string', required: false, minLength: 1, maxLength: 64 },
+    spend: { type: 'number', required: false, min: 0 },
+    department: { type: 'string', required: false, minLength: 1, maxLength: 255 },
     // Either identifier is enough to join to the vendor master; the service
     // rejects a row that supplies neither, because it cannot be attributed.
     vendorCode: { type: 'string', required: false, maxLength: 120 },
     vendorName: { type: 'string', required: false, maxLength: 512 },
     vendorGstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
-    specification: { type: 'string', required: false, maxLength: 4000 },
+    specification: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 4000,
+      message: 'Specifications is required.',
+    },
     materialCode: { type: 'string', required: false, maxLength: 120 },
     existingCategory: { type: 'string', required: false, maxLength: 255 },
     existingSubcategory: { type: 'string', required: false, maxLength: 255 },

@@ -40,7 +40,7 @@ const MAPPING = {
   aiSuggestion: { majorCategory: 'Mechanical', minorCategories: ['Pumps'], confidence: 95, reason: 'Repeated pump purchases' },
 };
 const VENDOR_ROW = { vendorCode: 'V-001', companyName: 'Pump Supplier', email: 'supplier@example.test', gstin: '27ABCDE1234F1Z5' };
-const PO_ROW = { poNumber: 'PO-001', poDate: '2026-06-01', itemDescription: 'Industrial pump', quantity: 2, uom: 'Nos', spend: 2000, department: 'Maintenance', vendorCode: 'V-001' };
+const PO_ROW = { poNumber: 'PO-001', poDate: '2026-06-01', itemDescription: 'Industrial pump', specification: 'Centrifugal, 5 HP', quantity: 2, uom: 'Nos', spend: 2000, department: 'Maintenance', vendorCode: 'V-001' };
 const SUMMARY = { queued: 0, processing: 0, completed: 2, failed: 0, mapped: 2, pendingReview: 0, selfMapRequired: 0 };
 
 beforeEach(() => {
@@ -253,6 +253,14 @@ describe('vendor and purchase order uploads', () => {
     await expect(service.confirmPoDump(USER, SESSION.id, { rows: [{}] })).rejects.toMatchObject({ status: 422, details: { invalidRows: [expect.any(Object)] } });
     queries.countPoLineItems.mockResolvedValue({ total: CONFIG.MAX_PO_ROWS + 1 });
     await expect(service.confirmPoDump(USER, SESSION.id, { rows: [PO_ROW] })).rejects.toMatchObject({ status: 413 });
+  });
+
+  test('keeps a PO line that gives only the required fields inside the period when it has no date', async () => {
+    const result = await service.confirmPoDump(USER, SESSION.id, {
+      rows: [{ itemDescription: 'Industrial pump', specification: 'Centrifugal, 5 HP', vendorName: 'Pump Supplier' }],
+    });
+    expect(result).toMatchObject({ validRows: 1, invalidRows: 0 });
+    expect(queries.bulkInsertPoLineItems.mock.calls[0][2][0]).toMatchObject({ inHorizon: true });
   });
 });
 
