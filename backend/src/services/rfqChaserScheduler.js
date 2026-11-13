@@ -611,25 +611,29 @@ function _chaserJobId(rfqNumber, vendorIdOrKey, channel) {
   return `chaser-${rfqNumber}-${safeVendorKey}-${channel}`;
 }
 
+/** One chaser job row, ready for domainQueries.insertChaserJobInDB or insertChaserJobsInDB. */
+function _buildChaserJobRecord(jobId, rfq, vendor, channel, delayMs) {
+  return {
+    id: jobId,
+    rfqNumber: rfq.rfqNumber,
+    rfqId: rfq.id || rfq.rfqNumber,
+    vendorId: vendor.id,
+    vendorName: vendor.name,
+    vendorPhone: vendor.phone || null,
+    vendorEmail: vendor.email || null,
+    vendorContactPerson: vendor.contactPerson || null,
+    rfqTitle: rfq.title || null,
+    channel,
+    fireAt: new Date(Date.now() + delayMs).toISOString(),
+  };
+}
+
 /**
  * Persist a chaser job to D1 (fire-and-forget — never blocks scheduling).
  */
 async function _persistChaserJob(jobId, rfq, vendor, channel, delayMs) {
   try {
-    const fireAt = new Date(Date.now() + delayMs).toISOString();
-    const saved = await domainQueries.insertChaserJobInDB({
-      id: jobId,
-      rfqNumber: rfq.rfqNumber,
-      rfqId: rfq.id || rfq.rfqNumber,
-      vendorId: vendor.id,
-      vendorName: vendor.name,
-      vendorPhone: vendor.phone || null,
-      vendorEmail: vendor.email || null,
-      vendorContactPerson: vendor.contactPerson || null,
-      rfqTitle: rfq.title || null,
-      channel,
-      fireAt,
-    });
+    const saved = await domainQueries.insertChaserJobInDB(_buildChaserJobRecord(jobId, rfq, vendor, channel, delayMs));
     return Boolean(saved);
   } catch (err) {
     // Never block scheduling — chaser DB persistence is best-effort
@@ -644,6 +648,58 @@ async function _dispatchPersistedChaserOrFallback(persistPromise, fallbackDispat
     return;
   }
   await fallbackDispatch();
+}
+
+/** True when the RFQ runs in V0 (free starter trial) mode. V0 only ever gets the SMS chaser. */
+function _isV0Rfq(rfq) {
+  return rfq.sourcingMode === 'mode_0' || rfq.sourcingMode === 'v0' || rfq.sourcingMode === 'version_0';
+}
+
+/** Delay before each chaser channel fires, in milliseconds. Test runs use the shorter defaults. */
+function _chaserDelays() {
+  return {
+    smsDelay: process.env.NODE_ENV === 'test'
+      ? (CHASER_DELAYS.SMS_MS ?? 5 * 60 * 1000)
+      : (CHASER_DELAYS.SMS_MS !== undefined && !isNaN(Number(CHASER_DELAYS.SMS_MS))
+          ? Math.max(0, Number(CHASER_DELAYS.SMS_MS))
+          : (5 * 60 * 1000)),
+    callDelay: CHASER_DELAYS.CALL_MS,
+    waDelay: process.env.NODE_ENV === 'test'
+      ? (CHASER_DELAYS.WHATSAPP_MS ?? 12 * 60 * 60 * 1000)
+      : Math.max(0, Number(CHASER_DELAYS.WHATSAPP_MS) || (12 * 60 * 60 * 1000)),
+    emailDelay: process.env.NODE_ENV === 'test'
+      ? (CHASER_DELAYS.EMAIL_MS ?? 24 * 60 * 60 * 1000)
+      : Math.max(0, Number(CHASER_DELAYS.EMAIL_MS) || (24 * 60 * 60 * 1000)),
+  };
+}
+
+/** Chaser job rows for one vendor. V0 gets the SMS only. Other modes also get the call, WhatsApp and email steps. */
+function _buildVendorChaserRows(rfq, vendor, { isV0, smsDelay, callDelay, waDelay, emailDelay }) {
+  const vendorKey = _vendorKey(vendor);
+  const steps = isV0
+    ? [['sms', smsDelay]]
+    : [['sms', smsDelay], ['call', callDelay], ['whatsapp', waDelay], ['email', emailDelay]];
+  return steps.map(([channel, delay]) =>
+    _buildChaserJobRecord(_chaserJobId(rfq.rfqNumber, vendorKey, channel), rfq, vendor, channel, delay)
+  );
+}
+
+/**
+ * Writes chaser rows in one D1 batch on the Worker's waitUntil. Best-effort: a failure is logged
+ * and never blocks scheduling.
+ */
+function _persistChaserRowsInBackground(rows, rfqNumber) {
+  const waitUntil = getWaitUntil();
+  const persistPromise = domainQueries.insertChaserJobsInDB(rows).catch((err) => {
+    logger.warn(
+      `[CHASER] Failed to persist ${rows.length} chaser job(s) for ${rfqNumber}: ${err.message}`,
+      {},
+      'RFQ_CHASER'
+    );
+    return [];
+  });
+  if (waitUntil) waitUntil(persistPromise);
+  return persistPromise;
 }
 
 /**
@@ -663,41 +719,15 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   if (!rfq || !vendor) return;
 
   const { rfqNumber } = rfq;
-  const isV0 =
-    rfq.sourcingMode === 'mode_0' ||
-    rfq.sourcingMode === 'v0' ||
-    rfq.sourcingMode === 'version_0';
+  const isV0 = _isV0Rfq(rfq);
 
   const vendorKey = _vendorKey(vendor);
 
-  const smsDelay = process.env.NODE_ENV === 'test'
-    ? (CHASER_DELAYS.SMS_MS ?? 5 * 60 * 1000)
-    : (CHASER_DELAYS.SMS_MS !== undefined && !isNaN(Number(CHASER_DELAYS.SMS_MS))
-        ? Math.max(0, Number(CHASER_DELAYS.SMS_MS))
-        : (5 * 60 * 1000));
-  const callDelay = CHASER_DELAYS.CALL_MS;
-  const waDelay = process.env.NODE_ENV === 'test'
-    ? (CHASER_DELAYS.WHATSAPP_MS ?? 12 * 60 * 60 * 1000)
-    : Math.max(0, Number(CHASER_DELAYS.WHATSAPP_MS) || (12 * 60 * 60 * 1000));
-  const emailDelay = process.env.NODE_ENV === 'test'
-    ? (CHASER_DELAYS.EMAIL_MS ?? 24 * 60 * 60 * 1000)
-    : Math.max(0, Number(CHASER_DELAYS.EMAIL_MS) || (24 * 60 * 60 * 1000));
+  const delays = _chaserDelays();
+  const { smsDelay, callDelay, waDelay, emailDelay } = delays;
 
   if (getD1Binding()) {
-    const waitUntil = getWaitUntil();
-    const jobs = isV0
-      ? [['sms', smsDelay]]
-      : [
-          ['sms', smsDelay],
-          ['call', callDelay],
-          ['whatsapp', waDelay],
-          ['email', emailDelay],
-        ];
-    jobs.forEach(([channel, delay]) => {
-      const jobId = _chaserJobId(rfqNumber, vendorKey, channel);
-      const persistPromise = _persistChaserJob(jobId, rfq, vendor, channel, delay);
-      if (waitUntil) waitUntil(persistPromise);
-    });
+    _persistChaserRowsInBackground(_buildVendorChaserRows(rfq, vendor, { isV0, ...delays }), rfqNumber);
     logger.info(
       `[CHASER] Persisted Worker schedule for ${vendor.name} on ${rfqNumber} (isV0=${isV0}); dispatch is handled by Cron Trigger`,
       { rfqNumber, vendorId: vendor.id, isV0 },
@@ -930,10 +960,18 @@ function scheduleRFQChasers(rfq, vendors, getCreditInfo = () => ({})) {
     dedupedVendors.push(vendor);
   });
 
-  dedupedVendors.forEach((vendor) => {
-    const credit = typeof getCreditInfo === 'function' ? getCreditInfo(vendor) : (getCreditInfo || {});
-    scheduleVendorChaser(rfq, vendor, credit);
-  });
+  if (getD1Binding()) {
+    // One D1 batch for every vendor on this RFQ, instead of one write per vendor channel.
+    const isV0 = _isV0Rfq(rfq);
+    const delays = _chaserDelays();
+    const rows = dedupedVendors.flatMap((vendor) => _buildVendorChaserRows(rfq, vendor, { isV0, ...delays }));
+    _persistChaserRowsInBackground(rows, rfq.rfqNumber);
+  } else {
+    dedupedVendors.forEach((vendor) => {
+      const credit = typeof getCreditInfo === 'function' ? getCreditInfo(vendor) : (getCreditInfo || {});
+      scheduleVendorChaser(rfq, vendor, credit);
+    });
+  }
   logger.info(
     `[CHASER] Queued chaser sequence for ${dedupedVendors.length} vendor(s) on ${rfq.rfqNumber}`,
     { rfqNumber: rfq.rfqNumber, vendorCount: dedupedVendors.length },

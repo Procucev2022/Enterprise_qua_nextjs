@@ -83,6 +83,8 @@ function authFetchHeaders(): Record<string, string> {
 }
 
 let _lastHistoricalDataError: string | null = null;
+// Numbers the feed entries recorded in this browser session, so each local id is unique.
+let sessionFeedSequence = 0;
 export function getLastHistoricalDataError(): string | null {
   return _lastHistoricalDataError;
 }
@@ -318,12 +320,11 @@ interface AppContextType {
     approverNotes?: string
   ) => Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }>;
   /**
-   * Records an audit event. The server stamps the actor from the signed-in session, plus the IP address and the
-   * SHA-256 seal. The entry is added to `auditLogs` only after the server stores it.
+   * Records an audit event in the frontend log. It is not stored in the database and is not added to `auditLogs`.
    */
   addAuditLog: (action: string, rfqNumber?: string) => Promise<void>;
-  /** Saves a feed event. The event appears in `aiFeed` only once the server has stored it. */
-  addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system', channelDetails?: AIBotFeedItem['channelDetails']) => Promise<void>;
+  /** Adds a feed event for this browser session. It is not written to the database, so it is gone after a reload. */
+  addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system', channelDetails?: AIBotFeedItem['channelDetails']) => void;
   selectedRFQForMatrix: RFQItem | null;
   setSelectedRFQForMatrix: (rfq: RFQItem | null) => void;
   /** Opportunity carried from the vendor feed into the quotation form route. */
@@ -2349,47 +2350,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setToastMessage(null);
   };
 
-  // The server stamps the actor from the signed-in session, plus the IP address and the SHA-256 seal. The client
-  // sends only the action and the RFQ number. The entry joins `auditLogs` only after the server has stored it.
+  // Audit events raised in the browser are not stored in the database and do not join the server audit chain.
+  // They go to the structured frontend log, which the backend writes to the console. The backend stamps the
+  // signed-in user on each log line from the session token, so the event keeps its actor.
   const addAuditLog = async (action: string, rfqNumber?: string): Promise<void> => {
-    if (!authClient.getToken()) {
-      logger.log('WARN', 'Audit event not recorded: no signed-in session', { action }, 'AUDIT_TRAIL');
-      return;
-    }
-    try {
-      const res = await fetch('/api/audit', {
-        method: 'POST',
-        headers: authFetchHeaders(),
-        body: JSON.stringify({ action, rfqNumber: rfqNumber ?? null }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok || !json?.success || !json.data) {
-        logApiResponseFailure('Audit event persistence request failed', res, 'AUDIT_TRAIL', { responseError: json?.error });
-        showToast(STORE_MESSAGES.auditSaveFailedTitle, STORE_MESSAGES.auditSaveFailed, 'warning');
-        return;
-      }
-      const stored = json.data;
-      const entry: AuditLogEntry = {
-        id: String(stored.id),
-        timestamp: String(stored.timestamp),
-        user: stored.userEmail ?? undefined,
-        userEmail: stored.userEmail ?? undefined,
-        action: String(stored.action),
-        rfqNumber: stored.rfqNumber ?? undefined,
-        shaSignature: String(stored.shaSignature ?? ''),
-        previousHash: stored.previousHash ?? undefined,
-        status: stored.status ?? undefined,
-        ipAddress: stored.ipAddress ?? undefined,
-      };
-      setAuditLogs((prev) => [entry, ...prev]);
-    } catch (e) {
-      logger.log('ERROR', 'Failed to save audit event to backend', { error: e }, 'AUDIT_TRAIL');
-      showToast(STORE_MESSAGES.auditSaveFailedTitle, STORE_MESSAGES.auditSaveFailed, 'warning');
-    }
+    logger.info(action, { rfqNumber: rfqNumber ?? null }, 'AUDIT_TRAIL');
   };
 
-  // A feed event is shown only once the server has stored it. The stored copy, with the server's id and timestamps, is what appears.
-  const addFeedItem = async (
+  // Feed entries raised in the browser are kept for this session only. They are not written to the database,
+  // so they are not listed again after a reload. The server writes its own feed entries for the events it handles.
+  const addFeedItem = (
     title: string,
     message: string,
     type: AIBotFeedItem['type'],
@@ -2397,25 +2367,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     recipient?: string,
     channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system',
     channelDetails?: AIBotFeedItem['channelDetails']
-  ): Promise<void> => {
+  ): void => {
     const resolvedChannel = channel || (type === 'call' || type === 'whatsapp' || type === 'sms' || type === 'email' ? type : undefined);
-    try {
-      const res = await fetch('/api/ai-feed', {
-        method: 'POST',
-        headers: authFetchHeaders(),
-        body: JSON.stringify({ title, message, type, channel: resolvedChannel, recipient, rfqNumber, channelDetails }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok || !json?.success || !json.data) {
-        logApiResponseFailure('AI feed persistence request failed', res, 'AI_FEED', { responseError: json?.error });
-        showToast(STORE_MESSAGES.feedSaveFailedTitle, STORE_MESSAGES.feedSaveFailed, 'warning');
-        return;
-      }
-      setAiFeed((prev) => [json.data, ...prev]);
-    } catch (e) {
-      logger.log('ERROR', 'Failed to save AI feed item to backend', { error: e }, 'AI_FEED');
-      showToast(STORE_MESSAGES.feedSaveFailedTitle, STORE_MESSAGES.feedSaveFailed, 'warning');
-    }
+    sessionFeedSequence += 1;
+    const timestamp = new Date().toISOString();
+    const item: AIBotFeedItem = {
+      id: `session-feed-${Date.now()}-${sessionFeedSequence}`,
+      timestamp,
+      timeAgo: STORE_MESSAGES.feedJustNow,
+      type,
+      channel: resolvedChannel,
+      title,
+      message,
+      recipient,
+      rfqNumber,
+      status: 'completed',
+      channelDetails,
+    };
+    setAiFeed((prev) => [item, ...prev]);
   };
 
   // Sends the chasers through POST /api/rfqs/:id/batch-chaser. The server decides what reached a provider, per

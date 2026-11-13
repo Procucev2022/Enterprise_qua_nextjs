@@ -1744,7 +1744,7 @@ async function extractLineItems(input = {}) {
  * @returns {Promise<{status: string, data: object|null, model: string|null, error: string|null}>}
  */
 async function generateJson(input = {}) {
-  const { prompt, label = 'generation' } = input;
+  const { prompt, label = 'generation', budgetMs } = input;
   checkDailyModelReset();
 
   const base = { data: null, model: null, error: null };
@@ -1781,9 +1781,13 @@ async function generateJson(input = {}) {
 
   const failures = [];
   const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
-  const deadline = isBudgetDisabled
-    ? null
-    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 900000);
+  // A caller may ask for a shorter budget than the global one, never a longer one.
+  const globalBudgetMs = GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 900000;
+  const requestedBudgetMs = Number(budgetMs);
+  const effectiveBudgetMs = Number.isFinite(requestedBudgetMs) && requestedBudgetMs > 0
+    ? Math.min(requestedBudgetMs, globalBudgetMs)
+    : globalBudgetMs;
+  const deadline = isBudgetDisabled ? null : Date.now() + effectiveBudgetMs;
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;

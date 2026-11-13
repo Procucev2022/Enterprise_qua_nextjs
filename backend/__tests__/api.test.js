@@ -1343,16 +1343,11 @@ describe('API Route Endpoints', () => {
       expect(buyerVerify.statusCode).toBe(403);
     });
 
-    test('POST /api/audit creates new log entry', async () => {
+    test('POST /api/audit is not served, so browsers cannot write audit events', async () => {
       const res = await request(app).post('/api/audit').set(authHeader('buyer')).send({
-        userEmail: 'auditor@enterprise.com',
         action: 'Manual compliance check performed',
-        ipAddress: 'spoofed-ip',
       });
-      expect(res.statusCode).toBe(201);
-      expect(res.body.data).toHaveProperty('shaSignature');
-      expect(res.body.data.userEmail).toBe('buyer@procucev.com');
-      expect(res.body.data.ipAddress).not.toBe('spoofed-ip');
+      expect([404, 405]).toContain(res.statusCode);
     });
   });
 
@@ -1384,7 +1379,7 @@ describe('API Route Endpoints', () => {
       expect(res.body).toHaveProperty('provider');
     });
 
-    test('GET & POST /api/ai-feed', async () => {
+    test('GET /api/ai-feed is role-scoped, and browsers cannot create feed items over HTTP', async () => {
       const anonymousGet = await request(app).get('/api/ai-feed');
       expect(anonymousGet.statusCode).toBe(401);
 
@@ -1393,37 +1388,20 @@ describe('API Route Endpoints', () => {
 
       const getRes = await request(app).get('/api/ai-feed').set(authHeader('buyer'));
       expect(getRes.statusCode).toBe(200);
-
-      const postRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({
-        title: 'SMS Alert Sent',
-        message: 'Notification pushed to supplier.',
-        buyerAccountId: 'attacker-selected-account',
-      });
-      expect(postRes.statusCode).toBe(201);
-      expect(postRes.body.data).toHaveProperty('buyerAccountId');
-      expect(postRes.body.data.buyerAccountId).not.toBe('attacker-selected-account');
-
-      const failRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({});
-      expect(failRes.statusCode).toBe(400);
-
-      const scopedRes = await request(app)
-        .get(`/api/ai-feed?buyerAccountId=${postRes.body.data.buyerAccountId}`)
-        .set(authHeader('buyer'));
-      expect(scopedRes.statusCode).toBe(200);
-      expect(scopedRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(true);
+      expect(Array.isArray(getRes.body.data)).toBe(true);
 
       // A query parameter cannot switch a buyer session into another account scope.
       const otherBuyerRes = await request(app)
         .get('/api/ai-feed?buyerAccountId=other-nonexistent-buyer')
         .set(authHeader('buyer'));
       expect(otherBuyerRes.statusCode).toBe(200);
-      expect(otherBuyerRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(true);
+      expect(otherBuyerRes.body.data.every((item) => item.buyerAccountId !== 'other-nonexistent-buyer')).toBe(true);
 
-      const vendorPost = await request(app).post('/api/ai-feed').set(authHeader('vendor')).send({
-        title: 'Spoofed alert',
-        message: 'Vendor should not create buyer activity.',
+      const postRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({
+        title: 'SMS Alert Sent',
+        message: 'Notification pushed to supplier.',
       });
-      expect(vendorPost.statusCode).toBe(403);
+      expect([404, 405]).toContain(postRes.statusCode);
     });
 
     test('GET /api/db/metrics is admin-only', async () => {
@@ -1565,11 +1543,6 @@ describe('API Route Endpoints', () => {
 
     test('POST /api/evaluations returns 400 when evidence is missing', async () => {
       const res = await request(app).post('/api/evaluations').set(authHeader('vendor')).send({});
-      expect(res.statusCode).toBe(400);
-    });
-
-    test('POST /api/audit returns 400 when missing action', async () => {
-      const res = await request(app).post('/api/audit').set(authHeader('buyer')).send({});
       expect(res.statusCode).toBe(400);
     });
 

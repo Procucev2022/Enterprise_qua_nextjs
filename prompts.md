@@ -5665,3 +5665,15 @@ A lot of errors started coming after recent deployment, can you please check the
 ```
 
 ---
+### Prompt 190
+**Timestamp**: 2026-11-13T09:20:11+05:30
+```text
+Remove Frontend logging in database, we don't want to store this logs data in database. & sometimes too slow response. Still a lot of errors, please check logs. logs-2026-11-13T03_33_18.573Z.csv logs-2026-11-13T03_34_59.807Z.csv logs-2026-11-13T03_35_25.839Z.csv logs-2026-11-13T03_35_49.409Z.csv
+```
+---
+### Prompt 191
+**Timestamp**: 2026-11-13T10:35:37+05:30
+```text
+Increase Gemini AI model timeout to 10 min. for now. not 15 seconds, Gemini AI model time is not in our hands. complex process may take some time. Do not touch gemini model timeout for now
+```
+---

@@ -291,8 +291,6 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // one the caller did not supply — which is exactly what the store must adopt.
     let allocated = 0;
     let allocatedVendors = 0;
-    let allocatedAuditEntries = 0;
-    let allocatedFeedItems = 0;
     let allocatedBuyerAccounts = 0;
     // The account the server reports as active. Activation changes it, and GET /api/buyer-accounts/active reads it.
     let serverActiveAccountId = 'buyer-acc-1';
@@ -358,37 +356,6 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       if (url === '/api/buyer-accounts/active') {
         const known = bootstrapPayload.data.buyerAccounts.find((account) => account.id === serverActiveAccountId);
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: known ?? null }) });
-      }
-      // The server stamps the audit actor and seal. The store adds the entry only from this stored copy.
-      if (url === '/api/audit' && init?.method === 'POST') {
-        allocatedAuditEntries += 1;
-        const sent = JSON.parse(init.body || '{}');
-        return Promise.resolve({
-          ok: true,
-          status: 201,
-          json: async () => ({
-            success: true,
-            data: {
-              id: `audit-${allocatedAuditEntries}`,
-              timestamp: '2026-09-04 10:00:00 UTC',
-              userEmail: 'buyer@procucev.com',
-              action: sent.action,
-              rfqNumber: sent.rfqNumber ?? null,
-              shaSignature: `sha-${allocatedAuditEntries}`,
-              previousHash: '',
-              ipAddress: '127.0.0.1',
-            },
-          }),
-        });
-      }
-      if (url === '/api/ai-feed' && init?.method === 'POST') {
-        allocatedFeedItems += 1;
-        const sent = JSON.parse(init.body || '{}');
-        return Promise.resolve({
-          ok: true,
-          status: 201,
-          json: async () => ({ success: true, data: { ...sent, id: `feed-${allocatedFeedItems}`, timestamp: '10:00 AM' } }),
-        });
       }
       return Promise.resolve({
         ok: true,
@@ -1800,7 +1767,7 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     // 3. Add Audit Log & Feed Item across all role contexts and feed types
-    // Audit and feed writes are async: each entry appears only after the server returns it.
+    // Audit events go to the frontend log. Feed entries stay in this session.
     await act(async () => {
       await contextValue.addAuditLog('Custom administrative policy update', 'RFQ-2026-001');
       await contextValue.addAuditLog('Userless log with buyer role');
@@ -1820,8 +1787,10 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       await contextValue.addFeedItem('System Scoring', 'Evaluation done', 'system', 'RFQ-2026-001', 'Apex', 'system');
       await contextValue.addFeedItem('Plain Feed', 'Message only', 'system');
     });
-    expect(contextValue.auditLogs.some((l: any) => l.action.includes('Custom administrative policy update'))).toBe(true);
-    expect(contextValue.auditLogs.some((l: any) => l.action === 'Userless log with admin role')).toBe(true);
+    expect(logger.getLogs({ category: 'AUDIT_TRAIL' }).some((entry) => entry.message === 'Custom administrative policy update')).toBe(true);
+    expect(logger.getLogs({ category: 'AUDIT_TRAIL' }).some((entry) => entry.message === 'Userless log with admin role')).toBe(true);
+    expect(contextValue.auditLogs.some((l: any) => l.action === 'Custom administrative policy update')).toBe(false);
+    expect(contextValue.aiFeed.some((item: any) => item.title === 'Urgent Call Notification')).toBe(true);
 
     // 4. Toast Notifications
     act(() => {
@@ -2338,26 +2307,6 @@ describe('lib/store.tsx - RFQ edit and delete', () => {
         });
       }
 
-      // The audit route stores the entry and returns it, so the store adds the stored copy.
-      if (url === '/api/audit' && init?.method === 'POST') {
-        const sent = JSON.parse(init.body || '{}');
-        return Promise.resolve({
-          ok: true,
-          status: 201,
-          json: async () => ({
-            success: true,
-            data: {
-              id: 'audit-test',
-              timestamp: '2026-09-04 10:00:00 UTC',
-              userEmail: 'buyer@procucev.com',
-              action: sent.action,
-              rfqNumber: sent.rfqNumber ?? null,
-              shaSignature: 'sha-test',
-            },
-          }),
-        });
-      }
-
       return Promise.resolve({
         ok: true,
         status: 200,
@@ -2435,7 +2384,7 @@ describe('lib/store.tsx - RFQ edit and delete', () => {
       });
 
       expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.savedTitle);
-      await waitFor(() => expect(ctx().auditLogs[0].action).toContain('Edited'));
+      await waitFor(() => expect(logger.getLogs({ category: 'AUDIT_TRAIL' }).some((entry) => entry.message.includes('Edited'))).toBe(true));
     });
 
     it('keeps the vendor opportunity for that RFQ in step', async () => {
@@ -2548,7 +2497,7 @@ describe('lib/store.tsx - RFQ edit and delete', () => {
       });
 
       expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.deletedTitle);
-      await waitFor(() => expect(ctx().auditLogs[0].action).toContain('Deleted'));
+      await waitFor(() => expect(logger.getLogs({ category: 'AUDIT_TRAIL' }).some((entry) => entry.message.includes('Deleted'))).toBe(true));
     });
 
     // A selection pointing at a deleted record would render a stale RFQ.
@@ -2623,7 +2572,7 @@ describe('lib/store.tsx - RFQ edit and delete', () => {
       });
 
       expect(ctx().rfqs[0].rfqNumber).toBe('RFQ260409000099');
-      await waitFor(() => expect(ctx().auditLogs[0].action).toContain('Created'));
+      await waitFor(() => expect(logger.getLogs({ category: 'AUDIT_TRAIL' }).some((entry) => entry.message.includes('Created'))).toBe(true));
     });
 
     // A concurrent refresh must not leave two copies of one RFQ.

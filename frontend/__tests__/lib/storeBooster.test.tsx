@@ -570,41 +570,14 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       expect(screen.getByTestId('ready')).toBeInTheDocument();
     });
 
-    test('addAuditLog lists only the entry the server stored, with the signed-in user and the server seal', async () => {
+    test('addAuditLog writes the event to the frontend log and never posts it to the server or the audit list', async () => {
       authClient.setSession(
         { id: 'usr-1', email: 'buyer@procucev.com', name: 'Buyer', role: 'buyer', orgId: 'org-1', orgName: 'Org' },
         'test-session-token'
       );
-      const posted: Array<{ action: string; rfqNumber: string | null }> = [];
-      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string; body?: string }) => {
-        if (url === '/api/audit' && init?.method === 'POST') {
-          const body = JSON.parse(init.body || '{}');
-          posted.push(body);
-          if (body.action === 'Refused') {
-            return Promise.resolve({ ok: false, status: 503, statusText: 'Unavailable', json: async () => ({ success: false, error: 'Store unavailable' }) });
-          }
-          return Promise.resolve({
-            ok: true,
-            status: 201,
-            statusText: 'Created',
-            json: async () => ({
-              success: true,
-              data: {
-                id: `aud-${posted.length}`,
-                timestamp: '2026-01-01 00:00:00 UTC',
-                userEmail: 'buyer@procucev.com',
-                action: body.action,
-                rfqNumber: body.rfqNumber,
-                status: 'TAMPER_CHECK_OK',
-                ipAddress: '10.0.0.1',
-                previousHash: '',
-                shaSignature: 'sha256-server',
-              },
-            }),
-          });
-        }
-        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => ({ success: true, data: [] }) });
-      }) as unknown as typeof fetch;
+      global.fetch = jest.fn().mockImplementation(() =>
+        Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => ({ success: true, data: [] }) })
+      ) as unknown as typeof fetch;
 
       render(
         <AppProvider>
@@ -612,23 +585,22 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
         </AppProvider>
       );
       await waitFor(() => expect(screen.getByTestId('ready')).toBeInTheDocument());
+      const auditCountBefore = capturedApp?.auditLogs.length ?? 0;
 
       await act(async () => {
         await capturedApp?.addAuditLog('Action Buyer');
-        await capturedApp?.addAuditLog('Refused', 'RFQ-100');
+        await capturedApp?.addAuditLog('Action on RFQ', 'RFQ-100');
       });
 
-      // The client sends only the action and the RFQ number. The actor, IP and seal are the server's.
-      expect(posted).toEqual([
-        { action: 'Action Buyer', rfqNumber: null },
-        { action: 'Refused', rfqNumber: 'RFQ-100' },
-      ]);
-      expect(capturedApp?.auditLogs).toHaveLength(1);
-      expect(capturedApp?.auditLogs[0]).toMatchObject({
-        action: 'Action Buyer',
-        user: 'buyer@procucev.com',
-        shaSignature: 'sha256-server',
-      });
+      const requestedUrls = (global.fetch as jest.Mock).mock.calls.map(([url]) => url);
+      expect(requestedUrls).not.toContain('/api/audit');
+      expect(capturedApp?.auditLogs).toHaveLength(auditCountBefore);
+      expect(logger.getLogs({ category: 'AUDIT_TRAIL' })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ level: 'INFO', message: 'Action Buyer' }),
+          expect.objectContaining({ level: 'INFO', message: 'Action on RFQ', metadata: expect.objectContaining({ rfqNumber: 'RFQ-100' }) }),
+        ])
+      );
     });
 
     test('updateRFQ handles longer assignedVendors, fallback to changes or empty', async () => {

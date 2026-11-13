@@ -124,41 +124,6 @@ function extractCategories(val) {
   return [];
 }
 
-const SEEDED_INQUIRIES = [
-  {
-    id: 'ent-inq-1792066342226-1vkew',
-    companyName: 'Procucev  Navin Buyer',
-    email: 'navin.procucev@gmail.com',
-    mobile: '+919157154504',
-    buyerAccountId: '4fdcc92c-8421-4ab5-8258-0134375a3c86',
-    notes: '',
-    status: 'NEW',
-    createdAt: '2026-10-15T12:12:22.226Z',
-    updatedAt: '2026-10-15T12:12:22.226Z',
-  },
-];
-
-function loadPersistedInquiries() {
-  try {
-    const fs = require('fs');
-    if (fs.existsSync(INQUIRIES_PERSISTENCE_FILE)) {
-      const data = fs.readFileSync(INQUIRIES_PERSISTENCE_FILE, 'utf8');
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch (_) { }
-  return [...SEEDED_INQUIRIES];
-}
-
-function savePersistedInquiries(list) {
-  try {
-    const fs = require('fs');
-    const dir = path.dirname(INQUIRIES_PERSISTENCE_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(INQUIRIES_PERSISTENCE_FILE, JSON.stringify(list, null, 2), 'utf8');
-  } catch (_) { }
-}
-
 function normalizeRFQForRead(rfq) {
   const normalized = { ...rfq };
   delete normalized.vendorInvitationTargets;

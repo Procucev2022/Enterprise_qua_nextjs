@@ -48,11 +48,6 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await aiFeedController.getAIFeed({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await aiFeedController.createFeedItem(buyerReq({ body: { title: 'Test Feed', message: 'Test Message' } }), res, next);
-    expect(res.status).toHaveBeenCalledWith(201);
-
-    await aiFeedController.createFeedItem(buyerReq({ body: {} }), res, next);
-    expect(res.status).toHaveBeenCalledWith(400);
 
     jest.spyOn(storeService, 'getAIFeed').mockImplementationOnce(() => {
       throw new Error('AI Feed Error');
@@ -68,17 +63,6 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     await auditController.getAuditLogs({}, res, next);
     expect(res.json).toHaveBeenCalled();
-
-    await auditController.createAuditLog({
-      user: { email: 'session@user.test', role: 'admin' },
-      ip: '192.0.2.5',
-      body: { action: 'TEST_ACTION', userEmail: 'forged@user.test' },
-    }, res, next);
-    expect(res.status).toHaveBeenCalledWith(201);
-    expect(auditSpy).toHaveBeenCalledTimes(1);
-
-    await auditController.createAuditLog({ user: { email: 'session@user.test' }, body: {} }, res, next);
-    expect(res.status).toHaveBeenCalledWith(400);
 
     await auditController.verifyIntegrity({}, res, next);
     expect(res.json).toHaveBeenCalled();

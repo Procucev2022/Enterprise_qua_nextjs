@@ -98,6 +98,25 @@ async function authenticate(req, res, next) {
 }
 
 /**
+ * Authentication for the frontend log beacon (POST /api/logs). It checks the token signature and
+ * expiry only, with no revocation read, so each log line costs no database query. Log lines are
+ * written to the console, so a logged-out token can still post them until it expires. Every other
+ * route keeps the full check in authenticate().
+ */
+function authenticateTelemetry(req, res, next) {
+  const token = extractToken(req);
+  if (!token) {
+    return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+  }
+  const verification = authService.verifySessionToken(token);
+  if (!verification.valid) {
+    return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
+  }
+  req.user = verification.user;
+  return next();
+}
+
+/**
  * Optional authentication: resolves and attaches req.user if a valid token is
  * supplied, but does not block requests that lack a token.
  */
@@ -248,6 +267,7 @@ async function requireVendorDirectorySession(req, res, next) {
 module.exports = {
   extractToken,
   authenticate,
+  authenticateTelemetry,
   optionalAuthenticate,
   requireRole,
   requireVendorDirectorySession,

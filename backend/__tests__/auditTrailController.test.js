@@ -45,56 +45,6 @@ describe('audit controller identity, persistence, and verification contract', ()
     expect(next).toHaveBeenCalledWith(failure);
   });
 
-  test('requires a signed-in identity before accepting an audit event', async () => {
-    const res = response();
-
-    await auditController.createAuditLog({ body: { action: 'Reviewed RFQ' } }, res, jest.fn());
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(storeService.addAuditLogDurably).not.toHaveBeenCalled();
-  });
-
-  test('rejects invalid event data with field-level feedback', async () => {
-    const res = response();
-
-    await auditController.createAuditLog({ user: { email: 'buyer@example.test' }, body: { action: '' } }, res, jest.fn());
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json.mock.calls[0][0].fieldErrors).toHaveProperty('action');
-    expect(storeService.addAuditLogDurably).not.toHaveBeenCalled();
-  });
-
-  test('uses session identity and request IP, then returns the durably stored entry', async () => {
-    const savedEntry = { id: 'audit-2', userEmail: 'buyer@example.test', action: 'Reviewed RFQ', shaSignature: 'sealed' };
-    storeService.addAuditLogDurably.mockResolvedValue(savedEntry);
-    const res = response();
-
-    await auditController.createAuditLog({
-      user: { email: 'buyer@example.test', role: 'buyer' },
-      ip: '192.0.2.8',
-      body: { userEmail: 'forged@example.test', ipAddress: 'spoofed', action: 'Reviewed RFQ', rfqNumber: 'RFQ-1' },
-    }, res, jest.fn());
-
-    expect(storeService.addAuditLogDurably).toHaveBeenCalledWith({
-      userEmail: 'buyer@example.test',
-      action: 'Reviewed RFQ',
-      rfqNumber: 'RFQ-1',
-      ipAddress: '192.0.2.8',
-    });
-    expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: savedEntry });
-  });
-
-  test('forwards durable write failures to the error handler', async () => {
-    const failure = new Error('audit storage unavailable');
-    storeService.addAuditLogDurably.mockRejectedValue(failure);
-    const next = jest.fn();
-
-    await auditController.createAuditLog({ user: { email: 'buyer@example.test' }, body: { action: 'Reviewed RFQ' } }, response(), next);
-
-    expect(next).toHaveBeenCalledWith(failure);
-  });
-
   test('returns persisted verification reports and forwards verification errors', async () => {
     const report = { valid: true, complete: true, source: 'persisted', expectedCount: 1, verifiedCount: 1, compromisedEntries: [] };
     storeService.verifyAuditIntegrityDurably.mockResolvedValueOnce(report);
