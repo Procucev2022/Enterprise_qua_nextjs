@@ -163,6 +163,47 @@ describe('lib/store.tsx - remaining failure branches', () => {
     expect(app().toastMessage?.description).toBe(STORE_MESSAGES.chaserUnreachable);
   });
 
+  test('triggerBatchChannelChaser stays silent on an unreachable server when the caller suppresses the toast', async () => {
+    const app = await mountStore();
+    mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+      if (url === '/api/rfqs/RFQ-BR-4/batch-chaser' && init?.method === 'POST') {
+        return Promise.reject(new Error('socket hang up'));
+      }
+      return serveDefaults(url);
+    });
+
+    let sent = true;
+    await act(async () => {
+      sent = await app().triggerBatchChannelChaser('RFQ-BR-4', ['sms'], true);
+    });
+
+    expect(sent).toBe(false);
+    expect(app().toastMessage).toBeNull();
+  });
+
+  test('triggerBatchChannelChaser stays silent when the caller suppresses the toast and the batch is refused', async () => {
+    const app = await mountStore();
+    mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+      if (url === '/api/rfqs/RFQ-BR-5/batch-chaser' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          statusText: 'Unavailable',
+          json: async () => ({ success: false, error: 'Chaser provider is down' }),
+        });
+      }
+      return serveDefaults(url);
+    });
+
+    let sent = true;
+    await act(async () => {
+      sent = await app().triggerBatchChannelChaser('RFQ-BR-5', ['sms'], true);
+    });
+
+    expect(sent).toBe(false);
+    expect(app().toastMessage).toBeNull();
+  });
+
   test('triggerBatchChannelChaser shows the server reason when the batch is refused', async () => {
     const app = await mountStore();
     mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
@@ -181,7 +222,7 @@ describe('lib/store.tsx - remaining failure branches', () => {
     expect(app().toastMessage?.description).toBe('Voice provider is offline.');
   });
 
-  test('addAuditLog records nothing and sends nothing when there is no signed-in session', async () => {
+  test('addAuditLog writes the event to the frontend log and sends nothing to the server when there is no signed-in session', async () => {
     const app = await mountStore();
     authClient.setSession(null, null);
     mockFetch.mockClear();
@@ -191,8 +232,8 @@ describe('lib/store.tsx - remaining failure branches', () => {
     });
 
     expect(mockFetch.mock.calls.some(([url]) => url === '/api/audit')).toBe(false);
-    expect(logger.getLogs({ level: 'WARN', category: 'AUDIT_TRAIL' })).toEqual(
-      expect.arrayContaining([expect.objectContaining({ message: 'Audit event not recorded: no signed-in session' })])
+    expect(logger.getLogs({ level: 'INFO', category: 'AUDIT_TRAIL' })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ message: 'Action without a session' })])
     );
   });
 

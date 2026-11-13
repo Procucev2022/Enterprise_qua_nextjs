@@ -80,7 +80,7 @@ describe('scheduleVendorChaser', () => {
     const previousEnv = globalThis.__CF_ENV__;
     const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
     const waitUntil = jest.fn();
-    const persistSpy = jest.spyOn(domainQueries, 'insertChaserJobInDB').mockResolvedValue(true);
+    const persistSpy = jest.spyOn(domainQueries, 'insertChaserJobsInDB').mockResolvedValue([]);
     globalThis.__CF_ENV__ = { DB: {} };
     globalThis.__CF_WAIT_UNTIL__ = waitUntil;
 
@@ -88,8 +88,10 @@ describe('scheduleVendorChaser', () => {
       scheduler.scheduleVendorChaser(RFQ, VENDOR);
 
       expect(scheduler.pendingTimers.has(RFQ.rfqNumber)).toBe(false);
-      expect(persistSpy).toHaveBeenCalledTimes(4);
-      expect(waitUntil).toHaveBeenCalledTimes(4);
+      // The four channel rows for one vendor go to D1 in a single batch.
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+      expect(persistSpy.mock.calls[0][0]).toHaveLength(4);
+      expect(waitUntil).toHaveBeenCalledTimes(1);
       await Promise.all(waitUntil.mock.calls.map(([promise]) => promise));
     } finally {
       if (previousEnv === undefined) delete globalThis.__CF_ENV__;
@@ -948,7 +950,7 @@ describe('V0 Chaser Scheduling', () => {
   });
 
   test('D1 persistence records only 1 SMS job for V0 RFQs', async () => {
-    const persistSpy = jest.spyOn(domainQueries, 'insertChaserJobInDB').mockResolvedValue(true);
+    const persistSpy = jest.spyOn(domainQueries, 'insertChaserJobsInDB').mockResolvedValue([]);
     const waitUntil = jest.fn();
     const previousEnv = globalThis.__CF_ENV__;
     const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
@@ -959,10 +961,11 @@ describe('V0 Chaser Scheduling', () => {
 
       scheduler.scheduleVendorChaser(V0_RFQ, VENDOR, {});
       expect(persistSpy).toHaveBeenCalledTimes(1);
-      expect(persistSpy).toHaveBeenCalledWith(expect.objectContaining({
+      expect(persistSpy).toHaveBeenCalledWith([expect.objectContaining({
         channel: 'sms',
         rfqNumber: V0_RFQ.rfqNumber,
-      }));
+      })]);
+      expect(persistSpy.mock.calls[0][0]).toHaveLength(1);
     } finally {
       if (previousEnv === undefined) delete globalThis.__CF_ENV__;
       else globalThis.__CF_ENV__ = previousEnv;

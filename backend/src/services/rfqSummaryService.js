@@ -188,6 +188,7 @@ async function buildRFQSummary(rfq = {}, options = {}) {
     result = await gemini.generateJson({
       prompt: buildSummaryPrompt(rfq, options),
       label: 'RFQ summary',
+      budgetMs: RFQ_SUMMARY_CONFIG.GEMINI_BUDGET_MS,
     });
   } catch (err) {
     // generateJson is documented not to throw, but an unexpected throw here must

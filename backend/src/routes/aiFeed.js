@@ -3,7 +3,7 @@ const router = express.Router();
 const aiFeedController = require('../controllers/aiFeedController');
 const { authenticate, requireRole } = require('../middleware/auth');
 
+// Feed entries are written by the server. Browsers do not write them over HTTP.
 router.get('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), aiFeedController.getAIFeed);
-router.post('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), aiFeedController.createFeedItem);
 
 module.exports = router;

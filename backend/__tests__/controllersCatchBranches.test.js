@@ -40,22 +40,9 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.restoreAllMocks();
   });
 
-  test('AI Feed Controller Error Branches', async () => {
-    const next = jest.fn();
-    const res = mockRes();
-
-    jest.spyOn(storeService, 'addAIFeedItemDurably').mockRejectedValueOnce(new Error('Add feed fail'));
-    await aiFeedController.createFeedItem({ user: { role: 'admin' }, body: { title: 'T', message: 'M' } }, res, next);
-    expect(next).toHaveBeenCalled();
-  });
-
   test('Audit Controller Error Branches', async () => {
     const next = jest.fn();
     const res = mockRes();
-
-    jest.spyOn(storeService, 'addAuditLogDurably').mockRejectedValueOnce(new Error('Audit add fail'));
-    await auditController.createAuditLog({ user: { email: 'admin@procucev.com' }, body: { action: 'Test' } }, res, next);
-    expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'verifyAuditIntegrityDurably').mockImplementationOnce(() => {
       throw new Error('Audit verify fail');

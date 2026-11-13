@@ -668,6 +668,9 @@ const RFQ_SUMMARY_CONFIG = {
   MAX_PROMPT_ITEMS: 40,
   MAX_HEADLINE_CHARS: 140,
   MAX_RISK_NOTES: 5,
+  // Longest time the model chain may take for one summary. POST /api/rfqs waits for the summary, so
+  // the 15 minute Gemini budget must not apply here. When this runs out, the deterministic summary is used.
+  GEMINI_BUDGET_MS: 15000,
 };
 
 // ==============================================================================
