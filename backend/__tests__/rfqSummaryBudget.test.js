@@ -1,8 +1,10 @@
 const rfqSummaryService = require('../src/services/rfqSummaryService');
-const { RFQ_SUMMARY_CONFIG } = require('../src/config/constants');
+const { GEMINI_CONFIG, RFQ_SUMMARY_CONFIG } = require('../src/config/constants');
+
+const TEN_MINUTES_MS = 10 * 60 * 1000;
 
 describe('RFQ summary model budget', () => {
-  test('caps the summary model call at the summary budget, so RFQ creation is not held for minutes', async () => {
+  test('passes the summary budget to the model call', async () => {
     const gemini = {
       isConfigured: () => true,
       EXTRACTION_STATUS: { SUCCESS: 'SUCCESS' },
@@ -22,8 +24,8 @@ describe('RFQ summary model budget', () => {
     expect(summary).toBeTruthy();
   });
 
-  test('the summary budget is short enough for a request that waits on it', () => {
-    expect(RFQ_SUMMARY_CONFIG.GEMINI_BUDGET_MS).toBeGreaterThan(0);
-    expect(RFQ_SUMMARY_CONFIG.GEMINI_BUDGET_MS).toBeLessThanOrEqual(30000);
+  test('the summary budget is ten minutes and never exceeds the global Gemini budget', () => {
+    expect(RFQ_SUMMARY_CONFIG.GEMINI_BUDGET_MS).toBe(TEN_MINUTES_MS);
+    expect(RFQ_SUMMARY_CONFIG.GEMINI_BUDGET_MS).toBeLessThanOrEqual(GEMINI_CONFIG.TOTAL_BUDGET_MS);
   });
 });

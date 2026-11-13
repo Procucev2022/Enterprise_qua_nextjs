@@ -51,6 +51,16 @@ describe('generateJson per-call request budget', () => {
     expect(remaining).toBeGreaterThan(FIFTEEN_SECONDS_MS - 1000);
   });
 
+  test('honours a ten minute summary budget under the default fifteen minute global budget', async () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
+
+    await gemini.generateJson({ prompt: 'Summarise this RFQ.', label: 'RFQ summary', budgetMs: 10 * 60 * 1000 });
+
+    const remaining = firstAttemptRemainingMs(infoSpy);
+    expect(remaining).toBeLessThanOrEqual(10 * 60 * 1000);
+    expect(remaining).toBeGreaterThan(10 * 60 * 1000 - 1000);
+  });
+
   test('never grants more time than the global budget', async () => {
     const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
 
