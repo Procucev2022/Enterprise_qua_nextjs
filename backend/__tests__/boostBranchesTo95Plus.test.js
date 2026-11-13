@@ -14,6 +14,17 @@ const catalogueController = require('../src/controllers/catalogueController');
 const domainQueries = require('../src/db/domainQueries');
 const { SYSTEM_ACTOR_EMAIL } = require('../src/config/constants');
 
+// One line item with every field the RFQ form requires. Spread into create payloads so each
+// request reaches the branch under test instead of stopping at line-item validation.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
+
 function mockRes() {
   const res = {};
   res.status = jest.fn().mockReturnValue(res);
@@ -246,7 +257,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Item 1', quantity: 10, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item 1', quantity: 10, unit: 'pcs' }],
       },
       user: { email: 'v0test@example.com' },
     }, res1, next);
@@ -261,7 +272,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Item 2', quantity: 5, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item 2', quantity: 5, unit: 'pcs' }],
       },
       user: { email: 'v0test@example.com' },
     }, res2, next);
@@ -276,7 +287,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Item 3', quantity: 2, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item 3', quantity: 2, unit: 'pcs' }],
       },
       user: { email: 'v0test@example.com' },
     }, res3, next);
@@ -433,7 +444,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Item A', quantity: 1, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item A', quantity: 1, unit: 'pcs' }],
       },
       user: { email: 'v1buyer@example.com' },
     }, resForbiddenMode, next);
@@ -458,7 +469,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Item B', quantity: 1, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item B', quantity: 1, unit: 'pcs' }],
       },
       user: { email: 'exhausted@example.com' },
     }, resExhausted, next);
@@ -484,7 +495,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Item C', quantity: 1, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item C', quantity: 1, unit: 'pcs' }],
       },
       user: { email: 'trialactive@example.com' },
     }, resConsumeFail, next);
@@ -503,7 +514,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Item D', quantity: 1, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item D', quantity: 1, unit: 'pcs' }],
       },
       user: { email: 'v1buyer@example.com' },
     }, resPaidSuccess, next);
@@ -526,7 +537,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Part 1', quantity: 1, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Part 1', quantity: 1, unit: 'pcs' }],
       },
       user: { email: 'multirfq@example.com' },
     }, resRfq1, next);
@@ -546,7 +557,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Part 2', quantity: 2, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Part 2', quantity: 2, unit: 'pcs' }],
       },
       user: { email: 'multirfq@example.com' },
     }, resRfq2, next);
@@ -569,7 +580,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Part 3', quantity: 1, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Part 3', quantity: 1, unit: 'pcs' }],
       },
       user: { email: 'multirfq@example.com' },
     }, resRfq3Blocked, next);
@@ -588,7 +599,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Part 4', quantity: 1, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Part 4', quantity: 1, unit: 'pcs' }],
       },
       user: { email: 'multirfq@example.com' },
     }, resRfq4Mode0, next);
@@ -2165,7 +2176,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       body: {
         title: 'WaitUntil Test RFQ',
         category: 'Civil Works',
-        lineItems: [{ itemName: 'Item 1' }],
+        lineItems: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item 1' }],
         sourcingMode: 'mode_2',
         deliveryLocation: 'Mumbai Hub',
         deliveryPincode: '400001',
@@ -2186,7 +2197,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       body: {
         title: 'Gateway Storage Test RFQ',
         category: 'Civil Works',
-        lineItems: [{ itemName: 'Item 1' }],
+        lineItems: [{ ...COMPLETE_LINE_ITEM, itemName: 'Item 1' }],
         sourcingMode: 'mode_1',
         deliveryLocation: 'Delhi Hub',
         deliveryPincode: '110001',
@@ -2400,7 +2411,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
         targetDeliveryDate: '2028-10-15',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
-        extractedEntities: [{ itemName: 'Gear 1', quantity: 10, unit: 'pcs' }],
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Gear 1', quantity: 10, unit: 'pcs' }],
       },
       user: { email: 'testbuyer@example.com' },
     }, resPersistErr, jest.fn());

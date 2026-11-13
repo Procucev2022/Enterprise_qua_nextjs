@@ -202,12 +202,19 @@ function fillRow() {
   fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
     target: { value: HOME_CATEGORY.minorCategories[0] },
   });
+  fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), { target: { value: 'SS316 impeller, 2 HP' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
 }
 
-/** Fill the mandatory delivery destination. */
-function fillDelivery() {
+/** Fill the mandatory header fields: the title, the target delivery date and the destination. */
+function fillHeaderFields() {
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+    target: { value: 'Centrifugal pump replacement' },
+  });
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
+    target: { value: '2099-12-01' },
+  });
   fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
     target: { value: 'Navi Mumbai Plant, Gate 3' },
   });
@@ -486,7 +493,7 @@ describe('ManualRFQModal: saving branches', () => {
     createRFQ.mockResolvedValueOnce({ success: true, rfq: savedRFQ(), remainingFreeRFQs: 2 });
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(adoptCreatedRFQ).toHaveBeenCalledWith(savedRFQ(), 2));
@@ -497,7 +504,7 @@ describe('ManualRFQModal: saving branches', () => {
     mockedUseApp.mockReturnValue(storeWith({ adoptCreatedRFQ }));
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(adoptCreatedRFQ).toHaveBeenCalledWith(savedRFQ()));
@@ -512,7 +519,7 @@ describe('ManualRFQModal: saving branches', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('spec.pdf'));
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_0');
     clickSave();
     await waitFor(() => expect(createRFQ).toHaveBeenCalledTimes(1));
@@ -529,7 +536,7 @@ describe('ManualRFQModal: saving branches', () => {
     mockedUseApp.mockReturnValue(storeWith({ buyerVendors: [networkSupplier] }));
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_2');
     clickSave();
     await waitFor(() => expect(createRFQ).toHaveBeenCalledTimes(1));

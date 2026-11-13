@@ -700,13 +700,20 @@ sellerDirectory: {
 
     // Line item
     itemNameRequired: 'Describe the item. Vendors quote against this text, so it cannot be blank.',
+    specsRequired: 'Describe the specification, such as material, size or standard. Vendors quote against it.',
     quantityRequired: 'Enter a quantity above zero.',
     unitRequired: 'Enter a unit, for example Nos, Kg or Mtr.',
     majorCategoryRequired: 'Choose a major category so the RFQ routes to the right vendors.',
-    minorCategoryRequired: 'Choose a minor category.',
+    majorCategoryUnknown: 'The selected major category is not in the category master. Choose one from the list.',
+    minorCategoryRequired: 'Choose a minor category under the selected major category.',
+    minorCategoryNotUnderMajor:
+      'The selected minor category does not belong to the selected major category. Choose a minor category under that major category.',
+    minorWithoutMajor: 'A minor category needs a major category. Choose a major category first, or clear the minor category.',
+    minorNotApplicable: 'A minor category does not apply to All Categories. Clear the minor category to continue.',
 
     // Header
-    titleLength: 'The RFQ title must be between {min} and {max} characters, or left blank to use the first line item.',
+    titleRequired: 'Enter an RFQ title. It is the first thing vendors read about this requirement.',
+    titleLength: 'The RFQ title must be between {min} and {max} characters.',
     deliveryLocationRequired:
       'Enter the delivery location. Vendors price freight against it, so it cannot be left blank.',
     deliveryLocationLength: 'The delivery location must be between {min} and {max} characters.',
@@ -720,6 +727,7 @@ sellerDirectory: {
       'PIN code not found in postal directory. Please enter a valid delivery PIN code.',
     budgetNegative: 'An estimated budget cannot be negative. Leave it blank to publish no ceiling.',
     lineItemsRequired: 'Add at least one line item so vendors have something to quote against.',
+    targetDateRequired: 'Choose a target delivery date. Vendors plan their delivery against it.',
     targetDateCannotBePast: 'Target date cannot be earlier than today.',
   },
 
@@ -729,9 +737,11 @@ sellerDirectory: {
     subtitle:
       '',
     closeAria: 'Close manual RFQ entry',
+    /** Shown beside the label of every mandatory field. Every field except the budget is mandatory. */
+    requiredMarker: '*',
 
     titleLabel: 'RFQ Title',
-    titlePlaceholder: 'Leave blank to use the first line item',
+    titlePlaceholder: 'For example, Mechanical seal replacement for pump P-101',
     budgetLabel: 'Estimated Budget ({symbol})',
     budgetPlaceholder: 'Leave blank to publish no ceiling',
     optionalTag: 'Optional',
@@ -780,6 +790,10 @@ sellerDirectory: {
     shortlistMismatchNotice:
       '{count} vendor(s) have a category mismatch and were left out of this RFQ shortlist. Use the category update request on each of them to ask them to update their categories.',
     itemsCount: '{count} items',
+    /** Names of incomplete line items in the dispatch summary, e.g. "2 line item(s) incomplete". */
+    lineItemsIncompleteLabel: '{count} line item(s) incomplete',
+    /** Names the target date in the dispatch summary. It is mandatory and must not be in the past. */
+    targetDateMissingLabel: 'Target Delivery Date (required, not in the past)',
 
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',

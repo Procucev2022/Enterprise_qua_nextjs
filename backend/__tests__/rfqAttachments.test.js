@@ -377,6 +377,16 @@ describe('vendor quote attachment storage', () => {
   });
 });
 
+// One line item with every field the RFQ form requires, so the create requests below are valid RFQs.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
+
 describe('RFQ attachment HTTP routes', () => {
   describe('POST /api/rfqs/attachments', () => {
     test('stores a document and returns its metadata', async () => {
@@ -540,6 +550,7 @@ describe('RFQ attachment HTTP routes', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
           attachments: [upload.body.data],
         });
 
@@ -559,6 +570,7 @@ describe('RFQ attachment HTTP routes', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);

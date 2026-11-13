@@ -15,6 +15,17 @@ const optimizationMetrics = require('../src/db/optimizationMetrics');
 const buyerAccountResolver = require('../src/services/buyerAccountResolver');
 const { RFQ_CREATION_ERRORS } = require('../src/config/constants');
 
+// One line item with every field the RFQ form requires. Spread into create payloads so each
+// request reaches the checks under test instead of stopping at line-item validation.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
+
 function mockRes() {
   const res = {};
   res.status = jest.fn().mockReturnValue(res);
@@ -264,8 +275,8 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.spyOn(storeService, 'createRFQ').mockImplementationOnce(() => {
       throw new Error('Create RFQ error');
     });
-    // The payload must satisfy VALIDATION_SCHEMAS.createRFQ, otherwise the
-    // handler returns 400 and never reaches the store call under test.
+    // The payload must satisfy VALIDATION_SCHEMAS.createRFQ and carry a complete line item,
+    // otherwise the handler returns 400 and never reaches the store call under test.
     await rfqController.createRFQ(
       buyerReq({
         body: {
@@ -275,6 +286,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
           targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         },
       }),
       res,
@@ -297,7 +309,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
           source: 'email_gateway',
           targetGatewayEmail: 'intake-test@example.com',
           sourceEmail: 'requisition@buyer.com',
-          extractedEntities: [{ itemName: 'Valve', quantity: 2, technicalSpecs: 'DN50' }],
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM, itemName: 'Valve', quantity: 2, technicalSpecs: 'DN50' }],
         },
       }),
       emailRes,
@@ -317,7 +329,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
       deliveryLocation: 'Navi Mumbai',
       deliveryPincode: '400701',
       source: 'email_gateway',
-      lineItems: [{ itemName: 'Gasket', quantity: 10 }],
+      lineItems: [{ ...COMPLETE_LINE_ITEM, itemName: 'Gasket', quantity: 10 }],
     };
     try {
       gatewayEnvKeys.forEach((key) => {

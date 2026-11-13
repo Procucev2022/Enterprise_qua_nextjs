@@ -7,6 +7,16 @@ const { authHeader, TEST_USERS } = require('./testHelpers');
 
 const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
+// One line item with every field the RFQ form requires, so the create helper below is a valid RFQ.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
+
 describe('RFQ Extension Feature (24h / 48h strictly one-time)', () => {
   describe('Constants and Schemas', () => {
     test('ALLOWED_EXTENSION_HOURS contains exactly 24 and 48', () => {
@@ -138,6 +148,7 @@ describe('RFQ Extension Feature (24h / 48h strictly one-time)', () => {
           targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
           ...overrides,
         });
       return res.body.data;

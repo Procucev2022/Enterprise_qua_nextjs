@@ -5704,3 +5704,13 @@ no vendor is assigned or invitation sent for any Rfq. Can you please check.
 ```
 
 ---
+
+### Prompt 196
+
+**Timestamp**: 2026-11-13T14:09:22+05:30
+
+```text
+All RFQ fields except Estimated Budget should be mandatory. Also, clicking anywhere inside the Target Delivery Date field should open the calendar picker.
+```
+
+---

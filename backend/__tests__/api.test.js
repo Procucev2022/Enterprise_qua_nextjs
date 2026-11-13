@@ -16,6 +16,16 @@ function customAuthHeader(user) {
 // started failing the moment the sandbox's clock rolled into 2026-10-01.
 // Computed once per test run instead, always valid.
 const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+// One line item with every field the RFQ form requires. Spread into payloads so each test
+// starts from a valid row and only the field under test is changed.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
 
 describe('API Route Endpoints', () => {
   // 1. Bootstrap
@@ -621,6 +631,7 @@ describe('API Route Endpoints', () => {
         deliveryPincode: '411001',
         targetDeliveryDate: '2026-12-01',
         sourcingMode: 'mode_1',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
       });
       expect(rfqRes.statusCode).toBe(201);
       expect(rfqRes.body.data.buyerAccountName).toBe('Test Buyer Org');
@@ -657,6 +668,7 @@ describe('API Route Endpoints', () => {
         sourcingMode: 'mode_1',
         deliveryLocation: 'Plant A',
         deliveryPincode: '400001',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         ...overrides,
       });
 
@@ -820,7 +832,7 @@ describe('API Route Endpoints', () => {
 
         const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({
           targetDeliveryDate: new Date().toISOString().slice(0, 10),
-          extractedEntities: [{ itemName: 'Item 1', quantity: 1, unit: 'Nos', targetDate: '2020-01-01' }],
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM, targetDate: '2020-01-01' }],
         }));
         expect(res.statusCode).toBe(400);
         expect(res.body.error).toBe('Target date cannot be earlier than today.');
@@ -872,6 +884,7 @@ describe('API Route Endpoints', () => {
         sourcingMode: 'mode_2',
         deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         deliveryPincode: '400701',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
       };
       const res = await request(app).post('/api/rfqs').set(authHeader('buyer')).send(rfq);
       expect(res.statusCode).toBe(201);
@@ -894,6 +907,7 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);
@@ -926,6 +940,7 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
           attachments: [attachment],
           source: 'web_portal',
           sourceFileName: 'BOQ-pumps.xlsx',
@@ -962,6 +977,7 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Pune Facility, Dock 2',
           deliveryPincode: '411057',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);
@@ -985,6 +1001,96 @@ describe('API Route Endpoints', () => {
 
       expect(res.statusCode).toBe(400);
       expect(res.body.fieldErrors.deliveryLocation).toMatch(/delivery location is required/i);
+    });
+
+    // Every line item must be complete. The form asks for the same fields, and a vendor cannot
+    // quote against a row that leaves any of them out.
+    const RFQ_WITH_ITEMS = {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: A_FUTURE_DATE,
+      sourcingMode: 'mode_1',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
+    };
+
+    test('POST /api/rfqs rejects a line item with no specification', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, technicalSpecs: '   ' }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].technicalSpecs']).toMatch(/specification/i);
+    });
+
+    test('POST /api/rfqs rejects an RFQ with no line items', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.lineItems).toMatch(/at least one line item/i);
+    });
+
+    test('POST /api/rfqs rejects a line item with no major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, majorCategory: '', minorCategory: '' }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].majorCategory']).toMatch(/major category/i);
+    });
+
+    test('POST /api/rfqs requires a minor category under a real major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, minorCategory: '' }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].minorCategory']).toMatch(/minor category/i);
+    });
+
+    test('POST /api/rfqs rejects a line item quantity of zero', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, quantity: 0 }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].quantity']).toMatch(/quantity above zero/i);
+    });
+
+    // All Categories is a complete choice that needs no minor category. It is stored blank, as
+    // every uncategorised row always was, so matching behaves the same as before.
+    test('POST /api/rfqs accepts an All Categories line item without a minor category and stores it blank', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          ...RFQ_WITH_ITEMS,
+          category: undefined,
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM, majorCategory: 'All Categories', minorCategory: '' }],
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.data.extractedEntities[0].majorCategory).toBe('');
+    });
+
+    test('POST /api/rfqs rejects an All Categories line item that also names a minor category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          ...RFQ_WITH_ITEMS,
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM, majorCategory: 'All Categories' }],
+        });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].minorCategory']).toMatch(/does not apply to All Categories/i);
     });
 
     test('POST /api/rfqs rejects a delivery location shorter than three characters', async () => {
@@ -1050,6 +1156,7 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Tilbury Docks, Berth 4',
           deliveryPincode: 'SW1A 1AA',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);
@@ -1076,6 +1183,7 @@ describe('API Route Endpoints', () => {
           deliveryPincode: '400701',
           targetDeliveryDate: '2026-12-01',
           category: 'Nonexistent Major Category 12345',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
       expect(res.statusCode).toBe(400);
       expect(res.body.error).toMatch(/Invalid major category/i);
@@ -1092,6 +1200,7 @@ describe('API Route Endpoints', () => {
           targetDeliveryDate: '2026-12-01',
           category: 'Engineering Spares - Electrical',
           minorCategory: 'Food & Beverages',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
       expect(res.statusCode).toBe(400);
       expect(res.body.error).toMatch(/Invalid category combination/i);
@@ -1111,6 +1220,9 @@ describe('API Route Endpoints', () => {
             {
               id: 'li-1',
               itemName: 'Stethoscope',
+              technicalSpecs: 'Dual head, adult size',
+              quantity: 5,
+              unit: 'Nos',
               majorCategory: 'Raw Material',
               minorCategory: 'Health Equipments', // Health Equipments does NOT belong to Raw Material!
             },
@@ -1603,6 +1715,7 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
         targetDeliveryDate: A_FUTURE_DATE,
         deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         deliveryPincode: '400701',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         ...overrides,
       });
     return res.body.data;

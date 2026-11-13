@@ -77,7 +77,14 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
       deliveryPincode: '380001',
       targetDeliveryDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
       budget: 150000,
-      lineItems: [{ description: 'High Pressure Pump', quantity: 3, unit: 'units' }],
+      lineItems: [{
+        itemName: 'High Pressure Pump',
+        technicalSpecs: 'Multistage, 150 HP, cast iron casing',
+        quantity: 3,
+        unit: 'Nos',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategory: 'Pumps & Accessories',
+      }],
     };
 
     const res = await request(app)

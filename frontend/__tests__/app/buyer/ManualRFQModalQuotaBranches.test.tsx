@@ -123,12 +123,19 @@ function fillRow() {
   });
   fireEvent.change(within(row).getByLabelText(MODAL.colMajor), { target: { value: HOME_CATEGORY.majorCategory } });
   fireEvent.change(within(row).getByLabelText(MODAL.colMinor), { target: { value: HOME_CATEGORY.minorCategories[0] } });
+  fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), { target: { value: 'SS316 impeller, 2 HP' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
 }
 
-/** Fill the mandatory delivery destination. */
-function fillDelivery() {
+/** Fill the mandatory header fields: the title, the target delivery date and the destination. */
+function fillHeaderFields() {
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+    target: { value: 'Centrifugal pump replacement' },
+  });
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
+    target: { value: '2099-12-01' },
+  });
   fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
     target: { value: 'Navi Mumbai Plant, Gate 3' },
   });
@@ -174,7 +181,7 @@ describe('ManualRFQModal: quota and plan come only from the store', () => {
     mockedUseApp.mockReturnValue(storeWith({ activeBuyerAccount: { subscriptionPlan: 'free_trial' }, remainingFreeRFQs: null }));
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -250,7 +257,7 @@ describe('ManualRFQModal: outcome messages', () => {
     mockedUseApp.mockReturnValue(storeWith({ buyerVendors: [matchingVendor, mismatchedVendor] }));
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -270,7 +277,7 @@ describe('ManualRFQModal: outcome messages', () => {
     createRFQ.mockResolvedValueOnce({ success: true, rfq: savedRFQ({ extractedEntities: [] }) });
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -284,7 +291,7 @@ describe('ManualRFQModal: outcome messages', () => {
     createRFQ.mockResolvedValueOnce({ success: true, rfq: withoutItems });
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 

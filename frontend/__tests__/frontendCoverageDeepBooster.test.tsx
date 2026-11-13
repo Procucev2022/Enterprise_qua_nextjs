@@ -355,6 +355,9 @@ describe('Frontend Deep Coverage Booster Test Suite', () => {
     const pinInput = document.getElementById('manual-rfq-pincode') as HTMLInputElement;
     if (pinInput) fireEvent.change(pinInput, { target: { value: '400701' } });
 
+    const dateInput = document.getElementById('manual-rfq-date') as HTMLInputElement;
+    if (dateInput) fireEvent.change(dateInput, { target: { value: '2099-12-01' } });
+
     // Fill in all line item rows
     const rows = document.querySelectorAll('tr[data-testid^="manual-row-"]');
     rows.forEach((row, idx) => {
@@ -362,8 +365,9 @@ describe('Frontend Deep Coverage Booster Test Suite', () => {
       const selects = row.querySelectorAll('select');
 
       if (inputs.length > 0) fireEvent.change(inputs[0], { target: { value: `Submersible Pump Item ${idx + 1}` } });
-      if (selects.length > 0) fireEvent.change(selects[0], { target: { value: 'Mechanical' } });
-      if (selects.length > 1) fireEvent.change(selects[1], { target: { value: 'Pumps' } });
+      if (inputs.length > 1) fireEvent.change(inputs[1], { target: { value: 'SS316 impeller, 2 HP' } });
+      if (selects.length > 0) fireEvent.change(selects[0], { target: { value: 'Engineering Spares - Mechanical' } });
+      if (selects.length > 1) fireEvent.change(selects[1], { target: { value: 'Pumps & Accessories' } });
       if (inputs.length > 2) fireEvent.change(inputs[2], { target: { value: '5' } });
       if (inputs.length > 3) fireEvent.change(inputs[3], { target: { value: 'Nos' } });
     });

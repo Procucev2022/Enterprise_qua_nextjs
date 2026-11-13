@@ -43,6 +43,7 @@ import {
   type RankedProcucevVendor,
 } from '@/lib/vendorMatching';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
+import RequiredMarker from '@/app/components/RequiredMarker';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -1132,14 +1133,14 @@ export default function IngestionWizard({
     if (!validation.isValid || form.sourcingMode === null) {
       const missing: string[] = [];
       if (validation.formErrors.sourcingMode) missing.push(MODAL.sourcingModeLabel);
-      if (validation.formErrors.title) missing.push('RFQ Title');
+      if (validation.formErrors.title) missing.push(MODAL.titleLabel);
       if (validation.formErrors.deliveryLocation) missing.push('Delivery Location');
       if (validation.formErrors.deliveryPincode) missing.push('Delivery Pincode');
-      if (validation.formErrors.targetDeliveryDate) missing.push('Target Delivery Date (cannot be in the past)');
+      if (validation.formErrors.targetDeliveryDate) missing.push(MODAL.targetDateMissingLabel);
       if (validation.formErrors.lineItems) missing.push('At least 1 complete line item');
       const lineItemErrCount = Object.keys(validation.lineItemErrors).length;
       if (lineItemErrCount > 0) {
-        missing.push(`${lineItemErrCount} line item(s) missing name, quantity, or unit`);
+        missing.push(formatString(MODAL.lineItemsIncompleteLabel, { count: lineItemErrCount }));
       }
       const errorMsg = missing.length > 0
         ? `Validation Error – Please complete: ${missing.join(', ')}.`
@@ -1273,22 +1274,16 @@ export default function IngestionWizard({
         return;
       }
 
-      // ALL_CATEGORIES_OPTION is a UI-only sentinel that opts a line item out
-      // of category-narrowed matching — never a real taxonomy value, so it
-      // must never reach the server as this item's majorCategory.
-      const sanitizedForm: ManualRFQForm = {
-        ...updatedForm,
-        lineItems: updatedForm.lineItems.map((item) =>
-          item.majorCategory === ALL_CATEGORIES_OPTION ? { ...item, majorCategory: '' } : item
-        ),
-      };
+      // All Categories is a complete choice that opts a line item out of category-narrowed
+      // matching. It is sent as chosen, and the server stores it as a blank category, which is
+      // how it was always stored. Every row must carry a major category, so a blank one is refused.
       const isAiExtracted = Boolean(
         extractionSummary &&
         extractionSummary.accepted > 0 &&
         uploadedFiles.length > 0
       );
       const rfqSource: RFQSource = isAiExtracted ? 'ai_extraction' : 'manual_entry';
-      const payload = toRFQCreatePayload(sanitizedForm, mode1AssignedVendors, rfqSource);
+      const payload = toRFQCreatePayload(updatedForm, mode1AssignedVendors, rfqSource);
       if (isAiExtracted && extractionSummary?.fileName) {
         payload.sourceFileName = extractionSummary.fileName;
       }
@@ -1591,10 +1586,14 @@ export default function IngestionWizard({
           <div className="xl:col-span-2">
             <label htmlFor="rfq-title" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.titleLabel}
+              <RequiredMarker />
             </label>
             <input
               id="rfq-title"
               type="text"
+              required
+              aria-required
+              aria-invalid={!!formErrors.title}
               value={form.title}
               onChange={(e) => patchForm('title', e.target.value)}
               placeholder={MODAL.titlePlaceholder}
@@ -1626,13 +1625,15 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.deliveryPincodeLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+              <RequiredMarker />
             </label>
             <div className="relative">
               <input
                 id="rfq-pincode"
                 type="text"
                 required
+                aria-required
+                aria-invalid={!!formErrors.deliveryPincode || !!pincodeError}
                 value={form.deliveryPincode}
                 onChange={(e) => patchForm('deliveryPincode', e.target.value)}
                 onBlur={handlePincodeBlur}
@@ -1665,12 +1666,14 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-location" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.deliveryLocationLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+              <RequiredMarker />
             </label>
             <input
               id="rfq-location"
               type="text"
               required
+              aria-required
+              aria-invalid={!!formErrors.deliveryLocation}
               value={form.deliveryLocation}
               onChange={(e) => patchForm('deliveryLocation', e.target.value)}
               placeholder={MODAL.deliveryLocationPlaceholder}
@@ -1684,14 +1687,18 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-date" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.targetDateLabel}
+              <RequiredMarker />
             </label>
             <input
               id="rfq-date"
               type="date"
+              required
+              aria-required
+              aria-invalid={!!formErrors.targetDeliveryDate}
               min={new Date().toISOString().slice(0, 10)}
               value={form.targetDeliveryDate}
               onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
+              className="date-input-whole-field w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
             <FieldError message={formErrors.targetDeliveryDate} />
           </div>
@@ -1744,12 +1751,12 @@ export default function IngestionWizard({
             <table className="w-full text-left min-w-[1080px] text-xs">
               <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
                 <tr>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
                   <th className="px-3 py-2.5 text-center font-bold">Action</th>
                 </tr>
               </thead>
@@ -1776,11 +1783,14 @@ export default function IngestionWizard({
                         <input
                           type="text"
                           aria-label={MODAL.colSpecs}
+                          aria-required
+                          aria-invalid={!!errors.technicalSpecs}
                           value={item.technicalSpecs}
                           onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
                           placeholder={MODAL.specsPlaceholder}
                           className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
+                        <FieldError message={errors.technicalSpecs} />
                       </td>
 
                       {/* Quantity */}
@@ -1818,6 +1828,8 @@ export default function IngestionWizard({
                       <td className="px-3 py-2.5 align-top">
                         <select
                           aria-label={MODAL.colMajor}
+                          aria-required
+                          aria-invalid={!!errors.majorCategory}
                           value={item.majorCategory}
                           onChange={(e) => {
                             const newMajor = e.target.value;
@@ -1841,6 +1853,7 @@ export default function IngestionWizard({
                       <td className="px-3 py-2.5 align-top">
                         <select
                           aria-label={MODAL.colMinor}
+                          aria-invalid={!!errors.minorCategory}
                           value={item.minorCategory}
                           disabled={
                             !item.majorCategory ||

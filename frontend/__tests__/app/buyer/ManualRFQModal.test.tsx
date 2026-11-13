@@ -126,12 +126,21 @@ function fillRow() {
   fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
     target: { value: categoriesData[0].minorCategories[0] },
   });
+  fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
+    target: { value: 'SS316 impeller, 2 HP' },
+  });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
 }
 
-/** Fill the mandatory delivery destination. */
-function fillDelivery() {
+/** Fill the mandatory header fields: the title, the target delivery date and the destination. */
+function fillHeaderFields() {
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+    target: { value: 'Centrifugal pump replacement' },
+  });
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
+    target: { value: '2099-12-01' },
+  });
   fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
     target: { value: 'Navi Mumbai Plant, Gate 3' },
   });
@@ -345,11 +354,13 @@ describe('ManualRFQModal: validation', () => {
     renderModal();
     clickSave();
 
+    expect(screen.getByText(MANUAL.titleRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.targetDateRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.itemNameRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.specsRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.quantityRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.unitRequired)).toBeInTheDocument();
-    // Category is optional now — no error shown for a blank major/minor category.
-    expect(screen.queryByText(MANUAL.majorCategoryRequired)).not.toBeInTheDocument();
+    expect(screen.getByText(MANUAL.majorCategoryRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryLocationRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryPincodeRequired)).toBeInTheDocument();
   });
@@ -397,7 +408,7 @@ describe('ManualRFQModal: saving', () => {
   it('posts the form and hands back the server record', async () => {
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -425,7 +436,7 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -444,7 +455,7 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -473,7 +484,7 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -539,7 +550,7 @@ describe('ManualRFQModal: supporting documents', () => {
     await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -553,6 +564,9 @@ describe('ManualRFQModal: header and item fields', () => {
     // Relative to today: the date input has min=today, so a fixed date goes stale.
     const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     renderModal();
+    fillRow();
+    fillHeaderFields();
+    // Set after the shared header fill, so these values are the ones the payload carries.
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
       target: { value: 'Monsoon Pump Overhaul' },
     });
@@ -560,8 +574,6 @@ describe('ManualRFQModal: header and item fields', () => {
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
       target: { value: futureDate },
     });
-    fillRow();
-    fillDelivery();
     chooseMode('mode_1');
     clickSave();
 
@@ -579,7 +591,7 @@ describe('ManualRFQModal: header and item fields', () => {
     fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
       target: { value: 'SS316 impeller, 415V' },
     });
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -616,7 +628,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(mode1).not.toBeChecked();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_3');
@@ -629,7 +641,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     });
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     expect(rfqClient.createRFQ).not.toHaveBeenCalled();
@@ -672,7 +684,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(mode2).not.toBeChecked();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -931,7 +943,7 @@ describe('ManualRFQModal: extraction from an attached document', () => {
       expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
     );
 
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -952,7 +964,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     expect(screen.getByText('0 Suppliers Found')).toBeInTheDocument();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => {
@@ -990,7 +1002,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     expect(screen.queryByText('Category Manager Vendor')).not.toBeInTheDocument();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -1024,7 +1036,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     fireEvent.click(mode3Checkbox);
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -1053,7 +1065,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     // fillRow() sets the RFQ's category to categoriesData[0] ('Civil Works'),
     // which the IT vendor above does not cover at all.
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -1256,7 +1268,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
       fireEvent.click(mode0Radio);
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1279,7 +1291,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
       fireEvent.click(mode0Radio);
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1299,7 +1311,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         rfq: savedRFQ({ sourcingMode: 'mode_0', category: '' }),
       });
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
       await waitFor(() => {
@@ -1577,7 +1589,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
 
       // Initially quota exhausted banner and bottom upgrade link are both present
       expect(screen.getByTestId('manual-rfq-quota-exhausted-banner')).toBeInTheDocument();
@@ -1778,7 +1790,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Submit with only mismatched vendor in candidate pool
@@ -1809,7 +1821,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Attach file (first upload fails, keeping file in pendingFilesRef)
@@ -2222,7 +2234,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Test top useV0 button
       const { unmount: unmount1 } = renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const useV0Btns = screen.getAllByRole('button', { name: MODAL.useV0Action });
       expect(useV0Btns).toHaveLength(2);
       fireEvent.click(useV0Btns[0]);
@@ -2232,7 +2244,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Test bottom useV0 button
       const { unmount: unmount2 } = renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const useV0Btns2 = screen.getAllByRole('button', { name: MODAL.useV0Action });
       fireEvent.click(useV0Btns2[1]);
       expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
@@ -2356,7 +2368,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Click vendor card for v1 (which has no name, so card displays contactPerson)
@@ -2392,7 +2404,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Attach document so pendingFilesRef has files
@@ -2426,7 +2438,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -2453,7 +2465,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -2480,7 +2492,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -2493,3 +2505,25 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 });
 
 
+
+describe('ManualRFQModal: mandatory fields', () => {
+  it('marks every field except the budget as required, and the target date opens its calendar from the whole field', () => {
+    renderModal();
+
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toBeRequired();
+    const targetDate = screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i'));
+    expect(targetDate).toBeRequired();
+    expect(targetDate).toHaveClass('date-input-whole-field');
+    expect(within(firstRow()).getByLabelText(MODAL.colSpecs)).toBeRequired();
+    expect(within(firstRow()).getByLabelText(MODAL.colMajor)).toBeRequired();
+    expect(within(firstRow()).getByLabelText(MODAL.colMinor)).toBeRequired();
+    expect(screen.getByLabelText(/Estimated Budget/i)).not.toBeRequired();
+  });
+
+  it('shows the required mark beside each mandatory column heading', () => {
+    renderModal();
+
+    const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
+    expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker))).toHaveLength(6);
+  });
+});

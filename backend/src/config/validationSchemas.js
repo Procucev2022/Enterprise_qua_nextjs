@@ -392,6 +392,48 @@ const VALIDATION_SCHEMAS = {
     notes: { type: 'string', required: false, maxLength: 2000 },
   },
 
+  // One line item of an RFQ being created. A row is complete only when a vendor can quote
+  // against it: what is wanted, how it is specified, how many and in which unit, and the
+  // category it routes under. The minor category is checked by validateRFQLineItemsForCreate
+  // because it does not apply when the major category is All Categories.
+  createRFQLineItem: {
+    itemName: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 200,
+      message: 'Each line item needs a description of the item.',
+    },
+    technicalSpecs: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 2000,
+      message: 'Each line item needs a specification, such as material, size or standard.',
+    },
+    quantity: {
+      type: 'number',
+      required: true,
+      custom: (val) => (Number(val) > 0 ? null : 'Each line item needs a quantity above zero.'),
+      message: 'Each line item needs a quantity above zero.',
+    },
+    unit: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 40,
+      message: 'Each line item needs a unit, for example Nos, Kg or Mtr.',
+    },
+    majorCategory: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 200,
+      message: 'Each line item needs a major category.',
+    },
+    minorCategory: { type: 'string', required: false, maxLength: 200 },
+  },
+
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
     // A buyer may not know the exact taxonomy slot for every line item up
@@ -1555,7 +1597,51 @@ function validatePayload(schema, data = {}) {
   };
 }
 
+/** The major category that means "not narrowed". A row under it needs no minor category. */
+const RFQ_ALL_CATEGORIES = 'All Categories';
+
+/**
+ * Validates the line items of an RFQ being created.
+ *
+ * Returns field errors keyed `lineItems` when there is no row, and `lineItems[n].field` for
+ * row n (zero-based). These keys match the category errors the RFQ controller already returns.
+ *
+ * @param {Array<object>} lineItems The rows as submitted (extractedEntities or lineItems).
+ * @returns {{ isValid: boolean, errors: Record<string, string> }}
+ */
+function validateRFQLineItemsForCreate(lineItems) {
+  const rows = Array.isArray(lineItems) ? lineItems : [];
+  if (rows.length === 0) {
+    return {
+      isValid: false,
+      errors: { lineItems: 'Add at least one line item so vendors have something to quote against.' },
+    };
+  }
+
+  const errors = {};
+  rows.forEach((row, index) => {
+    const rowResult = validatePayload(VALIDATION_SCHEMAS.createRFQLineItem, row || {});
+    Object.entries(rowResult.errors).forEach(([field, message]) => {
+      errors[`lineItems[${index}].${field}`] = message;
+    });
+
+    const major = String((row && row.majorCategory) || '').trim();
+    // The controller reads a row's minor category from minorCategory, falling back to category.
+    const minor = String((row && (row.minorCategory || row.category)) || '').trim();
+    if (major === RFQ_ALL_CATEGORIES) {
+      if (minor) {
+        errors[`lineItems[${index}].minorCategory`] = 'A minor category does not apply to All Categories. Clear the minor category to continue.';
+      }
+    } else if (major && !minor) {
+      errors[`lineItems[${index}].minorCategory`] = 'Each line item needs a minor category under its major category.';
+    }
+  });
+
+  return { isValid: Object.keys(errors).length === 0, errors };
+}
+
 module.exports = {
+  validateRFQLineItemsForCreate,
   EMAIL_REGEX,
   PROCUCEV_EMAIL_REGEX,
   PROCUCEV_EMAIL_MESSAGE,

@@ -41,6 +41,7 @@ const {
   AUTH_MESSAGES,
   RFQ_CREATION_ERRORS,
 } = require('../config/constants');
+const { validateRFQLineItemsForCreate } = require('../config/validationSchemas');
 
 // A number the vendor entered, or null when the field was left out. Zero is a real answer
 // (for example, no warranty) and is kept. A missing value is never replaced by zero.
@@ -878,6 +879,19 @@ async function createRFQ(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
+    // Every line item must be complete. The form asks for the same fields, and a vendor cannot
+    // quote against a row that leaves any of them out.
+    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const lineItemValidation = validateRFQLineItemsForCreate(lineItems);
+    if (!lineItemValidation.isValid) {
+      logger.warn('Failed to create RFQ: line item validation failed', { errors: lineItemValidation.errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: Object.values(lineItemValidation.errors)[0],
+        fieldErrors: lineItemValidation.errors,
+      });
+    }
+
     if (isPastDate(body.targetDeliveryDate)) {
       logger.warn('Failed to create RFQ: targetDeliveryDate is in the past', { targetDeliveryDate: body.targetDeliveryDate }, 'RFQ_CONTROLLER');
       return res.status(400).json({
@@ -887,7 +901,6 @@ async function createRFQ(req, res, next) {
       });
     }
 
-    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
     await rfqIngestionService.ensureTaxonomyLoaded();
 
     const declaredMajor = (body.category || body.majorCategory || '').trim();
@@ -904,6 +917,10 @@ async function createRFQ(req, res, next) {
       }
       body.category = canonical;
       if (body.majorCategory) body.majorCategory = canonical;
+    } else if (declaredMajor === 'All Categories') {
+      // All Categories is a complete choice that means no category. It is stored blank, as it always was.
+      body.category = '';
+      if (body.majorCategory) body.majorCategory = '';
     }
     if (declaredMinor) {
       if (!declaredMajor) {
@@ -947,27 +964,20 @@ async function createRFQ(req, res, next) {
           });
         }
         item.majorCategory = canonical;
+      } else if (major === 'All Categories') {
+        // Stored blank, as it always was: the row is not narrowed to a category.
+        item.majorCategory = '';
       }
       if (minor) {
-        const effectiveLineMajor = item.majorCategory || declaredMajor;
-        if (!effectiveLineMajor) {
-          logger.warn(`Failed to create RFQ: minor category "${minor}" without major category on line item ${idx + 1}`, {}, 'RFQ_CONTROLLER');
-          return res.status(400).json({
-            success: false,
-            error: `Line item ${idx + 1} specifies minor category "${minor}" without a major category. Please select a major category first.`,
-            fieldErrors: { [`lineItems[${idx}].minorCategory`]: `Major category required for "${minor}"` },
-          });
-        }
-        if (effectiveLineMajor !== 'All Categories' && !rfqIngestionService.isMinorUnderMajor(effectiveLineMajor, minor)) {
+        // Validation guarantees a real major category on any row that names a minor one.
+        const effectiveLineMajor = item.majorCategory;
+        if (!rfqIngestionService.isMinorUnderMajor(effectiveLineMajor, minor)) {
           logger.warn(`Failed to create RFQ: invalid category combination ("${effectiveLineMajor}" / "${minor}") on line item ${idx + 1}`, {}, 'RFQ_CONTROLLER');
           return res.status(400).json({
             success: false,
             error: `Line item ${idx + 1} has an invalid category combination: "${minor}" does not belong to "${effectiveLineMajor}".`,
             fieldErrors: { [`lineItems[${idx}].minorCategory`]: `Minor category "${minor}" does not belong to "${effectiveLineMajor}"` },
           });
-        }
-        if (!item.majorCategory && effectiveLineMajor) {
-          item.majorCategory = rfqIngestionService.canonicalMajor(effectiveLineMajor) || effectiveLineMajor;
         }
       }
     }

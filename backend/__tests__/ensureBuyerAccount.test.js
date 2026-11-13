@@ -230,6 +230,16 @@ describe('an imported buyer (no buyer_accounts row) can see the RFQ they create'
       sourcingMode: 'mode_0',
       deliveryLocation: 'Plant A',
       deliveryPincode: '400001',
+      extractedEntities: [
+        {
+          itemName: 'Centrifugal pump bearing',
+          technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+          quantity: 2,
+          unit: 'Nos',
+          majorCategory: 'Engineering Spares - Mechanical',
+          minorCategory: 'Bearings & Accessories',
+        },
+      ],
     });
     expect(created.statusCode).toBe(201);
     expect(created.body.data.buyerAccountId).toBe('u-imported-rfq');

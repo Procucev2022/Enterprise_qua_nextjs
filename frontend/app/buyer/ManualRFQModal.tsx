@@ -48,6 +48,7 @@ import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingM
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
+import RequiredMarker from '@/app/components/RequiredMarker';
 import {
   addManualRFQLineItem,
   createEmptyManualRFQForm,
@@ -1027,10 +1028,14 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             <div className="xl:col-span-2">
               <label htmlFor="manual-rfq-title" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
                 {MODAL.titleLabel}
+                <RequiredMarker />
               </label>
               <input
                 id="manual-rfq-title"
                 type="text"
+                required
+                aria-required
+                aria-invalid={!!formErrors.title}
                 value={form.title}
                 onChange={(e) => patchForm('title', e.target.value)}
                 placeholder={MODAL.titlePlaceholder}
@@ -1136,14 +1141,18 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             <div>
               <label htmlFor="manual-rfq-date" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
                 {MODAL.targetDateLabel}
+                <RequiredMarker />
               </label>
               <input
                 id="manual-rfq-date"
                 type="date"
+                required
+                aria-required
+                aria-invalid={!!formErrors.targetDeliveryDate}
                 min={new Date().toISOString().slice(0, 10)}
                 value={form.targetDeliveryDate}
                 onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
-                className="font-medium"
+                className="date-input-whole-field font-medium"
               />
               <FieldError message={formErrors.targetDeliveryDate} />
             </div>
@@ -1187,22 +1196,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 <table className="w-full text-left min-w-[1080px]">
                   <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400">
                     <tr>
-                      <th className="px-2 py-2 font-bold">{MODAL.colItem}</th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colSpecs}</th>
-                      <th className="px-2 py-2 font-bold">
-                        {MODAL.colMajor}
-                        {form.sourcingMode === 'mode_0' && (
-                          <span className="ml-1 text-[9px] font-medium text-slate-400 normal-case">(Optional)</span>
-                        )}
-                      </th>
-                      <th className="px-2 py-2 font-bold">
-                        {MODAL.colMinor}
-                        {form.sourcingMode === 'mode_0' && (
-                          <span className="ml-1 text-[9px] font-medium text-slate-400 normal-case">(Optional)</span>
-                        )}
-                      </th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colQty}</th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colUnit}</th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colItem}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colQty}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
                       <th className="px-2 py-2" />
                     </tr>
                   </thead>
@@ -1227,15 +1226,19 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <input
                               type="text"
                               aria-label={MODAL.colSpecs}
+                              aria-required
+                              aria-invalid={!!errors.technicalSpecs}
                               value={item.technicalSpecs}
                               onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
                               placeholder={MODAL.specsPlaceholder}
                               className="w-48"
                             />
+                            <FieldError message={errors.technicalSpecs} />
                           </td>
                           <td className="px-2 py-2 align-top">
                             <select
                               aria-label={MODAL.colMajor}
+                              aria-required
                               aria-invalid={!!errors.majorCategory}
                               value={item.majorCategory}
                               onChange={(e) => {
@@ -1257,6 +1260,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           <td className="px-2 py-2 align-top">
                             <select
                               aria-label={MODAL.colMinor}
+                              aria-required
                               aria-invalid={!!errors.minorCategory}
                               value={item.minorCategory}
                               disabled={!item.majorCategory}
