@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
-import { resolveConfirmationVendorCount } from './ingestion-wizard';
+import { resolveConfirmationVendorCount, resolveOwnVendorCount, V2_V3_SOURCING_MODES } from './ingestion-wizard';
 import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals, selectVendorsForCategories } from '@/lib/vendorMatching';
 import {
   Plus,
@@ -679,6 +679,23 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           }));
         }
       }
+
+      if (form.sourcingMode === 'mode_3' && Array.isArray(fetchedCategoryVendors) && fetchedCategoryVendors.length > 0) {
+        const already = new Set((mode1AssignedVendors || []).map((v) => v.id));
+        const procAdditions = fetchedCategoryVendors
+          .filter((v) => !already.has(v.id))
+          .slice(0, 10)
+          .map((v) => ({
+            id: v.id,
+            name: v.name ?? '',
+            email: v.email || null,
+            contactPerson: v.contactPerson || v.name || null,
+            phone: v.phone || (v as any).mobile || (v as any).mobileNumber || null,
+          }));
+        if (procAdditions.length > 0) {
+          mode1AssignedVendors = [...(mode1AssignedVendors || []), ...procAdditions];
+        }
+      }
       if (form.sourcingMode === RFQ_MODES.MODE_1 && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
         setIsSaving(false);
         setSubmitError(`${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Sourcing) requires at least one private vendor to be selected before creating the RFQ.`);
@@ -824,7 +841,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </span>
               </div>
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
-                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Vendors Assigned</span>
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">
+                  {V2_V3_SOURCING_MODES.includes(String(confirmationRfq.sourcingMode || ''))
+                    ? 'Your Invited Vendors'
+                    : 'Mode & Vendors'}
+                </span>
                 <span data-testid="confirmation-vendor-count" className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono">
                   {(() => {
                     const mode = confirmationRfq.sourcingMode as any;
@@ -833,10 +854,28 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     if (isV0 && !hasCat && (!confirmationRfq.assignedVendors || confirmationRfq.assignedVendors.length === 0)) {
                       return '0 (Pending CM Assignment)';
                     }
-                    return resolveConfirmationVendorCount(confirmationRfq);
+                    return V2_V3_SOURCING_MODES.includes(String(confirmationRfq.sourcingMode || ''))
+                      ? resolveOwnVendorCount(confirmationRfq)
+                      : resolveConfirmationVendorCount(confirmationRfq);
                   })()}
                 </span>
               </div>
+              {V2_V3_SOURCING_MODES.includes(String(confirmationRfq.sourcingMode || '')) && (
+                <div
+                  data-testid="confirmation-procucev-vendor-box"
+                  className="p-3 bg-emerald-50/60 dark:bg-emerald-950/30 rounded-xl border border-emerald-200/60 dark:border-emerald-800/50"
+                >
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 block uppercase tracking-wider">
+                    Procucev Vendors
+                  </span>
+                  <span
+                    data-testid="confirmation-procucev-vendor-count"
+                    className="text-xs font-bold text-emerald-700 dark:text-emerald-300 font-mono"
+                  >
+                    {resolveConfirmationVendorCount(confirmationRfq)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-3 pt-4 border-t border-slate-200 dark:border-gray-800">

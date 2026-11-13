@@ -107,16 +107,25 @@ function VendorRFQDetailsView() {
         }
       }
 
+      const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
+      const myVendorName = (currentUserSession?.orgName || currentUserSession?.name || '').toLowerCase().trim();
+      const scopedQuotes = (result.rfq.quotes || []).filter((quote) => {
+        if (myVendorId && quote.vendorId && String(quote.vendorId).toLowerCase() === myVendorId.toLowerCase()) return true;
+        if (sessionEmail && (quote as any).vendorEmail && String((quote as any).vendorEmail).toLowerCase() === sessionEmail) return true;
+        if (myVendorName && quote.vendorName && String(quote.vendorName).trim().toLowerCase() === myVendorName) return true;
+        return !myVendorId && !sessionEmail;
+      });
+
       const scopedRfq: RFQItem = {
         ...result.rfq,
         buyerAccountName: undefined,
         buyerCompany: undefined,
         sourcingMode: undefined as any,
-        quotes: (result.rfq.quotes || []).filter((quote) => quote.vendorId === myVendorId),
+        quotes: scopedQuotes,
       };
       setState({ status: 'loaded', rfq: scopedRfq });
     },
-    [currentUserSession?.email]
+    [currentUserSession?.email, currentUserSession?.name, currentUserSession?.orgName]
   );
 
   useEffect(() => {

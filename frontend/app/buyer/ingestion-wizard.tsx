@@ -1253,15 +1253,15 @@ export default function IngestionWizard({
         }
       }
 
-      // V3 (Autonomous): fold in the Procucev network vendors the buyer explicitly
-      // picked from the 360°-ranked top-10 panel, de-duplicated against the private
-      // roster already assembled above. These are honoured on top of the backend's
-      // own autonomous category match for mode_3.
-      if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
+      // V3 (Autonomous): fold in the Procucev network vendors from the 360°-ranked
+      // panel (explicitly selected or all matched candidates), de-duplicated against
+      // the private roster already assembled above.
+      if (form.sourcingMode === 'mode_3') {
         const alreadyAssigned = new Set((mode1AssignedVendors || []).map((v) => v.id));
-        const picked = procucevV3Ranked
-          .filter((r) => selectedProcucevV3Ids.includes(r.vendor.id) && !alreadyAssigned.has(r.vendor.id))
-          .map((r) => toProcucevAssignedEntry(r));
+        const poolToPick = selectedProcucevV3Ids.length > 0
+          ? procucevV3Ranked.filter((r) => selectedProcucevV3Ids.includes(r.vendor.id) && !alreadyAssigned.has(r.vendor.id))
+          : procucevV3Ranked.filter((r) => !alreadyAssigned.has(r.vendor.id));
+        const picked = poolToPick.map((r) => toProcucevAssignedEntry(r));
         if (picked.length > 0) {
           mode1AssignedVendors = [...(mode1AssignedVendors || []), ...picked];
         }

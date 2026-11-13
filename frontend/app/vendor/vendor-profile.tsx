@@ -1259,6 +1259,7 @@ export default function VendorProfilePage() {
                           key={`${item.major}-${item.name}`}
                           type="button"
                           role="option"
+                          aria-selected={customCategoryInput === item.name}
                           onClick={() => {
                             setCustomCategoryInput(item.name);
                             setShowCategorySuggestions(false);

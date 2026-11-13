@@ -1259,10 +1259,9 @@ describe('app/buyer/command-center.tsx', () => {
     });
 
     expect(screen.queryByText(/Autonomous Sourcing Engine Initialized/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/SMS Alert Delivered/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/WhatsApp Invitation Delivered/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Procucev Verified Supplier/i)).not.toBeInTheDocument();
-    expect(screen.getByText('No outreach events yet')).toBeInTheDocument();
+    expect(screen.getByText(/WhatsApp Follow-Up: Apex Metals/i)).toBeInTheDocument();
+    expect(screen.getByText(/SMS Follow-Up: Apex Metals/i)).toBeInTheDocument();
+    expect(screen.getByText(/RFQ Invitation Dispatched: Local Shop/i)).toBeInTheDocument();
 
     // Trigger modal interactions
     fireEvent.click(screen.getByText('Active Pipeline'));

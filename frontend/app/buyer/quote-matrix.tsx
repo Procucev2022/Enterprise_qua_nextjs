@@ -467,7 +467,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       >
                         <div className="flex items-baseline gap-2">
                           <span className="text-lg font-black text-slate-900 dark:text-white mono">
-                            {formatCurrency(q.unitPrice)}
+                            {formatCurrency(q.unitPrice || (q.totalPrice ? Math.round(q.totalPrice / ((currentRFQ as any).quantity || 1)) : 0))}
                           </span>
                           {isL1 && (
                             <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
@@ -475,7 +475,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                             </span>
                           )}
                         </div>
-                        <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: {formatCurrency(q.totalPrice)}</span>
+                        <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: {formatCurrency(q.totalPrice || (q as any)?.totalAmount || q.unitPrice)}</span>
                       </td>
                     );
                   })}
@@ -702,12 +702,15 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                     const items = quote.lineItemQuotes || [];
                     const matched =
                       items.find((li) => li.lineItemId === item.id) ||
-                      items.find((li) => (li.itemName || '').trim().toLowerCase() === (item.itemName || '').trim().toLowerCase());
+                      items.find((li) => (li.itemName || '').trim().toLowerCase() === (item.itemName || '').trim().toLowerCase()) ||
+                      items[itemIdx];
                     const effectivePrice =
                       matched && typeof matched.unitPrice === 'number' && matched.unitPrice > 0
                         ? matched.unitPrice
                         : typeof quote.unitPrice === 'number' && quote.unitPrice > 0
                         ? quote.unitPrice
+                        : typeof quote.totalPrice === 'number' && quote.totalPrice > 0
+                        ? Math.round(quote.totalPrice / (item.quantity || 1))
                         : null;
                     return { quote, matched, effectivePrice };
                   });

@@ -277,7 +277,10 @@ function applyQuotesVisibility(rfq, role) {
     rfq.status === 'PO Generated' ||
     rfq.poFinalised ||
     Boolean(rfq.poNumber) ||
-    rfq.status === 'Expired';
+    rfq.status === 'Expired' ||
+    rfq.status === 'In Evaluation' ||
+    rfq.status === 'AI Recommended' ||
+    rfq.status === 'Quotes Received';
 
   if (isWithin48h && !isConcluded) {
     const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
@@ -522,11 +525,26 @@ async function getAllRFQs(req, res, next) {
             status: av.status,
           })),
           quotes: (r.quotes || []).map((q) => ({
-            id: q.id,
+            id: q.id || `quote-${q.vendorId || 'v'}-${q.submittedAt || Date.now()}`,
             vendorId: q.vendorId,
             vendorName: q.vendorName,
+            vendorEmail: q.vendorEmail,
+            vendorCategory: q.vendorCategory,
+            unitPrice: q.unitPrice,
+            totalPrice: q.totalPrice || q.totalAmount || q.unitPrice,
+            totalAmount: q.totalAmount || q.totalPrice || q.unitPrice,
+            leadTimeDays: q.leadTimeDays,
+            warrantyYears: q.warrantyYears,
+            complianceStatus: q.complianceStatus,
+            paymentTerms: q.paymentTerms,
+            remarks: q.remarks,
             submittedAt: q.submittedAt,
-            totalAmount: q.totalAmount,
+            lineItemQuotes: q.lineItemQuotes || [],
+            attachments: q.attachments || [],
+            taxRate: q.taxRate,
+            taxes: q.taxes,
+            deliveryCharges: q.deliveryCharges,
+            aiMatchScore: q.aiMatchScore,
           })),
         }))
       : rfqs;
@@ -1100,9 +1118,27 @@ async function createRFQ(req, res, next) {
         logger.warn('Could not apply DB-backed V0 vendor assignment', { error: err.message }, 'RFQ_CONTROLLER');
       }
     } else {
-      if ((!Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
+      const isHybridOrAuto =
+        createdMode === 'mode_2' ||
+        createdMode === 'v2' ||
+        createdMode === 'version_2' ||
+        createdMode === 'mode_3' ||
+        createdMode === 'v3' ||
+        createdMode === 'version_3';
+      const hasProcucevAssigned = (finalRFQ.assignedVendors || []).some((v) =>
+        storeService.isProcucevVendor(
+          (v && v.id ? storeService.getVendorById(v.id, 'all') : null) || v
+        )
+      );
+
+      if (
+        (!Array.isArray(finalRFQ.assignedVendors) ||
+          finalRFQ.assignedVendors.length === 0 ||
+          (isHybridOrAuto && !hasProcucevAssigned)) &&
+        typeof storeService.autoAssignVendorsFromDB === 'function'
+      ) {
         try {
-          finalRFQ = await storeService.autoAssignVendorsFromDB(created);
+          finalRFQ = await storeService.autoAssignVendorsFromDB(finalRFQ);
         } catch (err) {
           logger.warn('Could not apply DB-backed vendor auto-assignment', { error: err.message }, 'RFQ_CONTROLLER');
         }
@@ -2054,12 +2090,14 @@ async function addQuote(req, res, next) {
     }
 
     const quote = {
+      id: req.body?.id || `quote-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
       vendorId: vendorRecord.id,
       vendorName: vendorRecord.name,
       vendorEmail: vendorRecord.email,
       vendorCategory: vendorCategory || 'Client List',
       unitPrice,
       totalPrice: totalPrice || unitPrice,
+      totalAmount: totalPrice || unitPrice,
       leadTimeDays: optionalQuoteNumber(leadTimeDays),
       // No score is computed for a quote submitted through this route, so none is invented here.
       aiMatchScore: null,

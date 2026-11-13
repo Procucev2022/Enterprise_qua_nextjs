@@ -2450,6 +2450,105 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
+      {isVendor && quotes.length > 0 && (() => {
+        const myQuote = quotes[0];
+        return (
+          <Panel
+            title="Your Submitted Quotation"
+            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+          >
+            <div className="p-4 sm:p-5 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Unit Price</span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white text-sm mt-0.5 block">
+                    {formatCurrency(myQuote.unitPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40">
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block uppercase font-bold">Total Quote Price</span>
+                  <span className="font-mono font-black text-emerald-700 dark:text-emerald-300 text-base mt-0.5 block">
+                    {formatCurrency(myQuote.totalPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Lead Time</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.leadTimeDays != null ? `${myQuote.leadTimeDays} Days` : 'Standard'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Warranty</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.warrantyYears != null ? `${myQuote.warrantyYears} Years` : 'Standard'}
+                  </span>
+                </div>
+              </div>
+
+              {(myQuote.paymentTerms || myQuote.remarks) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {myQuote.paymentTerms && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Commercial & Payment Terms</span>
+                      <p className="text-slate-700 dark:text-gray-300 font-medium">{myQuote.paymentTerms}</p>
+                    </div>
+                  )}
+                  {myQuote.remarks && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Submission Remarks</span>
+                      <p className="text-slate-700 dark:text-gray-300">{myQuote.remarks}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {Array.isArray(myQuote.lineItemQuotes) && myQuote.lineItemQuotes.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider block">
+                    Line Item Price Breakdown
+                  </span>
+                  <div className="overflow-x-auto border border-slate-200 dark:border-gray-800 rounded-xl">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase text-slate-500 font-bold">
+                        <tr>
+                          <th className="px-3 py-2">Item Name</th>
+                          <th className="px-3 py-2 text-right">Unit Rate</th>
+                          <th className="px-3 py-2 text-right">Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                        {myQuote.lineItemQuotes.map((li: any, lIdx: number) => (
+                          <tr key={li.lineItemId || lIdx}>
+                            <td className="px-3 py-2 font-medium text-slate-800 dark:text-gray-200">{li.itemName || `Item ${lIdx + 1}`}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{formatCurrency(li.unitPrice)}</td>
+                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(li.totalPrice || li.unitPrice)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {Array.isArray(myQuote.attachments) && myQuote.attachments.length > 0 && (
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1.5">Submitted Bid Documents</span>
+                  <div className="flex flex-wrap gap-2">
+                    {myQuote.attachments.map((att: any, attIdx: number) => (
+                      <span key={att.id || attIdx} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-xs font-semibold border border-indigo-200 dark:border-indigo-800">
+                        <FileText size={12} />
+                        <span>{att.fileName || att.name || `Document-${attIdx + 1}`}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Panel>
+        );
+      })()}
+
       {/* Vendor Inquiries & Clarifications Chat Desk */}
       {!isV0 && (
         <Panel
@@ -2975,6 +3074,105 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         )}
       </Panel>
       )}
+
+      {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
+      {isVendor && quotes.length > 0 && (() => {
+        const myQuote = quotes[0];
+        return (
+          <Panel
+            title="Your Submitted Quotation"
+            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+          >
+            <div className="p-4 sm:p-5 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Unit Price</span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white text-sm mt-0.5 block">
+                    {formatCurrency(myQuote.unitPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40">
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block uppercase font-bold">Total Quote Price</span>
+                  <span className="font-mono font-black text-emerald-700 dark:text-emerald-300 text-base mt-0.5 block">
+                    {formatCurrency(myQuote.totalPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Lead Time</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.leadTimeDays != null ? `${myQuote.leadTimeDays} Days` : 'Standard'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Warranty</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.warrantyYears != null ? `${myQuote.warrantyYears} Years` : 'Standard'}
+                  </span>
+                </div>
+              </div>
+
+              {(myQuote.paymentTerms || myQuote.remarks) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {myQuote.paymentTerms && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Commercial & Payment Terms</span>
+                      <p className="text-slate-700 dark:text-gray-300 font-medium">{myQuote.paymentTerms}</p>
+                    </div>
+                  )}
+                  {myQuote.remarks && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Submission Remarks</span>
+                      <p className="text-slate-700 dark:text-gray-300">{myQuote.remarks}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {Array.isArray(myQuote.lineItemQuotes) && myQuote.lineItemQuotes.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider block">
+                    Line Item Price Breakdown
+                  </span>
+                  <div className="overflow-x-auto border border-slate-200 dark:border-gray-800 rounded-xl">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase text-slate-500 font-bold">
+                        <tr>
+                          <th className="px-3 py-2">Item Name</th>
+                          <th className="px-3 py-2 text-right">Unit Rate</th>
+                          <th className="px-3 py-2 text-right">Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                        {myQuote.lineItemQuotes.map((li: any, lIdx: number) => (
+                          <tr key={li.lineItemId || lIdx}>
+                            <td className="px-3 py-2 font-medium text-slate-800 dark:text-gray-200">{li.itemName || `Item ${lIdx + 1}`}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{formatCurrency(li.unitPrice)}</td>
+                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(li.totalPrice || li.unitPrice)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {Array.isArray(myQuote.attachments) && myQuote.attachments.length > 0 && (
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1.5">Submitted Bid Documents</span>
+                  <div className="flex flex-wrap gap-2">
+                    {myQuote.attachments.map((att: any, attIdx: number) => (
+                      <span key={att.id || attIdx} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-xs font-semibold border border-indigo-200 dark:border-indigo-800">
+                        <FileText size={12} />
+                        <span>{att.fileName || att.name || `Document-${attIdx + 1}`}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Panel>
+        );
+      })()}
 
       {/* Buyer Reply Modal */}
       {replyModalInquiry && (

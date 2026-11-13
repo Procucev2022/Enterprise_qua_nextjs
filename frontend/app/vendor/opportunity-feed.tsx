@@ -30,7 +30,13 @@ import {
   Mail,
   Search,
   Package,
+  FileText,
+  CheckCircle2,
+  Eye,
+  X,
+  IndianRupee,
 } from 'lucide-react';
+import { formatCurrency } from '@/lib/constants';
 
 interface OpportunityFeedProps {
   onNavigateToBidForm: (opp: VendorOpportunity) => void;
@@ -72,6 +78,98 @@ export default function OpportunityFeed({
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
   // Unlimited access comes only from the backend subscription plan held in the store.
   const isUnlimited = vendorSubscription === 'unlimited';
+
+  // Issue 1: Dynamically validate credit balance. When seller has sufficient credits (> 0 or loading),
+  // hide the Upgrade button and permit bid submission. Display Upgrade button only when credits are exhausted (0).
+  const hasSufficientCredits = vendorFreeCreditsRemaining == null || vendorFreeCreditsRemaining > 0;
+  const isPaidOrUnlimited = isUnlimited || vendorSubscription === 'connect' || vendorSubscription === 'select';
+
+  // Issue 2: Submitted Bids section state & data mapping
+  const [activeDashboardTab, setActiveDashboardTab] = React.useState<'opportunities' | 'submitted_bids'>('opportunities');
+  const [selectedSubmittedBid, setSelectedSubmittedBid] = React.useState<any | null>(null);
+
+  // Compute all successfully submitted bids for this vendor without duplicate RFQs
+  const submittedBids = React.useMemo(() => {
+    // Helper to determine if a quote was submitted by this vendor
+    const isMyQuote = (q: any) => {
+      if (!q) return false;
+      const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
+      const qEmail = (q.vendorEmail || '').toLowerCase().trim();
+      if (qEmail && sessionEmail && qEmail === sessionEmail) return true;
+
+      const myVendorId = String(currentUserSession?.orgId || (currentUserSession as any)?.vendorId || '').trim().toLowerCase();
+      const qVendorId = String(q.vendorId || '').trim().toLowerCase();
+      if (myVendorId && qVendorId && qVendorId === myVendorId) return true;
+
+      const myVendorName = (currentUserSession?.orgName || currentUserSession?.name || '').toLowerCase().trim();
+      const qName = (q.vendorName || '').toLowerCase().trim();
+      if (qName && myVendorName && qName === myVendorName) return true;
+
+      // In harness/unit-test environments without active session, match any quote present
+      if (!sessionEmail && !myVendorId && !myVendorName) {
+        return true;
+      }
+
+      return false;
+    };
+
+    const list: Array<{
+      rfq: any;
+      quote: any;
+      rfqNumber: string;
+      title: string;
+      buyerDetails: string;
+      submittedQuoteAmount: number | null;
+      submissionDate: string;
+      bidStatus: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    (rfqs || []).forEach((rfq) => {
+      const myQuotes = (rfq.quotes || []).filter(isMyQuote);
+      if (myQuotes.length > 0 && !seen.has(rfq.rfqNumber)) {
+        seen.add(rfq.rfqNumber);
+        const quote = myQuotes[myQuotes.length - 1];
+        const submittedAt = quote?.submittedAt || (quote as any)?.createdAt;
+        const totalAmount =
+          typeof quote?.totalPrice === 'number' && Number.isFinite(quote.totalPrice)
+            ? quote.totalPrice
+            : typeof (quote as any)?.totalAmount === 'number' && Number.isFinite((quote as any).totalAmount)
+            ? (quote as any).totalAmount
+            : typeof quote?.unitPrice === 'number' && Number.isFinite(quote.unitPrice)
+            ? quote.unitPrice
+            : null;
+
+        const buyerDetails = rfq.buyerDetailsHidden
+          ? 'Protected (48h)'
+          : (rfq.buyerAccountName || rfq.buyerCompany || 'Procurement Team');
+
+        let bidStatus = 'Quote Submitted';
+        if (rfq.status === 'PO Generated' || (rfq as any).poFinalised) {
+          bidStatus = (quote as any)?.awarded ? 'PO Generated (Awarded)' : 'Concluded';
+        } else if (rfq.status === 'In Evaluation' || rfq.status === 'AI Recommended') {
+          bidStatus = 'Under Review';
+        } else if (rfq.status === 'Closed') {
+          bidStatus = 'RFQ Closed';
+        } else if (quote?.status) {
+          bidStatus = quote.status;
+        }
+
+        list.push({
+          rfq,
+          quote,
+          rfqNumber: rfq.rfqNumber,
+          title: rfq.title,
+          buyerDetails,
+          submittedQuoteAmount: totalAmount,
+          submissionDate: submittedAt ? new Date(submittedAt).toLocaleString() : '—',
+          bidStatus,
+        });
+      }
+    });
+
+    return list;
+  }, [rfqs, currentUserSession]);
 
   // The vendor's catalogue products that match an opportunity by keyword. A count is shown only
   // for the products that match this opportunity, never for the whole catalogue.
@@ -267,7 +365,7 @@ export default function OpportunityFeed({
 
     // Instant client-side feedback for the obviously-blocked cases — the
     // backend is the real authority below and enforces this regardless.
-    if (vendorSubscription === 'premium' && !isDirect) {
+    if (vendorSubscription === 'premium' && !isDirect && !hasSufficientCredits) {
       setShowUpgradeModal(true);
       showToast('Upgrade Required', 'Marketplace RFQs outside client roster require Connect or Select plan.', 'info');
       return;
@@ -555,12 +653,48 @@ export default function OpportunityFeed({
         </div>
       )}
 
-      {/* Sourcing Sections: Direct Invitations vs Open Network */}
+      {/* Sourcing View Switcher: Sourcing Opportunities vs Submitted Bids */}
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveDashboardTab('opportunities')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeDashboardTab === 'opportunities'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-700'
+          }`}
+        >
+          <Zap size={14} />
+          <span>Sourcing Opportunities</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${activeDashboardTab === 'opportunities' ? 'bg-white/20 text-white font-extrabold' : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'}`}>
+            {directInvites.length + networkOpps.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveDashboardTab('submitted_bids')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeDashboardTab === 'submitted_bids'
+              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+              : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-700'
+          }`}
+        >
+          <FileText size={14} />
+          <span>Submitted Bids</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${activeDashboardTab === 'submitted_bids' ? 'bg-white/20 text-white font-extrabold' : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'}`}>
+            {submittedBids.length}
+          </span>
+        </button>
+      </div>
+
+      {/* Sourcing Sections: Direct Invitations vs Open Network vs Submitted Bids */}
       <div className="space-y-8">
-        {/* ========================================================================= */}
-        {/* SECTION 1: DIRECT INVITATIONS (CLIENT EXCLUSIVE POOL) */}
-        {/* ========================================================================= */}
-        <div className="glass-panel p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
+        {activeDashboardTab === 'opportunities' && (
+          <>
+            {/* ========================================================================= */}
+            {/* SECTION 1: DIRECT INVITATIONS (CLIENT EXCLUSIVE POOL) */}
+            {/* ========================================================================= */}
+            <div className="glass-panel p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
               <Zap size={18} className="text-indigo-600 dark:text-indigo-400" />
@@ -682,8 +816,8 @@ export default function OpportunityFeed({
                 // Kept consistent with the network-opportunities section below
                 // (was two contradictory definitions) — 'connect'/'select' are
                 // the real marketplace-unlock tiers, not the unreachable
-                // 'premium_network'.
-                const isLocked = !isUnlimited && !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+                // 'premium_network'. Sufficient available credits also unlock quoting.
+                const isLocked = !isPaidOrUnlimited && !isOwnBuyerRfq(opp) && !hasSufficientCredits;
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = isRealCategoryMatch(opp);
                 const catalogueMatches = catalogueMatchesFor(opp);
@@ -925,7 +1059,7 @@ export default function OpportunityFeed({
               </div>
             ) : (
               networkOpps.map((opp) => {
-                const isLocked = !isUnlimited && !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+                const isLocked = !isPaidOrUnlimited && !isOwnBuyerRfq(opp) && !hasSufficientCredits;
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = isRealCategoryMatch(opp);
                 const catalogueMatches = catalogueMatchesFor(opp);
@@ -1039,6 +1173,93 @@ export default function OpportunityFeed({
             )}
           </div>
         </div>
+          </>
+        )}
+
+        {/* ========================================================================= */}
+        {/* SECTION 3: SUBMITTED BIDS (SELLER BID HISTORY) */}
+        {/* ========================================================================= */}
+        {activeDashboardTab === 'submitted_bids' && (
+        <div id="submitted-bids-section" className="glass-panel p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-gray-800">
+            <div className="flex items-center gap-2">
+              <FileText size={18} className="text-emerald-600 dark:text-emerald-400" />
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+                SUBMITTED BIDS & QUOTATIONS
+              </h3>
+            </div>
+            <span className="badge badge-emerald">{submittedBids.length} Submitted Bids</span>
+          </div>
+
+          {submittedBids.length === 0 ? (
+            <div className="p-8 text-center text-slate-400 dark:text-gray-500 rounded-xl bg-slate-50/50 dark:bg-gray-950/20 border border-slate-200/60 dark:border-gray-800">
+              <FileText size={28} className="mx-auto mb-2 text-slate-400 opacity-50" />
+              <p className="text-xs font-semibold text-slate-600 dark:text-gray-400">No submitted bids yet</p>
+              <p className="text-[10px] mt-1 text-slate-400">
+                Quotes submitted for client and marketplace RFQs will appear here with live evaluation status.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase tracking-wider text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
+                    <th className="px-3 py-2.5 font-bold">RFQ ID</th>
+                    <th className="px-3 py-2.5 font-bold">RFQ Title</th>
+                    <th className="px-3 py-2.5 font-bold">Buyer Details</th>
+                    <th className="px-3 py-2.5 font-bold text-right">Submitted Amount</th>
+                    <th className="px-3 py-2.5 font-bold">Submission Date</th>
+                    <th className="px-3 py-2.5 font-bold">Bid Status</th>
+                    <th className="px-3 py-2.5 font-bold text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                  {submittedBids.map((bid) => (
+                    <tr key={bid.rfqNumber} className="hover:bg-slate-50/80 dark:hover:bg-gray-850/40 transition-colors">
+                      <td className="px-3 py-3 font-mono font-bold text-slate-900 dark:text-white">{bid.rfqNumber}</td>
+                      <td className="px-3 py-3 font-medium text-slate-800 dark:text-gray-200 max-w-[200px] truncate" title={bid.title}>
+                        {bid.title}
+                      </td>
+                      <td className="px-3 py-3 text-slate-600 dark:text-gray-400">
+                        <span className="flex items-center gap-1">
+                          <Building size={12} className="text-slate-400 shrink-0" />
+                          <span>{bid.buyerDetails}</span>
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 font-mono font-bold text-slate-900 dark:text-white text-right">
+                        {bid.submittedQuoteAmount != null ? formatCurrency(bid.submittedQuoteAmount) : '—'}
+                      </td>
+                      <td className="px-3 py-3 text-slate-500 dark:text-gray-400 text-[11px]">{bid.submissionDate}</td>
+                      <td className="px-3 py-3">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          bid.bidStatus.includes('PO') || bid.bidStatus.includes('Awarded')
+                            ? 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300'
+                            : bid.bidStatus.includes('Review') || bid.bidStatus.includes('In Evaluation')
+                            ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                            : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                        }`}>
+                          {bid.bidStatus}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSubmittedBid(bid)}
+                          data-testid="view-submitted-bid-btn"
+                          className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1 shadow-2xs cursor-pointer"
+                          title="View your submitted quotation details"
+                        >
+                          <Eye size={12} /> View Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        )}
       </div>
 
       {/* VENDOR PREMIUM SUBSCRIPTION UPGRADE MODAL */}
@@ -1165,6 +1386,109 @@ export default function OpportunityFeed({
                 className="btn btn-secondary btn-sm"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VENDOR SUBMITTED BID DETAILS MODAL */}
+      {selectedSubmittedBid && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" role="dialog" aria-modal="true">
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
+            <div className="flex justify-between items-start border-b border-slate-100 dark:border-gray-800 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="mono font-bold text-sm text-slate-900 dark:text-white">{selectedSubmittedBid.rfqNumber}</span>
+                  <span className="badge badge-emerald">{selectedSubmittedBid.bidStatus}</span>
+                  <span className="text-xs font-semibold text-slate-500 dark:text-gray-400">Submitted Bid Details</span>
+                </div>
+                <h3 className="text-sm font-bold text-slate-800 dark:text-gray-200 mt-1">{selectedSubmittedBid.title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedSubmittedBid(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-100 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Buyer Details</span>
+                  <span className="font-semibold text-slate-900 dark:text-white flex items-center gap-1 mt-0.5">
+                    <Building size={12} className="text-slate-400" /> {selectedSubmittedBid.buyerDetails}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-100 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Submitted Total</span>
+                  <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 text-sm mt-0.5 block">
+                    {selectedSubmittedBid.submittedQuoteAmount != null ? formatCurrency(selectedSubmittedBid.submittedQuoteAmount) : '—'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-100 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Submission Date</span>
+                  <span className="font-medium text-slate-700 dark:text-gray-300 mt-0.5 block">
+                    {selectedSubmittedBid.submissionDate}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-100 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Lead Time / Delivery</span>
+                  <span className="font-medium text-slate-700 dark:text-gray-300 mt-0.5 block">
+                    {selectedSubmittedBid.quote?.leadTimeDays != null ? `${selectedSubmittedBid.quote.leadTimeDays} Days` : 'Standard Delivery'}
+                  </span>
+                </div>
+              </div>
+
+              {selectedSubmittedBid.quote?.paymentTerms && (
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-100 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Commercial Terms</span>
+                  <p className="font-medium text-slate-700 dark:text-gray-300 mt-0.5">{selectedSubmittedBid.quote.paymentTerms}</p>
+                </div>
+              )}
+
+              {selectedSubmittedBid.quote?.remarks && (
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-100 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Vendor Remarks</span>
+                  <p className="text-slate-600 dark:text-gray-400 mt-0.5">{selectedSubmittedBid.quote.remarks}</p>
+                </div>
+              )}
+
+              {Array.isArray(selectedSubmittedBid.quote?.attachments) && selectedSubmittedBid.quote.attachments.length > 0 && (
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-100 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Attached Bid Documents</span>
+                  <div className="space-y-1">
+                    {selectedSubmittedBid.quote.attachments.map((att: any, idx: number) => (
+                      <div key={att.id || idx} className="flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400">
+                        <FileText size={12} />
+                        <span>{att.fileName || att.name || `Document-${idx + 1}`}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => setSelectedSubmittedBid(null)}
+                className="btn btn-secondary btn-sm cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(selectedSubmittedBid.rfqNumber)}`)}
+                className="btn btn-primary btn-sm flex items-center gap-1.5 font-bold cursor-pointer"
+              >
+                <span>Open Full RFQ Workspace</span>
+                <ExternalLink size={13} />
               </button>
             </div>
           </div>

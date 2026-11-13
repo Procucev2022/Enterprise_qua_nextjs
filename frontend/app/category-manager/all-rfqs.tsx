@@ -325,7 +325,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
       {!loading && !error && filtered.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-850 dark:bg-gray-950/40">
-          <table className="w-full min-w-[1600px] table-fixed text-sm">
+          <table className="w-full min-w-[1750px] table-fixed text-sm">
             <caption className="sr-only">{S.subtitle}</caption>
             <colgroup>
               <col className="w-[155px]" />
@@ -333,7 +333,8 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               <col className="w-[165px]" />
               <col className="w-[145px]" />
               <col className="w-[75px]" />
-              <col className="w-[210px]" />
+              <col className="w-[190px]" />
+              <col className="w-[190px]" />
               <col className="w-[125px]" />
               <col className="w-[105px]" />
               <col className="w-[180px]" />
@@ -346,6 +347,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colBuyer}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colStatus}</th>
                 <th scope="col" className="px-3 py-3 text-right font-bold">{S.colQuotes}</th>
+                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colInvitedVendors}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colVendors}</th>
                 <th scope="col" className="px-3 py-3 text-right font-bold">{S.colBudget}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colCreated}</th>
@@ -402,47 +404,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   </td>
                   <td className="px-3 py-3 text-right font-mono text-slate-700 dark:text-gray-300">{rfq.quotesCount}</td>
+                  {/* Invited Vendors column */}
                   <td className="px-3 py-3">
-                    {rfq.quotes && rfq.quotes.length > 0 ? (
-                      <div className="flex flex-col items-start gap-1 max-w-full">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {rfq.quotes.slice(0, 2).map((q, idx) => (
-                            <button
-                              key={q.vendorId || `${q.vendorName}-${idx}`}
-                              type="button"
-                              onClick={() =>
-                                setSelectedVendorInfo({
-                                  name: q.vendorName,
-                                  id: q.vendorId,
-                                  quote: q,
-                                  rfq,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/70 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold hover:bg-teal-100 dark:hover:bg-teal-900 transition-colors max-w-[135px] truncate cursor-pointer shadow-2xs group"
-                              title={`Quoted vendor: ${q.vendorName}. Click to view quotation details.`}
-                            >
-                              <Store size={11} className="text-teal-600 dark:text-teal-400 shrink-0" />
-                              <span className="truncate">{q.vendorName}</span>
-                              {q.isBestPrice && (
-                                <span className="shrink-0 px-1 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                                  L1
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                          {rfq.quotes.length > 2 && (
-                            <button
-                              type="button"
-                              onClick={() => setVendorListModalData({ rfq, mode: 'quotes' })}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 dark:hover:bg-teal-900 transition border border-teal-200 dark:border-teal-800 cursor-pointer"
-                              title="Click to view all quoted vendors"
-                            >
-                              +{rfq.quotes.length - 2} more
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
+                    {rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
                       <div className="flex flex-col items-start gap-1 max-w-full">
                         <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500">
                           Invited ({rfq.assignedVendors.length})
@@ -480,6 +444,51 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                               title="Click to view all invited vendors"
                             >
                               +{rfq.assignedVendors.length - 2} more
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="italic text-slate-400 text-xs">{S.colInvitedVendorsNone}</span>
+                    )}
+                  </td>
+                  {/* Quoted Vendors column */}
+                  <td className="px-3 py-3">
+                    {rfq.quotes && rfq.quotes.length > 0 ? (
+                      <div className="flex flex-col items-start gap-1 max-w-full">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {rfq.quotes.slice(0, 2).map((q, idx) => (
+                            <button
+                              key={q.vendorId || `${q.vendorName}-${idx}`}
+                              type="button"
+                              onClick={() =>
+                                setSelectedVendorInfo({
+                                  name: q.vendorName,
+                                  id: q.vendorId,
+                                  quote: q,
+                                  rfq,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/70 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold hover:bg-teal-100 dark:hover:bg-teal-900 transition-colors max-w-[135px] truncate cursor-pointer shadow-2xs group"
+                              title={`Quoted vendor: ${q.vendorName}. Click to view quotation details.`}
+                            >
+                              <Store size={11} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                              <span className="truncate">{q.vendorName}</span>
+                              {q.isBestPrice && (
+                                <span className="shrink-0 px-1 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                                  L1
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                          {rfq.quotes.length > 2 && (
+                            <button
+                              type="button"
+                              onClick={() => setVendorListModalData({ rfq, mode: 'quotes' })}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 dark:hover:bg-teal-900 transition border border-teal-200 dark:border-teal-800 cursor-pointer"
+                              title="Click to view all quoted vendors"
+                            >
+                              +{rfq.quotes.length - 2} more
                             </button>
                           )}
                         </div>

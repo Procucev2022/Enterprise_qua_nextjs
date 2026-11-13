@@ -895,7 +895,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('blocks a marketplace download on the client-uploaded Premium plan', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // The second card is RFQ-2026-00901, outside this vendor's own-buyer roster.
     fireEvent.click(downloadButtons()[1]);
@@ -939,7 +939,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('locks off-roster RFQs below the top tier', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // Two off-roster direct cards plus two off-roster marketplace cards.
     expect(screen.getAllByRole('button', { name: /🔒 Upgrade/i })).toHaveLength(4);
@@ -958,6 +958,59 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(screen.getAllByText('Open Network')).toHaveLength(3);
   });
 
+  test('Issue 1: hides Upgrade button when seller has sufficient credits, shows only when credits are exhausted', async () => {
+    // With 3 credits remaining (sufficient credits): Upgrade button must be hidden
+    const r1 = await renderFeed({ subscription: 'premium', downloadsUsed: 2 });
+    expect(screen.queryByRole('button', { name: /🔒 Upgrade/i })).not.toBeInTheDocument();
+    r1.unmount();
+
+    // With 0 credits remaining (insufficient credits): Upgrade button must be displayed
+    const r2 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
+    expect(screen.getAllByRole('button', { name: /🔒 Upgrade/i })).toHaveLength(4);
+    r2.unmount();
+  });
+
+  test('Issue 2: renders Submitted Bids tab and allows viewing submitted bid details', async () => {
+    const rfqWithQuote = {
+      ...DIRECT_OWN,
+      rfqNumber: 'RFQ-SUBMITTED-99',
+      quotes: [{
+        vendorId: 'v-self',
+        vendorEmail: SELF_VENDOR_RECORD.email,
+        vendorName: (SELF_VENDOR_RECORD as any).companyName || SELF_VENDOR_RECORD.name,
+        vendorCategory: 'Client List' as const,
+        aiMatchScore: 90,
+        warrantyYears: 1,
+        complianceStatus: 'Fully Compliant' as const,
+        totalPrice: 125000,
+        unitPrice: 12500,
+        submittedAt: '2026-11-12T10:00:00Z',
+        leadTimeDays: 7,
+        paymentTerms: 'Net 30',
+        remarks: 'Ready for immediate dispatch',
+      }],
+    };
+    serveRFQs([rfqWithQuote]);
+    await renderFeed();
+
+    // Sourcing View Switcher tabs
+    const submittedBidsTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    expect(submittedBidsTab).toBeInTheDocument();
+    fireEvent.click(submittedBidsTab);
+
+    // Section 3: Submitted Bids table is displayed
+    expect(screen.getAllByText('RFQ-SUBMITTED-99').length).toBeGreaterThan(0);
+    expect(screen.getByText(/1,25,000/)).toBeInTheDocument();
+
+    // Click "View Details" opens the modal
+    const viewDetailsBtn = screen.getByTestId('view-submitted-bid-btn');
+    await act(async () => {
+      fireEvent.click(viewDetailsBtn);
+    });
+    expect(screen.getByText('Submitted Bid Details')).toBeInTheDocument();
+    expect(screen.getByText('Ready for immediate dispatch')).toBeInTheDocument();
+  });
+
   test('starts a real Zoho checkout for each paid plan from the upgrade modal', async () => {
     // Connect/Select are paid plans and route through the real Zoho checkout
     // modal (real gate — see handleUpgradeClick); only Premium is free and
@@ -966,7 +1019,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     // reconciliation poller) confirms payment, so this UI no longer flips it
     // client-side, and there is nothing left to chain the next plan onto
     // within one render — each is exercised from its own fresh render.
-    const r1 = await renderFeed({ subscription: 'premium' });
+    const r1 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
     // Upgrade buttons stay disabled until the plan prices have loaded from the pricing API.
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[0]).toBeEnabled());
@@ -982,7 +1035,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     );
     r1.unmount();
 
-    const r2 = await renderFeed({ subscription: 'premium' });
+    const r2 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[1]).toBeEnabled());
     // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
@@ -1053,7 +1106,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('starts a real Zoho checkout for a Connect-plan upgrade', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // Reliable trigger: the locked-RFQ card's own "🔒 Upgrade" button always
     // opens the upgrade modal, regardless of which card/section it's on.
@@ -1344,7 +1397,7 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
   });
 
   test('closes the subscription payment modal via onClose', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
     fireEvent.click(lockedBtns[0]);
     await waitFor(() => expect(screen.getAllByRole('button', { name: /^Upgrade$/i })[0]).toBeEnabled());
