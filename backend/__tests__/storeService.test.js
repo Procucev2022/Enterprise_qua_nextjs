@@ -2467,7 +2467,7 @@ describe('Store Service & Business Operations', () => {
       test('assigns category-matched public vendors from the DB and sets the real count', async () => {
         const originalPool = domainPool.pool;
         domainPool.pool = { query: jest.fn() };
-        jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+        jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([
           { id: 'pv-1', name: 'Mamta Electrics', email: 'm@n.in', source: 'procucev_network', majorCategory: 'Lighting', rating: 4 },
           { id: 'pv-2', name: 'Raja Electricals', email: 'r@n.in', source: 'procucev_network', majorCategory: 'Lighting', rating: 5 },
         ]);
@@ -2485,7 +2485,7 @@ describe('Store Service & Business Operations', () => {
       test('ranks a delivery-pincode match ahead of a non-match', async () => {
         const originalPool = domainPool.pool;
         domainPool.pool = { query: jest.fn() };
-        jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+        jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([
           { id: 'far', name: 'Far Co', source: 'procucev_network', majorCategory: 'Lighting', rating: 5, pincode: '110001' },
           { id: 'near', name: 'Near Co', source: 'procucev_network', majorCategory: 'Lighting', rating: 3, pincode: '385310' },
         ]);
@@ -2503,7 +2503,7 @@ describe('Store Service & Business Operations', () => {
       test('no-ops for a non-V0 RFQ', async () => {
         const originalPool = domainPool.pool;
         domainPool.pool = { query: jest.fn() };
-        const spy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories');
+        const spy = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB');
         try {
           const rfq = { id: 'r', sourcingMode: 'mode_2', category: 'Lighting' };
           const result = await storeService.augmentV0AssignmentsFromDB(rfq);
@@ -2517,7 +2517,7 @@ describe('Store Service & Business Operations', () => {
       test('no-ops when no DB pool is configured', async () => {
         const originalPool = domainPool.pool;
         domainPool.pool = null;
-        const spy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories');
+        const spy = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB');
         try {
           const rfq = v0Rfq();
           const result = await storeService.augmentV0AssignmentsFromDB(rfq);
@@ -2531,7 +2531,7 @@ describe('Store Service & Business Operations', () => {
       test('a V0 RFQ with no category signal skips category matching and network fallback, routing to Category Manager', async () => {
         const originalPool = domainPool.pool;
         domainPool.pool = { query: jest.fn() };
-        const catSpy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories');
+        const catSpy = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB');
         const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB');
         try {
           const rfq = { id: 'r2', sourcingMode: 'mode_0', category: '', extractedEntities: [], assignedVendors: [] };
@@ -2556,7 +2556,7 @@ describe('Store Service & Business Operations', () => {
         domainPool.pool = { query: jest.fn() };
         // The RFQ carries a category, but no vendor's tags match it (the real
         // label-mismatch case that previously left assignedVendors empty).
-        jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([]);
+        jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
         const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
           rows: [
             { id: 'net-a', name: 'Net A', source: 'procucev_network', rating: 5 },
@@ -2578,7 +2578,7 @@ describe('Store Service & Business Operations', () => {
       test('swallows a DB query failure and returns the RFQ unchanged', async () => {
         const originalPool = domainPool.pool;
         domainPool.pool = { query: jest.fn() };
-        jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockRejectedValue(new Error('ECONNREFUSED'));
+        jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockRejectedValue(new Error('ECONNREFUSED'));
         jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('ECONNREFUSED'));
         try {
           const rfq = v0Rfq();

@@ -7086,7 +7086,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       // 1. Category-matched public vendors from the whole directory.
       if (Array.isArray(signals) && signals.length > 0) {
         try {
-          dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit);
+          // Indexed major-category lookup. The LIKE scan over the raw JSON read about a million
+          // rows per call on D1 and was the query that failed under overload, leaving the RFQ with no vendors.
+          dbMatches = await domainQueries.getPublicVendorsByMajorCategoryFromDB(signals, limit);
         } catch (err) {
           logger.warn(
             'V0 DB-backed vendor assignment query failed',

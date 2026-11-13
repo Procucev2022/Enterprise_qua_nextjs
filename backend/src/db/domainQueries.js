@@ -33,6 +33,7 @@ const {
   RFQ_CHASER_ERROR_MAX_LENGTH,
   D1_NOTIFICATION_INSERT_BATCH_SIZE,
   DATABASE_QUERY_CACHE,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
@@ -521,6 +522,60 @@ async function countPublicVendorsMatchingCategories(signals) {
     }
   );
   return result.rows[0]?.total || 0;
+}
+
+/**
+ * Public (Procucev-network) vendor rows whose MAJOR category is one of the given RFQ
+ * category signals, newest first, capped by `limit`. This is the lookup V0 assignment
+ * uses.
+ *
+ * It reads the indexed major_category column (idx_vendors_major_category_nocase), so it
+ * reads only the matching vendors. The LIKE-based lookups below match the whole raw JSON
+ * and so scan the entire vendors table: on D1 one such scan read about a million rows, and
+ * under the D1 per-window budget that failed, which left V0 RFQs with no vendors. Every
+ * categorised network vendor carries majorCategory in its major_category column
+ * (upsertVendorInDB writes both), so the indexed match finds them. A vendor whose only
+ * category sits in minorCategories is not returned here; the in-memory matcher still checks
+ * those fields.
+ *
+ * @param {string[]} signals Category strings the RFQ carries.
+ * @param {number} limit Max rows to return.
+ * @returns {Promise<object[]>} Matching public vendor records.
+ */
+async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT) {
+  if (!pool.hasStorage()) return [];
+  const cleaned = Array.from(
+    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  if (cleaned.length === 0) return [];
+
+  const safeLimit = Math.min(
+    Math.max(Number(limit) || PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, 1),
+    PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT
+  );
+  const d1Placeholders = cleaned.map((_, index) => `$${index + 1}`).join(', ');
+  const limitIndex = cleaned.length + 1;
+  const result = await pool.query(
+    `SELECT raw FROM vendors
+     WHERE lower(major_category) = ANY($1::text[])
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL
+     ORDER BY created_at DESC LIMIT $2`,
+    [cleaned, safeLimit],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors
+       WHERE major_category COLLATE NOCASE IN (${d1Placeholders})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL
+       ORDER BY created_at DESC LIMIT $${limitIndex}`,
+      d1Params: [...cleaned, safeLimit],
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
+  );
+  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
 }
 
 /**
@@ -2913,6 +2968,7 @@ module.exports = {
   getVendorsPageFromDB,
   countVendorsCreatedBetween,
   countPublicVendorsMatchingCategories,
+  getPublicVendorsByMajorCategoryFromDB,
   getPublicVendorsMatchingCategories,
   getPublicVendorsPerCategoryFromDB,
   getVendorByEmailFromDB,

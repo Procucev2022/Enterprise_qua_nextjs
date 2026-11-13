@@ -489,6 +489,84 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       });
     });
 
+    describe('getPublicVendorsByMajorCategoryFromDB', () => {
+      const originalBinding = globalThis.__CF_ENV__;
+
+      afterEach(() => {
+        if (originalBinding === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalBinding;
+      });
+
+      test('no-ops to [] when no pool is configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB(['Steels'], 10)).resolves.toEqual([]);
+      });
+
+      test('returns [] for an empty or blank signal list without querying', async () => {
+        pool.pool = { query: jest.fn() };
+        await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB([], 10)).resolves.toEqual([]);
+        await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB(['', '  '], 10)).resolves.toEqual([]);
+        expect(pool.pool.query).not.toHaveBeenCalled();
+      });
+
+      test('matches the indexed major category on D1 and never scans the raw JSON', async () => {
+        const vendor = { id: 'v-major-d1', name: 'Major D1 Vendor', majorCategory: 'Engineering Spares - Mechanical' };
+        const all = jest.fn().mockResolvedValue({ results: [{ raw: JSON.stringify(vendor) }], meta: {} });
+        const prepare = jest.fn(() => ({ bind: jest.fn(() => ({ all })), all }));
+        pool.pool = null;
+        globalThis.__CF_ENV__ = { DB: { prepare } };
+
+        const rows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(
+          ['Engineering Spares - Mechanical', 'Pumps & Accessories'],
+          5
+        );
+
+        expect(rows).toEqual([expect.objectContaining({ id: 'v-major-d1' })]);
+        const [sql] = prepare.mock.calls[0];
+        expect(sql).toContain('major_category COLLATE NOCASE IN (?, ?)');
+        expect(sql).toContain('ORDER BY created_at DESC LIMIT ?');
+        expect(sql).not.toMatch(/LIKE/i);
+      });
+
+      test('uses the Postgres major category match and caps the limit', async () => {
+        const vendor = { id: 'v-pg-major', name: 'Pg Major Vendor' };
+        const query = jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(vendor) }] });
+        pool.pool = { query };
+
+        const rows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(['Steels'], 100000);
+
+        expect(rows).toEqual([expect.objectContaining({ id: 'v-pg-major' })]);
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain('lower(major_category) = ANY($1::text[])');
+        expect(sql).toContain('ORDER BY created_at DESC LIMIT $2');
+        expect(params).toEqual([['steels'], 500]);
+      });
+
+      test('uses the default limit when none is given', async () => {
+        const query = jest.fn().mockResolvedValue({ rows: [] });
+        pool.pool = { query };
+
+        await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB(['Ceramics'])).resolves.toEqual([]);
+        expect(query.mock.calls[0][1]).toEqual([['ceramics'], 100]);
+      });
+
+      test('returns [] when the query yields no rows', async () => {
+        pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+        await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB(['Brass'], 10)).resolves.toEqual([]);
+      });
+
+      test('treats a non-array signal list as empty, a zero limit as the default, and a missing result as no rows', async () => {
+        const query = jest.fn().mockResolvedValue(undefined);
+        pool.pool = { query };
+
+        await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB('Steels', 10)).resolves.toEqual([]);
+        expect(query).not.toHaveBeenCalled();
+
+        await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB(['Steels', null], 0)).resolves.toEqual([]);
+        expect(query.mock.calls[0][1]).toEqual([['steels'], 100]);
+      });
+    });
+
     describe('getPublicVendorsMatchingCategories', () => {
       test('no-ops to [] when no pool is configured', async () => {
         pool.pool = null;

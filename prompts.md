@@ -5694,3 +5694,13 @@ Keep pushing the changes directly in the "test-v3" branch for now. as soon as an
 remove the "company name" already vendor enterprise is there. so it is duplicate in second image
 ```
 ---
+
+### Prompt 195
+
+**Timestamp**: 2026-11-13T13:39:45+05:30
+
+```text
+no vendor is assigned or invitation sent for any Rfq. Can you please check.
+```
+
+---

@@ -375,6 +375,13 @@ const DATABASE_QUERY_LOGGING = Object.freeze({
 const DATABASE_QUERY_CACHE = Object.freeze({
   VENDOR_PAGE_COUNT_TTL_MS: 30 * 1000,
 });
+// Public-vendor lookups by major category read the indexed major_category column. The limits
+// bound how many vendor rows one lookup returns and how many category signals it accepts.
+const PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG = Object.freeze({
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 500,
+  MAX_SIGNALS: 45,
+});
 /**
  * Unnecessary / deprecated tables automatically purged during migrations and deployments.
  */
@@ -3540,6 +3547,7 @@ module.exports = {
   INFRASTRUCTURE_HEALTH,
   DATABASE_QUERY_LOGGING,
   DATABASE_QUERY_CACHE,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
   DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
