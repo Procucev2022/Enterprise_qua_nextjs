@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -146,6 +146,45 @@ export default function ItemCatalogue() {
   // Search filter & Summary filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRfqsAvailableOnly, setFilterRfqsAvailableOnly] = useState(false);
+
+  // Category Autocomplete State
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
+  const categoryContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (categoryContainerRef.current && !categoryContainerRef.current.contains(event.target as Node)) {
+        setShowCategorySuggestions(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  const allAvailableCategories = useMemo(() => {
+    const list: { name: string; major: string }[] = [];
+    (categoryTaxonomy || []).forEach((c) => {
+      if (c.majorCategory && !list.some((item) => item.name.toLowerCase() === c.majorCategory.toLowerCase())) {
+        list.push({ name: c.majorCategory, major: c.majorCategory });
+      }
+      (c.minorCategories || []).forEach((m) => {
+        if (m && !list.some((item) => item.name.toLowerCase() === m.toLowerCase())) {
+          list.push({ name: m, major: c.majorCategory });
+        }
+      });
+    });
+    return list;
+  }, [categoryTaxonomy]);
+
+  const filteredCategorySuggestions = useMemo(() => {
+    const q = category.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableCategories.filter(
+      (item) => item.name.toLowerCase().includes(q) || item.major.toLowerCase().includes(q)
+    );
+  }, [category, allAvailableCategories]);
 
   const currentCount = products.length;
 
@@ -537,12 +576,11 @@ export default function ItemCatalogue() {
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-500">Category</label>
+              <div className="space-y-1 relative" ref={categoryContainerRef}>
                 <select
+                  className="sr-only"
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  className="select w-full bg-slate-50 dark:bg-gray-955 border border-slate-250 rounded-lg font-bold text-slate-800 dark:text-white"
                 >
                   <option value="">—</option>
                   {category !== '' && !categoryTaxonomy.some((group) => group.majorCategory === category) && <option value={category}>{category}</option>}
@@ -557,6 +595,83 @@ export default function ItemCatalogue() {
                     </optgroup>
                   ))}
                 </select>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-500">Category *</label>
+                  {category && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCategory('');
+                        setShowCategorySuggestions(false);
+                      }}
+                      className="text-[9px] text-slate-400 hover:text-rose-500 font-semibold"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={category}
+                    onChange={(e) => {
+                      setCategory(e.target.value);
+                      setShowCategorySuggestions(true);
+                    }}
+                    onFocus={() => {
+                      if (category.trim().length >= 3) {
+                        setShowCategorySuggestions(true);
+                      }
+                    }}
+                    placeholder="Type 3+ characters to search..."
+                    className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-white"
+                  />
+                  {category.trim().length > 0 && category.trim().length < 3 && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
+                      Enter at least 3 characters to search categories
+                    </p>
+                  )}
+                  {showCategorySuggestions && category.trim().length >= 3 && (
+                    <div
+                      role="listbox"
+                      className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-2xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                    >
+                      <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                        <span>Matching Categories ({filteredCategorySuggestions.length})</span>
+                        <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">Taxonomy</span>
+                      </div>
+                      {filteredCategorySuggestions.length > 0 ? (
+                        filteredCategorySuggestions.map((item) => (
+                          <button
+                            key={`${item.major}-${item.name}`}
+                            type="button"
+                            role="option"
+                            aria-selected={category === item.name}
+                            onClick={() => {
+                              setCategory(item.name);
+                              setShowCategorySuggestions(false);
+                            }}
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors"
+                          >
+                            <span className="font-semibold text-slate-800 dark:text-white">{item.name}</span>
+                            <span className="text-[10px] text-slate-400 italic">{item.major}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="p-3 text-center space-y-1">
+                          <p className="text-xs text-slate-500 dark:text-gray-400">No matching categories found</p>
+                          <button
+                            type="button"
+                            onClick={() => setShowCategorySuggestions(false)}
+                            className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            Use &quot;{category.trim()}&quot; as custom category
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -684,21 +799,21 @@ export default function ItemCatalogue() {
           <div className="overflow-x-auto text-xs">
             <table className="w-full text-left">
               <thead>
-                <tr className="border-b border-slate-100 dark:border-gray-800 text-slate-400 uppercase tracking-wider text-[9px] font-bold">
-                  <th className="py-2">SKU / Model</th>
-                  <th className="py-2">Item Name & Specs</th>
-                  <th className="py-2">Category</th>
-                  <th className="py-2 text-right">Unit Price</th>
-                  <th className="py-2 text-center">MOQ</th>
-                  <th className="py-2 text-center">Lead Time</th>
-                  <th className="py-2 text-center">RFQs Available</th>
-                  <th className="py-2 text-right">Actions</th>
+                <tr className="border-b border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-850/50 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] font-bold">
+                  <th className="px-3 py-2.5 text-left">SKU / Model</th>
+                  <th className="px-3 py-2.5 text-left">Product Name &amp; Specs</th>
+                  <th className="px-3 py-2.5 text-left">Category</th>
+                  <th className="px-3 py-2.5 text-right">Unit Price</th>
+                  <th className="px-3 py-2.5 text-center">MOQ</th>
+                  <th className="px-3 py-2.5 text-center">Lead Time</th>
+                  <th className="px-3 py-2.5 text-center">RFQs Available</th>
+                  <th className="px-3 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-gray-850 text-[11px]">
+              <tbody className="divide-y divide-slate-100 dark:divide-gray-800 text-[11px]">
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={8} role={catalogueLoadError ? 'alert' : undefined} className="py-8 text-center text-slate-400 text-xs">
+                    <td colSpan={8} role={catalogueLoadError ? 'alert' : undefined} className="py-12 text-center text-slate-400 text-xs">
                       {catalogueLoadError || 'No matching products found in catalogue.'}
                     </td>
                   </tr>
@@ -708,66 +823,72 @@ export default function ItemCatalogue() {
                     const hasRfqMatch = matchingRfqs.length > 0;
 
                     return (
-                    <tr key={prod.id} className={`hover:bg-slate-50/50 dark:hover:bg-gray-850/20 ${hasRfqMatch ? 'bg-violet-50/30 dark:bg-violet-950/10' : ''}`}>
+                    <tr key={prod.id} className={`hover:bg-slate-50/70 dark:hover:bg-gray-850/40 transition-colors ${hasRfqMatch ? 'bg-violet-50/30 dark:bg-violet-950/10' : ''}`}>
                       {/* SKU */}
-                      <td className="py-3 font-mono font-bold text-slate-900 dark:text-white uppercase">{prod.sku}</td>
+                      <td className="px-3 py-3 font-mono font-bold text-slate-900 dark:text-white uppercase whitespace-nowrap">{prod.sku}</td>
                       
                       {/* Name & Specs */}
-                      <td className="py-3 max-w-[200px]">
-                        <div className="font-semibold text-slate-800 dark:text-gray-200 truncate">{prod.name}</div>
+                      <td className="px-3 py-3 max-w-[220px]">
+                        <div className="font-bold text-slate-800 dark:text-gray-100 truncate">{prod.name}</div>
                         <div className="text-[10px] text-slate-400 dark:text-gray-500 truncate" title={prod.specs}>
                           {prod.specs || 'No technical specifications provided.'}
                         </div>
                       </td>
 
                       {/* Category */}
-                      <td className="py-3 text-slate-500">{prod.category}</td>
+                      <td className="px-3 py-3">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 dark:bg-gray-800 text-slate-700 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60">
+                          {prod.category}
+                        </span>
+                      </td>
 
                       {/* Price */}
-                      <td className="py-3 text-right font-mono font-bold text-indigo-650 dark:text-indigo-400">
+                      <td className="px-3 py-3 text-right font-mono font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
                         {displayValue(prod.unitPrice, (n) => `₹${n.toLocaleString('en-IN')}`)}
                       </td>
 
                       {/* MOQ */}
-                      <td className="py-3 text-center font-bold text-indigo-600 dark:text-indigo-300 mono">
+                      <td className="px-3 py-3 text-center font-mono font-semibold text-slate-700 dark:text-gray-300 whitespace-nowrap">
                         {displayValue(prod.moq, (n) => `${n.toLocaleString()} units`)}
                       </td>
 
                       {/* Lead Time */}
-                      <td className="py-3 text-center mono text-slate-700 dark:text-gray-300">
+                      <td className="px-3 py-3 text-center font-mono text-slate-700 dark:text-gray-300 whitespace-nowrap">
                         {displayValue(prod.leadTimeDays, (n) => `${n} Days`)}
                       </td>
 
                       {/* RFQs Available */}
-                      <td className="py-3 text-center">
+                      <td className="px-3 py-3 text-center whitespace-nowrap">
                         {hasRfqMatch ? (
                           <span
-                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-black bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-300 dark:border-violet-500/40"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-50 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300 border border-violet-200 dark:border-violet-800"
                             title="Matching RFQs available in marketplace"
                           >
-                            <Bell size={9} className="animate-pulse" /> {matchingRfqs.length} RFQs Available
+                            <Bell size={10} className="animate-pulse" /> {matchingRfqs.length} Open
                           </span>
                         ) : (
-                          <span className="text-[9px] text-slate-400">—</span>
+                          <span className="text-[10px] text-slate-400">—</span>
                         )}
                       </td>
 
                       {/* Actions */}
-                      <td className="py-3 text-right">
+                      <td className="px-3 py-3 text-right whitespace-nowrap">
                         <div className="flex justify-end gap-1.5">
                           <button
+                            type="button"
                             onClick={() => handleEditClick(prod)}
-                            className="p-1 text-slate-500 hover:text-indigo-650 bg-slate-100 hover:bg-indigo-50 dark:bg-gray-800 dark:hover:bg-indigo-950 rounded border-none cursor-pointer"
+                            className="p-1.5 text-slate-500 hover:text-indigo-600 bg-slate-100 hover:bg-indigo-50 dark:bg-gray-800 dark:hover:bg-indigo-950 rounded-lg transition-colors cursor-pointer"
                             title="Edit Product"
                           >
-                            <Edit2 size={11} />
+                            <Edit2 size={12} />
                           </button>
                           <button
+                            type="button"
                             onClick={() => handleDeleteClick(prod.id, prod.sku)}
-                            className="p-1 text-slate-500 hover:text-red-650 bg-slate-100 hover:bg-red-50 dark:bg-gray-800 dark:hover:bg-red-950 rounded border-none cursor-pointer"
+                            className="p-1.5 text-slate-500 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 dark:bg-gray-800 dark:hover:bg-rose-950 rounded-lg transition-colors cursor-pointer"
                             title="Delete Product"
                           >
-                            <Trash2 size={11} />
+                            <Trash2 size={12} />
                           </button>
                         </div>
                       </td>

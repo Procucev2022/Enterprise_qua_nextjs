@@ -1263,7 +1263,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold uppercase tracking-wider">
             {DETAILS.documentTypeBadge}
           </span>
-          {mode && (
+          {mode && !isVendor && (
             <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold ${mode.badgeColor}`}>
               {mode.code}
             </span>
@@ -2483,7 +2483,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                      Buyer: {activeRfq.buyerAccountName || 'Lead Procurement Manager'}
+                      {isVendor ? 'Buyer: Procurement Team' : `Buyer: ${activeRfq.buyerAccountName || 'Lead Procurement Manager'}`}
                     </h3>
                     <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                       Direct Line Active
@@ -2534,7 +2534,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                       >
                         <div className="flex items-center gap-1.5 text-[10px] text-slate-400 px-1">
                           <span className="font-bold text-slate-600 dark:text-gray-300 inline-flex items-center gap-1">
-                            {isMyMessage ? `${msg.senderName || 'You'} (Supplier)` : `${msg.senderName || activeRfq.buyerAccountName || DETAILS.nameNotRecorded} (Buyer)`}
+                            {isMyMessage
+                              ? `${msg.senderName || 'You'} (Supplier)`
+                              : `${isVendor ? (msg.senderName && msg.senderName !== DETAILS.nameNotRecorded ? 'Procurement Team' : DETAILS.nameNotRecorded) : (msg.senderName || activeRfq.buyerAccountName || DETAILS.nameNotRecorded)} (Buyer)`}
                             {isMyMessage && activeChannel?.isProcucev && (
                               <span className="px-1.5 py-0.2 rounded-full text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-0.5 shadow-xs">
                                 <ShieldCheck size={9} className="text-emerald-600 dark:text-emerald-400" />

@@ -28,6 +28,8 @@ import {
   X,
   KeyRound,
   Lock,
+  Eye,
+  Trash2,
 } from 'lucide-react';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
@@ -160,6 +162,21 @@ export default function VendorProfilePage() {
 
   const CUSTOM_CATEGORY_GROUP = UI_STRINGS.vendorProfile.customCategoryGroup;
   const [customCategoryInput, setCustomCategoryInput] = useState('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
+  const [viewCategory, setViewCategory] = useState<{ name: string; major: string; status: string } | null>(null);
+  const categorySearchContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (categorySearchContainerRef.current && !categorySearchContainerRef.current.contains(event.target as Node)) {
+        setShowCategorySuggestions(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Groups a flat list of minor category names (as persisted by the backend)
   // back into the major->minor shape this screen's selector state uses.
@@ -472,6 +489,30 @@ export default function VendorProfilePage() {
     });
   };
 
+  // Collect all available categories across taxonomy for autocomplete search
+  const allAvailableCategories = React.useMemo(() => {
+    const list: { name: string; major: string }[] = [];
+    (categoryTaxonomy || []).forEach((c) => {
+      if (c.majorCategory && !list.some((item) => item.name.toLowerCase() === c.majorCategory.toLowerCase())) {
+        list.push({ name: c.majorCategory, major: c.majorCategory });
+      }
+      (c.minorCategories || []).forEach((m) => {
+        if (m && !list.some((item) => item.name.toLowerCase() === m.toLowerCase())) {
+          list.push({ name: m, major: c.majorCategory });
+        }
+      });
+    });
+    return list;
+  }, [categoryTaxonomy]);
+
+  const filteredCategorySuggestions = React.useMemo(() => {
+    const q = customCategoryInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableCategories.filter(
+      (item) => item.name.toLowerCase().includes(q) || item.major.toLowerCase().includes(q)
+    );
+  }, [customCategoryInput, allAvailableCategories]);
+
   // The category master as the database returned it. Empty while loading or after a failure.
   const displayTaxonomy = categoryTaxonomy;
 
@@ -747,6 +788,11 @@ export default function VendorProfilePage() {
                 required
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
               />
+              {panNumber.trim() && !isPanValid(panNumber) && (
+                <p className="text-[10px] text-rose-500 font-medium mt-1">
+                  Invalid PAN format (expected 5 letters, 4 numbers, 1 letter, e.g. AAACA9876K)
+                </p>
+              )}
             </div>
 
             {/* GST Number */}
@@ -769,6 +815,11 @@ export default function VendorProfilePage() {
                 required
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
               />
+              {gstNumber.trim() && !isGstValid(gstNumber) && (
+                <p className="text-[10px] text-rose-500 font-medium mt-1">
+                  Invalid GSTIN format (15 characters alphanumeric, e.g. 29AAAAA0000A1Z5)
+                </p>
+              )}
             </div>
 
             {/* MSME / Udyam Number */}
@@ -1020,7 +1071,7 @@ export default function VendorProfilePage() {
                 </p>
               </div>
 
-              {/* Card 2: Vendor Profile Self-Selected Categories */}
+              {/* Card 2: Vendor Profile Self-Selected Categories (Table Format) */}
               <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
@@ -1030,42 +1081,91 @@ export default function VendorProfilePage() {
                     {flatSelectedCategories.length} / {MAX_CATEGORIES} Selected
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-1.5 min-h-[36px]">
-                  {flatSelectedCategories.length > 0 ? (
-                    flatSelectedCategories.map((c) => {
-                      const isCommon = commonCategories.includes(c);
-                      return (
-                        <span
-                          key={c}
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold flex items-center gap-1.5 ${
-                            isCommon
-                              ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200'
-                              : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200'
-                          }`}
-                        >
-                          {isCommon && <span className="text-[9px]">✓</span>}
-                          <span>{c}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCategory(c)}
-                            className="text-slate-400 hover:text-rose-500 font-bold leading-none cursor-pointer p-0.5 rounded hover:bg-slate-200/50 dark:hover:bg-gray-800"
-                            title={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
-                            aria-label={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
-                          >
-                            <X size={11} />
-                          </button>
-                        </span>
-                      );
-                    })
-                  ) : (
-                    <span className="text-[10px] text-slate-400 italic">
-                      {UI_STRINGS.vendorProfile.noCategoriesSelected}
-                    </span>
-                  )}
+
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-gray-900/60 shadow-xs">
+                  <div className="overflow-x-auto max-h-72">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] font-bold border-b border-slate-200 dark:border-gray-800 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left w-10">#</th>
+                          <th className="px-3 py-2 text-left">Category / Capability Name</th>
+                          <th className="px-3 py-2 text-left">Major Category</th>
+                          <th className="px-3 py-2 text-center">Status</th>
+                          <th className="px-3 py-2 text-right w-32">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800 text-[11px]">
+                        {flatSelectedCategories.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-6 text-center text-slate-400 text-xs">
+                              {UI_STRINGS.vendorProfile.noCategoriesSelected}
+                            </td>
+                          </tr>
+                        ) : (
+                          flatSelectedCategories.map((c, idx) => {
+                            const majorName = findMajorForMinor(c) || CUSTOM_CATEGORY_GROUP;
+                            const isClientMapped = clientCats.some((cc) => cc.toLowerCase() === c.toLowerCase());
+                            const isDualAligned = isClientMapped;
+
+                            return (
+                              <tr key={c} className="hover:bg-slate-50/70 dark:hover:bg-gray-850/40 transition-colors">
+                                <td className="px-3 py-2 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                <td className="px-3 py-2 font-bold text-slate-900 dark:text-white">
+                                  {c}
+                                </td>
+                                <td className="px-3 py-2 text-slate-500 dark:text-gray-400 font-medium">
+                                  Domain: {majorName}
+                                </td>
+                                <td className="px-3 py-2 text-center whitespace-nowrap">
+                                  {isDualAligned ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200">
+                                      ✓ Dual Aligned
+                                    </span>
+                                  ) : isClientMapped ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-400 border border-indigo-200">
+                                      Buyer-Empanelled
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200">
+                                      Self-Selected
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <div className="flex justify-end items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setViewCategory({
+                                          name: c,
+                                          major: majorName,
+                                          status: isDualAligned ? 'Dual Aligned (Buyer & Vendor)' : isClientMapped ? 'Buyer-Empanelled' : 'Self-Selected',
+                                        })
+                                      }
+                                      className="btn btn-secondary btn-xs font-semibold inline-flex items-center gap-1"
+                                      title={`View details for ${c}`}
+                                    >
+                                      <Eye size={11} /> View
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveCategory(c)}
+                                      className="btn btn-ghost btn-xs text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/60 inline-flex items-center gap-1 cursor-pointer"
+                                      title={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
+                                      aria-label={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
+                                    >
+                                      <Trash2 size={11} /> Remove
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-                <p className="text-[9.5px] text-slate-400">
-                  Selected directly by vendor. Chips with ✓ indicate common match with buyer roster. Click × on any chip to remove it.
-                </p>
               </div>
             </div>
 
@@ -1114,25 +1214,77 @@ export default function VendorProfilePage() {
             <p className="text-[11px] text-slate-600 dark:text-gray-300 leading-relaxed">
               {UI_STRINGS.vendorProfile.customCategoriesDesc}
             </p>
-            <div className="flex flex-col sm:flex-row gap-2 pt-1">
-              <input
-                type="text"
-                value={customCategoryInput}
-                onChange={(e) => setCustomCategoryInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleAddCustomCategory();
-                  }
-                }}
-                placeholder={UI_STRINGS.vendorProfile.customCategoryPlaceholder}
-                className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-white dark:bg-gray-900 text-slate-900 dark:text-white placeholder:text-slate-400"
-              />
+            <div className="relative flex flex-col sm:flex-row gap-2 pt-1" ref={categorySearchContainerRef}>
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={customCategoryInput}
+                  onChange={(e) => {
+                    setCustomCategoryInput(e.target.value);
+                    setShowCategorySuggestions(true);
+                  }}
+                  onFocus={() => {
+                    if (customCategoryInput.trim().length >= 3) {
+                      setShowCategorySuggestions(true);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddCustomCategory();
+                    } else if (e.key === 'Escape') {
+                      setShowCategorySuggestions(false);
+                    }
+                  }}
+                  placeholder={UI_STRINGS.vendorProfile.customCategoryPlaceholder}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-white dark:bg-gray-900 text-slate-900 dark:text-white placeholder:text-slate-400"
+                />
+                {customCategoryInput.trim().length > 0 && customCategoryInput.trim().length < 3 && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
+                    Type at least 3 characters to search master categories
+                  </p>
+                )}
+                {showCategorySuggestions && customCategoryInput.trim().length >= 3 && (
+                  <div
+                    role="listbox"
+                    className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-2xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                  >
+                    <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                      <span>Matching Categories ({filteredCategorySuggestions.length})</span>
+                      <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">Taxonomy Master</span>
+                    </div>
+                    {filteredCategorySuggestions.length > 0 ? (
+                      filteredCategorySuggestions.map((item) => (
+                        <button
+                          key={`${item.major}-${item.name}`}
+                          type="button"
+                          role="option"
+                          onClick={() => {
+                            setCustomCategoryInput(item.name);
+                            setShowCategorySuggestions(false);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors"
+                        >
+                          <span className="font-semibold text-slate-800 dark:text-white">{item.name}</span>
+                          <span className="text-[10px] text-slate-400 italic">{item.major}</span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="p-3 text-center space-y-1">
+                        <p className="text-xs text-slate-500 dark:text-gray-400">No matching master categories found</p>
+                        <p className="text-[11px] text-indigo-600 dark:text-indigo-400">
+                          Click &quot;+ Add Category&quot; to add &quot;{customCategoryInput.trim()}&quot; as custom capability
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={handleAddCustomCategory}
                 disabled={!customCategoryInput.trim()}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-xs whitespace-nowrap"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-xs whitespace-nowrap self-start"
               >
                 <Plus size={14} />
                 <span>{UI_STRINGS.vendorProfile.addCategoryButton}</span>
@@ -1297,6 +1449,50 @@ export default function VendorProfilePage() {
 
         <AccountSecurityPanel />
       </div>
+
+      {/* Category View Modal */}
+      {viewCategory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Category Details</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewCategory(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-gray-200"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Category Name</span>
+                <p className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">{viewCategory.name}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Major Category</span>
+                <p className="font-semibold text-slate-700 dark:text-gray-300 mt-0.5">{viewCategory.major}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Alignment Status</span>
+                <p className="font-semibold text-slate-700 dark:text-gray-300 mt-0.5">{viewCategory.status}</p>
+              </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setViewCategory(null)}
+                className="btn btn-secondary btn-sm px-4"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -109,6 +109,9 @@ function VendorRFQDetailsView() {
 
       const scopedRfq: RFQItem = {
         ...result.rfq,
+        buyerAccountName: undefined,
+        buyerCompany: undefined,
+        sourcingMode: undefined as any,
         quotes: (result.rfq.quotes || []).filter((quote) => quote.vendorId === myVendorId),
       };
       setState({ status: 'loaded', rfq: scopedRfq });
