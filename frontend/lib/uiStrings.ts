@@ -3098,6 +3098,7 @@ sellerDirectory: {
     companySelectedTitle: 'Company Selected',
     companySelectedMessage: 'Loaded 360° evaluation summary for {name}.',
     scoreLabel: '360° AI Rating Score',
+    scoreNotApplicable: 'NA',
     gateLabel: 'Gate Pass Status:',
     gateUnlocked: '≥ {score}% Unlocked',
     gateLocked: 'Below {score}% Locked',

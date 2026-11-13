@@ -496,7 +496,7 @@ export default function VendorEvaluationSummary({
                   </span>
                 </div>
                 <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal truncate block mt-0.5">
-                  {summary.vendorId ?? NOT_RECORDED} • {summary.category ?? NOT_RECORDED}
+                  {summary.category ?? NOT_RECORDED}
                 </span>
               </div>
             </div>
@@ -578,7 +578,7 @@ export default function VendorEvaluationSummary({
                             </span>
                           </div>
                           <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                            <span className="font-mono text-indigo-600 dark:text-indigo-400">{c.id}</span> • {c.category ?? NOT_RECORDED}
+                            {c.category ?? NOT_RECORDED}
                           </div>
                         </div>
 
@@ -592,7 +592,7 @@ export default function VendorEvaluationSummary({
                                 : 'text-amber-600 dark:text-amber-400'
                             }`}
                           >
-                            {c.overallScore === null ? NOT_EVALUATED : `${c.overallScore}%`}
+                            {c.overallScore === null ? SUMMARY.scoreNotApplicable : `${c.overallScore}%`}
                           </span>
                           {isSelected && <Check size={14} className="text-indigo-600 dark:text-indigo-400" />}
                         </div>
@@ -631,10 +631,6 @@ export default function VendorEvaluationSummary({
                 {/* 1. Vendor Details */}
                 <td className="py-2.5 px-2.5 space-y-1">
                   <div className="flex items-center gap-1.5 flex-wrap text-xs">
-                    <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px]">
-                      {summary.vendorId ?? NOT_RECORDED}
-                    </span>
-                    <span className="text-slate-400">•</span>
                     <span className="text-slate-600 dark:text-gray-400 font-medium flex items-center gap-1 text-[11px]">
                       <Tag size={11} /> {summary.category ?? NOT_RECORDED}
                     </span>
@@ -664,9 +660,11 @@ export default function VendorEvaluationSummary({
                       <span>•</span>
                       <span className="flex items-center gap-1"><Phone size={11} /> {summary.phone ?? NOT_RECORDED}</span>
                     </div>
-                    <div className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-gray-500">
-                      <Clock size={10} /> {SUMMARY.submittedLabel} {summary.submissionDate ?? NOT_RECORDED}
-                    </div>
+                    {summary.submissionDate !== null && (
+                      <div className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-gray-500">
+                        <Clock size={10} /> {SUMMARY.submittedLabel} {summary.submissionDate}
+                      </div>
+                    )}
                   </div>
                 </td>
 
@@ -683,7 +681,7 @@ export default function VendorEvaluationSummary({
                     {SUMMARY.scoreLabel}
                   </div>
                   <div className="text-2xl sm:text-3xl font-black mono text-emerald-600 dark:text-emerald-400">
-                    {overallScore === null ? NOT_EVALUATED : `${overallScore}%`}
+                    {overallScore === null ? SUMMARY.scoreNotApplicable : `${overallScore}%`}
                   </div>
                   <div className="text-[10px] text-slate-600 dark:text-gray-400 font-medium">
                     {SUMMARY.gateLabel} <span className="font-bold text-emerald-600 dark:text-emerald-400">{gateText}</span>

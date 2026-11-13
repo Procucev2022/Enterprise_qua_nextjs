@@ -203,7 +203,7 @@ describe('buyer evaluation summary: full evaluation record', () => {
     render(<VendorEvaluationSummary evaluationRecord={buildRecord()} onBack={onBack} />);
 
     expect(screen.getAllByText('Alpha Pumps Ltd.').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('VN-100')).toBeInTheDocument();
+    expect(screen.queryByText('VN-100')).not.toBeInTheDocument();
     expect(screen.getByText('94%')).toBeInTheDocument();
     expect(screen.getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
     expect(screen.getByText('Asha Rao')).toBeInTheDocument();
@@ -371,7 +371,7 @@ describe('buyer evaluation summary: criteria matrix', () => {
 });
 
 describe('buyer evaluation summary: values not on record', () => {
-  it('shows not recorded for missing contact, email, phone, id, category and submission date', () => {
+  it('shows not recorded for missing contact, email, phone and category, and leaves out the submitted line', () => {
     mockStore();
     const record = buildRecord({
       vendorId: '',
@@ -384,6 +384,7 @@ describe('buyer evaluation summary: values not on record', () => {
     render(<VendorEvaluationSummary evaluationRecord={record} />);
 
     expect(screen.getAllByText(NOT_RECORDED).length).toBeGreaterThanOrEqual(5);
+    expect(screen.queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
     for (const invented of ['Authorized Representative', 'Enterprise Supplier', 'General Industrial', 'N/A', 'v-001', '2026-03-01']) {
       expect(screen.queryByText(invented)).not.toBeInTheDocument();
     }
@@ -410,7 +411,9 @@ describe('buyer evaluation summary: values not on record', () => {
       const view = render(
         <VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: score as unknown as number })} />
       );
-      expect(screen.getAllByText(NOT_EVALUATED).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText(SUMMARY.scoreNotApplicable)).toBeInTheDocument();
+      // The gate status still reads not evaluated, because the overall score is missing.
+      expect(screen.getByText(NOT_EVALUATED)).toBeInTheDocument();
       view.unmount();
     }
   });
@@ -526,6 +529,7 @@ describe('buyer evaluation summary: supplier picker', () => {
     expect(screen.getAllByText(NOT_EVALUATED).length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText('Authorized Representative')).not.toBeInTheDocument();
     expect(store.setActiveEvaluationRecord).not.toHaveBeenCalled();
+    expect(screen.getByText(SUMMARY.scoreNotApplicable)).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(PICKER_LABEL));
     fireEvent.click(screen.getByRole('button', { name: /Beta Polymer Systems/ }));
@@ -539,7 +543,7 @@ describe('buyer evaluation summary: supplier picker', () => {
     render(<VendorEvaluationSummary />);
 
     fireEvent.click(screen.getByLabelText(PICKER_LABEL));
-    expect(screen.getByRole('button', { name: /Alpha Machining Works/ })).toHaveTextContent(NOT_EVALUATED);
+    expect(screen.getByRole('button', { name: /Alpha Machining Works/ })).toHaveTextContent(SUMMARY.scoreNotApplicable);
     expect(screen.getByRole('button', { name: /Beta Polymer Systems/ })).toHaveTextContent('76%');
     expect(screen.getByRole('button', { name: /Gamma Fabrication/ })).toHaveTextContent('94%');
   });
@@ -588,7 +592,7 @@ describe('buyer evaluation summary: supplier picker', () => {
     render(<VendorEvaluationSummary />);
 
     fireEvent.click(screen.getByLabelText(PICKER_LABEL));
-    fireEvent.click(screen.getByRole('button', { name: /v-nameless/ }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(NOT_RECORDED) }));
     expect(store.showToast).toHaveBeenCalledWith(
       SUMMARY.companySelectedTitle,
       formatString(SUMMARY.companySelectedMessage, { name: NOT_RECORDED }),
@@ -714,5 +718,52 @@ describe('buyer evaluation summary: failed reference load', () => {
 
     expect(screen.getByText(SUMMARY.noEvaluationTitle)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('buyer evaluation summary: vendor code, overall score and submitted line', () => {
+  const alpha = buildVendor({ id: 'v-101', name: 'Alpha Machining Works', majorCategory: 'Mechanical' });
+  const beta = buildVendor({ id: 'v-102', name: 'Beta Polymer Systems', majorCategory: 'Polymers', source: 'buyer_manual' });
+
+  it('does not show the vendor code in the details card or in the supplier picker, and keeps the category', () => {
+    mockStore({ buyerVendors: [alpha, beta], vendorEvaluations: [] });
+    render(
+      <VendorEvaluationSummary
+        evaluationRecord={buildRecord({ vendorId: 'v-102', vendorName: 'Beta Polymer Systems', category: 'Polymers' })}
+      />
+    );
+
+    expect(screen.getAllByText('Polymers').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('v-102')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+    expect(screen.getByRole('button', { name: /Alpha Machining Works/ })).toBeInTheDocument();
+    expect(screen.queryByText('v-101')).not.toBeInTheDocument();
+    expect(screen.queryByText('v-102')).not.toBeInTheDocument();
+  });
+
+  it('shows NA as the overall score when the record holds none', () => {
+    mockStore();
+    render(<VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: null as unknown as number })} />);
+
+    expect(screen.getByText(SUMMARY.scoreLabel)).toBeInTheDocument();
+    expect(screen.getByText(SUMMARY.scoreNotApplicable)).toBeInTheDocument();
+    expect(screen.queryByText('94%')).not.toBeInTheDocument();
+  });
+
+  it('leaves out the submitted line when the record holds no submission date', () => {
+    mockStore();
+    for (const submissionDate of ['', '   ']) {
+      const view = render(<VendorEvaluationSummary evaluationRecord={buildRecord({ submissionDate })} />);
+      expect(screen.queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it('shows the submitted line with the recorded submission date', () => {
+    mockStore();
+    render(<VendorEvaluationSummary evaluationRecord={buildRecord()} />);
+
+    expect(screen.getByText(`${SUMMARY.submittedLabel} 2026-02-28`)).toBeInTheDocument();
   });
 });

@@ -5761,3 +5761,9 @@ invite 25 vendors for submitting quotations per each unique minor category. In c
 Remove entire 4th AI category join page as mentioned in image below
 ```
 ---
+### Prompt 203
+**Timestamp**: 2026-11-13T22:39:47+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Vendor Evaluation Summary was attached.)
+```text
+Please remove the vendor code from both places, change the Overall Score from *Not Evaluated* to *NA*, and remove the **Submitted: Not recorded* text from the Vendor Evaluation Summary.
+```
+---
