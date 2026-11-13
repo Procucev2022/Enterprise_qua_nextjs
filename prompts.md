@@ -5264,3 +5264,97 @@ Seems like logs are getting stored in database, in localhost running it should b
 ```text
 Check if there is any logs getting saved in database, remove those as well
 ```
+
+---
+
+### Prompt 142
+
+**Timestamp**: 2026-11-12T12:45:26+05:30
+
+```text
+### Buyer & Seller Directory – Feature Updates
+
+**1. Buyer Profile – Buyer Uploaded Vendors**
+- Add a new **Buyer Uploaded Vendors** section in the Buyer Profile.
+- Display all vendors uploaded by that specific buyer.
+- Show vendor name, company, contact details, upload date, and status.
+- Fetch records from the database using the buyer's ID.
+
+**2. Seller Profile – Buyer Upload**
+- Add a new **Buyer Upload** section in the Seller Profile.
+- Display all buyers who uploaded or added that particular vendor.
+- Show buyer name, company details, upload date, and status.
+- Display the total number of buyers who uploaded the vendor.
+- Fetch accurate records from the database using the seller's ID.
+
+**3. Seller Home Page – Quote Credits Button**
+- Remove the duplicate `+` symbol from the **Add Quote Credits** button.
+- Keep only one plus icon with the existing button label.
+
+**Important Development Requirements**
+- Reuse existing APIs, database models, methods, and upload functionality wherever possible.
+- Display only genuine database records; remove mock or hardcoded data.
+- Maintain buyer–vendor relationships accurately and avoid duplicate records.
+- Ensure all sections work correctly across Buyer Directory, Seller Directory, and their respective profiles.
+- Keep UI consistent with the existing design.
+- Do not modify or break any existing functionality, business logic, or workflows.
+- Test all changes end-to-end before completion.
+```
+
+---
+
+### Prompt 143
+
+**Timestamp**: 2026-11-12T13:28:56+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 144
+
+**Timestamp**: 2026-11-12T14:22:14+05:30
+
+````text
+### Registrations – UI & Filter Updates
+
+1. **Remove Duplicate Header:** Remove the large **Registered Clients – 85,379 Total** header/card. Move the four existing summary cards (Total Registrations, Web App, WhatsApp, Email) to the top of the Registration section. Keep their existing data and functionality.
+
+2. **Status Filter Logic:**
+   - **New:** Show only buyers awaiting approval; exclude sellers because seller registrations are auto-approved.
+   - **Accepted:** Show approved buyers and auto-approved sellers.
+   - **Rejected:** Show only rejected buyers.
+
+3. **Independent Filters:**
+   - Keep Client View options: All (Buyers & Sellers), Buyers, Sellers.
+   - Rename the second dropdown from **All** to **Source Type**, with options All, Web App, WhatsApp, Email.
+   - Keep Status as a separate filter.
+   - All three filters must work independently and combine correctly when multiple filters are selected.
+
+4. **Alignment:** Fix spacing, alignment, and toolbar layout without changing the existing table design or other page functionality.
+
+**Important:** Use actual database records and existing APIs. Preserve registration workflows and business logic. Do not introduce mock data or break existing functionality.
+:::
+````
+
+---
+
+### Prompt 145
+
+**Timestamp**: 2026-11-12T15:24:14+05:30
+
+```text
+please merge this all file changes in veera branch to store after some times again i working on this becuase now i want gto implement other functions
+```
+
+---
+
+### Prompt 146
+
+**Timestamp**: 2026-11-13T10:32:56+05:30
+
+```text
+continue this all files are in veera branch pull and complete this  issue and run this locally
+```
