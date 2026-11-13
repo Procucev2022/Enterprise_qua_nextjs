@@ -1,15 +1,20 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-jest.mock('../src/services/loggerService', () => ({ logger: { info: jest.fn(), error: jest.fn() } }));
+jest.mock('../src/services/loggerService', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 const {
   acquireMigrationLock,
   applyD1Migrations,
+  d1Query,
   getSchemaBaseline,
   migrate,
+  recordSchemaBaseline,
+  reportRowCounts,
   resolveD1Config,
   schemaChecksum,
   splitStatements,
+  purgeDeprecatedTables,
 } = require('../scripts/migrate-d1');
 const { ensureLocalAuditChainVerificationMigration } = require('../scripts/migrate-d1-local-audit-chain-verification');
 const { ensureLocalDossierAlignmentMigration } = require('../scripts/migrate-d1-local-dossier-alignment');
@@ -580,5 +585,410 @@ describe('D1 migration SQL handling', () => {
       process.exitCode = originalExitCode;
       errSpy.mockRestore();
     }
+  });
+
+  test('skips synchronous FTS rebuild when vendors table is large to avoid 429 CPU timeouts', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-fts-skip-test-'));
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    const sql = "INSERT INTO vendors_search_fts(vendors_search_fts) SELECT 'rebuild';";
+    fs.writeFileSync(path.join(migrationsPath, '0001_search_index.d1.sql'), sql);
+    const expectedChecksum = crypto.createHash('sha256').update(sql).digest('hex');
+
+    const executedSql = [];
+    const query = jest.fn(async (querySql) => {
+      executedSql.push(querySql);
+      if (querySql.includes('SELECT checksum FROM schema_migrations')) {
+        return querySql.includes('WHERE version = ?') && executedSql.some((s) => s.startsWith('INSERT INTO schema_migrations'))
+          ? { result: [{ results: [{ checksum: expectedChecksum }] }] }
+          : { result: [{ results: [] }] };
+      }
+      if (querySql.includes('SELECT COUNT(*) AS total FROM vendors')) {
+        return { result: [{ results: [{ total: 600000 }] }] };
+      }
+      return { result: [{ results: [] }] };
+    });
+
+    try {
+      const summary = await applyD1Migrations({ query, migrationsPath });
+      expect(summary.applied).toBe(1);
+      // Ensure the 'rebuild' statement was NOT executed
+      expect(executedSql.some((stmt) => stmt.includes("'rebuild'"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('recovers gracefully from FTS rebuild CPU time limit errors', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-fts-err-test-'));
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    const sql = "INSERT INTO vendors_search_fts(vendors_search_fts) SELECT 'rebuild';";
+    fs.writeFileSync(path.join(migrationsPath, '0001_search_index.d1.sql'), sql);
+    const expectedChecksum = crypto.createHash('sha256').update(sql).digest('hex');
+
+    const executedSql = [];
+    const query = jest.fn(async (querySql) => {
+      executedSql.push(querySql);
+      if (querySql.includes('SELECT checksum FROM schema_migrations')) {
+        return querySql.includes('WHERE version = ?') && executedSql.some((s) => s.startsWith('INSERT INTO schema_migrations'))
+          ? { result: [{ results: [{ checksum: expectedChecksum }] }] }
+          : { result: [{ results: [] }] };
+      }
+      if (querySql.includes('SELECT COUNT(*) AS total FROM vendors')) {
+        return { result: [{ results: [{ total: 100 }] }] };
+      }
+      if (querySql.includes("'rebuild'")) {
+        throw new Error('D1 query failed (429): D1 DB exceeded its CPU time limit and was reset.');
+      }
+      return { result: [{ results: [] }] };
+    });
+
+    try {
+      const summary = await applyD1Migrations({ query, migrationsPath });
+      expect(summary.applied).toBe(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('skips audit_logs backfill gracefully when audit_logs table does not exist', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-audit-skip-test-'));
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    const sql = "INSERT OR IGNORE INTO audit_chain_state (id, head_hash, revision) SELECT 1, (SELECT json_extract(raw, '$.shaSignature') FROM audit_logs LIMIT 1), 0;";
+    fs.writeFileSync(path.join(migrationsPath, '0011_audit_chain_state.d1.sql'), sql);
+    const expectedChecksum = crypto.createHash('sha256').update(sql).digest('hex');
+
+    const executedSql = [];
+    const query = jest.fn(async (querySql) => {
+      executedSql.push(querySql);
+      if (querySql.includes('SELECT checksum FROM schema_migrations')) {
+        return querySql.includes('WHERE version = ?') && executedSql.some((s) => s.startsWith('INSERT INTO schema_migrations'))
+          ? { result: [{ results: [{ checksum: expectedChecksum }] }] }
+          : { result: [{ results: [] }] };
+      }
+      if (querySql.includes('FROM audit_logs')) {
+        throw new Error('D1 query failed (400): no such table: audit_logs: SQLITE_ERROR');
+      }
+      return { result: [{ results: [] }] };
+    });
+
+    try {
+      const summary = await applyD1Migrations({ query, migrationsPath });
+      expect(summary.applied).toBe(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('d1Query retries on 429 rate/resource limit responses with backoff', async () => {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    global.fetch = jest.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          status: 429,
+          ok: false,
+          text: async () => '{"success":false,"errors":[{"message":"Rate limited"}]}',
+        };
+      }
+      return {
+        status: 200,
+        ok: true,
+        text: async () => '{"success":true,"result":[{"results":[{"total":1}]}]}',
+      };
+    });
+
+    try {
+      const res = await d1Query('SELECT 1', [], { maxRetries: 2, backoffBaseMs: 5 });
+      expect(callCount).toBe(2);
+      expect(res.success).toBe(true);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  test('d1Query throws on non-JSON response', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async () => ({
+      status: 502,
+      ok: false,
+      text: async () => '<html>502 Bad Gateway</html>',
+    }));
+    try {
+      await expect(d1Query('SELECT 1')).rejects.toThrow('D1 non-JSON response (502)');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  test('d1Query throws error message on query failure', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async () => ({
+      status: 400,
+      ok: false,
+      text: async () => JSON.stringify({ success: false, errors: [{ message: 'syntax error near SELECT' }] }),
+    }));
+    try {
+      await expect(d1Query('BAD SQL')).rejects.toThrow('D1 query failed (400): syntax error near SELECT');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  test('splitStatements handles bracket quotes and escaped quotes in strings', () => {
+    const stmts = splitStatements("SELECT [col;1], 'escaped '' quote; here' FROM [my;table];");
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0]).toContain('[col;1]');
+  });
+
+  test('reportRowCounts logs table counts and handles missing tables', async () => {
+    const query = jest.fn(async (sql) => {
+      if (sql.includes('rfqs')) {
+        return { result: [{ results: [{ total: 42 }] }] };
+      }
+      throw new Error('no such table');
+    });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await reportRowCounts(query);
+      expect(query).toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test('recordSchemaBaseline throws if recorded checksum mismatches', async () => {
+    const query = jest.fn(async (sql) => {
+      if (sql.includes('SELECT checksum FROM schema_migrations')) {
+        return { result: [{ results: [{ checksum: 'different_hash' }] }] };
+      }
+      return { result: [{ results: [] }] };
+    });
+    await expect(recordSchemaBaseline(query, 'expected_hash')).rejects.toThrow('The D1 schema baseline checksum was not recorded consistently.');
+  });
+
+  test('migrate fails and returns failure when lock acquisition fails', async () => {
+    const query = jest.fn(async (sql) => {
+      if (sql.includes('INSERT INTO schema_migration_locks')) {
+        return { result: [{ results: [] }] };
+      }
+      if (sql.includes('SELECT owner_token')) {
+        return { result: [{ results: [{ owner_token: 'other-owner' }] }] };
+      }
+      return { result: [{ results: [] }] };
+    });
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await migrate({ query, requireCredentials: false });
+      expect(res.failures).toHaveLength(1);
+      expect(res.failures[0].statement).toBe('migration lock');
+    } finally {
+      errSpy.mockRestore();
+      process.exitCode = 0;
+    }
+  });
+
+  test('migrate handles schema creation statement failures and reportRowCounts', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-migrate-fail-'));
+    const schemaFile = path.join(root, 'schema.d1.sql');
+    fs.writeFileSync(schemaFile, 'CREATE TABLE t1 (id INT); CREATE TABLE t2 (id INT); CREATE TABLE t3 (id INT);');
+    const query = jest.fn(async (sql, params = []) => {
+      if (sql.includes('INSERT INTO schema_migration_locks')) {
+        return { result: [{ results: [{ owner_token: params[1] }] }] };
+      }
+      if (sql.includes('UPDATE schema_migration_locks')) {
+        return { result: [{ results: [{ owner_token: params[2] }] }] };
+      }
+      if (sql.includes('SELECT checksum FROM schema_migrations')) {
+        return { result: [{ results: [] }] };
+      }
+      if (sql.includes('CREATE TABLE t1')) return { result: [{ results: [] }] };
+      if (sql.includes('CREATE TABLE t2')) throw new Error('table t2 already exists');
+      if (sql.includes('CREATE TABLE t3')) throw new Error('syntax error in t3');
+      return { result: [{ results: [] }] };
+    });
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await migrate({ query, schemaPath: schemaFile, includeRowCounts: true, requireCredentials: false });
+      expect(res.failures.some((f) => f.statement.includes('t3'))).toBe(true);
+      expect(res.skipped).toBeGreaterThan(0);
+    } finally {
+      errSpy.mockRestore();
+      process.exitCode = 0;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('migrate records failure when migration lock release fails', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-migrate-rel-'));
+    const schemaFile = path.join(root, 'schema.d1.sql');
+    fs.writeFileSync(schemaFile, 'SELECT 1;');
+    const query = jest.fn(async (sql, params = []) => {
+      if (sql.includes('INSERT INTO schema_migration_locks')) {
+        return { result: [{ results: [{ owner_token: params[1] }] }] };
+      }
+      if (sql.includes('UPDATE schema_migration_locks')) {
+        return { result: [{ results: [{ owner_token: params[2] }] }] };
+      }
+      if (sql.includes('DELETE FROM schema_migration_locks')) {
+        throw new Error('D1 network down during release');
+      }
+      return { result: [{ results: [] }] };
+    });
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await migrate({ query, schemaPath: schemaFile, requireCredentials: false });
+      expect(res.failures.some((f) => f.statement === 'migration lock release')).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+      process.exitCode = 0;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('applyD1Migrations updates existing empty checksum in schema_migrations', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-empty-ck-'));
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    const sql = 'SELECT 1;';
+    fs.writeFileSync(path.join(migrationsPath, '0001_test.d1.sql'), sql);
+    const updated = [];
+    const query = jest.fn(async (sqlQuery, params = []) => {
+      if (sqlQuery.includes('SELECT checksum FROM schema_migrations')) {
+        return { result: [{ results: [{ checksum: null }] }] };
+      }
+      if (sqlQuery.includes('UPDATE schema_migrations SET checksum')) {
+        updated.push(params);
+        return { result: [{ results: [] }] };
+      }
+      return { result: [{ results: [] }] };
+    });
+    try {
+      const summary = await applyD1Migrations({ query, migrationsPath });
+      expect(summary.skipped).toBe(1);
+      expect(updated.length).toBe(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('d1Query handles 10-second window overload with backoff', async () => {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    global.fetch = jest.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          status: 429,
+          ok: false,
+          text: async () => '{"success":false,"errors":[{"message":"Too many resources consumed within a 10 second window"}]}',
+        };
+      }
+      return {
+        status: 200,
+        ok: true,
+        text: async () => '{"success":true,"result":[{"results":[]}]}',
+      };
+    });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await d1Query('SELECT 1', [], { maxRetries: 1, backoffBaseMs: 1, minWindowDelayMs: 2 });
+      expect(res.success).toBe(true);
+      expect(callCount).toBe(2);
+    } finally {
+      warnSpy.mockRestore();
+      global.fetch = originalFetch;
+    }
+  });
+
+  test('applyD1Migrations throws if checksum was not persisted after insert', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-persist-fail-'));
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    const sql = 'SELECT 1;';
+    fs.writeFileSync(path.join(migrationsPath, '0001_test.d1.sql'), sql);
+    const query = jest.fn(async (sqlQuery) => {
+      if (sqlQuery.includes('SELECT checksum FROM schema_migrations')) {
+        return { result: [{ results: [] }] };
+      }
+      return { result: [{ results: [] }] };
+    });
+    try {
+      await expect(applyD1Migrations({ query, migrationsPath })).rejects.toThrow('did not persist its checksum');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('lease renewal handles query error and marks lost error', async () => {
+    jest.useFakeTimers();
+    const originalExitCode = process.exitCode;
+    try {
+      const query = jest.fn(async (sql, params = []) => {
+        if (sql.includes('INSERT INTO schema_migration_locks')) {
+          return { result: [{ results: [{ owner_token: params[1] }] }] };
+        }
+        if (sql.includes('UPDATE schema_migration_locks')) {
+          throw new Error('Network error on renewal');
+        }
+        return { result: [{ results: [] }] };
+      });
+      const lock = await acquireMigrationLock(query);
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(() => lock.assertOwned()).toThrow('Network error on renewal');
+      await lock.release();
+    } finally {
+      process.exitCode = originalExitCode;
+      jest.useRealTimers();
+    }
+  });
+
+  test('migrate records failure when numbered migration throws', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-migrate-numfail-'));
+    const schemaFile = path.join(root, 'schema.d1.sql');
+    fs.writeFileSync(schemaFile, 'SELECT 1;');
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    fs.writeFileSync(path.join(migrationsPath, '0001_fail.d1.sql'), 'SELECT 1;');
+    const query = jest.fn(async (sql, params = []) => {
+      if (sql.includes('INSERT INTO schema_migration_locks')) {
+        return { result: [{ results: [{ owner_token: params[1] }] }] };
+      }
+      if (sql.includes('UPDATE schema_migration_locks')) {
+        return { result: [{ results: [{ owner_token: params[2] }] }] };
+      }
+      if (sql.includes('SELECT checksum FROM schema_migrations')) {
+        if (params && params[0] === '0000_schema_baseline') {
+          return { result: [{ results: [{ checksum: schemaChecksum('SELECT 1;') }] }] };
+        }
+        throw new Error('D1 internal query failure');
+      }
+      return { result: [{ results: [] }] };
+    });
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await migrate({ query, schemaPath: schemaFile, migrationsPath, requireCredentials: false });
+      expect(res.failures.some((f) => f.statement === 'numbered migration')).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+      process.exitCode = 0;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('purgeDeprecatedTables drops all configured deprecated tables and triggers', async () => {
+    const executed = [];
+    const query = jest.fn(async (sql) => {
+      executed.push(sql);
+      return { result: [{ results: [] }] };
+    });
+    await purgeDeprecatedTables(query);
+    expect(executed.some((s) => s.includes('DROP TRIGGER IF EXISTS vendors_search_fts_insert'))).toBe(true);
+    expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "vendors_search_fts"'))).toBe(true);
+    expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "system_error_logs"'))).toBe(true);
+    expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "audit_logs"'))).toBe(true);
   });
 });

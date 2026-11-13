@@ -380,11 +380,19 @@ describe('Internal Tasks API & Controller', () => {
       expect(sumRes.status).toBe(500);
     });
 
-    test('GET /api/internal-tasks/task-types falls back to default types on DB failure', async () => {
+    test('GET /api/internal-tasks/task-types returns an error, not a default list, when the lookup fails', async () => {
       jest.spyOn(internalTaskQueries, 'getTaskTypes').mockRejectedValue(new Error('DB failure'));
       const ttRes = await request(app).get('/api/internal-tasks/task-types');
-      expect(ttRes.status).toBe(200);
-      expect(ttRes.body.taskTypes).toEqual(internalTaskQueries.DEFAULT_TASK_TYPES);
+      expect(ttRes.status).toBe(500);
+      expect(ttRes.body.success).toBe(false);
+      expect(ttRes.body.taskTypes).toBeUndefined();
+    });
+
+    test('GET /api/internal-tasks/task-types returns 503 when task storage is unavailable', async () => {
+      jest.spyOn(internalTaskQueries, 'getTaskTypes').mockRejectedValue(Object.assign(new Error('down'), { code: 'PERSISTENCE_UNAVAILABLE' }));
+      const ttRes = await request(app).get('/api/internal-tasks/task-types');
+      expect(ttRes.status).toBe(503);
+      expect(ttRes.body.retryable).toBe(true);
     });
 
     test('POST /api/internal-tasks/task-types returns 500 on DB failure', async () => {
@@ -794,6 +802,9 @@ describe('Internal Tasks API & Controller', () => {
   });
 
   test('POST /api/internal-tasks dispatches notifications for assigned employee and credit approver', async () => {
+    const previousApproverEmail = process.env.CREDIT_APPROVER_EMAIL;
+    process.env.CREDIT_APPROVER_EMAIL = 'approver@test.local';
+    try {
     const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
     const notifySpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication').mockResolvedValue({ success: true });
     jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
@@ -822,6 +833,11 @@ describe('Internal Tasks API & Controller', () => {
 
     expect(res.status).toBe(201);
     expect(notifySpy).toHaveBeenCalledTimes(2);
+    expect(notifySpy.mock.calls[1][0].recipientEmail).toBe('approver@test.local');
+    } finally {
+      if (previousApproverEmail === undefined) delete process.env.CREDIT_APPROVER_EMAIL;
+      else process.env.CREDIT_APPROVER_EMAIL = previousApproverEmail;
+    }
   });
 
   test('PUT /api/internal-tasks/:id returns 400 when schema validation fails', async () => {

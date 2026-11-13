@@ -245,6 +245,7 @@ describe('Store service durable buyer RFQ creation', () => {
       await expect(freshStore.createRFQDurably({
         id: 'rfq-durable-create-failure',
         rfqNumber: 'RFQ-DURABLE-CREATE-FAILURE',
+        title: 'Durable failure',
       })).rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
 
       expect(freshStore.getRFQById('rfq-durable-create-failure')).toBeUndefined();
@@ -256,7 +257,7 @@ describe('Store service durable buyer RFQ creation', () => {
       const { freshStore } = freshStoreWithFailingWrite();
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      const created = await freshStore.createRFQDurably({ id: 'rfq-memory-create', rfqNumber: 'RFQ-MEMORY-CREATE' });
+      const created = await freshStore.createRFQDurably({ id: 'rfq-memory-create', rfqNumber: 'RFQ-MEMORY-CREATE', title: 'Memory create' });
 
       expect(freshStore.getRFQById(created.id)).toEqual(created);
       expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -273,7 +274,7 @@ describe('Store service durable buyer RFQ creation', () => {
         throw new Error('notification dispatcher unavailable');
       });
 
-      const created = await freshStore.createRFQDurably({ id: 'rfq-dispatch-failure', rfqNumber: 'RFQ-DISPATCH-FAILURE' });
+      const created = await freshStore.createRFQDurably({ id: 'rfq-dispatch-failure', rfqNumber: 'RFQ-DISPATCH-FAILURE', title: 'Dispatch failure' });
 
       expect(freshStore.getRFQById(created.id)).toEqual(created);
       expect(errorSpy).toHaveBeenCalledWith('RFQ persisted but post-create dispatch failed', expect.objectContaining({
@@ -303,6 +304,7 @@ describe('Store service durable buyer RFQ creation', () => {
         id: persistedRFQ.id,
         rfqNumber: persistedRFQ.rfqNumber,
         sourcingMode: 'mode_1',
+        title: 'Atomic credit',
       }, buyer);
 
       expect(created).toEqual(persistedRFQ);
@@ -331,7 +333,7 @@ describe('Store service durable buyer RFQ creation', () => {
       freshStore.activeBuyerAccount = buyer;
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-no-credit', sourcingMode: 'mode_2' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-no-credit', sourcingMode: 'mode_2', title: 'No credit' }, buyer))
         .rejects.toMatchObject({ statusCode: 403, code: 'FREE_RFQ_CREDITS_EXHAUSTED', remaining: 0 });
 
       expect(freshStore.getRFQById('rfq-no-credit')).toBeUndefined();
@@ -353,7 +355,7 @@ describe('Store service durable buyer RFQ creation', () => {
       }, true);
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: persistedRFQ.id, sourcingMode: 'mode_1' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: persistedRFQ.id, sourcingMode: 'mode_1', title: 'Replay' }, buyer))
         .resolves.toEqual(persistedRFQ);
 
       expect(freshStore.buyerAccounts).toEqual([refreshedBuyer]);
@@ -367,7 +369,7 @@ describe('Store service durable buyer RFQ creation', () => {
       }, true);
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-null-result' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-null-result', title: 'Null result' }, buyer))
         .rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
       expect(freshStore.getRFQById('rfq-null-result')).toBeUndefined();
       expect(dispatchSpy).not.toHaveBeenCalled();
@@ -380,7 +382,7 @@ describe('Store service durable buyer RFQ creation', () => {
       }, true);
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-atomic-failure' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-atomic-failure', title: 'Atomic failure' }, buyer))
         .rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE', retryable: true });
 
       expect(freshStore.getRFQById('rfq-atomic-failure')).toBeUndefined();
@@ -394,7 +396,7 @@ describe('Store service durable buyer RFQ creation', () => {
       freshStore.buyerAccounts = [buyer];
       const dispatchSpy = jest.spyOn(freshStore, 'dispatchRFQCreationSideEffects').mockImplementation(() => {});
 
-      await expect(freshStore.createRFQDurably({ id: 'rfq-local-no-credit', sourcingMode: 'mode_1' }, buyer))
+      await expect(freshStore.createRFQDurably({ id: 'rfq-local-no-credit', sourcingMode: 'mode_1', title: 'Local exhaustion' }, buyer))
         .rejects.toMatchObject({ statusCode: 403, code: 'FREE_RFQ_CREDITS_EXHAUSTED' });
       expect(freshStore.getRFQById('rfq-local-no-credit')).toBeUndefined();
       expect(dispatchSpy).not.toHaveBeenCalled();
@@ -412,6 +414,7 @@ describe('Store service durable buyer RFQ creation', () => {
       await expect(freshStore.createRFQDurably({
         id: 'rfq-local-refund',
         sourcingMode: 'mode_1',
+        title: 'Local refund',
       }, buyer)).rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
 
       expect(refundSpy).toHaveBeenCalledWith(buyer.id);

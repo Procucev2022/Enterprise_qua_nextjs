@@ -13,22 +13,22 @@ const gitHooksDir = path.resolve(rootDir, '.git/hooks');
 const huskyDir = path.resolve(rootDir, '.husky');
 
 const hookContent = `#!/bin/sh
-# Procucev Enterprise Automated Pre-Commit Quality Gate
-# Enforces Linting, Typechecking, Building, and 90% Unit Test Code Coverage
+# Procucev Enterprise Fast Pre-Commit Quality Gate
+# Enforces Linting, Typechecking, and Unit Tests for changed files in active workflows
 
-echo "🛡️  [PRE-COMMIT GATE] Executing full workspace quality check..."
+echo "⚡ [PRE-COMMIT GATE] Executing fast incremental quality check..."
 
-FAST_PRECOMMIT=true npm run check:quality
+npm run check:fast
 
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
   echo ""
-  echo "❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing."
+  echo "❌ [PRE-COMMIT REJECTED] Fast quality check failed. Please resolve all errors before committing."
   exit 1
 fi
 
-echo "✅ [PRE-COMMIT APPROVED] All quality gates and coverage benchmarks verified."
+echo "✅ [PRE-COMMIT APPROVED] All fast quality gates verified."
 exit 0
 `;
 

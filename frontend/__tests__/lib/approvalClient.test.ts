@@ -5,6 +5,7 @@ import {
 } from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 describe('approvalClient', () => {
   const originalFetch = global.fetch;
@@ -59,6 +60,7 @@ describe('approvalClient', () => {
       const result = await fetchApprovals();
       expect(result.data).toEqual([]);
       expect(result.total).toBe(0);
+      expect(result.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvals }));
       expect(errorLog).toHaveBeenCalledWith(
         'Approval list request failed',
         expect.objectContaining({ errorName: 'Error', errorMessage: 'Network fail' }),
@@ -72,11 +74,8 @@ describe('approvalClient', () => {
       const result = await fetchApprovals();
       expect(result.data).toEqual([]);
       expect(result.total).toBe(0);
-      expect(errorLog).toHaveBeenCalledWith(
-        'Approval list request failed',
-        expect.objectContaining({ errorName: 'Error', errorMessage: 'HTTP 500' }),
-        'APPROVAL_CLIENT'
-      );
+      expect(result.error).toBe(formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource: UI_STRINGS.dataLoad.resources.approvals, status: 500 }));
+      expect(errorLog).toHaveBeenCalledWith('Approval list request rejected', { status: 500 }, 'APPROVAL_CLIENT');
     });
   });
 
@@ -94,14 +93,14 @@ describe('approvalClient', () => {
       });
 
       const res = await fetchApprovalSummary();
-      expect(res).toEqual(mockSummary);
+      expect(res).toEqual({ summary: mockSummary });
     });
 
-    it('returns zeroed fallback on failure or non-ok response', async () => {
+    it('returns a null summary and an error on failure or non-ok response, never zero counts', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Server down'));
       const errorLog = jest.spyOn(logger, 'error');
       const res = await fetchApprovalSummary();
-      expect(res).toEqual({ pending: 0, approved: 0, rejected: 0, total: 0 });
+      expect(res).toEqual({ summary: null, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvalSummary }) });
       expect(errorLog).toHaveBeenCalledWith(
         'Approval summary request failed',
         expect.objectContaining({ errorName: 'Error', errorMessage: 'Server down' }),
@@ -110,12 +109,8 @@ describe('approvalClient', () => {
 
       global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
       const res2 = await fetchApprovalSummary();
-      expect(res2).toEqual({ pending: 0, approved: 0, rejected: 0, total: 0 });
-      expect(errorLog).toHaveBeenLastCalledWith(
-        'Approval summary request failed',
-        expect.objectContaining({ errorName: 'Error', errorMessage: 'HTTP 500' }),
-        'APPROVAL_CLIENT'
-      );
+      expect(res2).toEqual({ summary: null, error: formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource: UI_STRINGS.dataLoad.resources.approvalSummary, status: 500 }) });
+      expect(errorLog).toHaveBeenLastCalledWith('Approval summary request rejected', { status: 500 }, 'APPROVAL_CLIENT');
     });
   });
 

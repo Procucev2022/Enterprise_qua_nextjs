@@ -27,6 +27,21 @@ function sendControllerError(res, error, fallbackMessage) {
   return res.status(500).json({ success: false, error: fallbackMessage });
 }
 
+const PAYMENT_DUES_ACTOR_ERROR = 'Sign in with a staff account to record this payment-dues action. No signed-in user was found on the request.';
+
+/**
+ * Name recorded on a communication. The authenticated user is the only source, and no
+ * default sender is assumed. Without a signed-in user the request fails with 401.
+ */
+function requireActor(req, res) {
+  const actor = req.user?.name || req.user?.email;
+  if (!actor) {
+    res.status(401).json({ success: false, error: PAYMENT_DUES_ACTOR_ERROR });
+    return null;
+  }
+  return actor;
+}
+
 /**
  * List low-credit accounts with filtering, sorting, pagination, and summary.
  */
@@ -109,7 +124,8 @@ async function sendEmailNotification(req, res) {
     }
 
     const { accountId, accountType, recipientEmail, subject, message, notes } = validation.sanitizedData;
-    const sender = req.user?.name || req.user?.email || 'Category Manager';
+    const sender = requireActor(req, res);
+    if (!sender) return undefined;
 
     // Write pending history first so a crash or provider outage cannot leave an
     // externally sent email with no durable communication record.
@@ -288,7 +304,8 @@ async function sendMessageNotification(req, res) {
     }
 
     const { accountId, accountType, title, message, notes } = validation.sanitizedData;
-    const sender = req.user?.name || req.user?.email || 'Category Manager';
+    const sender = requireActor(req, res);
+    if (!sender) return undefined;
     const msgTitle = title || 'Action Required: Low Credit Balance Alert';
 
     // Persist the recipient notification before recording a successful delivery.
@@ -361,7 +378,8 @@ async function sendWhatsAppNotification(req, res) {
     }
 
     const { accountId, accountType, phone, message, notes } = validation.sanitizedData;
-    const sender = req.user?.name || req.user?.email || 'Category Manager';
+    const sender = requireActor(req, res);
+    if (!sender) return undefined;
 
     // Build direct wa.me link
     const directLink = typeof whatsAppService.buildDirectWhatsAppLink === 'function'
@@ -420,7 +438,8 @@ async function updateAcknowledgement(req, res) {
     }
 
     const { accountId, accountType, acknowledgementStatus, notes } = validation.sanitizedData;
-    const updatedBy = req.user?.name || req.user?.email || 'Category Manager';
+    const updatedBy = requireActor(req, res);
+    if (!updatedBy) return undefined;
 
     const updated = await paymentDuesQueries.updateAcknowledgementStatus({
       accountId,

@@ -2,9 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 
-const outputPath = 'C:/Users/navin/OneDrive/Desktop/procucev/RFQ_Vendor_Assignment_Data_Migration_Report.pdf';
-const img1Path = 'C:/Users/navin/.gemini/antigravity/brain/4a7fc672-4aeb-48b9-a8a2-60e4aefc2067/.user_uploaded/media_1793937080520_7e68c2f7.jpg';
-const img2Path = 'C:/Users/navin/.gemini/antigravity/brain/4a7fc672-4aeb-48b9-a8a2-60e4aefc2067/.user_uploaded/media_1793937088131_1d14f50d.png';
+// Usage: node scripts/generate_migration_report_pdf.js [output.pdf] [figure1.jpg] [figure2.png]
+// The output defaults to the repository root. Figures are optional: a figure is
+// embedded only when its path is passed and the file exists.
+const outputPath = process.argv[2] || path.resolve(__dirname, '..', '..', 'RFQ_Vendor_Assignment_Data_Migration_Report.pdf');
+const img1Path = process.argv[3] || null;
+const img2Path = process.argv[4] || null;
 
 console.log('Generating PDF at:', outputPath);
 
@@ -95,7 +98,7 @@ doc.fillColor(textDark).fontSize(8).font('Helvetica').text(
 curY += 14;
 
 // Embed Image 1
-if (fs.existsSync(img1Path)) {
+if (img1Path && fs.existsSync(img1Path)) {
   const imgW = 515;
   const imgH = 265;
   doc.rect(39, curY - 1, imgW + 2, imgH + 2).stroke(borderLight);
@@ -123,7 +126,7 @@ doc.fillColor(textDark).fontSize(8.5).font('Helvetica').text(
 curY += 28;
 
 // Embed Image 2
-if (fs.existsSync(img2Path)) {
+if (img2Path && fs.existsSync(img2Path)) {
   const img2W = 515;
   const img2H = 240;
   doc.rect(39, curY - 1, img2W + 2, img2H + 2).stroke(borderLight);

@@ -3,16 +3,18 @@ const pool = require('../src/db/pool');
 const eventOutboxService = require('../src/services/eventOutboxService');
 const mailerService = require('../src/services/mailerService');
 const dailyRfqReportService = require('../src/services/dailyRfqReportService');
-const { DAILY_RFQ_REPORT_CONFIG, EVENT_OUTBOX_TYPES, RFQ_MODES } = require('../src/config/constants');
+const { EVENT_OUTBOX_TYPES, RFQ_MODES } = require('../src/config/constants');
 const { logger } = require('../src/services/loggerService');
 
 describe('dailyRfqReportService Suite', () => {
   const originalEnv = { ...process.env };
+  const TEST_DAILY_REPORT_RECIPIENT = 'daily-report@test.example';
 
   beforeEach(() => {
     jest.clearAllMocks();
     dailyRfqReportService.resetRuntimeState();
     process.env = { ...originalEnv };
+    process.env.DAILY_RFQ_REPORT_EMAILS = TEST_DAILY_REPORT_RECIPIENT;
   });
 
   afterEach(() => {
@@ -90,13 +92,13 @@ describe('dailyRfqReportService Suite', () => {
 
   describe('resolveRecipients', () => {
     test('returns array override when provided with valid emails', () => {
-      const rec = dailyRfqReportService.resolveRecipients(['custom1@procucev.com', 'custom2@procucev.com']);
-      expect(rec).toEqual(['custom1@procucev.com', 'custom2@procucev.com']);
+      const rec = dailyRfqReportService.resolveRecipients(['custom1@test.example', 'custom2@test.example']);
+      expect(rec).toEqual(['custom1@test.example', 'custom2@test.example']);
     });
 
-    test('array with empty values falls through', () => {
+    test('array with empty values falls through to DAILY_RFQ_REPORT_EMAILS', () => {
       const rec = dailyRfqReportService.resolveRecipients(['', '   ']);
-      expect(rec).toEqual(DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS);
+      expect(rec).toEqual([TEST_DAILY_REPORT_RECIPIENT]);
     });
 
     test('splits comma-separated string override', () => {
@@ -104,57 +106,52 @@ describe('dailyRfqReportService Suite', () => {
       expect(rec).toEqual(['a@test.com', 'b@test.com']);
     });
 
-    test('string with empty tokens falls through', () => {
+    test('string with empty tokens falls through to DAILY_RFQ_REPORT_EMAILS', () => {
       const rec = dailyRfqReportService.resolveRecipients('   ,   ');
-      expect(rec).toEqual(DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS);
+      expect(rec).toEqual([TEST_DAILY_REPORT_RECIPIENT]);
     });
 
     test('uses DAILY_RFQ_REPORT_EMAILS env variable when set', () => {
-      process.env.DAILY_RFQ_REPORT_EMAILS = 'env1@procucev.com, env2@procucev.com';
+      process.env.DAILY_RFQ_REPORT_EMAILS = 'env1@test.example, env2@test.example';
       const rec = dailyRfqReportService.resolveRecipients();
-      expect(rec).toEqual(['env1@procucev.com', 'env2@procucev.com']);
+      expect(rec).toEqual(['env1@test.example', 'env2@test.example']);
     });
 
-    test('DAILY_RFQ_REPORT_EMAILS with only whitespace falls through', () => {
+    test('DAILY_RFQ_REPORT_EMAILS with only whitespace yields no recipients', () => {
       process.env.DAILY_RFQ_REPORT_EMAILS = '  ,  ';
-      process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS = 'catman@procucev.com';
-      const rec = dailyRfqReportService.resolveRecipients();
-      expect(rec).toEqual(['catman@procucev.com']);
+      expect(dailyRfqReportService.resolveRecipients()).toEqual([]);
     });
 
-    test('uses CATEGORY_MANAGER_DAILY_REPORT_EMAILS fallback env variable', () => {
+    test('never reads CATEGORY_MANAGER_DAILY_REPORT_EMAILS, even when DAILY_RFQ_REPORT_EMAILS is unset', () => {
       delete process.env.DAILY_RFQ_REPORT_EMAILS;
-      process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS = 'catman@procucev.com';
-      const rec = dailyRfqReportService.resolveRecipients();
-      expect(rec).toEqual(['catman@procucev.com']);
+      process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS = 'legacy@test.example';
+      expect(dailyRfqReportService.resolveRecipients()).toEqual([]);
     });
 
-    test('falls back to DEFAULT_RECIPIENTS when no inputs or env are present in dev/test', () => {
+    test('returns no recipients when no inputs or env are present, in dev and production alike', () => {
       const origNodeEnv = process.env.NODE_ENV;
-      try {
-      delete process.env.DAILY_RFQ_REPORT_EMAILS;
-      delete process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS;
-        process.env.NODE_ENV = 'development';
-      const rec = dailyRfqReportService.resolveRecipients([]);
-      expect(rec).toEqual(DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS);
-        expect(rec).toEqual(['veerababu.v@procucev.com']);
-      } finally {
-        process.env.NODE_ENV = origNodeEnv;
-      }
-    });
-
-    test('falls back to PROD_RECIPIENTS when in production and no env variable is set', () => {
-      const origNodeEnv = process.env.NODE_ENV;
+      const origEmails = process.env.DAILY_RFQ_REPORT_EMAILS;
       try {
         delete process.env.DAILY_RFQ_REPORT_EMAILS;
-        delete process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS;
+        process.env.NODE_ENV = 'development';
+        expect(dailyRfqReportService.resolveRecipients([])).toEqual([]);
         process.env.NODE_ENV = 'production';
-        const rec = dailyRfqReportService.resolveRecipients();
-        expect(rec).toEqual(DAILY_RFQ_REPORT_CONFIG.PROD_RECIPIENTS);
-        expect(rec).toEqual(['quateam@procucev.com', 'veerababu.v@procucev.com']);
+        expect(dailyRfqReportService.resolveRecipients()).toEqual([]);
       } finally {
         process.env.NODE_ENV = origNodeEnv;
+        if (origEmails === undefined) delete process.env.DAILY_RFQ_REPORT_EMAILS; else process.env.DAILY_RFQ_REPORT_EMAILS = origEmails;
       }
+    });
+
+    test('sendDailyRfqReport reports not_configured and sends nothing when no recipient is configured', async () => {
+      delete process.env.DAILY_RFQ_REPORT_EMAILS;
+      process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS = 'legacy@test.example';
+      const mailerService = require('../src/services/mailerService');
+      const deliverSpy = jest.spyOn(mailerService, 'deliver');
+      const result = await dailyRfqReportService.sendDailyRfqReport({ date: '2026-11-03' });
+      expect(result).toMatchObject({ sent: false, success: false, status: 'not_configured' });
+      expect(result.reason).toBe('No recipients are configured. Set DAILY_RFQ_REPORT_EMAILS to a comma-separated list of addresses, then retry.');
+      expect(deliverSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -232,10 +229,10 @@ describe('dailyRfqReportService Suite', () => {
       expect(report.summary.totalRFQs).toBe(5);
       expect(report.summary.bySourcingMode[RFQ_MODES.MODE_0]).toBe(2);
       expect(report.summary.bySource.web_portal).toBe(2);
-      expect(report.rfqs[4].title).toBe('General Procurement Requirement');
-      expect(report.rfqs[4].category).toBe('General Procurement');
-      expect(report.rfqs[4].deliveryLocation).toBe('All India');
-      expect(report.rfqs[4].status).toBe('Quotes Pending');
+      expect(report.rfqs[4].title).toBe('Not specified');
+      expect(report.rfqs[4].category).toBe('Not specified');
+      expect(report.rfqs[4].deliveryLocation).toBe('Not specified');
+      expect(report.rfqs[4].status).toBe('Not specified');
       expect(report.rfqs[4].quotesCount).toBe(3);
     });
 
@@ -394,7 +391,7 @@ describe('dailyRfqReportService Suite', () => {
         .mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' })
         .mockResolvedValueOnce(null);
 
-      const res1 = await dailyRfqReportService.sendDailyRfqReport({ date: '2026-11-03' });
+      const res1 = await dailyRfqReportService.sendDailyRfqReport({ date: '2026-11-03', recipients: ['daily-report@test.example'] });
       expect(res1.success).toBe(true);
       expect(res1.messageId).toBe('daily-report-accepted');
 
@@ -450,6 +447,7 @@ describe('dailyRfqReportService Suite', () => {
         .mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' })
         .mockResolvedValueOnce({ sent: true, messageId: 'daily-report-retry-accepted' });
 
+      process.env.DAILY_RFQ_REPORT_EMAILS = 'daily-report@test.example';
       const failedRun = await dailyRfqReportService.checkAndTriggerScheduledReport(scheduledTime, 'Asia/Kolkata', 6, 0);
       expect(failedRun.triggered).toBe(true);
       expect(failedRun.dispatchResult.success).toBe(false);
@@ -480,7 +478,7 @@ describe('dailyRfqReportService Suite', () => {
         {
           reportDate: '2026-11-03',
           timezone: 'Asia/Kolkata',
-          recipients: DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS,
+          recipients: [TEST_DAILY_REPORT_RECIPIENT],
         }
       );
 

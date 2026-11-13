@@ -10,6 +10,17 @@ export const CATALOGUE_TEMPLATE_HEADERS = [
   'MOQ',
 ] as const;
 
+/** Column names shown in the "Missing required columns" message, keyed by the parsed field. */
+const CATALOGUE_HEADER_LABELS = {
+  name: 'Product Name',
+  sku: 'SKU',
+  category: 'Category',
+  specs: 'Specifications',
+  unitPrice: 'Unit Price',
+  leadTimeDays: 'Lead Time Days',
+  moq: 'MOQ',
+} as const;
+
 export interface CatalogueUploadRow {
   name: string;
   sku: string;
@@ -26,11 +37,9 @@ export type CatalogueParseResult =
   | { success: true; rows: CatalogueUploadRow[]; error: null }
   | { success: false; rows: []; error: string };
 
+/** Builds and downloads a catalogue template that contains only the column headers. No sample rows. */
 export function downloadCatalogueTemplate(): void {
-  const worksheet = XLSX.utils.aoa_to_sheet([
-    [...CATALOGUE_TEMPLATE_HEADERS],
-    ['Centrifugal Water Pump', 'SKU-PUMP-500', 'Engineering Spares - Mechanical', '15 HP, cast iron', 850, 5, 10],
-  ]);
+  const worksheet = XLSX.utils.aoa_to_sheet([[...CATALOGUE_TEMPLATE_HEADERS]]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Catalogue');
   XLSX.writeFile(workbook, 'catalogue-template.xlsx');
@@ -61,12 +70,19 @@ export function parseCatalogueWorkbook(data: ArrayBuffer): CatalogueParseResult 
     const requiredHeaders = ['name', 'sku', 'category', 'unitPrice', 'leadTimeDays', 'moq'] as const;
     const missing = requiredHeaders.filter((key) => !columns[key]);
     if (missing.length) {
-      return { success: false, rows: [], error: `Missing required columns: ${missing.map((key) => key === 'unitPrice' ? 'Unit Price' : key === 'leadTimeDays' ? 'Lead Time Days' : key === 'moq' ? 'MOQ' : key === 'name' ? 'Product Name' : key.toUpperCase()).join(', ')}.` };
+      return {
+        success: false,
+        rows: [],
+        error: `Missing required columns: ${missing.map((key) => CATALOGUE_HEADER_LABELS[key]).join(', ')}.`,
+      };
     }
 
     const seenSkus = new Set<string>();
     const rows: CatalogueUploadRow[] = raw.map((item, index) => {
-      const value = (key: keyof typeof columns) => String(columns[key] ? item[columns[key]!] ?? '' : '').trim();
+      const value = (key: keyof typeof columns): string => {
+        const header = columns[key];
+        return header ? String(item[header] ?? '').trim() : '';
+      };
       const sku = value('sku').toUpperCase();
       const unitPrice = Number(value('unitPrice'));
       const leadTimeDays = Number(value('leadTimeDays'));

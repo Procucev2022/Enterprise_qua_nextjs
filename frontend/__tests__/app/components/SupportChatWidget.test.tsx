@@ -2,298 +2,305 @@ import React from 'react';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import SupportChatWidget from '@/app/components/SupportChatWidget';
 import * as storeModule from '@/lib/store';
+import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
+import { SUPPORT_CHAT_COPY_CONFIRMATION_MS, SUPPORT_CHAT_ENDPOINT } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
 
+const strings = UI_STRINGS.supportChat;
+
+// The refusal the support endpoint sends when no support service is connected.
+const NOT_CONFIGURED_MESSAGE =
+  'The AI support assistant is not connected to this server. Your message was not answered and no support ticket was created.';
+const NOT_CONFIGURED_BODY = { success: false, status: 'not_configured', reply: null, error: NOT_CONFIGURED_MESSAGE };
+
+function jsonResponse(body: unknown, status = 200) {
+  return { ok: status < 400, status, json: async () => body };
+}
+
+function setRole(role: string) {
+  (storeModule.useApp as jest.Mock).mockReturnValue({ currentRole: role });
+}
+
+function openChat() {
+  fireEvent.click(screen.getByLabelText(strings.triggerLabel));
+}
+
+function sendText(text: string) {
+  const input = screen.getByPlaceholderText(strings.inputPlaceholder);
+  fireEvent.change(input, { target: { value: text } });
+  fireEvent.submit(input.closest('form') as HTMLFormElement);
+}
+
+/** The JSON body and headers of every request the widget has sent to the endpoint. */
+function sentRequests() {
+  return (global.fetch as jest.Mock).mock.calls
+    .filter(([url]) => url === SUPPORT_CHAT_ENDPOINT)
+    .map(([, init]) => ({ body: JSON.parse(init.body), headers: init.headers }));
+}
+
 describe('SupportChatWidget', () => {
-  const mockAddAuditLog = jest.fn();
-
   beforeEach(() => {
-    jest.useFakeTimers();
-    (storeModule.useApp as jest.Mock).mockReturnValue({
-      currentRole: 'buyer',
-      addAuditLog: mockAddAuditLog,
-    });
+    setRole('buyer');
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse(NOT_CONFIGURED_BODY, 503));
   });
 
   afterEach(() => {
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-    jest.useRealTimers();
+    jest.restoreAllMocks();
     jest.clearAllMocks();
   });
 
-  it('renders trigger button and opens chat window', () => {
+  it('opens with a notice that replies come only from the support service', () => {
     render(<SupportChatWidget />);
-    const trigger = screen.getByLabelText('Open support chat');
-    expect(trigger).toBeInTheDocument();
+    openChat();
 
-    fireEvent.click(trigger);
-    expect(screen.getByText('QUA AI Support')).toBeInTheDocument();
-    expect(screen.getByText(/Hello!/)).toBeInTheDocument();
+    expect(screen.getByText(strings.headerTitle)).toBeInTheDocument();
+    expect(screen.getByText(strings.intro)).toBeInTheDocument();
+    expect(screen.getByText(strings.roleBuyer)).toBeInTheDocument();
 
-    // Close chat
-    const closeBtn = screen.getByTitle('Close chat');
-    fireEvent.click(closeBtn);
-    expect(screen.queryByText('QUA AI Support')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle(strings.closeTitle));
+    expect(screen.queryByText(strings.headerTitle)).not.toBeInTheDocument();
   });
 
-  it('sends user message and receives standard AI reply for subscriptions', () => {
+  it('opens from the hover prompt', () => {
     render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
 
-    const input = screen.getByPlaceholderText('Ask a question...');
-    fireEvent.change(input, { target: { value: 'tell me about subscription' } });
-    fireEvent.submit(input.closest('form')!);
-
-    expect(screen.getByText('tell me about subscription')).toBeInTheDocument();
-
-    act(() => {
-      jest.advanceTimersByTime(600);
-    });
-
-    expect(screen.getByText(/Vendor Subscriptions/)).toBeInTheDocument();
-  });
-
-  it('handles quick prompt button click for Sourcing Modes', () => {
-    render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
-
-    const quickBtn = screen.getByText('⚡ Sourcing Modes');
-    fireEvent.click(quickBtn);
-
-    expect(screen.getByText('What is the difference between Mode 1, 2, and 3?')).toBeInTheDocument();
-
-    act(() => {
-      jest.advanceTimersByTime(600);
-    });
-
-    expect(screen.getByText(/3 Sourcing Modes/)).toBeInTheDocument();
-  });
-
-  it('handles dissatisfaction and escalates to support agent with audit log', () => {
-    render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
-
-    const quickBtn = screen.getByText('🎧 Agent Support');
-    fireEvent.click(quickBtn);
-
-    expect(mockAddAuditLog).toHaveBeenCalledWith(
-      expect.stringContaining('Support Chat Escalation'),
-      undefined,
-      'system'
-    );
-
-    act(() => {
-      jest.advanceTimersByTime(500);
-    });
-
-    expect(screen.getByText(/Our support agent will connect with you shortly/)).toBeInTheDocument();
-    expect(screen.getByText('Support Desk')).toBeInTheDocument();
-  });
-
-  it('handles RFQ download prompt', () => {
-    render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
-
-    const quickBtn = screen.getByText('📄 RFQ Download');
-    fireEvent.click(quickBtn);
-
-    act(() => {
-      jest.advanceTimersByTime(600);
-    });
-
-    expect(screen.getByText(/Download RFQ/)).toBeInTheDocument();
-  });
-
-  it('handles generic prompt fallback reply', () => {
-    render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
-
-    const input = screen.getByPlaceholderText('Ask a question...');
-    fireEvent.change(input, { target: { value: 'Random query here' } });
-    fireEvent.submit(input.closest('form')!);
-
-    act(() => {
-      jest.advanceTimersByTime(600);
-    });
-
-    expect(screen.getByText(/Procucev QUA AI streamlines multi-channel/)).toBeInTheDocument();
-  });
-
-  it('toggles maximize and restore view', () => {
-    render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
-
-    const maxBtn = screen.getByTitle('Maximize view');
-    expect(maxBtn).toBeInTheDocument();
-    fireEvent.click(maxBtn);
-
-    const restoreBtn = screen.getByTitle('Restore compact view');
-    expect(restoreBtn).toBeInTheDocument();
-    fireEvent.click(restoreBtn);
-
-    expect(screen.getByTitle('Maximize view')).toBeInTheDocument();
-  });
-
-  it('resets conversation when clicking restart button', () => {
-    render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
-
-    const input = screen.getByPlaceholderText('Ask a question...');
-    fireEvent.change(input, { target: { value: 'test question' } });
-    fireEvent.submit(input.closest('form')!);
-
-    expect(screen.getByText('test question')).toBeInTheDocument();
-
-    const restartBtn = screen.getByTitle('Restart conversation');
-    fireEvent.click(restartBtn);
-
-    expect(screen.queryByText('test question')).not.toBeInTheDocument();
-    expect(screen.getByText(/Hello!/)).toBeInTheDocument();
-  });
-});
-
-// ==============================================================================
-// ROLE ATTRIBUTION, THE HOVER BADGE, COPY AND CLEAR
-// ==============================================================================
-// The escalation names the role it came from, so a support desk reading the audit
-// log knows whether a buyer or a vendor raised it. The remaining cases cover the
-// controls that sit on an open conversation.
-// ==============================================================================
-
-describe('SupportChatWidget: escalation attributes the role', () => {
-  const mockAddAuditLog = jest.fn();
-
-  /**
-   * Escalate the conversation.
-   *
-   * Triggered by a dissatisfaction keyword rather than by any unrecognised
-   * question — an unmatched prompt still gets a canned reply.
-   */
-  const escalate = () => {
-    fireEvent.click(screen.getByLabelText('Open support chat'));
-    const input = screen.getByPlaceholderText('Ask a question...');
-    fireEvent.change(input, { target: { value: 'this is no help at all' } });
-    fireEvent.submit(input.closest('form') as HTMLFormElement);
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-  };
-
-  beforeEach(() => {
-    jest.useFakeTimers();
-    mockAddAuditLog.mockClear();
-  });
-
-  afterEach(() => {
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-    jest.useRealTimers();
-    jest.clearAllMocks();
+    fireEvent.click(screen.getByText(strings.hoverPrompt));
+    expect(screen.getByText(strings.headerTitle)).toBeInTheDocument();
   });
 
   it.each([
-    ['buyer', 'Buyer'],
-    ['vendor', 'Vendor'],
-    ['category_manager', 'Category Manager'],
-    // Anything else is a category manager as far as the escalation is concerned,
-    // rather than being reported with a blank role.
-    ['admin', 'Category Manager'],
-  ])('records a %s escalation as %s', (role, expected) => {
-    (storeModule.useApp as jest.Mock).mockReturnValue({
-      currentRole: role,
-      addAuditLog: mockAddAuditLog,
-    });
-
+    ['buyer', strings.roleBuyer],
+    ['vendor', strings.roleVendor],
+    ['category_manager', strings.roleCategoryManager],
+    ['admin', strings.roleAdmin],
+  ])('labels the %s workspace', (role, label) => {
+    setRole(role);
     render(<SupportChatWidget />);
-    escalate();
+    openChat();
 
-    expect(mockAddAuditLog).toHaveBeenCalledWith(
-      expect.stringContaining(expected),
-      undefined,
-      'system'
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('sends the message to the support endpoint and shows the reply the service returns', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(
+      jsonResponse({ success: true, status: 'answered', reply: 'Mode 3 uses the 360° evaluation.' })
     );
-  });
-});
-
-describe('SupportChatWidget: conversation controls', () => {
-  const mockAddAuditLog = jest.fn();
-  const writeText = jest.fn();
-
-  beforeEach(() => {
-    jest.useFakeTimers();
-    (storeModule.useApp as jest.Mock).mockReturnValue({
-      currentRole: 'buyer',
-      addAuditLog: mockAddAuditLog,
-    });
-    Object.assign(navigator, { clipboard: { writeText } });
-  });
-
-  afterEach(() => {
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-    jest.useRealTimers();
-    jest.clearAllMocks();
-  });
-
-  // The badge is the second way into the conversation, alongside the round button.
-  it('opens the conversation from the hover badge', () => {
     render(<SupportChatWidget />);
+    openChat();
 
-    fireEvent.click(screen.getByText(/Need help/i));
+    sendText('What is Mode 3?');
+    expect(screen.getByText('What is Mode 3?')).toBeInTheDocument();
+    expect(await screen.findByText('Mode 3 uses the 360° evaluation.')).toBeInTheDocument();
 
-    expect(screen.getByText('QUA AI Support')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(SUPPORT_CHAT_ENDPOINT, expect.objectContaining({ method: 'POST' }));
+    expect(sentRequests().map((request) => request.body)).toEqual([{ prompt: 'What is Mode 3?', userRole: 'buyer' }]);
   });
 
-  it('copies a reply and stops confirming after a moment', () => {
+  it('shows the not-configured message from the server and invents no reply, ticket or escalation', async () => {
     render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
+    openChat();
 
-    const copyButton = screen.getAllByTitle(/Copy/i)[0];
-    fireEvent.click(copyButton);
+    sendText('Explain vendor subscription plans');
+    expect(await screen.findByText(NOT_CONFIGURED_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByText(/Vendor Subscriptions/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/TK-\d+/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/support@/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/will connect with you/i)).not.toBeInTheDocument();
+  });
 
-    expect(writeText).toHaveBeenCalled();
-    // The tick is the confirmation, and it is not supposed to stay forever.
-    expect(document.querySelector('svg.lucide-check')).not.toBeNull();
+  it('sends the session token and the signed-in role when a session exists', async () => {
+    jest.spyOn(authClient, 'getToken').mockReturnValue('session-token');
+    setRole('vendor');
+    render(<SupportChatWidget />);
+    openChat();
+    expect(screen.getByText(strings.roleVendor)).toBeInTheDocument();
 
-    act(() => {
-      jest.advanceTimersByTime(2500);
+    sendText('Hello');
+    await screen.findByText(NOT_CONFIGURED_MESSAGE);
+
+    const [request] = sentRequests();
+    expect(request.headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer session-token' });
+    expect(request.body).toEqual({ prompt: 'Hello', userRole: 'vendor' });
+  });
+
+  it('sends no Authorization header when there is no session', async () => {
+    jest.spyOn(authClient, 'getToken').mockReturnValue(null);
+    render(<SupportChatWidget />);
+    openChat();
+
+    sendText('Hello');
+    await screen.findByText(NOT_CONFIGURED_MESSAGE);
+
+    const [request] = sentRequests();
+    expect(request.headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+
+  it('shows the connection message and logs the failure when the request cannot be sent', async () => {
+    (global.fetch as jest.Mock).mockRejectedValue(new Error('offline'));
+    render(<SupportChatWidget />);
+    openChat();
+
+    sendText('Hi');
+    expect(await screen.findByText(strings.unreachable)).toBeInTheDocument();
+    expect(logger.buffer).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        level: 'ERROR',
+        category: 'SUPPORT_CHAT',
+        message: 'Support chat request failed',
+      }),
+    ]));
+  });
+
+  it('shows the generic message when the response is not a support answer', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(jsonResponse({ success: false }, 500));
+    render(<SupportChatWidget />);
+    openChat();
+
+    sendText('Hi');
+    expect(await screen.findByText(strings.unexpectedResponse)).toBeInTheDocument();
+  });
+
+  it('shows the generic message when the response body is not JSON', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: () => Promise.reject(new SyntaxError('Unexpected token <')),
     });
-    expect(document.querySelector('svg.lucide-check')).toBeNull();
+    render(<SupportChatWidget />);
+    openChat();
+
+    sendText('Hi');
+    expect(await screen.findByText(strings.unexpectedResponse)).toBeInTheDocument();
   });
 
-  it('clears a half-typed question without sending it', () => {
+  it('ignores an empty submission and sends nothing', () => {
     render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
+    openChat();
 
-    const input = screen.getByPlaceholderText('Ask a question...');
+    sendText('   ');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('sends the quick prompt it shows, without any canned answer', async () => {
+    render(<SupportChatWidget />);
+    openChat();
+
+    fireEvent.click(screen.getByText(strings.quickSourcingModesLabel));
+    expect(await screen.findByText(NOT_CONFIGURED_MESSAGE)).toBeInTheDocument();
+    expect(screen.getByText(strings.quickSourcingModesPrompt)).toBeInTheDocument();
+    expect(sentRequests().map((request) => request.body)).toEqual([
+      { prompt: strings.quickSourcingModesPrompt, userRole: 'buyer' },
+    ]);
+  });
+
+  it('disables sending while the service is answering, then re-enables it', async () => {
+    let answer: (value: ReturnType<typeof jsonResponse>) => void = () => undefined;
+    (global.fetch as jest.Mock).mockImplementation(
+      () => new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    render(<SupportChatWidget />);
+    openChat();
+
+    sendText('First question');
+    expect(screen.getByRole('status', { name: strings.waitingForReply })).toBeInTheDocument();
+    expect(screen.getByTitle(strings.sendTitle)).toBeDisabled();
+    expect(screen.getByText(strings.quickSubscriptionsLabel)).toBeDisabled();
+
+    await act(async () => {
+      answer(jsonResponse(NOT_CONFIGURED_BODY, 503));
+    });
+    expect(await screen.findByText(NOT_CONFIGURED_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('clears the composer with the clear button without sending anything', () => {
+    render(<SupportChatWidget />);
+    openChat();
+
+    const input = screen.getByPlaceholderText(strings.inputPlaceholder);
     fireEvent.change(input, { target: { value: 'half typed' } });
-
-    // Appears only once there is something to clear, and carries an X rather than
-    // a label, so it is located by that icon inside the composer.
-    const clear = input.parentElement?.querySelector('button');
-    expect(clear).not.toBeNull();
-    fireEvent.click(clear as HTMLButtonElement);
+    fireEvent.click(screen.getByLabelText(strings.clearInputLabel));
 
     expect(input).toHaveValue('');
-    expect(screen.queryByText('half typed')).not.toBeInTheDocument();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  // Submitting an empty box must not post a blank message.
-  it('ignores an empty submission', () => {
+  it('restart clears the conversation and shows the intro notice again', async () => {
     render(<SupportChatWidget />);
-    fireEvent.click(screen.getByLabelText('Open support chat'));
+    openChat();
 
-    const input = screen.getByPlaceholderText('Ask a question...');
-    const before = screen.getAllByText(/./).length;
-    fireEvent.change(input, { target: { value: '   ' } });
-    fireEvent.submit(input.closest('form') as HTMLFormElement);
+    sendText('Remember this');
+    expect(await screen.findByText(NOT_CONFIGURED_MESSAGE)).toBeInTheDocument();
 
-    expect(mockAddAuditLog).not.toHaveBeenCalled();
-    expect(screen.getAllByText(/./).length).toBe(before);
+    fireEvent.click(screen.getByTitle(strings.restartTitle));
+    expect(screen.queryByText('Remember this')).not.toBeInTheDocument();
+    expect(screen.queryByText(NOT_CONFIGURED_MESSAGE)).not.toBeInTheDocument();
+    expect(screen.getByText(strings.intro)).toBeInTheDocument();
+  });
+
+  it('maximizes and restores the window', () => {
+    render(<SupportChatWidget />);
+    openChat();
+
+    fireEvent.click(screen.getByTitle(strings.maximizeTitle));
+    fireEvent.click(screen.getByTitle(strings.restoreTitle));
+    expect(screen.getByTitle(strings.maximizeTitle)).toBeInTheDocument();
+  });
+
+  describe('copying a reply', () => {
+    it('confirms the copy and clears the confirmation after the delay', async () => {
+      const writeText = jest.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+      (global.fetch as jest.Mock).mockResolvedValue(jsonResponse({ success: true, reply: 'Copy this reply.' }));
+      render(<SupportChatWidget />);
+      openChat();
+      sendText('Give me a reply');
+      expect(await screen.findByText('Copy this reply.')).toBeInTheDocument();
+
+      jest.useFakeTimers();
+      try {
+        fireEvent.click(screen.getByTitle(strings.copyTitle));
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(writeText).toHaveBeenCalledWith('Copy this reply.');
+        expect(document.querySelector('svg.lucide-check')).not.toBeNull();
+
+        act(() => {
+          jest.advanceTimersByTime(SUPPORT_CHAT_COPY_CONFIRMATION_MS);
+        });
+        expect(document.querySelector('svg.lucide-check')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('logs a failed copy and shows no confirmation', async () => {
+      Object.assign(navigator, { clipboard: { writeText: jest.fn().mockRejectedValue(new Error('denied')) } });
+      (global.fetch as jest.Mock).mockResolvedValue(jsonResponse({ success: true, reply: 'Copy this reply.' }));
+      render(<SupportChatWidget />);
+      openChat();
+      sendText('Give me a reply');
+      expect(await screen.findByText('Copy this reply.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTitle(strings.copyTitle));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(document.querySelector('svg.lucide-check')).toBeNull();
+      expect(logger.buffer).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          level: 'WARN',
+          category: 'SUPPORT_CHAT',
+          message: 'Copying a support chat message failed',
+        }),
+      ]));
+    });
   });
 });

@@ -13,6 +13,7 @@ const {
   OTP_CODE_MESSAGE,
   IDENTITY_OTP_CONFIG,
 } = require('../src/config/constants');
+const smsService = require('../src/services/smsService');
 const { authHeader } = require('./testHelpers');
 
 function mockRes() {
@@ -20,6 +21,20 @@ function mockRes() {
   res.status = jest.fn().mockReturnValue(res);
   res.json = jest.fn().mockReturnValue(res);
   return res;
+}
+
+// The API never returns an issued OTP code. The code only leaves the server in the
+// email sent to the visitor, so these helpers read it from the mailer call.
+let otpEmailSend;
+
+function lastIssuedOtpCode() {
+  const calls = otpEmailSend.mock.calls;
+  return calls[calls.length - 1][1];
+}
+
+async function issueCode(email, mobile, role) {
+  await authService.requestOtp(email, mobile, role, '::1');
+  return lastIssuedOtpCode();
 }
 
 /** An active, approved buyer row as returned by identityQueries.findUserByEmail. */
@@ -49,7 +64,7 @@ const PASSWORD = 'Pass@123';
 const MOBILE = '9157154504';
 
 /**
- * Email-OTP sign-in has no role branch anywhere in authService — requestOtp
+ * Email-OTP sign-in has no role branch anywhere in authService â€” requestOtp
  * and verifyOtp key purely off the email+mobile pair and return whatever role
  * is already on the account record. buyerRecord() above is reused with just
  * the role fields swapped, the same way assertUserCanSignIn and every other
@@ -74,7 +89,10 @@ describe('Authentication against the account records (/api/auth)', () => {
     // while every read is driven by the identityQueries mocks below.
     originalPool = dbPool.pool;
     dbPool.pool = { query: jest.fn() };
-    jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue(undefined);
+    // The provider accepts both channels, so the code reaches the visitor through
+    // these calls. The tests read the code from them, as a visitor would.
+    otpEmailSend = jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue({ success: true, status: 'sent' });
+    jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: true, status: 'sent' });
   });
 
   afterEach(() => {
@@ -82,7 +100,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     jest.restoreAllMocks();
   });
 
-  // ── Password hashing helpers (retained for legacy callers) ─────────────────
+  // â”€â”€ Password hashing helpers (retained for legacy callers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('password helpers', () => {
     test('hashPassword generates a hash+salt pair, reusing a supplied salt', () => {
       const auto = authService.hashPassword('testpass');
@@ -104,7 +122,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Session tokens ────────────────────────────────────────────────────────
+  // â”€â”€ Session tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('session tokens', () => {
     test('a generated token verifies and carries the account claims', () => {
       const token = authService.generateSessionToken(buyerRecord());
@@ -172,7 +190,7 @@ describe('Authentication against the account records (/api/auth)', () => {
 
       await expect(authService.revokeSessionToken(token)).resolves.toBe(true);
 
-      // The signature and expiry are still fine — only the revocation record makes
+      // The signature and expiry are still fine â€” only the revocation record makes
       // it invalid, which is why that check cannot live in verifySessionToken.
       expect(authService.verifySessionToken(token).valid).toBe(true);
       const after = await authService.assertSessionActive(token);
@@ -223,7 +241,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Identity lookups & sign-in gates ──────────────────────────────────────
+  // â”€â”€ Identity lookups & sign-in gates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('loadIdentityUser', () => {
     test('returns the row the identity database provides', async () => {
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
@@ -297,7 +315,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Password authentication ───────────────────────────────────────────────
+  // â”€â”€ Password authentication â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('authenticateWithPassword', () => {
     test('issues a session for correct credentials', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
@@ -424,7 +442,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── OTP flow ──────────────────────────────────────────────────────────────
+  // â”€â”€ OTP flow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Mirrors the OTP branch of POST /authenticate in the Java p2pservices app:
   // the email + mobile pair is validated first, and the 6-digit code is stored
   // against that pair for 15 minutes.
@@ -435,15 +453,16 @@ describe('Authentication against the account records (/api/auth)', () => {
       const requested = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
       expect(requested.success).toBe(true);
       expect(requested.expiresInSeconds).toBe(IDENTITY_OTP_CONFIG.OTP_EXPIRY_MS / 1000);
-      expect(requested.demoCode).toMatch(/^\d{6}$/);
+      const code = lastIssuedOtpCode();
+      expect(code).toMatch(/^\d{6}$/);
 
-      const verified = await authService.verifyOtp(EMAIL, requested.demoCode, '::1', MOBILE);
+      const verified = await authService.verifyOtp(EMAIL, code, '::1', MOBILE);
       expect(verified.success).toBe(true);
       expect(verified.user.email).toBe(EMAIL);
     });
 
     // Email OTP sign-in is a single, role-agnostic flow (one "Sign In" tab with
-    // a Password/Email OTP switcher on the login page, no role selector) — it
+    // a Password/Email OTP switcher on the login page, no role selector) â€” it
     // has to work identically for every account role, not just buyers.
     test.each([
       ['vendor', vendorRecord],
@@ -454,9 +473,10 @@ describe('Authentication against the account records (/api/auth)', () => {
 
       const requested = await authService.requestOtp(EMAIL, MOBILE, role, '::1');
       expect(requested.success).toBe(true);
-      expect(requested.demoCode).toMatch(/^\d{6}$/);
+      const code = lastIssuedOtpCode();
+      expect(code).toMatch(/^\d{6}$/);
 
-      const verified = await authService.verifyOtp(EMAIL, requested.demoCode, '::1', MOBILE);
+      const verified = await authService.verifyOtp(EMAIL, code, '::1', MOBILE);
       expect(verified.success).toBe(true);
       expect(verified.user.role).toBe(role);
     });
@@ -469,7 +489,7 @@ describe('Authentication against the account records (/api/auth)', () => {
 
     test('an OTP cannot be replayed once consumed', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      const demoCode = await issueCode(EMAIL, MOBILE, 'buyer');
       await authService.verifyOtp(EMAIL, demoCode, '::1', MOBILE);
 
       await expect(authService.verifyOtp(EMAIL, demoCode, '::1', MOBILE)).rejects.toThrow(
@@ -481,7 +501,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     // registered mobile number must not verify against a different one.
     test('a code issued for one mobile number does not verify against another', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      const demoCode = await issueCode(EMAIL, MOBILE, 'buyer');
 
       await expect(authService.verifyOtp(EMAIL, demoCode, '::1', '9000000000')).rejects.toThrow(
         AUTH_MESSAGES.INVALID_OTP
@@ -490,7 +510,7 @@ describe('Authentication against the account records (/api/auth)', () => {
 
     test('accepts any dialling form that normalises to the issued number', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      const demoCode = await issueCode(EMAIL, MOBILE, 'buyer');
 
       const verified = await authService.verifyOtp(EMAIL, demoCode, '::1', `+91 ${MOBILE}`);
       expect(verified.success).toBe(true);
@@ -498,7 +518,7 @@ describe('Authentication against the account records (/api/auth)', () => {
 
     test('deletes an expired code and rejects it', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      const demoCode = await issueCode(EMAIL, MOBILE, 'buyer');
 
       const expired = Date.now() + IDENTITY_OTP_CONFIG.OTP_EXPIRY_MS + 1000;
       jest.spyOn(Date, 'now').mockReturnValue(expired);
@@ -576,15 +596,20 @@ describe('Authentication against the account records (/api/auth)', () => {
       ).rejects.toThrow(AUTH_MESSAGES.INVALID_OTP);
     });
 
-    test('omits demoCode once SMTP is configured', async () => {
+    test('never returns a demo code, in production or outside it', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
-      jest.spyOn(mailerService, 'isConfigured').mockReturnValue(true);
+      jest.spyOn(mailerService, 'isConfigured').mockReturnValue(false);
       const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'production';
 
       try {
-        const res = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
-        expect(res.demoCode).toBeUndefined();
+        for (const env of ['production', 'development']) {
+          process.env.NODE_ENV = env;
+          const res = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+          expect(res).not.toHaveProperty('demoCode');
+          expect(res).not.toHaveProperty('demoEmailCode');
+          expect(res).not.toHaveProperty('demoMobileCode');
+          expect(JSON.stringify(res)).not.toContain(lastIssuedOtpCode());
+        }
       } finally {
         process.env.NODE_ENV = originalEnv;
       }
@@ -600,7 +625,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Registration ──────────────────────────────────────────────────────────
+  // â”€â”€ Registration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('registerUser', () => {
     const payload = {
       name: 'Navin Chaudhary',
@@ -754,7 +779,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Admin user listing ────────────────────────────────────────────────────
+  // â”€â”€ Admin user listing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('getAllUsers', () => {
     test('maps the directory rows onto the public shape', async () => {
       jest.spyOn(identityQueries, 'listUsers').mockResolvedValue([buyerRecord()]);
@@ -783,7 +808,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Boot-time health report ───────────────────────────────────────────────
+  // â”€â”€ Boot-time health report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('hydrateFromDB', () => {
     test('returns the identity health report when reachable', async () => {
       jest
@@ -802,7 +827,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── HTTP surface ──────────────────────────────────────────────────────────
+  // â”€â”€ HTTP surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('HTTP routes', () => {
     test('POST /api/auth/login signs in with an email, mobile and password', async () => {
       const findSpy = jest
@@ -855,7 +880,7 @@ describe('Authentication against the account records (/api/auth)', () => {
 
     test('POST /api/auth/login accepts an OTP code branch', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      const demoCode = await issueCode(EMAIL, MOBILE, 'buyer');
 
       const res = await request(app)
         .post('/api/auth/login')
@@ -914,7 +939,7 @@ describe('Authentication against the account records (/api/auth)', () => {
 
     test('POST /api/auth/verify-otp verifies and rejects codes', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      const demoCode = await issueCode(EMAIL, MOBILE, 'buyer');
 
       const bad = await request(app)
         .post('/api/auth/verify-otp')
@@ -976,7 +1001,7 @@ describe('Authentication against the account records (/api/auth)', () => {
           state: 'Maharashtra',
           pincode: '411001',
           gstin: '27AAAAA0000A1Z5',
-          pan: 'AAAAA0000A',
+          pan: '',
         })
       );
     });
@@ -1044,12 +1069,12 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Controller error branches ─────────────────────────────────────────────
+  // â”€â”€ Controller error branches â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('controller error branches', () => {
     test('getClientIp falls back through req.ip, x-forwarded-for, then a default', () => {
       expect(authController.getClientIp({ ip: '10.0.0.1' })).toBe('10.0.0.1');
       expect(authController.getClientIp({ headers: { 'x-forwarded-for': '8.8.8.8' } })).toBe('8.8.8.8');
-      expect(authController.getClientIp({})).toBe('127.0.0.1');
+      expect(authController.getClientIp({})).toBeNull();
     });
 
     test('getSession forwards unexpected failures to next()', async () => {
@@ -1109,7 +1134,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 
-  // ── Fallback branches when a body or an error message is absent ────────────
+  // â”€â”€ Fallback branches when a body or an error message is absent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('controller fallback branches', () => {
     const VALID = { email: EMAIL, password: PASSWORD };
 
@@ -1195,7 +1220,7 @@ describe('Authentication against the account records (/api/auth)', () => {
         jest.fn()
       );
 
-      expect(authService.verifyOtp).toHaveBeenCalledWith(EMAIL, '123456', '127.0.0.1', MOBILE);
+      expect(authService.verifyOtp).toHaveBeenCalledWith(EMAIL, '123456', null, MOBILE);
     });
 
     test('getSession falls back to a generic message when verification gives no reason', async () => {
@@ -1300,7 +1325,7 @@ describe('Changing your own password', () => {
     jest.restoreAllMocks();
   });
 
-  // ── Service ───────────────────────────────────────────────────────────────
+  // â”€â”€ Service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('authService.changePassword', () => {
     const call = (overrides = {}) =>
       authService.changePassword({
@@ -1404,7 +1429,7 @@ describe('Changing your own password', () => {
     });
   });
 
-  // ── Controller ────────────────────────────────────────────────────────────
+  // â”€â”€ Controller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('authController.changePassword', () => {
     const reqFor = (body, user = { sub: UUID, email: 'buyer@procucev.com' }) => ({
       body,
@@ -1470,7 +1495,7 @@ describe('Changing your own password', () => {
     });
   });
 
-  // ── Route ─────────────────────────────────────────────────────────────────
+  // â”€â”€ Route â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   describe('POST /api/auth/change-password', () => {
     test('requires a session token', async () => {
       const res = await request(app)

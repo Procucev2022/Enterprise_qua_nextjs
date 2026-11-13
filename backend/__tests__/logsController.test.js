@@ -275,3 +275,39 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     performanceOptimizer.optimizePerformance = origOpt;
   });
 });
+
+describe('Auto-resolve reports only remediation that really ran', () => {
+  const pool = require('../src/db/pool');
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('an unsupported action is refused with 400 and is not recorded as applied', async () => {
+    const before = logErrorResolver.getRemediationHistory().length;
+
+    const res = await request(app)
+      .post('/api/logs/auto-resolve')
+      .set(authHeader('admin'))
+      .send({ action: 'VALIDATE_SCHEMA_CLIENT_COMPATIBILITY' })
+      .expect(400);
+
+    expect(res.body.success).toBe(false);
+    expect(res.body.remediation).toMatchObject({ status: 'not_supported', success: false });
+    expect(res.body.remediation.message).not.toMatch(/Validated schema stability/i);
+    expect(logErrorResolver.getRemediationHistory().length).toBe(before);
+  });
+
+  test('a supported action whose database did not answer is reported as a failure with 503', async () => {
+    jest.spyOn(pool, 'checkDatabaseHealth').mockResolvedValue({ isConnected: false, errorMessage: 'connection refused' });
+
+    const res = await request(app)
+      .post('/api/logs/auto-resolve')
+      .set(authHeader('admin'))
+      .send({ action: 'RECONNECT_POOL_AND_INVALIDATE_CACHE' })
+      .expect(503);
+
+    expect(res.body.success).toBe(false);
+    expect(res.body.remediation).toMatchObject({ status: 'failed', success: false });
+  });
+});

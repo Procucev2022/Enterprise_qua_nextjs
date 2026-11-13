@@ -5264,3 +5264,392 @@ Seems like logs are getting stored in database, in localhost running it should b
 ```text
 Check if there is any logs getting saved in database, remove those as well
 ```
+---
+
+### Prompt 142
+
+**Timestamp**: 2026-11-11T21:32:26+05:30
+
+```text
+A lot of mock data in codebase, remove any mock data in codebase, make sure all data is fetched from database only. Seed the mock data in current database if required but all data should be fetched from database, Do not stop till all mock data's are removed. Also confirm in the end if any mock data is still left. ideally it should not be
+```
+
+---
+
+### Prompt 143
+
+**Timestamp**: 2026-11-12T08:19:32+05:30
+
+```text
+Can you get the values of database ID from codebase & share me
+```
+
+---
+### Prompt 144
+**Timestamp**: 2026-11-12T09:34:52+05:30
+```text
+Please keep commiting the changes as soon as you achieve something, for now, please commit all the changes done so far & pause for now & wait for me to ask for resuming
+```
+---
+### Prompt 145
+**Timestamp**: 2026-11-12T09:42:41+05:30
+```text
+Please fix the pre-commit issues, & commit the current changes done so far.
+```
+---
+### Prompt 146
+**Timestamp**: 2026-11-12T13:10:21+05:30
+```text
+Please fix the pre-commit issues, & commit all the current changes done so far.
+
+Please keep commiting the changes as soon as you achieve something, for now, please commit all the changes done so far & pause for now & wait for me to ask for resuming
+```
+---
+### Prompt 147
+**Timestamp**: 2026-11-12T14:09:28+05:30
+```text
+resume
+```
+---
+
+### Prompt 148
+**Timestamp**: 2026-11-12T15:57:53+05:30
+```text
+Please check this issue:  in github actions
+
+38s
+Run node scripts/migrate-d1.js --dev
+[INFO] [DATABASE_MIGRATION] D1 migration lease acquired {"leaseSeconds":300,"renewalIntervalMs":60000}
+[migrate-d1] Schema baseline matches; skipping the full schema replay.
+[migrate-d1] Numbered migration failed. The base schema may be present; fix the migration error and rerun safely.
+     Error : Error: D1 query failed (429): D1 DB exceeded its CPU time limit and was reset.
+[migrate-d1] Row-count scans skipped to avoid repeated full-table reads; pass --report-row-counts when needed.
+    at d1Query (/home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/scripts/migrate-d1.js:120:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async applyD1Migrations (/home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/scripts/migrate-d1.js:327:9)
+    at async migrate (/home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/scripts/migrate-d1.js:493:26)
+[INFO] [DATABASE_MIGRATION] D1 migration lease released
+```
+---
+
+### Prompt 149
+**Timestamp**: 2026-11-12T16:49:00+05:30
+```text
+Currently for any small change in antigravity, it is taking too much time in quality checks, any way to speed it up.  
+```
+---
+
+### Prompt 150
+**Timestamp**: 2026-11-12T16:53:30+05:30
+```text
+Seller Side:
+it needs to be 145 RFQs awaiting response. Can you please check & fix
+```
+---
+
+### Prompt 151
+**Timestamp**: 2026-11-12T17:11:08+05:30
+```text
+Filtration Issue, chosen category Civil works but showing results of Uncategorised, Electrical, IT, as well
+```
+---
+
+### Prompt 152
+**Timestamp**: 2026-11-12T17:22:54+05:30
+```text
+Please proceed with github commits optimizations suggested as well. i.e., 
+
+Update .git/hooks/pre-commit and scripts/setup-git-hooks.js to run npm run check:fast on commits (reducing commit time from 9.5 minutes to 2–5 seconds)?
+Also optimize backend test worker parallelism (e.g. --maxWorkers=50% instead of sequential --runInBand when full suites run)?
+
+
+For D1 issue: 
+Why are we creating the vendor_search_fts? As a part of DB migration, it should just have created empty tables if any table is missing, but this seems to be creating this table with adding much data? Is this table even needed anywhere, if no, please remove this table. please add the configuration to remove all unnecessary tables from codebase in each deployment.
+```
+---
+
+### Prompt 153
+**Timestamp**: 2026-11-12T17:47:57+05:30
+```text
+In the Buyer flow, Incorrect vendor assignment in V1 and V2 – Matching vendors are displayed, but invited and assigned vendor counts show 0. Expected Behaviour/Solution: All eligible matched vendors should be assigned to the RFQ, invitations should be dispatched successfully, and correct counts should be displayed in both Buyer and Category Manager modules. Please fix the issue
+```
+---
+
+### Prompt 154
+**Timestamp**: 2026-11-12T18:29:24+05:30
+```text
+In the Buyer flow, Vendor contact details visibility – Vendor contact names and mobile numbers are visible in Buyer Follow-Up Details. Expected Behaviour/Solution: Display only the vendor company name. Hide personal contact names and mobile numbers. Please fix the issue
+```
+---
+
+
+
+### Prompt 155
+**Timestamp**: 2026-11-12T17:52:00+05:30
+```text
+In the Buyer flow, Buyer-uploaded vendor PO data – PO data is optional but currently treated as mandatory Expected Behaviour/Solution: Validate PO data as mandatory during vendor upload and prevent submission when required PO data is missing. Please fix the issue
+```
+---
+
+
+### Prompt 156
+**Timestamp**: 2026-11-12T17:55:38+05:30
+```text
+In the Buyer flow, RFQ dashboard filter – Selecting AI Extraction RFQ also displays Email RFQs. Expected Behaviour/Solution: When AI Extraction RFQ is selected, display only AI Extraction RFQs. Other RFQ sources should be excluded Please fix the issue
+```
+---
+
+
+### Prompt 157
+**Timestamp**: 2026-11-12T17:56:46+05:30
+```text
+In the Buyer flow, Buyer-uploaded vendor – Four vendors are selected for upload, but only two vendors are successfully uploaded. The remaining two vendors are not uploaded despite having complete details. Expected Behaviour/Solution: All four selected vendors should be uploaded successfully. Display accurate upload counts and show clear error messages for any failed vendor records. Please fix the issue
+```
+---
+
+### Prompt 158
+**Timestamp**: 2026-11-12T20:00:15+05:30
+```text
+[User re-uploaded screenshots for Seller Side issues]:
+1. AUTOMATED SYSTEM REMINDER: "145 quotations awaiting your response" -> red box highlighting "quotations", needs to be "145 RFQs awaiting response".
+2. Filtration Issue: Category "Civil Works 10" selected, but displaying 19 enquiries including "Others - New Product", "Engineering Spares - Electrical", and uncategorized enquiries.
+```
+---
+### Prompt 159
+**Timestamp**: 2026-11-12T18:37:31+05:30
+```text
+In the Buyer flow, Buyer Registration Form – Field Label Cleanup: Remove unnecessary wording such as “Procurement Lead” and “Legal Name” from the registration form. Expected Behaviour/Solution: Use simple field labels such as Full Name, Company Name, GST Number, Pincode, City, State, Email ID, and Mobile Number. Please fix the issue
+```
+---
+
+### Prompt 160
+**Timestamp**: 2026-11-12T18:54:26+05:30
+```text
+In the Buyer flow, Mobile Number Validation: The mobile number field should accept only 10-digit numbers. Expected Behaviour/Solution: Allow exactly 10 numeric digits. Prevent registration if the number contains fewer or more than 10 digits. Please fix the issue
+```
+---
+
+### Prompt 161
+**Timestamp**: 2026-11-12T18:54:43+05:30
+```text
+In the Buyer flow, GSTIN Validation: Implement proper GSTIN validation during buyer registration. Expected Behaviour/Solution: Validate the standard 15-character GSTIN format and display a clear error message for invalid GST numbers. Prevent registration until a valid GSTIN is entered. Please fix the issue
+```
+---
+
+### Prompt 162
+**Timestamp**: 2026-11-12T18:55:32+05:30
+```text
+In the Buyer flow, Login Page – Remove Unnecessary Text: Remove the sentence “Sign in with your Procucev account. Credentials are verified against the enterprise user directory” displayed below the “Welcome back” heading Expected Behaviour/Solution: Keep the login page clean and simple by displaying only the “Welcome back” heading without the additional description. Please fix the issue
+```
+---
+
+### Prompt 163
+**Timestamp**: 2026-11-12T19:05:32+05:30
+```text
+In the Buyer flow, Mobile Number Validation: The Registered Mobile Number field should accept only 10 digits. Expected Behaviour/Solution: Allow only numeric input with a maximum of 10 digits. Prevent users from entering more than 10 digits and validate that exactly 10 digits are entered before login Please fix the issue
+```
+---
+
+### Prompt 164
+**Timestamp**: 2026-11-12T19:07:07+05:30
+```text
+In the Buyer flow, Remove Dual-File ERP Setup Label: Remove the “DUAL-FILE ERP SETUP” label displayed in the Buyer Initial Setup popup. Expected Behaviour/Solution: Remove the label and maintain a clean, professional header without affecting the existing setup functionality. Please fix the issue
+```
+---
+
+
+### Prompt 165
+**Timestamp**: 2026-11-12T19:13:24+05:30
+```text
+In the Buyer flow, Move Required Columns to Vendor Master Page: Move the Required Columns section and Download Vendor Master Template button from Step 1 (Time Horizon) to Step 2 (Vendor Master). Expected Behaviour/Solution: Display the required column details and vendor master template download option on the Vendor Master page, where users upload the vendor file. Please fix the issue
+```
+---
+
+
+### Prompt 166
+**Timestamp**: 2026-11-12T19:15:04+05:30
+```text
+In the Buyer flow, Vendor Mobile Number Validation: During Vendor Master Excel upload, mobile number fields are accepting alphanumeric values without proper validation. Expected Behaviour/Solution: Validate mobile numbers as numeric values with exactly 10 digits. Reject invalid or alphanumeric mobile numbers and display clear validation errors. Please fix the issue
+```
+---
+
+
+### Prompt 167
+**Timestamp**: 2026-11-12T19:15:17+05:30
+```text
+In the Buyer flow, Vendor Code Generation and Validation: Handle vendor codes during Vendor Master upload. Expected Behaviour/Solution: If a vendor code is provided in the uploaded file, retain and use that code. If no vendor code is provided, automatically generate sequential vendor codes such as 1, 2, 3, and so on. Ensure generated codes are unique and do not overwrite existing vendor codes. Please fix the issue
+```
+---
+
+
+### Prompt 168
+**Timestamp**: 2026-11-12T19:15:48+05:30
+```text
+In the Buyer flow, Country Code Handling in Vendor Mobile Number: During Vendor Master Excel upload, vendor mobile numbers may be provided with the +91 country code or without it. Expected Behaviour/Solution: Accept both formats, with or without +91. Validate the mobile number as exactly 10 digits after the country code. Store the country code and mobile number correctly without duplication. Please fix the issue
+```
+---
+
+
+### Prompt 169
+**Timestamp**: 2026-11-12T19:49:58+05:30
+```text
+In the Buyer flow, Replace Department with Minor Category: Replace the Department column in the PO Line Items Preview with Category (Minor Category). Expected Behaviour/Solution: Identify the exact Minor Category from the line-item description or existing category database and display it in the Category column. Please fix the issue
+```
+---
+
+
+### Prompt 170
+**Timestamp**: 2026-11-12T19:50:30+05:30
+```text
+In the Buyer flow, PO Dump Preview – Category Mapping: Ensure all uploaded PO line items are mapped to the correct Minor Category. Expected Behaviour/Solution: Display the matched Minor Category for each line item. If no exact match is found, show an appropriate status instead of assigning an incorrect category. Please fix the issue
+```
+---
+
+
+### Prompt 171
+**Timestamp**: 2026-11-12T20:00:53+05:30
+```text
+In the Buyer flow, Remove all existing summary cards and test data displayed below Step 5. Expected Behaviour/Solution: Keep Step 5 clean and simple, displaying only the email dispatch confirmation details Total Stored, PO Mapped, Self-Map Required and the Complete Setup & Ingest button. Please fix the issue
+```
+---
+
+
+
+### Prompt 172
+**Timestamp**: 2026-11-12T20:02:18+05:30
+```text
+In the Buyer flow, Remove Vendor Code: Remove vendor codes such as "v-1792579884052-6in9" and other similar IDs from the Vendor Directory display. Expected Behaviour/Solution: Display only the relevant vendor information without showing internal vendor codes. Please fix the issue
+```
+---
+
+### Prompt 173
+**Timestamp**: 2026-11-12T20:02:58+05:30
+```text
+In the Buyer flow, Change Vendor Label: Replace the "Uploaded by Buyer" label with "Internal Vendor" for internally uploaded vendors. Expected Behaviour/Solution: Display the correct "Internal Vendor" label consistently across all relevant vendor records. Please fix the issue
+```
+---
+
+### Prompt 174
+**Timestamp**: 2026-11-12T20:03:59+05:30
+```text
+In the Buyer flow, Compact Table Layout: Convert the current vendor cards into a compact table format with reduced spacing and aligned columns. Expected Behaviour/Solution: Display vendor information in a clean, space-efficient table with consistent row heights and column alignment. Please fix the issue
+```
+---
+
+
+### Prompt 175
+**Timestamp**: 2026-11-12T20:05:35+05:30
+```text
+In the Buyer flow, Popup for Long Data: When vendor details such as company name, email, address, or category are too long to fit in the table, truncate the visible text & show "...." Expected Behaviour/Solution: Show the complete information in a tooltip or popup when the user hovers the cursor over the truncated field. Please fix the issue
+```
+---
+
+
+### Prompt 176
+**Timestamp**: 2026-11-12T20:09:05+05:30
+```text
+In the Buyer flow, Edit Vendor Profile – Third Section: Add the Edit option to the third section (Statutory & Commercial Identifiers) so users can update the details when required. Expected Behaviour/Solution: Allow users to edit and save the third-section details independently without affecting the other sections. Please fix the issue
+```
+---
+
+
+### Prompt 177
+**Timestamp**: 2026-11-12T20:10:03+05:30
+```text
+In the Buyer flow, PAN Number – No Dummy Data: Do not automatically generate or insert dummy PAN numbers when the PAN field is empty. Expected Behaviour/Solution: Keep the PAN field blank if the user has not provided a PAN number. Save only the actual PAN details entered by the user. Please fix the issue
+```
+---
+
+
+### Prompt 178
+**Timestamp**: 2026-11-12T20:12:07+05:30
+```text
+In the Buyer flow, Remove the "Auto-Generate with AI" button and replace it with "Request Vendor Evaluation". Expected Behaviour/Solution: When the buyer clicks "Request Vendor Evaluation", send an evaluation request to the respective vendor and notify them to submit their performance evaluation details. Please fix the issue
+```
+---
+
+
+### Prompt 179
+**Timestamp**: 2026-11-12T20:13:21+05:30
+```text
+In the Buyer flow, Add Vendor Description: Change the text "Add a vendor you deal with directly — added to your vendor directory only" to "Add a vendor you deal with directly to your vendor directory only." Expected Behaviour/Solution: Display the updated description below the Add Vendor heading. Please fix the issue
+```
+---
+
+
+### Prompt 180
+**Timestamp**: 2026-11-12T20:17:24+05:30
+```text
+In the Buyer flow, Minor Category Field: Rename "Minor Categories" to "Category". Expected Behaviour/Solution: Provide a searchable dropdown that fetches the 305+ available minor categories from the backend and displays matching suggestions after the user enters at least 3 characters. Allow the user to select the required category from the suggestions. Please fix the issue
+```
+---
+
+
+### Prompt 181
+**Timestamp**: 2026-11-12T20:18:01+05:30
+```text
+In the Buyer flow, Major Category Field: Rename "Major Category" to "Division". Expected Behaviour/Solution: Display the Division dropdown with the existing major category options. Please fix the issue
+```
+---
+
+
+### Prompt 182
+**Timestamp**: 2026-11-12T20:19:25+05:30
+```text
+In the Buyer flow, Deleted Vendor Reappearing: When a buyer deletes a vendor from the Vendor Upload page, the deleted vendor sometimes appears again in the vendor list. Expected Behaviour/Solution: Once a vendor is deleted, remove the vendor permanently from the buyer's vendor list and ensure the deleted vendor does not reappear after refreshing the page, logging out and logging in, or reopening the Vendor Upload page. Please fix the issue
+```
+---
+
+
+### Prompt 183
+**Timestamp**: 2026-11-12T20:20:46+05:30
+```text
+In the Buyer flow, Vendor Rating Update Issue: After the buyer submits a revised supplier performance rating, the updated rating is also changing on the Vendor Portal. The rating update should follow the intended rating visibility and calculation rules. Expected Behaviour/Solution: Verify that the revised rating is saved and displayed correctly. Also, after clicking "Submit Revision & Dispatch Email", successfully submit the rating, dispatch the email, and automatically close the popup. Prevent duplicate submissions and display a success confirmation. Please fix the issue
+```
+---
+
+
+### Prompt 184
+**Timestamp**: 2026-11-12T20:21:08+05:30
+```text
+In the Buyer flow, Vendor Evaluation Summary – Table Layout: Convert the entire Vendor Evaluation Summary page from the current card-based layout into a compact table format with proper columns and rows. Expected Behaviour/Solution: Display vendor details, evaluation status, overall score, category scores, and review status in a clean, aligned table with reduced spacing. Please fix the issue
+```
+---
+
+
+### Prompt 185
+**Timestamp**: 2026-11-12T20:22:12+05:30
+```text
+In the Buyer flow, Vendor Score Visibility: Do not display a vendor score (such as 11%) unless an evaluation or review request has been submitted and the score is available in the database. Expected Behaviour/Solution: Fetch and display the existing vendor evaluation score from the database only when a buyer requests to view the review and a completed evaluation is available. Please fix the issue
+```
+---
+
+
+### Prompt 186
+**Timestamp**: 2026-11-12T20:22:35+05:30
+```text
+In the Buyer flow, Existing Evaluation: When the buyer requests a vendor review, first check whether an evaluation record already exists in the database. Expected Behaviour/Solution: If an evaluation exists, fetch and display the saved evaluation details and score without triggering a new evaluation. Please fix the issue
+```
+---
+
+### Prompt 187
+
+**Timestamp**: 2026-11-13T03:23:37+05:30
+
+```text
+In the Buyer flow, Existing Evaluation: When the buyer requests a vendor review, first check whether an evaluation record already exists in the database. Expected Behaviour/Solution: If an evaluation exists, fetch and display the saved evaluation details and score without triggering a new evaluation. Please fix the issue
+```
+
+---
+
+### Prompt 188
+
+**Timestamp**: 2026-11-13T06:41:09+05:30
+
+```text
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/451
+
+Please check PR checks & fix them: some failure. Why these failed & not detected & fixed in local code change while using kiro or anitgravity or any other AI assisted model or at pre-commit time. How to make sure this doesn't re-occur.
+```
+
+---

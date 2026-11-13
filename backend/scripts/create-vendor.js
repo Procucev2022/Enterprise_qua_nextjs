@@ -6,8 +6,8 @@
 // sign in to this workspace.
 //
 // Usage:
-//   node scripts/create-vendor.js --email a@b.com --phone 9876543210 \
-//        --password 'Secret@123' [--name "Full Name"] [--org "Company Pvt Ltd"]
+//   node scripts/create-vendor.js --email <email> --phone <10-digit mobile> \
+//        --password '<password>' [--name "<full name>"] [--org "<company name>"]
 //
 // Connection settings come from DATABASE_URL in backend/.env. Nothing is
 // hardcoded. The script is idempotent: re-running it resets the existing
@@ -44,7 +44,7 @@ async function main() {
   if (missing.length > 0) {
     console.error(`Missing required argument(s): ${missing.map((m) => `--${m}`).join(', ')}`);
     console.error(
-      "Usage: node scripts/create-vendor.js --email a@b.com --phone 9876543210 --password 'Secret@123' [--name \"Full Name\"] [--org \"Company\"]"
+      "Usage: node scripts/create-vendor.js --email <email> --phone <10-digit mobile> --password '<password>' [--name \"<full name>\"] [--org \"<company>\"]"
     );
     process.exitCode = 1;
     return;

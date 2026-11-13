@@ -36,9 +36,6 @@ const {
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
-const VENDOR_SEARCH_FTS_VERSION = '0001_vendor_search_trigram_index';
-const vendorSearchFtsReadiness = new WeakMap();
-
 function getRetryableStaleCacheValue(cacheKey, error, operation) {
   if (
     !cacheKey ||
@@ -53,68 +50,6 @@ function getRetryableStaleCacheValue(cacheKey, error, operation) {
     cacheKey,
   }, 'DATABASE_QUERY');
   return staleValue;
-}
-
-/**
- * The D1 trigram index is an optional, versioned optimization. Probe it once
- * per D1 binding/isolate and keep the original query as the compatibility
- * path until both the schema and the completed backfill are present.
- */
-async function hasD1VendorSearchFts() {
-  const binding = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
-  if (!binding) return false;
-
-  const cached = vendorSearchFtsReadiness.get(binding);
-  if (cached) return cached;
-
-  const readiness = (async () => {
-    try {
-      const tables = await pool.query(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('schema_migrations', 'vendors_search_fts')`,
-        [],
-        { d1: true }
-      );
-      const tableNames = new Set((tables.rows || []).map((row) => row.name));
-      if (!tableNames.has('schema_migrations') || !tableNames.has('vendors_search_fts')) {
-        logger.warn('D1 vendor search index is not installed; using the compatibility search path', {
-          version: VENDOR_SEARCH_FTS_VERSION,
-          missingTables: ['schema_migrations', 'vendors_search_fts'].filter((name) => !tableNames.has(name)),
-        }, 'DATABASE_SEARCH');
-        return false;
-      }
-
-      const migration = await pool.query(
-        'SELECT version FROM schema_migrations WHERE version = $1',
-        [VENDOR_SEARCH_FTS_VERSION],
-        { d1: true }
-      );
-      if (!migration.rows?.length) {
-        logger.warn('D1 vendor search index backfill is incomplete; using the compatibility search path', {
-          version: VENDOR_SEARCH_FTS_VERSION,
-        }, 'DATABASE_SEARCH');
-        return false;
-      }
-      return true;
-    } catch (error) {
-      logger.warn('Could not verify the D1 vendor search index; using the compatibility search path', {
-        error,
-        version: VENDOR_SEARCH_FTS_VERSION,
-      }, 'DATABASE_SEARCH');
-      return false;
-    }
-  })();
-
-  vendorSearchFtsReadiness.set(binding, readiness);
-  return readiness;
-}
-
-function d1VendorSearchFtsCandidate(parameterIndex) {
-  return `vendors.rowid IN (
-    SELECT rowid FROM vendors_search_fts
-    WHERE email LIKE $${parameterIndex}
-       OR major_category LIKE $${parameterIndex}
-       OR raw LIKE $${parameterIndex}
-  )`;
 }
 
 function normalizeVendorEmail(email) {
@@ -220,8 +155,6 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   if (search) {
     const tokens = parseSearchTokens(search);
     if (tokens.length > 0) {
-      const useD1VendorSearchFts = tokens.some((token) => token.trim().length >= 3)
-        && await hasD1VendorSearchFts();
       const tokenConditions = [];
       const d1TokenConditions = [];
 
@@ -239,11 +172,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           // Discrete email search: match directly against the indexed email column without
           // heavy unindexed JSON deserialization (which exceeds D1 CPU time limits on 600k+ rows).
           tokenConditions.push(`(email ILIKE $${p} OR raw->>'email' ILIKE $${p} OR raw->>'corporateEmail' ILIKE $${p})`);
-          const emailCondition = `(lower(email) LIKE lower($${p}))`;
-          const ftsCandidate = useD1VendorSearchFts && trimmed.length >= 3
-            ? d1VendorSearchFtsCandidate(p)
-            : null;
-          d1TokenConditions.push(ftsCandidate ? `(${emailCondition} AND ${ftsCandidate})` : emailCondition);
+          d1TokenConditions.push(`(lower(email) LIKE lower($${p}))`);
           continue;
         }
 
@@ -328,10 +257,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`;
-        const ftsCandidate = useD1VendorSearchFts && trimmed.length >= 3
-          ? d1VendorSearchFtsCandidate(p)
-          : null;
-        d1TokenConditions.push(ftsCandidate ? `(${d1SearchCondition} AND ${ftsCandidate})` : d1SearchCondition);
+        d1TokenConditions.push(d1SearchCondition);
       }
 
       if (tokenConditions.length > 0) {
@@ -539,8 +465,6 @@ async function countPublicVendorsMatchingCategories(signals) {
   const params = [];
   const orGroups = [];
   const d1OrGroups = [];
-  const useD1VendorSearchFts = cleaned.some((signal) => signal.length >= 3)
-    && await hasD1VendorSearchFts();
   for (const sig of cleaned) {
     if (sig.length <= 3) {
       params.push(sig);
@@ -580,8 +504,7 @@ async function countPublicVendorsMatchingCategories(signals) {
           OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
         )
       )`;
-      const ftsCandidate = useD1VendorSearchFts ? d1VendorSearchFtsCandidate(p) : null;
-      d1OrGroups.push(ftsCandidate ? `(${d1CategoryCondition} AND ${ftsCandidate})` : d1CategoryCondition);
+      d1OrGroups.push(d1CategoryCondition);
     }
   }
 
@@ -632,8 +555,6 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   const params = [];
   const orGroups = [];
   const d1OrGroups = [];
-  const useD1VendorSearchFts = cleaned.some((signal) => signal.length >= 3)
-    && await hasD1VendorSearchFts();
   for (const sig of cleaned) {
     if (sig.length <= 3) {
       params.push(sig);
@@ -673,8 +594,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
           OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
         )
       )`;
-      const ftsCandidate = useD1VendorSearchFts ? d1VendorSearchFtsCandidate(p) : null;
-      d1OrGroups.push(ftsCandidate ? `(${d1CategoryCondition} AND ${ftsCandidate})` : d1CategoryCondition);
+      d1OrGroups.push(d1CategoryCondition);
     }
   }
 
@@ -1497,6 +1417,28 @@ async function getEvaluationsFromDB(limit = null) {
       ttlMs: 60000,
     }
   );
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
+// Upper bound on rows one vendor lookup may return. Matches the cap the
+// evaluation list endpoint applies to its limit parameter.
+const VENDOR_EVALUATION_LOOKUP_MAX_ROWS = 500;
+
+// Saved evaluations for one vendor, newest first. Reads the table directly
+// through idx_evaluations_vendor_id, so a record older than the in-memory window
+// is still found. Deliberately not cached: a cached "no record" answer on one
+// worker would let a request go out for a vendor another worker just evaluated.
+async function getEvaluationsForVendorFromDB(vendorId, limit = 1) {
+  if (!pool.hasStorage()) return [];
+  const normalizedVendorId = String(vendorId || '').trim();
+  if (!normalizedVendorId) return [];
+  const requestedRows = Number.parseInt(limit, 10);
+  const rowLimit = Math.min(Math.max(Number.isInteger(requestedRows) ? requestedRows : 1, 1), VENDOR_EVALUATION_LOOKUP_MAX_ROWS);
+  const sql = 'SELECT raw FROM evaluations WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2';
+  const result = await pool.query(sql, [normalizedVendorId, rowLimit], {
+    d1: true,
+    d1Text: sql,
+  });
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
@@ -2795,7 +2737,6 @@ async function getPublicVendorsPageFromDB({
   if (search) {
     params.push(`%${search}%`);
     const p = params.length;
-    const useD1VendorSearchFts = normSearch.length >= 3 && await hasD1VendorSearchFts();
     // Trigram GIN indexes keep this O(log n) at scale.
     pgConditions.push(`(
       major_category ILIKE $${p}
@@ -2804,15 +2745,13 @@ async function getPublicVendorsPageFromDB({
       OR (raw->'products')::text ILIKE $${p}
       OR (raw->'minorCategories')::text ILIKE $${p}
     )`);
-    const d1SearchCondition = `(
+    d1Conditions.push(`(
       lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE lower($${p})
       OR lower(json_extract(raw,'$.name')) LIKE lower($${p})
       OR lower(json_extract(raw,'$.brandName')) LIKE lower($${p})
       OR lower(json_extract(raw,'$.products')) LIKE lower($${p})
       OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})
-    )`;
-    const ftsCandidate = useD1VendorSearchFts ? d1VendorSearchFtsCandidate(p) : null;
-    d1Conditions.push(ftsCandidate ? `(${d1SearchCondition} AND ${ftsCandidate})` : d1SearchCondition);
+    )`);
   }
 
   if (category && category !== 'all' && category !== 'All Categories') {
@@ -2996,6 +2935,7 @@ module.exports = {
   extendRFQOnceInDB,
   deleteRFQInDB,
   getEvaluationsFromDB,
+  getEvaluationsForVendorFromDB,
   upsertEvaluationInDB,
   getVendorCatalogueFromDB,
   getVendorCatalogueByVendorFromDB,

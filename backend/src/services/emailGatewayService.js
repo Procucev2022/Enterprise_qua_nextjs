@@ -52,6 +52,7 @@ const {
   RFQ_MODES,
   RFQ_MODE_MAP,
   EMAIL_REGEX,
+  BUYER_FREE_TRIAL_RFQ_CREDITS,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -115,7 +116,7 @@ const runtime = {
   ingestedThisRun: 0,
 };
 
-/** Live state for dedicated vendor quotation mailbox watcher (srinu20252026@gmail.com). */
+/** Live state for the dedicated vendor quotation mailbox watcher. */
 const vendorRuntime = {
   pollTimer: null,
   isPolling: false,
@@ -233,7 +234,7 @@ function resolveConfig(env = process.env) {
     // client@procucev.com can be collected by a login of intake@procucev.com.
     // Conflating them is what put a personal Gmail login in front of buyers as
     // though it were the address to forward requisitions to.
-    address: (env.EMAIL_GATEWAY_ADDRESS || env.EMAIL_GATEWAY_USER || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS).trim(),
+    address: (env.EMAIL_GATEWAY_ADDRESS || env.EMAIL_GATEWAY_USER || '').trim(),
     mailbox: (env.EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(
       Number(env.EMAIL_GATEWAY_POLL_MS || EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS),
@@ -250,7 +251,7 @@ function resolveConfig(env = process.env) {
 }
 
 /**
- * Resolve vendor gateway configuration from the environment (srinu20252026@gmail.com).
+ * Resolve vendor gateway configuration from the environment.
  */
 function resolveVendorConfig(env = process.env) {
   const splitList = (value) =>
@@ -270,13 +271,11 @@ function resolveVendorConfig(env = process.env) {
     // (VENDOR_GMAIL_* in mailerService).
     user: (
       env.VENDOR_EMAIL_GATEWAY_USER ||
-      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
       ''
     ).trim(),
     address: (
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
-      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
       ''
     ).trim(),
     mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
@@ -408,9 +407,6 @@ function isGatewayOrSystemEmail(email, config = {}) {
     process.env.VENDOR_SMTP_FROM,
     process.env.VENDOR_GMAIL_SENDER_EMAIL,
     process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL,
-    'srinu20252026@gmail.com',
-    'rfqprocucev@gmail.com',
-    'rfq@procucev.com',
   ]
     .filter(Boolean)
     .map((a) => {
@@ -902,7 +898,7 @@ async function getOrCreateBuyerAccount(email) {
       userResult = await identityQueries.insertBuyerAccount({
         email: normEmail,
         password: tempPassword,
-        phone: '9999999999',
+        phone: null,
         fullName: displayName,
         organizationName: orgName,
         resetPasswordRequired: true,
@@ -957,15 +953,13 @@ async function getOrCreateBuyerAccount(email) {
         id: userId,
         organizationName: orgName,
         brandName: displayName,
-        organizationType: 'Private Limited',
         corporateEmail: normEmail,
         contactPerson: displayName,
-        contactDesignation: 'Procurement Specialist',
-        mobileNumber: '+919999999999',
+        mobileNumber: null,
         organizationId: orgId,
         sourcingMode: 'mode_0',
         subscriptionPlan: 'free_trial',
-        remainingFreeRFQs: 5,
+        remainingFreeRFQs: BUYER_FREE_TRIAL_RFQ_CREDITS,
         status: 'PENDING_ONBOARDING',
         onboardingRequired: true,
         profileVerified: false,
@@ -1263,8 +1257,6 @@ function isOutgoingSystemMessage(message, config = {}) {
     process.env.VENDOR_SMTP_FROM,
     process.env.VENDOR_GMAIL_SENDER_EMAIL,
     process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL,
-    'srinu20252026@gmail.com',
-    'rfqprocucev@gmail.com',
   ]
     .map(normalizeAddress)
     .filter(Boolean);
@@ -1472,10 +1464,14 @@ async function sendAutoReply(message, kind, send, {
 
 /** Some mailer routes report provider refusal as `{ sent: false }` instead of throwing. */
 function ensureMailDeliveryAccepted(delivery, description) {
-  if (delivery === false || (delivery && typeof delivery === 'object' && delivery.sent === false)) {
+  const refused = delivery === false
+    || (delivery && typeof delivery === 'object' && (delivery.sent === false || delivery.success === false));
+  if (refused) {
     const providerReason = delivery && typeof delivery.reason === 'string' ? delivery.reason : null;
-    const error = new Error(`${description} was not accepted by a mail provider${providerReason ? `: ${providerReason}` : ''}`);
+    const providerStatus = delivery && typeof delivery.status === 'string' ? delivery.status : 'failed';
+    const error = new Error(`${description} was not accepted by a mail provider (${providerStatus})${providerReason ? `: ${providerReason}` : ''}`);
     error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+    error.deliveryStatus = providerStatus;
     error.providerReason = providerReason;
     throw error;
   }
@@ -1749,7 +1745,7 @@ async function retryPendingAcknowledgements({
           to: row.from_address,
           recipientName: saved.buyerName,
           tempPassword: retryTempPassword,
-          contactPhone: saved.contactPhone || '',
+          contactPhone: saved.contactPhone || null,
         }), 'Buyer credentials retry');
       } else if (
         saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER
@@ -1757,7 +1753,7 @@ async function retryPendingAcknowledgements({
       ) {
         ensureMailDeliveryAccepted(await mailerService.sendUnauthorizedBuyerNotificationEmail(row.from_address, {
           subject: saved.originalSubject || row.subject,
-          gatewayAddress: saved.gatewayAddress || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          gatewayAddress: saved.gatewayAddress || null,
         }), 'Unauthorized sender notice retry');
       } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED) {
         ensureMailDeliveryAccepted(await mailerService.sendRfqNotCreatedEmail({
@@ -1875,7 +1871,7 @@ async function retryPendingAcknowledgements({
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
           deliveryDate: saved.deliveryDate,
-          mobileNumber: saved.mobileNumber || '9999999999',
+          mobileNumber: saved.mobileNumber || null,
           category: saved.category,
           deliveryLocation: saved.deliveryLocation,
           requiredBy: saved.requiredBy || saved.deliveryDate,
@@ -1947,11 +1943,12 @@ class RetryableIngestionError extends Error {
   }
 }
 
+/** The buyer's name as recorded, or null. Mail templates greet a null name with a plain "Hello,". */
 function buyerDisplayName(buyerAccount, message) {
   return (
     (buyerAccount && (buyerAccount.contactPerson || buyerAccount.organizationName)) ||
     (message && message.fromName) ||
-    'Valued Buyer'
+    null
   );
 }
 
@@ -1996,7 +1993,7 @@ async function notifyRfqNotCreated(message, reason, { buyerAccount = null, confi
       to: message.fromAddress,
       recipientName: buyerDisplayName(buyerAccount, message),
       tempPassword: authorisation.tempPassword,
-      contactPhone: buyerAccount?.mobileNumber || '',
+      contactPhone: buyerAccount?.mobileNumber || null,
     };
     try {
       ensureMailDeliveryAccepted(await mailerService.sendBuyerCredentialsEmail(credentials), 'Buyer credentials notice');
@@ -2064,7 +2061,7 @@ function checkRfqCredits(buyerAccount, sourcingMode, needed) {
   const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3';
   const isV0 = sourcingMode === 'mode_0' || sourcingMode === 'v0' || sourcingMode === 'version_0';
   if (isPaidPlan || isV0) return { ok: true, applies: false };
-  const remaining = buyerAccount.remainingFreeRFQs !== undefined ? Number(buyerAccount.remainingFreeRFQs) : 5;
+  const remaining = buyerAccount.remainingFreeRFQs !== undefined ? Number(buyerAccount.remainingFreeRFQs) : BUYER_FREE_TRIAL_RFQ_CREDITS;
   return { ok: remaining >= needed, applies: true, remaining, needed };
 }
 
@@ -2114,24 +2111,22 @@ async function storeEmailAttachments(message) {
 
 /**
  * Resolve vendor record from sender email address or vendor directory.
- * Internal platform / gateway addresses (srinu20252026@gmail.com, rfqprocucev@gmail.com)
- * are NEVER resolved as a vendor.
+ * Configured internal platform / gateway addresses are NEVER resolved as a vendor.
  */
 async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   if (!fromAddress) return null;
   const email = String(fromAddress).trim().toLowerCase();
 
-  const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
-  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
+  // Only configured gateway addresses are excluded. No personal mailbox is assumed when they are unset.
+  const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || '').trim().toLowerCase();
+  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || '').trim().toLowerCase();
   const gmailApiAddr = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
 
   // Internal gateway accounts can NEVER be a vendor
   if (
-    email === vendorGatewayAddr ||
-    email === buyerGatewayAddr ||
-    (gmailApiAddr && email === gmailApiAddr) ||
-    email === 'srinu20252026@gmail.com' ||
-    email === 'rfqprocucev@gmail.com'
+    (vendorGatewayAddr && email === vendorGatewayAddr) ||
+    (buyerGatewayAddr && email === buyerGatewayAddr) ||
+    (gmailApiAddr && email === gmailApiAddr)
   ) {
     return null;
   }
@@ -2322,7 +2317,9 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     extraction = null;
   }
 
-  if (!extraction) {
+  // A vendor's question or issue is logged as an inquiry whether or not AI extraction ran, so
+  // the failure branch yields to it. Only a message that should have been a quote is refused here.
+  if ((!extraction || extraction.success === false) && !isVendorIssueOrQueryMessage(message)) {
     logger.warn(
       `Vendor quote from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} failed AI extraction`,
       { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
@@ -2369,7 +2366,12 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     };
   }
 
-  const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
+  // Total RFQ quantity, used only to derive a unit price from a stated total. It is 0 when
+  // any line has no stated quantity, so no unit price is derived from a guessed quantity.
+  const rfqQuantities = rfqItems.map((it) => Number(it.quantity));
+  const rfqQty = rfqQuantities.length > 0 && rfqQuantities.every((q) => Number.isFinite(q) && q > 0)
+    ? rfqQuantities.reduce((acc, q) => acc + q, 0)
+    : 0;
 
   const emailText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
   const isIssueOrQuery = isVendorIssueOrQueryMessage(message) || Boolean(extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry));
@@ -2492,7 +2494,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   }
 
   let unitPriceNum = Number(extraction.unitPrice);
-  if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Number(extraction.totalPrice) > 0) {
+  if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Number(extraction.totalPrice) > 0 && rfqQty > 0) {
     extraction.unitPrice = Math.round(Number(extraction.totalPrice) / rfqQty);
     unitPriceNum = extraction.unitPrice;
   }
@@ -2501,16 +2503,6 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     if (firstPriced) {
       extraction.unitPrice = Number(firstPriced.unitPrice);
       unitPriceNum = extraction.unitPrice;
-    }
-  }
-
-  // Second-chance extraction fallback if initial pass missed the price
-  if (!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) {
-    const fallbackText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
-    const fallback = geminiService.extractQuotationFallback(fallbackText, targetRfq);
-    if (Number(fallback.unitPrice) > 0) {
-      Object.assign(extraction, fallback);
-      unitPriceNum = Number(extraction.unitPrice);
     }
   }
 
@@ -2566,11 +2558,12 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     vendorName: vendorRecord.name,
     vendorCategory: vendorRecord.category || 'Client List',
     unitPrice: extraction.unitPrice,
-    totalPrice: extraction.totalPrice || extraction.unitPrice,
-    leadTimeDays: extraction.leadTimeDays || 7,
-    aiMatchScore: 0,
-    warrantyYears: extraction.warrantyYears || 1,
-    complianceStatus: extraction.complianceStatus || 'Fully Compliant',
+    totalPrice: extraction.totalPrice ?? null,
+    leadTimeDays: extraction.leadTimeDays ?? null,
+    // Not scored at ingestion. The UI derives its own score when this is null.
+    aiMatchScore: null,
+    warrantyYears: extraction.warrantyYears ?? null,
+    complianceStatus: extraction.complianceStatus || null,
     paymentTerms: extraction.paymentTerms || '',
     remarks: extraction.remarks || 'Email quotation submitted',
     submittedAt: new Date().toISOString(),
@@ -2578,8 +2571,8 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     submissionMethod: 'Email Submission',
     sourceMessageId: message.messageId || null,
     lineItemQuotes: extraction.lineItemQuotes || [],
-    taxes: extraction.taxes || 0,
-    deliveryCharges: extraction.deliveryCharges || 0,
+    taxes: extraction.taxes ?? null,
+    deliveryCharges: extraction.deliveryCharges ?? null,
     deliveryDate: extraction.deliveryDate || null,
     quotationValidity: extraction.quotationValidity || null,
   };
@@ -2884,7 +2877,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         () =>
           mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
             subject: message.subject,
-            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+            gatewayAddress: config.user || null,
           }),
         {
           config,
@@ -2893,7 +2886,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
             deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
             payload: {
               originalSubject: message.subject,
-              gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+              gatewayAddress: config.user || null,
             },
           },
         }
@@ -2927,7 +2920,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
       () =>
         mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
           subject: message.subject,
-          gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          gatewayAddress: config.user || null,
         }),
       {
         config,
@@ -2936,7 +2929,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
           deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER,
           payload: {
             originalSubject: message.subject,
-            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+            gatewayAddress: config.user || null,
           },
         },
       }
@@ -3110,7 +3103,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         buyerEmail: attribution.primaryBuyerAccount?.corporateEmail || message.fromAddress,
         sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
-        budget: draft.estimatedBudget || 0,
+        budget: draft.estimatedBudget ?? null,
         targetDeliveryDate: draft.targetDeliveryDate,
         extractedEntities: draft.extractedEntities,
         deliveryLocation: draft.deliveryLocation,
@@ -3205,8 +3198,9 @@ async function processMessage(rawSource, config = resolveConfig()) {
       authorisation?.buyerAccount?.mobileNumber ||
       authorisation?.buyerAccount?.phone ||
       authorisation?.user?.phone ||
-      '9999999999';
-    const resolvedMobile = String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || '9999999999';
+      null;
+    // Null when the buyer has no phone on record. No placeholder number is sent.
+    const resolvedMobile = rawMobile ? String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || null : null;
 
     const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
       ? created.extractedEntities
@@ -3214,16 +3208,18 @@ async function processMessage(rawSource, config = resolveConfig()) {
         ? created.items
         : [];
 
+    // A field the document did not state stays null. It is not replaced with a stand-in name, quantity or unit.
     const normalizedLineItems = rawEntities.map((it) => ({
-      item_name: it.itemName || it.name || it.item_name || 'Line Item',
-      item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
-      qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
-      uom: it.unit || it.uom || 'Nos',
+      item_name: it.itemName || it.name || it.item_name || null,
+      item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || null,
+      qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : null),
+      uom: it.unit || it.uom || null,
     }));
 
+    // The number of suppliers actually assigned. With none assigned and no recorded count, it stays null.
     const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
       ? created.assignedVendors.length
-      : (created.procucevVendorCount || 5);
+      : (Number.isFinite(created.procucevVendorCount) ? created.procucevVendorCount : null);
 
     const notificationRecipients = Array.isArray(attribution.eligibleNotificationRecipients) && attribution.eligibleNotificationRecipients.length > 0
       ? attribution.eligibleNotificationRecipients
@@ -3249,7 +3245,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
             tempPassword: isAutoRegisteredPrimary ? authorisation.tempPassword : null,
             mobileNumber: resolvedMobile,
             category: created.category,
-            itemCount: normalizedLineItems.length || 1,
+            itemCount: normalizedLineItems.length,
             deliveryLocation: created.deliveryLocation,
             requiredBy: created.targetDeliveryDate,
             quoteDeadline: created.deadline,
@@ -3336,7 +3332,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
  *
  * Shares the exact same processMessage()/emailGatewayQueries ledger as the
  * IMAP path below — this is only a different transport for fetching
- * messages, not a second parsing pipeline. Uses navin.procucev@gmail.com
+ * messages, not a second parsing pipeline. Uses the configured gateway mailbox
  * (whatever GMAIL_SENDER_EMAIL/GMAIL_REFRESH_TOKEN actually point to — no
  * address is hardcoded here) via the same Gmail OAuth client outbound mail
  * already uses, so the refresh token needs the gmail.readonly and
@@ -3353,7 +3349,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
   }
   const auth = options.auth || mailerService.getGmailOAuthClient();
   if (!auth) {
-    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+    return { skipped: true, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
   }
 
   // Per-deployment kill switch for the CRON poll path. Mirrors the
@@ -3788,7 +3784,7 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
 function startBuyerPolling(config = resolveConfig()) {
   if (runtime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
   const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
@@ -3818,7 +3814,7 @@ function startBuyerPolling(config = resolveConfig()) {
 function startVendorPolling(config = resolveVendorConfig()) {
   if (vendorRuntime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
   const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
@@ -3845,7 +3841,7 @@ function startVendorPolling(config = resolveVendorConfig()) {
 /**
  * Run one polling pass across both monitored inboxes:
  *   1. Buyer Requisitions Mailbox (e.g. rfq@procucev.com)
- *   2. Vendor Quotations Mailbox (srinu20252026@gmail.com)
+ *   2. Vendor Quotations Mailbox (VENDOR_EMAIL_GATEWAY_ADDRESS)
  *
  * Executes both in parallel using Promise.allSettled so an error in one inbox
  * never blocks or disrupts the other.
@@ -3870,11 +3866,11 @@ async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig =
   const result = {
     executedAt: new Date().toISOString(),
     buyerMailbox: {
-      address: buyerConfig.address || buyerConfig.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      address: buyerConfig.address || buyerConfig.user || null,
       ...buyer,
     },
     vendorMailbox: {
-      address: vendorConfig.address || vendorConfig.user || VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      address: vendorConfig.address || vendorConfig.user || null,
       ...vendor,
     },
     totalConsidered: (buyer.considered || 0) + (vendor.considered || 0),

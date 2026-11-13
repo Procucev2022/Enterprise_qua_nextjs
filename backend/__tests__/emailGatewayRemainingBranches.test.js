@@ -230,6 +230,46 @@ describe('emailGatewayService remaining branch coverage', () => {
       expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
       expect(mailerService.sendQuoteFailureEmail).toHaveBeenCalled();
     });
+
+    test('logs a vendor clarification as an inquiry when AI extraction did not run', async () => {
+      const targetRfq = {
+        id: 'rfq-query-no-ai',
+        rfqNumber: 'RFQ-QUERY-01',
+        title: 'Transformers',
+        buyerEmail: 'buyer@volt.com',
+        sourcingMode: 'mode_1',
+      };
+      const vendorRecord = { id: 'vendor-volt', name: 'Volt Transformers Ltd' };
+      const message = {
+        fromAddress: 'sales@volttransformers.com',
+        subject: 'Clarification query on RFQ-QUERY-01',
+        bodyText: 'Please clarify specification and drawings',
+      };
+
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@volt.com');
+      jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        success: false,
+        status: geminiService.EXTRACTION_STATUS.NOT_CONFIGURED,
+        error: 'AI extraction is not configured',
+        unitPrice: null,
+        totalPrice: null,
+        lineItemQuotes: [],
+      });
+      const addInquirySpy = jest.spyOn(storeService, 'addInquiryToRFQ')
+        .mockReturnValue({ inquiry: { id: 'inq-1' }, inquiryMessageId: 'msg-1' });
+      const failSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ messageId: 'm-fail' });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(message, targetRfq, vendorRecord);
+
+      expect(addInquirySpy).toHaveBeenCalledWith(
+        targetRfq.id,
+        expect.objectContaining({ message: expect.stringContaining('Please clarify') })
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+      expect(outcome.detail).toContain('issue or query');
+      expect(failSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('startBuyerPolling and startVendorPolling error branches', () => {
@@ -872,7 +912,7 @@ describe('emailGatewayService remaining branch coverage', () => {
       expect(result.sent).toBe(1);
       expect(deliverySpy).toHaveBeenCalledWith(row.from_address, {
         subject: row.subject,
-        gatewayAddress: EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+        gatewayAddress: null,
       });
     });
   });
@@ -900,9 +940,12 @@ describe('emailGatewayService remaining branch coverage', () => {
       jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('unverified-buyer@corp.com');
       jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
       jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValueOnce({
+        success: true,
         isQuery: false,
         hasIssue: false,
         isInquiry: false,
+        unitPrice: 10000,
+        totalPrice: 500000,
         pricing: { totalPrice: 500000, currency: 'INR' },
         lineItems: [{ description: 'Gate valve', quantity: 50, unitPrice: 10000 }],
       });

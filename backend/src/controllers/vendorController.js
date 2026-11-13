@@ -23,10 +23,12 @@ const {
   VENDOR_SUBSCRIPTION_PLANS,
   getSubscriptionPricingConfig,
   parseSearchTokens,
-  DEFAULT_VENDOR_DIRECTORY_PASSKEY,
+  AUTH_MESSAGES,
   VENDOR_FREE_CREDITS_LIMIT,
   PERSISTENCE_MESSAGES,
   EVENT_OUTBOX_TYPES,
+  VENDOR_EVALUATION_REQUEST,
+  formatMessage,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
@@ -45,16 +47,66 @@ async function checkVendorOwnership(user, vendorOrEmail) {
     return true;
   }
 
-  if (user.role === 'buyer' && typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
+  if (user.role === 'buyer') {
     const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
     const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    const sId = String(buyerId).toLowerCase();
-    const isOwner =
-      (vendorOrEmail.buyerId && String(vendorOrEmail.buyerId).toLowerCase() === sId) ||
-      (vendorOrEmail.buyerAccountId && String(vendorOrEmail.buyerAccountId).toLowerCase() === sId) ||
-      (vendorOrEmail.buyerEmail && String(vendorOrEmail.buyerEmail).toLowerCase() === sId) ||
-      (vendorOrEmail.id && (String(vendorOrEmail.id).startsWith('v-hist-') || String(vendorOrEmail.id).startsWith('v-navin-') || String(vendorOrEmail.id).startsWith('v-1788') || String(vendorOrEmail.id).startsWith('v-buyer-') || String(vendorOrEmail.id).startsWith('vm-')));
-    if (isOwner) return true;
+    const sId = buyerId ? String(buyerId).toLowerCase() : '';
+    const uEmail = user.email ? String(user.email).toLowerCase() : '';
+    const orgName = buyerAccount?.organizationName ? String(buyerAccount.organizationName).toLowerCase() : '';
+
+    if (typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
+      const vBuyerId = vendorOrEmail.buyerId ? String(vendorOrEmail.buyerId).toLowerCase() : '';
+      const vBuyerAccountId = vendorOrEmail.buyerAccountId ? String(vendorOrEmail.buyerAccountId).toLowerCase() : '';
+      const vBuyerEmail = vendorOrEmail.buyerEmail ? String(vendorOrEmail.buyerEmail).toLowerCase() : '';
+      const vCompany = vendorOrEmail.addedByBuyerCompany ? String(vendorOrEmail.addedByBuyerCompany).toLowerCase() : '';
+
+      const matchesBuyerId = (vBuyerId && vBuyerId === sId) || (vBuyerAccountId && vBuyerAccountId === sId);
+      const matchesBuyerEmail = (vBuyerEmail && (vBuyerEmail === uEmail || vBuyerEmail === sId));
+      const matchesCompany = Boolean(vCompany && orgName && vCompany === orgName);
+
+      if (matchesBuyerId || matchesBuyerEmail || matchesCompany) {
+        return true;
+      }
+
+      // If it belongs to a different buyer explicitly, deny
+      if ((vBuyerId && vBuyerId !== sId) || (vBuyerAccountId && vBuyerAccountId !== sId) || (vBuyerEmail && vBuyerEmail !== uEmail && vBuyerEmail !== sId)) {
+        return false;
+      }
+
+      // Check buyer source or buyer-prefixed ID or buyer empanelment
+      const isBuyerSource = [
+        'buyer_uploaded',
+        'buyer_manual',
+        'buyer_excel',
+        'vendor_master_ingestion',
+        'historical_purchase_dump',
+        'buyer',
+        'manual_buyer_upload'
+      ].includes(String(vendorOrEmail.source || vendorOrEmail.uploadSource || '').toLowerCase());
+
+      const hasBuyerPrefix = vendorOrEmail.id && (
+        String(vendorOrEmail.id).startsWith('v-hist-') ||
+        String(vendorOrEmail.id).startsWith('v-buyer-') ||
+        String(vendorOrEmail.id).startsWith('vm-') ||
+        String(vendorOrEmail.id).startsWith('v-ingest-') ||
+        String(vendorOrEmail.id).startsWith('v-bulk-')
+      );
+
+      if (isBuyerSource || hasBuyerPrefix || vendorOrEmail.isBuyerEmpanelled === true || vendorOrEmail.empanelledByBuyer === true) {
+        return true;
+      }
+    } else if (typeof vendorOrEmail === 'string') {
+      const idStr = String(vendorOrEmail).trim();
+      if (
+        idStr.startsWith('v-hist-') ||
+        idStr.startsWith('v-buyer-') ||
+        idStr.startsWith('vm-') ||
+        idStr.startsWith('v-ingest-') ||
+        idStr.startsWith('v-bulk-')
+      ) {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -606,12 +658,15 @@ async function updateVendor(req, res, next) {
 async function deleteVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id, 'all');
+    let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    if (!existing) {
+      existing = storeService.getVendorById(id, 'all');
+    }
     if (!existing) {
       // If it's a buyer vendor ID pattern or buyer session, handle deletion idempotently
       if (
         (req.user && (req.user.role === 'buyer' || req.user.role === 'admin')) &&
-        (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+        (id.startsWith('v-') || id.startsWith('vm-'))
       ) {
         logger.info(`Cleaning up vendor ID ${id}`, { id }, 'VENDOR_CONTROLLER');
         await storeService.deleteVendorDurably(id, req.user && req.user.email);
@@ -650,12 +705,15 @@ async function bulkDeleteVendors(req, res, next) {
     for (const rawId of targetIds) {
       const id = String(rawId).trim();
       if (!id) continue;
-      const existing = storeService.getVendorById(id, 'all');
+      let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+      if (!existing) {
+        existing = storeService.getVendorById(id, 'all');
+      }
 
       if (!existing) {
         if (
           (user.role === 'buyer' || user.role === 'admin') &&
-          (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+          (id.startsWith('v-') || id.startsWith('vm-'))
         ) {
           await storeService.deleteVendorDurably(id, user.email);
           deletedIds.push(id);
@@ -737,6 +795,82 @@ async function reviseRating(req, res, next) {
     res.json({ success: true, data: result });
   } catch (err) {
     logger.error(`Error revising rating for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+async function requestEvaluation(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    if (req.user.role === 'vendor') {
+      return res.status(403).json({ success: false, error: 'Vendors cannot request evaluations on other vendors.' });
+    }
+
+    const bodyValidation = validatePayload(VALIDATION_SCHEMAS.requestVendorEvaluation, req.body || {});
+    if (!bodyValidation.isValid) {
+      logger.warn('Rejected vendor evaluation request with invalid payload', { fields: Object.keys(bodyValidation.errors) }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'Invalid evaluation request.', errors: bodyValidation.errors });
+    }
+
+    let buyerId = null;
+    let buyerCompany = req.user.orgName || req.user.name || 'Buyer';
+    let buyerName = req.user.name || '';
+    let buyerEmail = req.user.email || '';
+
+    if (req.user.role === 'buyer') {
+      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      if (buyerAccount) {
+        buyerId = buyerAccount.id;
+        buyerCompany = buyerAccount.organizationName || buyerCompany;
+        buyerName = buyerAccount.contactPerson || buyerName;
+      } else {
+        buyerId = req.user.sub || req.user.email;
+      }
+    }
+
+    const vendor = storeService.getVendorById(id, buyerId || 'all');
+    if (!vendor) {
+      logger.warn(`Vendor not found for evaluation request: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+
+    // Check for a saved evaluation before anything is sent. When one exists, it is
+    // returned as it is: no email reaches the vendor and the vendor record is not changed.
+    const [savedEvaluation] = await storeService.getVendorEvaluationsDurably(vendor.id, 1);
+    if (savedEvaluation) {
+      logger.info(`Saved evaluation found for vendor ${vendor.name} (${vendor.id}); no new evaluation request sent`, { vendorId: vendor.id, evaluationId: savedEvaluation.id, buyerCompany }, 'VENDOR_CONTROLLER');
+      return res.status(200).json({
+        success: true,
+        evaluationExists: true,
+        message: formatMessage(VENDOR_EVALUATION_REQUEST.EXISTING_EVALUATION_MESSAGE, { vendorName: vendor.name }),
+        data: { evaluation: savedEvaluation },
+      });
+    }
+
+    if (!vendor.email) {
+      logger.warn(`Cannot request evaluation: Vendor ${id} has no email`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'Vendor does not have a registered email address to receive an evaluation request.' });
+    }
+
+    logger.info(`Sending evaluation request for vendor ${vendor.name} (${vendor.id}) by ${buyerCompany}`, { vendorId: vendor.id, buyerCompany }, 'VENDOR_CONTROLLER');
+
+    const result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+      buyerCompany,
+      buyerName,
+      buyerEmail,
+      notes: bodyValidation.sanitizedData.notes || '',
+    }, buyerId);
+
+    return res.status(200).json({
+      success: true,
+      message: `Evaluation request sent to ${vendor.name}. The vendor has been notified to submit their performance evaluation details.`,
+      data: result,
+    });
+  } catch (err) {
+    logger.error(`Error requesting evaluation for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
     next(err);
   }
 }
@@ -869,7 +1003,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // the matching comment in buyerAccountController.createSubscriptionPaymentLink
     // for why a hardcoded `?payment=success` here would misreport a real
     // cancellation.
-    const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const linkId = `pl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     const returnBase = String(ZOHO_CONFIG.RETURN_URL_BASE || '').replace(/\/+$/, '');
     const returnUrl = `${returnBase}/vendor/vendor-subscription?linkId=${linkId}`;
 
@@ -1124,7 +1258,7 @@ async function bulkImportVendors(req, res, next) {
 
     const { results: importResults, importedCount, duplicateCount, missingEmailCount } =
       rowsToImport.length > 0
-        ? await storeService.bulkAddVendors(rowsToImport)
+        ? await storeService.bulkAddVendors(rowsToImport, req.user?.email || null)
         : { results: [], importedCount: 0, duplicateCount: 0, missingEmailCount: 0 };
 
     const allResults = importResults.sort((a, b) => a.rowNumber - b.rowNumber);
@@ -1137,6 +1271,8 @@ async function bulkImportVendors(req, res, next) {
       };
     });
     const issuesCount = allResults.filter((r) => r.hasIssues).length;
+
+    const failedCount = allResults.filter((r) => r.status === 'failed').length;
 
     const updatedSession = await domainQueries.incrementBulkImportSessionInDB(sessionId, {
       processed: rows.length,
@@ -1155,7 +1291,7 @@ async function bulkImportVendors(req, res, next) {
         missingEmail: missingEmailCount,
         duplicates: duplicateCount,
         issues: issuesCount,
-        failed: 0,
+        failed: failedCount,
         onboardingFailed: allResults.filter((r) => r.onboardingEmailStatus === 'failed').length,
         onboardingSkipped: allResults.filter((r) => r.onboardingEmailStatus === 'skipped').length,
         results: publicResults,
@@ -1543,40 +1679,43 @@ async function getPublicVendorById(req, res, next) {
  * Authenticates enterprise visitors/vendors attempting to access the Vendor Directory.
  * Single shared directory login credential separate from the main platform user accounts.
  */
+// Compares SHA-256 digests so the check takes the same time whatever the input length.
+function accessKeysMatch(input, expected) {
+  const inputDigest = crypto.createHash('sha256').update(input, 'utf8').digest();
+  const expectedDigest = crypto.createHash('sha256').update(expected, 'utf8').digest();
+  return crypto.timingSafeEqual(inputDigest, expectedDigest);
+}
+
 async function authenticateVendorDirectory(req, res, next) {
   try {
-    const { passcode, accessKey, username, password } = req.body || {};
-    const inputPasskey = String(passcode || accessKey || '').trim();
-    const inputUsername = String(username || '').trim().toLowerCase();
-    const inputPassword = String(password || '').trim();
-
-    const expectedPasskey = process.env.VENDOR_DIRECTORY_ACCESS_KEY || DEFAULT_VENDOR_DIRECTORY_PASSKEY;
-    const isValidPasskey = inputPasskey && (
-      inputPasskey === expectedPasskey ||
-      inputPasskey === 'VENDOR2026' ||
-      inputPasskey === 'Procucev@Vendors2026'
-    );
-    const isValidCredentials = (inputUsername === 'vendor' || inputUsername === 'directory@procucev.com') && (
-      inputPassword === expectedPasskey ||
-      inputPassword === 'Procucev@Vendors2026'
-    );
-
-    if (!isValidPasskey && !isValidCredentials) {
-      logger.warn('Failed vendor directory authentication attempt', {
-        hasPasskey: Boolean(inputPasskey),
-        hasUsername: Boolean(inputUsername),
-      }, 'VENDOR_DIRECTORY_AUTH');
-      return res.status(401).json({
+    // The access key is deployment configuration. Without it no directory session can be
+    // issued, and the request fails closed instead of falling back to a built-in key.
+    const expectedAccessKey = String(process.env.VENDOR_DIRECTORY_ACCESS_KEY || '').trim();
+    if (!expectedAccessKey) {
+      logger.error('Vendor directory access key is not configured; directory sign-in refused', {}, 'VENDOR_DIRECTORY_AUTH');
+      return res.status(503).json({
         success: false,
-        error: 'Invalid directory access key. Please enter the valid passkey provided by Procucev.',
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_ACCESS_KEY_NOT_CONFIGURED,
       });
     }
 
-    const token = `vdir_${Buffer.from(`${Date.now()}_${Math.random()}`).toString('base64url')}`;
+    const { passcode, accessKey } = req.body || {};
+    const inputAccessKey = String(passcode || accessKey || '').trim();
+    if (!inputAccessKey || !accessKeysMatch(inputAccessKey, expectedAccessKey)) {
+      logger.warn('Failed vendor directory authentication attempt', {
+        hasAccessKey: Boolean(inputAccessKey),
+      }, 'VENDOR_DIRECTORY_AUTH');
+      return res.status(401).json({
+        success: false,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_ACCESS_KEY_INVALID,
+      });
+    }
+
+    const token = `vdir_${crypto.randomBytes(32).toString('base64url')}`;
     const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
 
     logger.info('Vendor directory authenticated successfully', {
-      method: isValidPasskey ? 'PASSKEY' : 'CREDENTIALS',
+      method: 'ACCESS_KEY',
       expiresAt: new Date(expiresAt).toISOString(),
     }, 'VENDOR_DIRECTORY_AUTH');
 
@@ -1601,6 +1740,7 @@ module.exports = {
   deleteVendor,
   bulkDeleteVendors,
   reviseRating,
+  requestEvaluation,
   generateOnboardingEmailPreview,
   updateCategories,
   updateSubscription,

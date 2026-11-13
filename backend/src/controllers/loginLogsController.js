@@ -6,6 +6,7 @@
 // ==============================================================================
 
 const loginLogsQueries = require('../db/loginLogsQueries');
+const { AUTH_MESSAGES } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
 /**
@@ -62,26 +63,43 @@ async function getSummary(req, res) {
 }
 
 /**
- * Record a login or logout event from client or internal trigger.
+ * Record a login or logout event for the authenticated session. The identity comes
+ * from req.user, and the network details come from the request. Client-supplied
+ * identity fields are ignored.
  */
 async function recordEvent(req, res) {
   try {
-    const { type, email, userUuid, logoutReason, ...data } = req.body || {};
+    const user = req.user;
+    if (!user || !user.email) {
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
 
-    if (type === 'logout') {
-      const entry = await loginLogsQueries.recordLogoutLog({ email, userUuid, logoutReason });
+    const userUuid = user.uuid || user.id || null;
+
+    if (req.body?.type === 'logout') {
+      const entry = await loginLogsQueries.recordLogoutLog({
+        email: user.email,
+        userUuid,
+        logoutReason: req.body.logoutReason,
+      });
       return res.json({ success: true, entry });
     }
 
     const entry = await loginLogsQueries.recordLoginLog({
-      email,
+      email: user.email,
       userId: userUuid,
-      ...data,
+      userName: user.fullName || user.name || null,
+      userType: user.role,
+      ipAddress: req.ip || null,
+      userAgent: req.headers?.['user-agent'] || null,
     });
 
     return res.status(201).json({ success: true, entry });
   } catch (err) {
     logger.error('loginLogsController: recordEvent failed', { error: err.message }, 'LOGIN_LOGS_CONTROLLER');
+    if (err?.code === 'VALIDATION_FAILED') {
+      return res.status(400).json({ success: false, error: err.message });
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to record session log event',

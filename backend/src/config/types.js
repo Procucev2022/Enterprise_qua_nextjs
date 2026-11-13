@@ -32,6 +32,9 @@
  * @property {string} majorCategory
  * @property {number} compositeRating
  * @property {string} status
+ * @property {boolean} [evaluationRequested]
+ * @property {string} [evaluationRequestedAt]
+ * @property {string} [evaluationRequestedBy]
  */
 
 /**

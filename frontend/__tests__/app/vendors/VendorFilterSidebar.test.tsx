@@ -141,15 +141,26 @@ describe('VendorFilterSidebar', () => {
     expect(screen.queryByText(S.clearFilters)).not.toBeInTheDocument();
   });
 
-  test('falls back to MAJOR_CATEGORIES when no categories prop is provided', () => {
-    renderSidebar({ categories: undefined });
-    // Should still render the All Categories option
+  test('lists no categories or states when the filter options are not provided', () => {
+    renderSidebar({ categories: undefined, states: undefined });
     expect(screen.getByText(S.allCategories)).toBeInTheDocument();
+    expect(screen.getByText(S.allStates)).toBeInTheDocument();
+    expect(screen.queryByText('Mechanical')).not.toBeInTheDocument();
+    expect(screen.queryByText('Maharashtra')).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Category' }).querySelectorAll('option')).toHaveLength(1);
+    expect(screen.getByRole('combobox', { name: 'State / Region' }).querySelectorAll('option')).toHaveLength(1);
   });
 
-  test('falls back to INDIAN_STATES when no states prop provided', () => {
-    renderSidebar({ states: undefined });
-    expect(screen.getByText(S.allStates)).toBeInTheDocument();
+  test('shows the filter-options error so an empty list is not read as a complete answer', () => {
+    renderSidebar({ categories: [], states: [], optionsError: UI_STRINGS.vendorWorkspace.publicDirectory.filterOptionsUnavailable });
+    expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.vendorWorkspace.publicDirectory.filterOptionsUnavailable);
+  });
+
+  test('lists exactly the categories and states the directory returned', () => {
+    renderSidebar({ categories: CATEGORIES, states: STATES });
+    expect(screen.getByRole('option', { name: 'Mechanical & Fluid Equipment' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Gujarat' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   test('prepends active category to list when it is not in provided categories', () => {

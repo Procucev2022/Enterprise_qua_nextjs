@@ -33,10 +33,14 @@ const mockSetCurrentUserSession = jest.fn();
 const mockSetIsLoggedIn = jest.fn();
 const mockShowToast = jest.fn();
 
+/** The buyer's real mobile on record, as the session carries it. */
+const REGISTERED_MOBILE = '9876543210';
+
 let mockCurrentUserSession: Record<string, unknown> | null = {
   email: 'buyer@example.com',
   name: 'Buyer Admin',
-  orgName: 'Acme Corp',
+  orgName: 'Test Buyer Org',
+  mobile: REGISTERED_MOBILE,
   role: 'buyer',
   onboardingRequired: true,
   passwordChangeRequired: true,
@@ -48,7 +52,8 @@ describe('BuyerFirstLoginPage', () => {
     mockCurrentUserSession = {
       email: 'buyer@example.com',
       name: 'Buyer Admin',
-      orgName: 'Acme Corp',
+      orgName: 'Test Buyer Org',
+      mobile: REGISTERED_MOBILE,
       role: 'buyer',
       onboardingRequired: true,
       passwordChangeRequired: true,
@@ -158,7 +163,7 @@ describe('BuyerFirstLoginPage', () => {
       fireEvent.click(sendBtn);
 
       await waitFor(() => {
-        expect(authClient.requestOtp).toHaveBeenCalledWith('buyer@example.com', '9999999999', 'buyer');
+        expect(authClient.requestOtp).toHaveBeenCalledWith('buyer@example.com', REGISTERED_MOBILE, 'buyer');
         expect(mockShowToast).toHaveBeenCalledWith(
           UI_STRINGS.auth.buyerOnboarding.title,
           UI_STRINGS.auth.buyerOnboarding.otpSentMessage,
@@ -176,6 +181,7 @@ describe('BuyerFirstLoginPage', () => {
 
       await waitFor(() => {
         expect(screen.getByRole('alert')).toHaveTextContent('SMTP failed');
+        expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.otpSendFailureGuidance);
       });
     });
 
@@ -186,7 +192,7 @@ describe('BuyerFirstLoginPage', () => {
       fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendEmailOtpBtn }));
 
       await waitFor(() => {
-        expect(screen.getByRole('alert')).toHaveTextContent('Failed to dispatch email verification OTP.');
+        expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.buyerOnboarding.emailOtpSendFailed);
       });
     });
 
@@ -197,7 +203,7 @@ describe('BuyerFirstLoginPage', () => {
       fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendEmailOtpBtn }));
 
       await waitFor(() => {
-        expect(screen.getByRole('alert')).toHaveTextContent('Failed to dispatch email verification OTP.');
+        expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.buyerOnboarding.emailOtpSendFailed);
       });
     });
 
@@ -213,6 +219,62 @@ describe('BuyerFirstLoginPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendEmailOtpBtn }));
       expect(authClient.requestOtp).not.toHaveBeenCalled();
+    });
+
+    it('sends to the buyer profile mobile when the session carries none', async () => {
+      mockCurrentUserSession = { email: 'buyer@example.com', role: 'buyer', onboardingRequired: true };
+      (storeModule.useApp as jest.Mock).mockReturnValue({
+        currentUserSession: mockCurrentUserSession,
+        activeBuyerAccount: { mobileNumber: '9123456780' },
+        setCurrentUserSession: mockSetCurrentUserSession,
+        setIsLoggedIn: mockSetIsLoggedIn,
+        showToast: mockShowToast,
+      });
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      render(<BuyerFirstLoginPage />);
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendEmailOtpBtn }));
+
+      await waitFor(() => {
+        expect(authClient.requestOtp).toHaveBeenCalledWith('buyer@example.com', '9123456780', 'buyer');
+      });
+    });
+
+    it.each([
+      ['no mobile is on record', undefined],
+      ['the stored mobile is the placeholder number', '+919999999999'],
+    ])('stops before dispatching when %s', (_case, storedMobile) => {
+      mockCurrentUserSession = { email: 'buyer@example.com', role: 'buyer', onboardingRequired: true, mobile: storedMobile };
+      (storeModule.useApp as jest.Mock).mockReturnValue({
+        currentUserSession: mockCurrentUserSession,
+        activeBuyerAccount: null,
+        setCurrentUserSession: mockSetCurrentUserSession,
+        setIsLoggedIn: mockSetIsLoggedIn,
+        showToast: mockShowToast,
+      });
+      render(<BuyerFirstLoginPage />);
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendEmailOtpBtn }));
+
+      expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.buyerOnboarding.placeholderPhoneWarning);
+      expect(authClient.requestOtp).not.toHaveBeenCalled();
+    });
+
+    it('shows the server message as a warning when the email channel failed', async () => {
+      const serverMessage =
+        'Verification OTP sent to your mobile +91 9876543210. The email could not be delivered right now.';
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        message: serverMessage,
+        delivery: { email: 'failed', sms: 'sent' },
+      });
+      render(<BuyerFirstLoginPage />);
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendEmailOtpBtn }));
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(UI_STRINGS.auth.buyerOnboarding.title, serverMessage, 'warning');
+      });
     });
   });
 
@@ -252,6 +314,28 @@ describe('BuyerFirstLoginPage', () => {
 
       expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.mobileInvalid);
       expect(authClient.requestOtp).not.toHaveBeenCalled();
+    });
+
+    it('warns when mobile contains fewer than 10 digits', () => {
+      render(<BuyerFirstLoginPage />);
+      const mobileInput = screen.getByPlaceholderText('10-digit mobile');
+      fireEvent.change(mobileInput, { target: { value: '987654321' } }); // 9 digits
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendSmsOtpBtn }));
+
+      expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.mobileInvalid);
+      expect(authClient.requestOtp).not.toHaveBeenCalled();
+    });
+
+    it('sanitizes mobile input by stripping non-digits and trimming country codes', () => {
+      render(<BuyerFirstLoginPage />);
+      const mobileInput = screen.getByPlaceholderText('10-digit mobile');
+
+      fireEvent.change(mobileInput, { target: { value: '+91 98765 43210' } });
+      expect(mobileInput).toHaveValue('9876543210');
+
+      fireEvent.change(mobileInput, { target: { value: '9876543210123' } });
+      expect(mobileInput).toHaveValue('9876543210');
     });
 
     it('dispatches SMS OTP successfully for valid mobile number', async () => {
@@ -300,7 +384,7 @@ describe('BuyerFirstLoginPage', () => {
       fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendSmsOtpBtn }));
 
       await waitFor(() => {
-        expect(screen.getByRole('alert')).toHaveTextContent('Failed to dispatch SMS verification OTP.');
+        expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.buyerOnboarding.smsOtpSendFailed);
       });
     });
 
@@ -313,7 +397,7 @@ describe('BuyerFirstLoginPage', () => {
       fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.sendSmsOtpBtn }));
 
       await waitFor(() => {
-        expect(screen.getByRole('alert')).toHaveTextContent('Failed to dispatch SMS verification OTP.');
+        expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.auth.buyerOnboarding.smsOtpSendFailed);
       });
     });
   });
@@ -333,7 +417,7 @@ describe('BuyerFirstLoginPage', () => {
         target: { value: 'NewSecurePass@2026' },
       });
       fireEvent.change(screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.companyNamePlaceholder), {
-        target: { value: 'Acme Global Ltd' },
+        target: { value: 'Test Buyer Ltd' },
       });
       fireEvent.change(screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.contactNamePlaceholder), {
         target: { value: 'John Buyer' },
@@ -546,11 +630,12 @@ describe('BuyerFirstLoginPage', () => {
       );
     });
 
-    it('updates GSTIN to uppercase and automatically derives PAN when 15 characters are entered', () => {
+    it('updates GSTIN to uppercase and does not auto-derive PAN when 15 characters are entered', () => {
       render(<BuyerFirstLoginPage />);
       const gstinInput = screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.gstinPlaceholder);
       fireEvent.change(gstinInput, { target: { value: '27aaaaa0000a1z5' } });
       expect(gstinInput).toHaveValue('27AAAAA0000A1Z5');
+      expect(screen.queryByDisplayValue('AAAAA0000A')).not.toBeInTheDocument();
     });
 
     it('clears pincode error when value is less than 6 digits', () => {
@@ -625,7 +710,7 @@ describe('BuyerFirstLoginPage', () => {
         onboardingRequired: false,
         passwordChangeRequired: false,
         name: 'John Buyer',
-        orgName: 'Acme Global Ltd',
+        orgName: 'Test Buyer Ltd',
       };
       (authClient.completeBuyerOnboarding as jest.Mock).mockResolvedValue({
         success: true,
@@ -645,14 +730,14 @@ describe('BuyerFirstLoginPage', () => {
           mobileOtp: '654321',
           currentPassword: 'TempPass@123',
           newPassword: 'NewSecurePass@2026',
-          companyName: 'Acme Global Ltd',
+          companyName: 'Test Buyer Ltd',
           contactName: 'John Buyer',
           city: 'Pune',
           state: 'Maharashtra',
           pincode: '411001',
           address: 'Plot 42, MIDC Hinjewadi',
           gstin: '27AAAAA0000A1Z5',
-          pan: 'AAAAA0000A',
+          pan: undefined,
         });
         expect(mockSetCurrentUserSession).toHaveBeenCalledWith(updatedUser);
         expect(mockSetIsLoggedIn).toHaveBeenCalledWith(true);
@@ -673,7 +758,7 @@ describe('BuyerFirstLoginPage', () => {
         onboardingRequired: false,
         passwordChangeRequired: false,
         name: 'John Buyer',
-        orgName: 'Acme Global Ltd',
+        orgName: 'Test Buyer Ltd',
       };
       (authClient.completeBuyerOnboarding as jest.Mock).mockResolvedValue({
         success: true,

@@ -1,11 +1,18 @@
 const buyerProfileService = require('../services/buyerProfileService');
 const { logger } = require('../services/loggerService');
-const { BUYER_PROFILE_MESSAGES } = require('../config/constants');
+const { BUYER_PROFILE_MESSAGES, DEFAULT_CATEGORY_TAXONOMY } = require('../config/constants');
 
 const LOG_CATEGORY = 'BUYER_PROFILE_CONTROLLER';
 
 function getClientIp(req) {
-  return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
+  return req.ip || (req.headers && req.headers['x-forwarded-for']) || null;
+}
+
+/** A stored count or amount as a number, or null when nothing is on record. */
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**
@@ -82,10 +89,52 @@ async function updateMyProfile(req, res, next) {
 /**
  * GET /api/buyer-profile/categories
  * The shared major/minor procurement taxonomy the profile screen selects from.
+ * Supports optional ?q= query param to search matching minor categories across 305+ categories.
  */
 async function getCategoryTaxonomy(req, res, next) {
   try {
-    const taxonomy = await buyerProfileService.getCategoryTaxonomy();
+    let taxonomy = await buyerProfileService.getCategoryTaxonomy();
+    if ((!taxonomy || taxonomy.length === 0) && Array.isArray(DEFAULT_CATEGORY_TAXONOMY) && DEFAULT_CATEGORY_TAXONOMY.length > 0) {
+      taxonomy = DEFAULT_CATEGORY_TAXONOMY;
+    }
+    const q = req.query && typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : null;
+
+    if (q !== null) {
+      const allMinors = Array.from(
+        new Set(
+          (taxonomy || []).flatMap((t) => t.minorCategories || [])
+        )
+      ).filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+      const filteredMinors = q.length >= 3
+        ? allMinors.filter((m) => m.toLowerCase().includes(q))
+        : [];
+
+      return res.json({
+        success: true,
+        count: taxonomy.length,
+        totalMinors: allMinors.length,
+        data: taxonomy,
+        minorCategories: filteredMinors,
+      });
+    }
+
+    if (req.query && (req.query.includeMinors === 'true' || req.query.format === 'flat')) {
+      const allMinors = Array.from(
+        new Set(
+          (taxonomy || []).flatMap((t) => t.minorCategories || [])
+        )
+      ).filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+      return res.json({
+        success: true,
+        count: taxonomy.length,
+        totalMinors: allMinors.length,
+        data: taxonomy,
+        minorCategories: allMinors,
+      });
+    }
+
     return res.json({ success: true, count: taxonomy.length, data: taxonomy });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error reading category taxonomy');
@@ -208,12 +257,14 @@ async function getBuyerProfileDetails(req, res, next) {
       });
     }
 
+    // Only stored values are returned. A field with nothing on record is an empty
+    // string or null, never a placeholder company, person, plan, or amount.
     const merged = {
-      organizationName: dbProfile?.companyName || account?.organizationName || name || 'Buyer Organization',
+      organizationName: dbProfile?.companyName || account?.organizationName || name || '',
       brandName: dbProfile?.brandName || account?.brandName || '',
-      organizationType: dbProfile?.organizationType || account?.organizationType || 'Public Limited',
-      contactPerson: dbProfile?.contactName || account?.contactPerson || 'Procurement Officer',
-      contactDesignation: dbProfile?.contactDesignation || account?.contactDesignation || 'Procurement Specialist',
+      organizationType: dbProfile?.organizationType || account?.organizationType || '',
+      contactPerson: dbProfile?.contactName || account?.contactPerson || '',
+      contactDesignation: dbProfile?.contactDesignation || account?.contactDesignation || '',
       corporateEmail: dbProfile?.contactEmail || account?.corporateEmail || email || '',
       mobileNumber: dbProfile?.contactPhone || account?.mobileNumber || account?.phone || '',
       gstin: dbProfile?.gstNumber || account?.gstin || '',
@@ -225,12 +276,14 @@ async function getBuyerProfileDetails(req, res, next) {
       city: dbProfile?.city || account?.city || '',
       state: dbProfile?.state || account?.state || '',
       pincode: dbProfile?.pincode || account?.pincode || account?.zip_code || '',
-      country: dbProfile?.country || account?.country || 'India',
+      country: dbProfile?.country || account?.country || '',
       categories: dbProfile?.categories || account?.categories || [],
-      sourcingMode: account?.sourcingMode || 'mode_1',
-      subscriptionPlan: account?.subscriptionPlan || 'free_trial',
-      totalRFQsCreated: account?.totalRFQsCreated || 0,
-      totalSpend: account?.totalSpend ? String(account.totalSpend).replace('$', '₹') : '₹0',
+      sourcingMode: account?.sourcingMode || null,
+      subscriptionPlan: account?.subscriptionPlan || null,
+      totalRFQsCreated: numberOrNull(account?.totalRFQsCreated),
+      totalSpend: account?.totalSpend !== undefined && account?.totalSpend !== null && account?.totalSpend !== ''
+        ? String(account.totalSpend).replace('$', '₹')
+        : null,
     };
 
     return res.json({

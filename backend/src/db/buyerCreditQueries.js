@@ -2,6 +2,7 @@ const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
+const { BUYER_FREE_TRIAL_RFQ_CREDITS } = require('../config/constants');
 
 function parseRaw(value) {
   if (typeof value === 'string') {
@@ -80,7 +81,7 @@ async function addBuyerCreditsInD1(binding, { buyerId, amount, transaction, star
              SET raw = json_set(
                raw,
                '$.remainingFreeRFQs',
-               CAST(COALESCE(json_extract(raw, '$.remainingFreeRFQs'), 5) AS INTEGER) + $1
+               CAST(COALESCE(json_extract(raw, '$.remainingFreeRFQs'), ${BUYER_FREE_TRIAL_RFQ_CREDITS}) AS INTEGER) + $1
              ), updated_at = CURRENT_TIMESTAMP
              WHERE id = $3
                AND NOT EXISTS (
@@ -96,8 +97,8 @@ async function addBuyerCreditsInD1(binding, { buyerId, amount, transaction, star
                payment_reference, status, description, idempotency_key, created_at
              )
              SELECT $1, b.id, $3, $4, $5, $6, 0,
-               CAST(COALESCE(json_extract(b.raw, '$.remainingFreeRFQs'), 5) AS INTEGER) - $14,
-               CAST(COALESCE(json_extract(b.raw, '$.remainingFreeRFQs'), 5) AS INTEGER),
+               CAST(COALESCE(json_extract(b.raw, '$.remainingFreeRFQs'), ${BUYER_FREE_TRIAL_RFQ_CREDITS}) AS INTEGER) - $14,
+               CAST(COALESCE(json_extract(b.raw, '$.remainingFreeRFQs'), ${BUYER_FREE_TRIAL_RFQ_CREDITS}) AS INTEGER),
                $10, $11, $12, $13, COALESCE($15, CURRENT_TIMESTAMP)
              FROM buyer_accounts b
              WHERE b.id = $2
@@ -200,7 +201,7 @@ async function addBuyerCreditsInPostgres({ buyerId, amount, transaction, started
     }
 
     const currentAccount = parseRaw(accountResult.rows[0].raw);
-    const previousBalance = Number(currentAccount.remainingFreeRFQs ?? 5);
+    const previousBalance = Number(currentAccount.remainingFreeRFQs ?? BUYER_FREE_TRIAL_RFQ_CREDITS);
     const updatedBalance = previousBalance + amount;
     const account = {
       ...currentAccount,

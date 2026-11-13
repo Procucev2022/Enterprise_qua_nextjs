@@ -355,7 +355,7 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     );
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/vendor%40test.com');
+      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/vendor%40test.com', expect.objectContaining({ headers: expect.any(Object) }));
     });
   });
 
@@ -408,17 +408,18 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     jest.useRealTimers();
   });
 
-  test('the Re-scan Document button is disabled until a file is attached, then clickable', () => {
+  test('an attached evidence file is shown as attached but not verified', () => {
     renderWithProvider(<VendorQualificationForm onBack={jest.fn()} onSuccess={jest.fn()} />);
 
-    const rescanBtns = screen.getAllByRole('button', { name: /Re-scan Document/i });
-    expect(rescanBtns[0]).toBeDisabled();
+    expect(screen.getAllByText('No File Attached').length).toBeGreaterThan(0);
 
-    const fileInput = document.querySelectorAll('input[type="file"]')[0];
+    const fileInput = document.querySelectorAll('input[type="file"]')[0] as HTMLInputElement;
     const file = new File(['dummy'], 'evidence.pdf', { type: 'application/pdf' });
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    expect(rescanBtns[0]).not.toBeDisabled();
-    fireEvent.click(rescanBtns[0]);
+    // The file name is recorded, but its contents are never checked, so the attachment is never labelled verified.
+    expect(screen.getByText('evidence.pdf')).toBeInTheDocument();
+    expect(screen.getByText('📎 File Attached (Not OCR-Verified)')).toBeInTheDocument();
+    expect(screen.getByText('Change File')).toBeInTheDocument();
   });
 });

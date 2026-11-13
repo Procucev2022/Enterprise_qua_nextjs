@@ -1,8 +1,15 @@
 const {
-  INITIAL_SYSTEM_CONFIG,
-  INITIAL_AZURE_HEALTH,
   DATABASE_HEALTH_SERVICE_LABEL,
+  INFRASTRUCTURE_HEALTH,
   SYSTEM_ACTOR_EMAIL,
+  GEMINI_CONFIG,
+  VENDOR_RATING_LABELS,
+  CHASER_CHANNEL_LABELS,
+  CHASER_OUTCOME_STATUS,
+  CHASER_OUTREACH_MESSAGES,
+  SUPPORT_CHAT_STATUS,
+  SUPPORT_CHAT_MESSAGES,
+  formatMessage,
   RFQ_DEFAULTS,
   resolveBuyerSourcingMode,
   hasUnlimitedRfqAccess,
@@ -26,6 +33,7 @@ const {
   KEYWORD_TAXONOMY_MAP,
   DEFAULT_CATEGORY_TAXONOMY,
   RFQ_QUOTE_WRITE_RETRIES,
+  BUYER_FREE_TRIAL_RFQ_CREDITS,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -38,7 +46,6 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
-const { simulateChaserOutreach, generateAIFeedItem } = require('./aiChaserService');
 // Called through the namespace so tests can stub the senders without rewiring
 // storeService; every send is fire-and-forget and no-ops under test / when SMTP
 // is unconfigured.
@@ -111,6 +118,60 @@ function normalizeRFQForRead(rfq) {
   return normalized;
 }
 
+/**
+ * A rating or score as a finite number, or null when none was recorded. Number(null)
+ * is 0, so missing and blank values are rejected before the conversion.
+ */
+function optionalScore(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+/**
+ * Maps a send helper's result onto the outcome stored on records and in the feed.
+ * A message counts as sent only when the provider accepted it. Throttled, link-only,
+ * unconfigured and failed results keep their own status.
+ */
+function toChannelOutcome(sendResult) {
+  const raw = sendResult && typeof sendResult === 'object' ? sendResult : {};
+  const providerStatus = typeof raw.status === 'string' && raw.status.trim() ? raw.status.trim() : null;
+  const accepted = raw.success === true || raw.sent === true;
+  if (accepted && raw.throttled !== true && (providerStatus === null || providerStatus === CHASER_OUTCOME_STATUS.SENT)) {
+    return { success: true, status: CHASER_OUTCOME_STATUS.SENT, messageId: raw.messageId || null, error: null };
+  }
+  let status = providerStatus || (raw.throttled === true ? CHASER_OUTCOME_STATUS.THROTTLED : CHASER_OUTCOME_STATUS.FAILED);
+  if (status === CHASER_OUTCOME_STATUS.SENT) status = CHASER_OUTCOME_STATUS.FAILED;
+  let fallbackError = CHASER_OUTREACH_MESSAGES.PROVIDER_NOT_ACCEPTED;
+  if (status === CHASER_OUTCOME_STATUS.THROTTLED) fallbackError = CHASER_OUTREACH_MESSAGES.THROTTLED;
+  return {
+    success: false,
+    status,
+    messageId: null,
+    error: raw.error || fallbackError,
+  };
+}
+
+function newFeedItemId() {
+  return `feed-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+}
+
+/** A recorded delivered count, or 0 when none has been recorded. */
+function recordedCount(value) {
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+/** The database row shown before the first connection probe has finished. */
+function buildPendingDatabaseHealthRow() {
+  return {
+    service: DATABASE_HEALTH_SERVICE_LABEL,
+    status: INFRASTRUCTURE_HEALTH.STATUS.CHECKING,
+    latency: INFRASTRUCTURE_HEALTH.EMPTY_VALUE,
+    uptime: INFRASTRUCTURE_HEALTH.EMPTY_VALUE,
+    details: INFRASTRUCTURE_HEALTH.MESSAGES.AWAITING_PROBE,
+  };
+}
+
 class StoreService {
   constructor() {
     // Every collection starts empty and is filled from Neon by hydrateFromDB().
@@ -138,8 +199,7 @@ class StoreService {
     this.notifications = [];
     this.vendorCatalogue = [];
     this.paymentLinks = [];
-    this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
-    this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
+    this.azureHealth = [buildPendingDatabaseHealthRow()];
     this.isHydratedFromDB = false;
     this._rfqSyncPromises = new Map();
     this._lastRfqSyncMap = new Map();
@@ -158,8 +218,7 @@ class StoreService {
     this.notifications = [];
     this.vendorCatalogue = [];
     this.paymentLinks = [];
-    this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
-    this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
+    this.azureHealth = [buildPendingDatabaseHealthRow()];
     this.isHydratedFromDB = false;
     this._rfqSyncPromises = new Map();
     this._lastRfqSyncMap = new Map();
@@ -194,6 +253,10 @@ class StoreService {
   async hydrateFromDB() {
     if (!pool.hasStorage()) {
       this.isHydratedFromDB = false;
+      this._setDatabaseHealthRow({
+        status: INFRASTRUCTURE_HEALTH.STATUS.NOT_CONFIGURED,
+        details: pool.NOT_CONFIGURED_MESSAGE,
+      });
       logger.error(
         'DATABASE_URL is not set — no records can be loaded and every data-backed request will fail.',
         null,
@@ -276,6 +339,10 @@ class StoreService {
     } catch (err) {
       logger.error('Failed to load domain records from PostgreSQL', err, 'STORE_SERVICE');
       this.isHydratedFromDB = false;
+      this._setDatabaseHealthRow({
+        status: INFRASTRUCTURE_HEALTH.STATUS.UNREACHABLE,
+        details: err.message,
+      });
       return { hydrated: false, source: 'unavailable', error: err.message };
     }
   }
@@ -339,6 +406,49 @@ class StoreService {
       }
     }
     return tracked;
+  }
+
+  /**
+   * Starts a real provider send and writes its feed entry from the send's result.
+   * The entry says "sent" only when the provider accepted the message; it never
+   * reports a result before the send has settled.
+   */
+  _sendWithFeedOutcome(sendPromise, errorMessage, metadata, feedDetails) {
+    const tracked = this._background(sendPromise, errorMessage, metadata);
+    tracked
+      .then((result) => this._recordChannelFeedItem(feedDetails, toChannelOutcome(result)))
+      .catch((error) => logger.error('Could not record the outcome of a channel send', { error }, 'STORE_SERVICE'));
+    return tracked;
+  }
+
+  /** Adds one feed entry for a channel message, using the real outcome as its status. */
+  _recordChannelFeedItem({ channel, vendor, rfqNumber, buyerAccountId }, outcome) {
+    const vendorName = (vendor && (vendor.name || vendor.contactPerson)) || 'Vendor';
+    const values = {
+      channel: CHASER_CHANNEL_LABELS[channel] || channel,
+      vendorName,
+      rfqNumber: rfqNumber || '',
+      status: outcome.status,
+      error: outcome.error || '',
+    };
+    return this.addAIFeedItem({
+      id: newFeedItemId(),
+      type: channel,
+      channel,
+      title: formatMessage(
+        outcome.success ? CHASER_OUTREACH_MESSAGES.FEED_TITLE_SENT : CHASER_OUTREACH_MESSAGES.FEED_TITLE_NOT_SENT,
+        values
+      ),
+      message: formatMessage(
+        outcome.success ? CHASER_OUTREACH_MESSAGES.FEED_MESSAGE_SENT : CHASER_OUTREACH_MESSAGES.FEED_MESSAGE_NOT_SENT,
+        values
+      ),
+      recipient: vendorName,
+      rfqNumber: rfqNumber || null,
+      buyerAccountId: buyerAccountId || null,
+      status: outcome.status,
+      channelDetails: { messageId: outcome.messageId || null, error: outcome.error || null },
+    });
   }
 
   _persistVendor(vendor) {
@@ -715,10 +825,10 @@ class StoreService {
       id,
       organizationName: profile?.companyName || user.orgName || user.email,
       brandName: profile?.brandName || '',
-      organizationType: profile?.organizationType || 'Public Limited',
+      organizationType: profile?.organizationType || null,
       corporateEmail: profile?.contactEmail || user.email.toLowerCase(),
       contactPerson: profile?.contactName || user.name || '',
-      contactDesignation: profile?.contactDesignation || 'Procurement Specialist',
+      contactDesignation: profile?.contactDesignation || null,
       mobileNumber: profile?.contactPhone || user.phone || '',
       organizationId: user.orgId || profile?.organizationId || null,
       gstin: profile?.gstNumber || '',
@@ -784,7 +894,7 @@ class StoreService {
           phone: (identity && identity.mobile) || '',
           source: 'migrated_identity',
           onboardingEmailStatus: 'account_exists',
-          status: 'PREFERRED ENTERPRISE SUPPLIER',
+          status: 'PENDING EVALUATION',
           subscriptionPlan: 'premium',
           freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
           majorCategory: '',
@@ -874,7 +984,7 @@ class StoreService {
       status: accData.status || 'ACTIVE_VERIFIED',
       sourcingMode: accData.sourcingMode || 'mode_1',
       subscriptionPlan: accData.subscriptionPlan || 'free_trial',
-      remainingFreeRFQs: accData.remainingFreeRFQs !== undefined ? accData.remainingFreeRFQs : 5,
+      remainingFreeRFQs: accData.remainingFreeRFQs !== undefined ? accData.remainingFreeRFQs : BUYER_FREE_TRIAL_RFQ_CREDITS,
     };
     return newAcc;
   }
@@ -1016,7 +1126,7 @@ class StoreService {
     if (!storageConfigured) {
       if (accountIndex === -1) return null;
       const currentAccount = this.buyerAccounts[accountIndex];
-      const previousBalance = Number(currentAccount.remainingFreeRFQs ?? 5);
+      const previousBalance = Number(currentAccount.remainingFreeRFQs ?? BUYER_FREE_TRIAL_RFQ_CREDITS);
       const updatedBalance = previousBalance + amount;
       const updatedAccount = {
         ...currentAccount,
@@ -1181,14 +1291,14 @@ class StoreService {
         if (hasUnlimitedRfqAccess(idOrAccount)) {
           return { ok: true, remaining: idOrAccount.remainingFreeRFQs !== undefined ? idOrAccount.remainingFreeRFQs : 999999 };
         }
-        const remaining = idOrAccount.remainingFreeRFQs !== undefined ? idOrAccount.remainingFreeRFQs : 5;
+        const remaining = idOrAccount.remainingFreeRFQs !== undefined ? idOrAccount.remainingFreeRFQs : BUYER_FREE_TRIAL_RFQ_CREDITS;
         if (remaining <= 0) {
           return { ok: false, remaining: 0 };
         }
         const updated = {
           ...idOrAccount,
           remainingFreeRFQs: remaining - 1,
-          freeRFQsUsed: (idOrAccount.freeRFQsUsed || (5 - remaining)) + 1,
+          freeRFQsUsed: (idOrAccount.freeRFQsUsed || (BUYER_FREE_TRIAL_RFQ_CREDITS - remaining)) + 1,
           syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
         };
         this.buyerAccounts.unshift(updated);
@@ -1207,14 +1317,14 @@ class StoreService {
     if (hasUnlimitedRfqAccess(buyer)) {
       return { ok: true, remaining: buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 999999 };
     }
-    const remaining = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
+    const remaining = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : BUYER_FREE_TRIAL_RFQ_CREDITS;
     if (remaining <= 0) {
       return { ok: false, remaining: 0 };
     }
     const updated = {
       ...buyer,
       remainingFreeRFQs: remaining - 1,
-      freeRFQsUsed: (buyer.freeRFQsUsed || (5 - remaining)) + 1,
+      freeRFQsUsed: (buyer.freeRFQsUsed || (BUYER_FREE_TRIAL_RFQ_CREDITS - remaining)) + 1,
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
     buyer.remainingFreeRFQs = updated.remainingFreeRFQs;
@@ -1252,8 +1362,8 @@ class StoreService {
     const current = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 0;
     const updated = {
       ...buyer,
-      remainingFreeRFQs: Math.min(5, current + 1),
-      freeRFQsUsed: Math.max(0, (buyer.freeRFQsUsed || (5 - current)) - 1),
+      remainingFreeRFQs: Math.min(BUYER_FREE_TRIAL_RFQ_CREDITS, current + 1),
+      freeRFQsUsed: Math.max(0, (buyer.freeRFQsUsed || (BUYER_FREE_TRIAL_RFQ_CREDITS - current)) - 1),
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
     this.buyerAccounts[idx] = updated;
@@ -1468,19 +1578,16 @@ class StoreService {
       buyerId: resolvedBuyerId,
       buyerAccountId: resolvedBuyerId,
       buyerEmail: vendorData.buyerEmail || null,
-      rating: vendorData.rating || 4.5,
-      score: vendorData.score || 85.0,
+      rating: optionalScore(vendorData.rating),
+      score: optionalScore(vendorData.score),
       source: vendorData.source || (resolvedBuyerId || vendorData.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
-      status: vendorData.status || 'PREFERRED ENTERPRISE SUPPLIER',
+      status: vendorData.status || 'PENDING EVALUATION',
       evaluated: vendorData.evaluated !== undefined ? vendorData.evaluated : false,
       hasRecord: vendorData.hasRecord !== undefined ? vendorData.hasRecord : false,
       isExistingInDatabase: vendorData.isExistingInDatabase !== undefined ? vendorData.isExistingInDatabase : true,
-      // Was defaulting to 'sent' unconditionally even though nothing below
-      // ever actually sent an email — a buyer adding a vendor by email saw a
-      // "sent" status that was simply a lie. Now starts 'pending' and only
-      // flips to 'sent' once mailerService confirms real delivery, mirroring
-      // bulkAddVendors' already-correct pattern below.
-      onboardingEmailStatus: vendorData.onboardingEmailStatus || (normalizedEmail ? 'pending' : 'sent'),
+      // 'pending' until mailerService confirms the onboarding email was accepted. A
+      // vendor without an email address cannot receive one, so it is 'skipped'.
+      onboardingEmailStatus: vendorData.onboardingEmailStatus || (normalizedEmail ? 'pending' : 'skipped'),
       isCategoryAligned: vendorData.isCategoryAligned !== undefined ? vendorData.isCategoryAligned : true,
       // Every vendor starts on the free client-uploaded tier with a clean
       // download counter and initial free quotation credits.
@@ -1798,8 +1905,10 @@ class StoreService {
       pincode: row.pincode || '',
       gstin: row.gstin || '',
       products: row.products || '',
-      rating: 4.5,
-      score: 85.0,
+      // Not evaluated yet, so no rating or score is recorded. An unrated supplier
+      // must not carry a score that nobody assessed.
+      rating: null,
+      score: null,
       // A category manager's upload feeds the shared Procucev network
       // ('excel', unscoped); a buyer's own upload is their private roster
       // and carries buyerId/addedByBuyerCompany through from the
@@ -1814,9 +1923,9 @@ class StoreService {
       isExistingInDatabase: true,
       onboardingEmailStatus: 'pending',
       isCategoryAligned: true,
-      subscriptionPlan: 'premium',
+      // No subscription plan or credit balance is granted here. The vendor has not
+      // registered, and neither value is a column in the vendors table.
       rfqDownloadsUsed: 0,
-      freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
       quotedRfqIds: [],
       // Carried through from the request's server-side re-validation
       // (see vendorController.bulkImportVendors) so a row that failed a
@@ -1845,7 +1954,7 @@ class StoreService {
    *   only remaining job is duplicate detection and the actual bulk write.
    * @returns {Promise<{results: object[], importedCount: number, duplicateCount: number}>}
    */
-  async bulkAddVendors(rows) {
+  async bulkAddVendors(rows, actorEmail = null) {
     // Neon is the single source of truth for vendor records (see the standing
     // "no in-memory-only data path" principle). A bulk import with no database
     // configured must fail loudly, not silently accept rows into `this.vendors`
@@ -1876,6 +1985,7 @@ class StoreService {
             status: 'duplicate',
             email: row.email,
             reason: `Duplicate Vendor Code "${row.vendorCode}" within the uploaded file.`,
+            errors: [`Duplicate Vendor Code "${row.vendorCode}" within the uploaded file.`],
           });
           return;
         }
@@ -1884,13 +1994,25 @@ class StoreService {
 
       if (email) {
         if (existingEmails.has(email)) {
-          const duplicate = { rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' };
+          const duplicate = {
+            rowNumber: row.rowNumber,
+            status: 'duplicate',
+            email: row.email,
+            reason: 'A vendor with this email already exists.',
+            errors: ['A vendor with this email already exists.'],
+          };
           results.push(duplicate);
           claimCandidates.push({ result: duplicate, vendor: this._buildBulkVendor(row, idx) });
           return;
         }
         if (seenInBatch.has(email)) {
-          results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'Duplicate email within the uploaded file.' });
+          results.push({
+            rowNumber: row.rowNumber,
+            status: 'duplicate',
+            email: row.email,
+            reason: 'Duplicate email within the uploaded file.',
+            errors: ['Duplicate email within the uploaded file.'],
+          });
           return;
         }
         seenInBatch.add(email);
@@ -1987,20 +2109,70 @@ class StoreService {
     for (const { result, vendor } of claimCandidates) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        const claimed = await this.claimMigratedVendorProfile(vendor.email, vendor, vendor.buyerId || null, 'vendor-bulk-import');
+        let claimed = await this.claimMigratedVendorProfile(vendor.email, vendor, vendor.buyerId || null, 'vendor-bulk-import');
+
+        if (!claimed && vendor.buyerId && vendor.email) {
+          const normalized = String(vendor.email).trim().toLowerCase();
+          let existing = this.vendors.find((v) => (v.email || '').toLowerCase() === normalized);
+          if (!existing && pool.hasStorage()) {
+            // eslint-disable-next-line no-await-in-loop
+            existing = await domainQueries.getVendorByEmailFromDB(normalized, { fresh: true });
+          }
+          if (existing) {
+            const isOwnedByOtherBuyer = existing.buyerId && existing.buyerId !== vendor.buyerId;
+            if (!isOwnedByOtherBuyer) {
+              const updates = {
+                ...existing,
+                name: vendor.name || existing.name,
+                companyName: vendor.name || existing.companyName || existing.name,
+                phone: vendor.phone || existing.phone,
+                contactPhone: vendor.phone || existing.contactPhone || existing.phone,
+                contactPerson: vendor.contactPerson || existing.contactPerson,
+                majorCategory: vendor.majorCategory || existing.majorCategory,
+                minorCategories: Array.isArray(vendor.minorCategories) && vendor.minorCategories.length > 0 ? vendor.minorCategories : existing.minorCategories,
+                city: vendor.city || existing.city,
+                state: vendor.state || existing.state,
+                pincode: vendor.pincode || existing.pincode,
+                gstin: vendor.gstin || existing.gstin,
+                buyerId: vendor.buyerId,
+                buyerAccountId: vendor.buyerId,
+                addedByBuyerCompany: vendor.addedByBuyerCompany || existing.addedByBuyerCompany,
+                source: existing.source === 'procucev_network' ? 'procucev_network' : 'buyer_excel',
+                isCategoryAligned: true,
+                onboardingEmailStatus: existing.onboardingEmailStatus || 'account_exists',
+              };
+              // eslint-disable-next-line no-await-in-loop
+              claimed = await this.updateVendorDurably(existing.id, updates);
+              if (claimed) {
+                const memIdx = this.vendors.findIndex((v) => v.id === existing.id);
+                if (memIdx !== -1) {
+                  this.vendors[memIdx] = { ...this.vendors[memIdx], ...claimed };
+                } else {
+                  this.vendors.unshift(claimed);
+                }
+              }
+            } else {
+              result.status = 'failed';
+              result.reason = `A vendor with the email "${vendor.email}" is already registered to another buyer organization.`;
+              result.errors = [result.reason];
+            }
+          }
+        }
+
         if (claimed) {
           delete result.reason;
+          delete result.errors;
           Object.assign(result, {
             status: 'imported',
             missingEmail: false,
             hasIssues: claimed.hasIssues,
             issues: claimed.issues,
             vendor: claimed,
-            onboardingEmailStatus: 'account_exists',
+            onboardingEmailStatus: claimed.onboardingEmailStatus || 'account_exists',
           });
         }
       } catch (err) {
-        logger.error(`Failed to link migrated vendor ${vendor.email} during bulk import`, err, 'STORE_SERVICE');
+        logger.error(`Failed to link vendor ${vendor.email} during bulk import`, err, 'STORE_SERVICE');
       }
     }
 
@@ -2010,7 +2182,7 @@ class StoreService {
 
     if (importedCount > 0) {
       this.addAuditLog({
-        userEmail: 'procurement@enterprise.com',
+        userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
         action: `Bulk-imported ${importedCount} vendor(s) via Excel upload (${duplicateCount} duplicate row(s) skipped, ${missingEmailCount} missing an email)`,
       });
     }
@@ -2107,7 +2279,13 @@ class StoreService {
   }
 
   async deleteVendorDurably(id, actorEmail = null) {
-    const target = this.vendors.find((vendor) => vendor.id === id || vendor.email === id);
+    let target = this.vendors.find((vendor) => vendor.id === id || vendor.email === id);
+    if (!target && pool.hasStorage()) {
+      target = await domainQueries.getVendorByIdFromDB(id);
+      if (!target && typeof id === 'string' && id.includes('@')) {
+        target = await domainQueries.getVendorByEmailFromDB(id);
+      }
+    }
     if (!target) return false;
 
     if (pool.hasStorage()) {
@@ -2122,10 +2300,10 @@ class StoreService {
       }
     }
 
-    if (!this.deleteVendor(id, actorEmail, { deferPersistence: true, deferAudit: true })) return false;
+    this.deleteVendor(target.id, actorEmail, { deferPersistence: true, deferAudit: true });
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-      action: `Removed vendor ${target.name} (${target.email || 'no email on record'}) from the vendor master`,
+      action: `Removed vendor ${target.name || id} (${target.email || 'no email on record'}) from the vendor master`,
     });
     return true;
   }
@@ -3172,7 +3350,7 @@ class StoreService {
       ...(link.billingDuration ? { billingDuration: link.billingDuration } : {}),
     };
     if (link.planId === 'free_trial') {
-      updates.remainingFreeRFQs = 5;
+      updates.remainingFreeRFQs = BUYER_FREE_TRIAL_RFQ_CREDITS;
     }
     this.updateBuyerAccount(buyer.id, updates);
     const updatedLink = this.updatePaymentLinkRecord(link.id, { activated: true });
@@ -3242,13 +3420,16 @@ class StoreService {
     const normalizedQualityScore = Number(qualityScore);
     const normalizedCostScore = Number(costScore);
     const normalizedDeliveryScore = Number(deliveryScore);
-    const previousScore = Number(vendor.score || 85);
-    const previousRating = Number(vendor.rating || 4.5);
+    // An unrated vendor has no earlier score to weight, so its first revision uses the
+    // buyer's own average as the base. The recorded previous values stay null.
+    const previousScore = optionalScore(vendor.score);
+    const previousRating = optionalScore(vendor.rating);
+    const buyerBaseline = parseFloat((((normalizedQualityScore + normalizedCostScore + normalizedDeliveryScore) / 3)).toFixed(2));
     const { buyerAverage, newCompositeScore, newRating } = calculateRevisedRating({
       qualityScore: normalizedQualityScore,
       costScore: normalizedCostScore,
       deliveryScore: normalizedDeliveryScore,
-      previousScore,
+      previousScore: previousScore ?? buyerBaseline,
     });
 
     const revisionRecord = {
@@ -3295,21 +3476,28 @@ class StoreService {
     const { newCompositeScore, newRating } = prepared;
     // Send rating revision email to the vendor
     if (vendor.email) {
-      const emailPayload = mailerService.buildRatingRevisionEmail({
-        to: vendor.email,
-        recipientName: vendor.contactPerson || vendor.name,
-        vendorName: vendor.name,
-        buyerCompany: buyerCompany || 'A buyer on Procucev',
-        buyerName: buyerName || '',
-        previousRating: vendor.rating || 4.5,
-        newRating: newRating,
-        previousScore: vendor.score || 85,
-        newScore: newCompositeScore,
-        remarks: remarks || 'Periodic Buyer Rating Assessment',
-        qualityScore,
-        costScore,
-        deliveryScore,
-      });
+      let emailPayload;
+      try {
+        emailPayload = mailerService.buildRatingRevisionEmail({
+          to: vendor.email,
+          recipientName: vendor.contactPerson || vendor.name,
+          vendorName: vendor.name,
+          buyerCompany: buyerCompany || 'A buyer on Procucev',
+          buyerName: buyerName || '',
+          // null for a vendor that has never been rated; the email template must say so.
+          previousRating: prepared.revisionRecord.previousRating,
+          newRating: newRating,
+          previousScore: prepared.revisionRecord.previousScore,
+          newScore: newCompositeScore,
+          remarks: remarks || 'Periodic Buyer Rating Assessment',
+          qualityScore,
+          costScore,
+          deliveryScore,
+        });
+      } catch (error) {
+        logger.error('Rating revision email could not be built; no email was sent', { vendorId: vendor.id, error }, 'STORE_SERVICE');
+        return;
+      }
 
       this._background(
         mailerService.sendVendorIngestionEmail(emailPayload, 'rating-revision'),
@@ -3328,7 +3516,7 @@ class StoreService {
     const { newCompositeScore, newRating } = prepared;
     this.addAuditLog({
       userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
-      action: `Revised vendor rating for ${vendor.name}: ${vendor.rating} -> ${newRating} (Score: ${newCompositeScore})`,
+      action: `Revised vendor rating for ${vendor.name}: ${optionalScore(vendor.rating) ?? VENDOR_RATING_LABELS.UNRATED} -> ${newRating} (Score: ${newCompositeScore})`,
     });
   }
 
@@ -3366,13 +3554,132 @@ class StoreService {
     return { updatedVendor, revisionRecord: prepared.revisionRecord };
   }
 
+  requestVendorEvaluation(vendorId, options = {}, scopedBuyerId = null) {
+    const vendor = this.getVendorById(vendorId, scopedBuyerId);
+    if (!vendor) return null;
+
+    const requestedAt = new Date().toISOString();
+    const buyerCompany = options.buyerCompany || 'A buyer on Procucev';
+    const buyerName = options.buyerName || '';
+    const buyerEmail = options.buyerEmail || '';
+    const notes = options.notes || '';
+
+    const updates = {
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: vendor.status || 'PENDING EVALUATION',
+    };
+
+    const updatedVendor = this.updateVendor(vendor.id, updates);
+
+    if (vendor.email) {
+      try {
+        void mailerService.sendVendorEvaluationRequestEmail({
+          to: vendor.email,
+          recipientName: vendor.contactPerson || vendor.name,
+          vendorName: vendor.name,
+          buyerCompany,
+          buyerName,
+          buyerEmail,
+          notes,
+        });
+      } catch (emailErr) {
+        logger.error('Failed to dispatch evaluation request email', emailErr, 'STORE_SERVICE');
+      }
+    }
+
+    this.addFeedItem({
+      title: `Vendor Evaluation Requested: ${vendor.name}`,
+      description: `Buyer ${buyerCompany} requested 360° performance evaluation from ${vendor.name} (${vendor.email}).`,
+      source: 'system',
+      vendorName: vendor.name,
+    });
+
+    this.addAuditLog({
+      userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Requested performance evaluation for vendor ${vendor.name} (${vendor.email}) on behalf of ${buyerCompany}.`,
+    });
+
+    return {
+      vendorId: vendor.id,
+      vendorName: vendor.name,
+      vendorEmail: vendor.email,
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: updatedVendor?.status || vendor.status,
+    };
+  }
+
+  async requestVendorEvaluationDurably(vendorId, options = {}, scopedBuyerId = null) {
+    let vendor = this.getVendorById(vendorId, scopedBuyerId);
+    if (!vendor && pool.hasStorage()) {
+      vendor = await this.getVendorByIdWithDBFallback(vendorId, scopedBuyerId, { fresh: true });
+    }
+    if (!vendor) return null;
+
+    const requestedAt = new Date().toISOString();
+    const buyerCompany = options.buyerCompany || 'A buyer on Procucev';
+    const buyerName = options.buyerName || '';
+    const buyerEmail = options.buyerEmail || '';
+    const notes = options.notes || '';
+
+    const updates = {
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: vendor.status || 'PENDING EVALUATION',
+    };
+
+    const updatedVendor = await this.updateVendorDurably(vendor.id, () => updates);
+
+    if (vendor.email) {
+      try {
+        void mailerService.sendVendorEvaluationRequestEmail({
+          to: vendor.email,
+          recipientName: vendor.contactPerson || vendor.name,
+          vendorName: vendor.name,
+          buyerCompany,
+          buyerName,
+          buyerEmail,
+          notes,
+        });
+      } catch (emailErr) {
+        logger.error('Failed to dispatch evaluation request email', emailErr, 'STORE_SERVICE');
+      }
+    }
+
+    this.addFeedItem({
+      title: `Vendor Evaluation Requested: ${vendor.name}`,
+      description: `Buyer ${buyerCompany} requested 360° performance evaluation from ${vendor.name} (${vendor.email}).`,
+      source: 'system',
+      vendorName: vendor.name,
+    });
+
+    this.addAuditLog({
+      userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Requested performance evaluation for vendor ${vendor.name} (${vendor.email}) on behalf of ${buyerCompany}.`,
+    });
+
+    return {
+      vendorId: vendor.id,
+      vendorName: vendor.name,
+      vendorEmail: vendor.email,
+      evaluationRequested: true,
+      evaluationRequestedAt: requestedAt,
+      evaluationRequestedBy: buyerCompany,
+      status: updatedVendor?.status || vendor.status,
+    };
+  }
+
   // ==========================================
   // 3. RFQS
   // ==========================================
   /**
    * Close due RFQs through one conditional database update before changing the
    * cache or sending closure notifications. The in-memory path is retained for
-   * local mock-only operation when no persistent store is configured.
+   * local in-memory operation when no persistent store is configured.
    */
   async closeExpiredRFQsDurably(now = Date.now()) {
     const nowMs = Number(now);
@@ -3479,7 +3786,7 @@ class StoreService {
         rfqNumber: rfq.rfqNumber,
         totalInvited: vCount,
         respondedCount: 0,
-        callStats: { total: vCount, connected: 0, avgDuration: '0s' },
+        callStats: { total: 0, connected: 0, avgDuration: null },
         whatsappStats: { total: vCount, delivered: 0, read: 0, replied: 0 },
         smsStats: { total: vCount, delivered: 0, clicked: 0 },
         emailStats: { total: vCount, delivered: 0, sent24h: 0, opened: 0 },
@@ -3526,47 +3833,30 @@ class StoreService {
       });
     }
 
-    const createdAtMs = new Date(rfq.createdAt || Date.now()).getTime();
-    const ageMs = Math.max(0, Date.now() - (isNaN(createdAtMs) ? Date.now() : createdAtMs));
-    const smsDue = ageMs >= 300000;
-    const waDue = ageMs >= 43200000;
-    const emailDue = ageMs >= 86400000;
+    // Channel counts and per-vendor statuses come only from what the chaser services
+    // recorded. The age of an RFQ is not evidence that a message went out, so no
+    // delivered count or sent flag is derived from elapsed time.
+    fup.callStats = { total: 0, connected: 0, avgDuration: null };
 
     fup.emailStats = fup.emailStats || { total: vCount, delivered: 0, sent24h: 0, opened: 0 };
-    const emailTotal = Math.max(fup.emailStats.total || 0, vCount);
-    fup.emailStats.total = emailTotal;
-    fup.emailStats.delivered = emailDue ? emailTotal : 0;
+    fup.emailStats.total = Math.max(fup.emailStats.total || 0, vCount);
+    fup.emailStats.delivered = recordedCount(fup.emailStats.delivered);
 
     fup.smsStats = fup.smsStats || { total: vCount, delivered: 0, clicked: 0 };
-    const smsTotal = Math.max(fup.smsStats.total || 0, vCount);
-    fup.smsStats.total = smsTotal;
-    fup.smsStats.delivered = smsDue ? smsTotal : 0;
+    fup.smsStats.total = Math.max(fup.smsStats.total || 0, vCount);
+    fup.smsStats.delivered = recordedCount(fup.smsStats.delivered);
 
     fup.whatsappStats = fup.whatsappStats || { total: vCount, delivered: 0, read: 0, replied: 0 };
-    const waTotal = Math.max(fup.whatsappStats.total || 0, vCount);
-    fup.whatsappStats.total = waTotal;
-    fup.whatsappStats.delivered = waDue ? waTotal : 0;
+    fup.whatsappStats.total = Math.max(fup.whatsappStats.total || 0, vCount);
+    fup.whatsappStats.delivered = recordedCount(fup.whatsappStats.delivered);
 
     if (Array.isArray(fup.vendors)) {
       fup.vendors.forEach((v) => {
         if (!v) return;
-        if (emailDue) {
-          v.emailSent = true;
-          v.email24h = { status: 'delivered', lastAttempt: new Date().toISOString() };
-        } else {
-          v.emailSent = false;
-          v.email24h = { status: 'pending' };
-        }
-        if (smsDue) {
-          v.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
-        } else {
-          v.sms = { status: 'pending' };
-        }
-        if (waDue) {
-          v.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
-        } else {
-          v.whatsapp = { status: 'pending' };
-        }
+        if (typeof v.emailSent !== 'boolean') v.emailSent = false;
+        if (!v.email24h) v.email24h = v.email ? { ...v.email } : { status: 'pending' };
+        if (!v.sms) v.sms = { status: 'pending' };
+        if (!v.whatsapp) v.whatsapp = { status: 'pending' };
       });
     }
 
@@ -3726,6 +4016,15 @@ class StoreService {
   }
 
   createRFQ(rfqData, requestingBuyerAccount = null, { deferPersistence = false, deferSideEffects = false } = {}) {
+    const rfqTitle = String(rfqData.title ?? '').trim();
+    if (!rfqTitle) {
+      const titleError = new Error(RFQ_CREATION_ERRORS.TITLE_REQUIRED);
+      titleError.statusCode = 422;
+      titleError.code = 'RFQ_TITLE_REQUIRED';
+      throw titleError;
+    }
+    const hasBudget = rfqData.budget !== undefined && rfqData.budget !== null && String(rfqData.budget).trim() !== '';
+    const budgetAmount = hasBudget && Number.isFinite(Number(rfqData.budget)) ? Number(rfqData.budget) : null;
     const hadExplicitVendors = Array.isArray(rfqData.assignedVendors) && rfqData.assignedVendors.length > 0;
     const rfqNumber = rfqData.rfqNumber || this.generateRFQNumber();
     const id = rfqData.id || `rfq-${Date.now()}`;
@@ -3747,7 +4046,7 @@ class StoreService {
     const newRFQ = {
       id,
       rfqNumber,
-      title: rfqData.title || 'Untitled RFQ',
+      title: rfqTitle,
       // Not defaulted to a category the buyer never chose: 'Engineering Spares -
       // Mechanical' used to be substituted here, which silently mis-filed the RFQ
       // and routed it to the wrong vendor pool.
@@ -3763,11 +4062,9 @@ class StoreService {
         : (rfqData.deadline
             ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
             : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
-      // Budget was previously dropped here, so an RFQ saved through the API came
-      // back from hydration with no budget at all: the portfolio value totalled
-      // zero and the quote matrix crashed reading it. It is validated as a
-      // required positive number by VALIDATION_SCHEMAS.createRFQ.
-      budget: Number(rfqData.budget) || 0,
+      // Budget is optional (VALIDATION_SCHEMAS.createRFQ). An RFQ that states none keeps
+      // null, and the UI shows it as not stated. Zero is never stored in its place.
+      budget: budgetAmount,
       // Vendors price freight against these, so they round-trip with the RFQ.
       deliveryLocation: rfqData.deliveryLocation || '',
       deliveryCity: rfqData.deliveryCity || '',
@@ -3852,7 +4149,7 @@ class StoreService {
         rfqNumber,
         totalInvited: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length,
         respondedCount: 0,
-        callStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, connected: 0, avgDuration: '0s' },
+        callStats: { total: 0, connected: 0, avgDuration: null },
         whatsappStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, read: 0, replied: 0 },
         smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, clicked: 0 },
         emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, sent24h: 0, opened: 0 },
@@ -3966,7 +4263,7 @@ class StoreService {
 
       // Limit client vendors to MAX_CLIENT_PER_CATEGORY per unique minor category (with major fallback)
       if (shortlisted.length > 0) {
-        newRFQ.assignedVendors = this.selectVendorsForRFQ(
+        const selected = this.selectVendorsForRFQ(
           shortlisted,
           newRFQ,
           maxClientPerCat,
@@ -3975,6 +4272,7 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
+        newRFQ.assignedVendors = selected.length > 0 ? selected : shortlisted.slice(0, maxClientPerCat);
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -3997,14 +4295,14 @@ class StoreService {
     // If assignedVendors is empty, automatically identify and assign eligible vendors from
     // the buyer's private roster matching the RFQ category and delivery location.
     const isV1 = newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'v1' || newRFQ.sourcingMode === 'version_1';
-    if (!newRFQ.needsCategoryManagerAssignment && !newRFQ.categoryNotAvailable && isV1 && !hadExplicitVendors && (!Array.isArray(newRFQ.assignedVendors) || newRFQ.assignedVendors.length === 0)) {
+    if (!newRFQ.needsCategoryManagerAssignment && !newRFQ.categoryNotAvailable && isV1 && !hadExplicitVendors) {
       const categories = this._rfqDistinctCategories(newRFQ);
       const targetCategories = categories.length > 0 ? categories : (newRFQ.category ? [newRFQ.category] : []);
       if (targetCategories.length > 0) {
         const clientCandidates = this.candidateVendorsForRFQ(newRFQ).filter(
           (v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ)
         );
-        const clientMatches = this.selectVendorsForRFQ(
+        let clientMatches = this.selectVendorsForRFQ(
           clientCandidates,
           newRFQ,
           maxClientPerCat,
@@ -4013,6 +4311,9 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
+        if (clientMatches.length === 0 && clientCandidates.length > 0) {
+          clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
+        }
         if (clientMatches.length > 0) {
           newRFQ.assignedVendors = clientMatches.map((v) => ({
             id: v.id,
@@ -4021,8 +4322,9 @@ class StoreService {
             contactPerson: v.contactPerson || null,
             phone: v.phone || v.mobile || v.mobileNumber || null,
             source: v.source || 'buyer_uploaded',
+            vendorCategory: 'Client List',
             majorCategory: v.majorCategory || v.category || null,
-            minorCategories: v.minorCategories || [],
+            minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
             city: v.city || null,
             state: v.state || null,
             location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
@@ -4164,11 +4466,17 @@ class StoreService {
       };
 
       const allCandidates = this.candidateVendorsForRFQ(newRFQ);
-      const clientCandidates = allCandidates.filter((v) => !this.isProcucevVendor(v));
+      const clientCandidates = allCandidates.filter((v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ));
       const procucevCandidates = allCandidates.filter((v) => this.isProcucevVendor(v));
 
-      const clientMatches = this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, targetLocation);
-      const procucevMatches = this.selectVendorsForRFQ(procucevCandidates, newRFQ, maxProcucevPerCat, targetLocation);
+      let clientMatches = this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, targetLocation);
+      if (clientMatches.length === 0 && clientCandidates.length > 0) {
+        clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
+      }
+      let procucevMatches = this.selectVendorsForRFQ(procucevCandidates, newRFQ, maxProcucevPerCat, targetLocation);
+      if (procucevMatches.length === 0 && procucevCandidates.length > 0) {
+        procucevMatches = procucevCandidates.slice(0, targetCategories.length * maxProcucevPerCat);
+      }
       const categoryMatches = [...clientMatches, ...procucevMatches];
 
       const existingKeys = new Set(
@@ -4176,24 +4484,30 @@ class StoreService {
       );
       const additions = categoryMatches
         .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
-        .map((v) => ({
-          id: v.id,
-          name: v.name,
-          email: v.email || null,
-          contactPerson: v.contactPerson || null,
-          phone: v.phone || null,
-          source: v.source || (this.isProcucevVendor(v) ? 'procucev_network' : 'buyer_uploaded'),
-          majorCategory: v.majorCategory || v.category || null,
-          minorCategories: v.minorCategories || [],
-          city: v.city || null,
-          state: v.state || null,
-          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
-          pincode: v.pincode || null,
-        }));
+        .map((v) => {
+          const isProc = this.isProcucevVendor(v);
+          return {
+            id: v.id,
+            name: v.name,
+            email: v.email || null,
+            contactPerson: v.contactPerson || null,
+            phone: v.phone || v.mobile || v.mobileNumber || null,
+            source: v.source || (isProc ? 'procucev_network' : 'buyer_uploaded'),
+            vendorCategory: isProc ? 'Procucev Network' : 'Client List',
+            majorCategory: v.majorCategory || v.category || null,
+            minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+            city: v.city || null,
+            state: v.state || null,
+            location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+            pincode: v.pincode || null,
+          };
+        });
       if (additions.length > 0) {
         newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];
-        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
-        newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+        if (newRFQ.followUpData) {
+          newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+          newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+        }
       }
     }
 
@@ -4504,25 +4818,17 @@ class StoreService {
       rfqNumber,
     });
 
-    // Simulate multi-channel outreach actions
-    if (newRFQ.assignedVendors && newRFQ.assignedVendors.length > 0) {
-      newRFQ.assignedVendors.forEach((v) => {
-        const chaserLogs = simulateChaserOutreach(newRFQ, v);
-        chaserLogs.forEach((log) => this.addAIFeedItem(log));
-      });
-    }
-
-    // System event for RFQ creation
-    this.addAIFeedItem(
-      generateAIFeedItem({
-        type: 'ingestion',
-        title: `Autonomous Sourcing Engine Initialized: ${rfqNumber}`,
-        message: `RFQ ${rfqNumber} created with ${(newRFQ.extractedEntities || []).length} line items. Multi-channel AI chasers dispatched across ${(newRFQ.assignedVendors || []).length} vendor(s).`,
-        recipient: 'Procurement AI Orchestrator',
-        rfqNumber,
-        buyerAccountId: newRFQ.buyerAccountId,
-      })
-    );
+    // System event for RFQ creation. It records what was created. Outreach results
+    // are written only by the services that actually send messages.
+    this.addAIFeedItem({
+      type: 'ingestion',
+      title: `Autonomous Sourcing Engine Initialized: ${rfqNumber}`,
+      message: `RFQ ${rfqNumber} created with ${(newRFQ.extractedEntities || []).length} line items and ${(newRFQ.assignedVendors || []).length} assigned vendor(s).`,
+      recipient: 'Procurement AI Orchestrator',
+      rfqNumber,
+      buyerAccountId: newRFQ.buyerAccountId,
+      status: CHASER_OUTCOME_STATUS.RECORDED,
+    });
 
     // In-app alert to every vendor whose category covers this RFQ, and an email
     // to the top matched vendors (same category, ranked by pincode + tier).
@@ -4731,9 +5037,16 @@ class StoreService {
       }
 
       const assignedVendors = [...existing, ...committedAdditions];
+      const isV1 = current.sourcingMode === 'mode_1' || current.sourcingMode === 'v1' || current.sourcingMode === 'version_1';
+      const procucevCount = isV1
+        ? 0
+        : assignedVendors.filter((v) => {
+            const resolved = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
+            return v.vendorCategory === 'Procucev Network' || (!v.vendorCategory && this.isProcucevVendor(resolved));
+          }).length;
       const updates = {
         assignedVendors,
-        procucevVendorCount: assignedVendors.length,
+        procucevVendorCount: procucevCount,
         vendorInvitationTargets: this._buildRFQVendorInviteTargets(
           { ...current, assignedVendors },
           committedAdditions,
@@ -6486,7 +6799,31 @@ class StoreService {
             groupSelected.push(v);
           }
         }
-        // Major category fallback removed: strictly match minor category
+        // Major category fallback: if fewer than limit vendors matched minor category and majorCategory exists,
+        // fill remaining slots with vendors matching the parent major category
+        if (groupSelected.length < limit && majorCategory) {
+          const majorCandidates = candidatePool.filter((candidate) => {
+            const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
+            const hasCategory = Boolean(
+              v.majorCategory ||
+              (Array.isArray(v.minorCategories) && v.minorCategories.length > 0) ||
+              (Array.isArray(v.vendorSelectedCategories) && v.vendorSelectedCategories.length > 0) ||
+              (Array.isArray(v.clientMappedCategories) && v.clientMappedCategories.length > 0)
+            );
+            return !hasCategory || this.vendorCoversCategory(v, majorCategory);
+          });
+
+          sortCandidates(majorCandidates);
+
+          for (const v of majorCandidates) {
+            if (groupSelected.length >= limit) break;
+            const key = (v.id || v.email || v.name || '').toLowerCase().trim();
+            if (key && !groupSeenKeys.has(key)) {
+              groupSeenKeys.add(key);
+              groupSelected.push(v);
+            }
+          }
+        }
       } else if (majorCategory) {
         // Pure major category matching (used only when no minor category is present)
         const majorCandidates = candidatePool.filter((candidate) => {
@@ -6843,8 +7180,6 @@ class StoreService {
     }
 
     const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
-    let emailDeliveredCount = 0;
-    let smsDeliveredCount = 0;
 
     for (const vendor of resolvedAdditions) {
       const isBuyerUploaded = this.isBuyerUploaded(vendor);
@@ -6879,9 +7214,8 @@ class StoreService {
       }
 
       if (vendor.email) {
-        emailDeliveredCount++;
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
-        this._background(
+        this._sendWithFeedOutcome(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq: updated,
             recipientName: vendor.contactPerson || vendor.name,
@@ -6897,25 +7231,14 @@ class StoreService {
             rfqId: updated.id,
             rfqNumber: updated.rfqNumber,
             vendorId: vendor.id,
-          }
+          },
+          { channel: 'email', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
         );
-        this.addAIFeedItem({
-          id: `feed-email-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'email',
-          channel: 'email',
-          title: `Invitation Email Dispatched: ${vendor.name || 'Vendor'}`,
-          message: `RFQ ${updated.rfqNumber} invitation delivered to ${vendor.email}. One-click bid link activated.`,
-          recipient: vendor.name,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          rfqNumber: updated.rfqNumber,
-          buyerAccountId: updated.buyerAccountId,
-        });
       }
 
       if (vendor.phone) {
-        smsDeliveredCount++;
         const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-        this._background(
+        this._sendWithFeedOutcome(
           smsService.sendRFQChaserSms({
             mobile: vendor.phone,
             vendorName: vendor.name,
@@ -6923,19 +7246,10 @@ class StoreService {
             rfqTitle: updated.title,
             bidLink: bidUrl,
           }),
-          'Failed to dispatch initial SMS alert'
+          'Failed to dispatch initial SMS alert',
+          {},
+          { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
         );
-        this.addAIFeedItem({
-          id: `feed-sms-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'sms',
-          channel: 'sms',
-          title: `SMS Alert Delivered: ${vendor.name || 'Vendor'}`,
-          message: `SMS dispatch confirmed for ${vendor.name} (${vendor.phone}) on ${updated.rfqNumber}.`,
-          recipient: vendor.name,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          rfqNumber: updated.rfqNumber,
-          buyerAccountId: updated.buyerAccountId,
-        });
       }
     }
 
@@ -6982,13 +7296,14 @@ class StoreService {
     if (!rfq) return rfq;
     const mode = String(rfq.sourcingMode || '');
     const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
-    if (isV1) return rfq;
+    const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2' || rfq.source === 'email_gateway';
 
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
     if (isV0) {
       return await this.augmentV0AssignmentsFromDB(rfq, { deferChasers });
     }
 
+    const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY || 5;
     const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY || 5;
     const signals = this._rfqCategorySignals(rfq);
     const categories = this._rfqDistinctCategories(rfq);
@@ -6999,59 +7314,116 @@ class StoreService {
     const targetCategories = categories.length > 0 ? categories : signals;
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
 
-    let dbMatches = [];
-    if (pool.hasStorage()) {
-      try {
-        dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit * 2);
-      } catch (err) {
-        logger.warn(
-          'Auto-assign DB-backed vendor assignment query failed',
-          { rfqNumber: rfq.rfqNumber, error: err.message },
-          'STORE_SERVICE'
-        );
-      }
-    }
-
-    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
-      dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
-    }
-
-    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
-      return rfq;
-    }
-
     const targetLocation = {
       pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
       location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
-    const candidatePool = dbMatches.filter((v) => this.isProcucevVendor(v));
-    const sorted = this.selectVendorsForRFQ(
-      candidatePool,
-      rfq,
-      maxProcucevPerCat,
-      targetLocation
-    ) || [];
+
+    let clientCandidates = [];
+    if (isV1 || isV2) {
+      let clientDbMatches = [];
+      if (pool.hasStorage()) {
+        try {
+          const buyerId = rfq.buyerAccountId || rfq.buyerCompanyId || rfq.buyerId || null;
+          const buyerEmail = rfq.buyerEmail || rfq.createdBy || null;
+          clientDbMatches = await domainQueries.getVendorsByBuyerFromDB(buyerId, limit * 2, buyerEmail);
+        } catch (err) {
+          logger.warn(
+            'Auto-assign DB-backed client vendor query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
+        }
+      }
+      const rawClient = [
+        ...(Array.isArray(clientDbMatches) ? clientDbMatches : []),
+        ...this.candidateVendorsForRFQ(rfq).filter(
+          (v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, rfq)
+        ),
+      ];
+      const seenClient = new Set();
+      for (const v of rawClient) {
+        const k = (v.id || v.email || v.name || '').toLowerCase();
+        if (k && !seenClient.has(k)) {
+          seenClient.add(k);
+          clientCandidates.push(v);
+        }
+      }
+    }
+
+    let sortedClient = [];
+    if (clientCandidates.length > 0) {
+      sortedClient = this.selectVendorsForRFQ(
+        clientCandidates,
+        rfq,
+        maxClientPerCat,
+        targetLocation
+      ) || [];
+      if (sortedClient.length === 0) {
+        sortedClient = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
+      }
+    }
+
+    let sortedProcucev = [];
+    if (!isV1) {
+      let dbMatches = [];
+      if (pool.hasStorage()) {
+        try {
+          dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit * 2);
+        } catch (err) {
+          logger.warn(
+            'Auto-assign DB-backed vendor assignment query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
+        }
+      }
+
+      if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+        dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
+      }
+
+      const candidatePool = (dbMatches || []).filter((v) => this.isProcucevVendor(v));
+      sortedProcucev = this.selectVendorsForRFQ(
+        candidatePool,
+        rfq,
+        maxProcucevPerCat,
+        targetLocation
+      ) || [];
+      if (sortedProcucev.length === 0 && candidatePool.length > 0) {
+        sortedProcucev = candidatePool.slice(0, targetCategories.length * maxProcucevPerCat);
+      }
+    }
+
+    const candidatePool = [...sortedClient, ...sortedProcucev];
+    if (candidatePool.length === 0) {
+      return rfq;
+    }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const existingKeys = new Set(
       existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
     );
-    const additions = sorted
+    const additions = candidatePool
       .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
-      .map((v) => ({
-        id: v.id,
-        name: v.name,
-        email: v.email || null,
-        contactPerson: v.contactPerson || null,
-        phone: v.phone || v.mobile || null,
-        source: v.source || 'procucev_network',
-        majorCategory: v.majorCategory || v.category || null,
-        minorCategories: v.minorCategories || [],
-        city: v.city || null,
-        state: v.state || null,
-        location: v.location || null,
-        pincode: v.pincode || null,
-      }));
+      .map((v) => {
+        const isProc = this.isProcucevVendor(v);
+        return {
+          id: v.id,
+          name: v.name,
+          email: v.email || null,
+          contactPerson: v.contactPerson || null,
+          phone: v.phone || v.mobile || v.mobileNumber || null,
+          source: v.source || (isProc ? 'procucev_network' : 'buyer_uploaded'),
+          vendorCategory: isProc ? 'Procucev Network' : 'Client List',
+          majorCategory: v.majorCategory || v.category || null,
+          minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+          city: v.city || null,
+          state: v.state || null,
+          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+          pincode: v.pincode || null,
+        };
+      });
 
     if (additions.length === 0) return rfq;
 
@@ -7123,7 +7495,7 @@ class StoreService {
 
         if (vendor.email) {
           const creditInfo = this.checkVendorQuotationEligibility(vendor);
-          this._background(
+          this._sendWithFeedOutcome(
             mailerService.sendRfqInviteEmail(vendor.email, {
               rfq: updated,
               recipientName: vendor.contactPerson || vendor.name,
@@ -7139,24 +7511,14 @@ class StoreService {
               rfqId: updated.id,
               rfqNumber: updated.rfqNumber,
               vendorId: vendor.id,
-            }
+            },
+            { channel: 'email', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
           );
-          this.addAIFeedItem({
-            id: `feed-email-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            type: 'email',
-            channel: 'email',
-            title: `Invitation Email Dispatched: ${vendor.name || 'Vendor'}`,
-            message: `RFQ ${updated.rfqNumber} invitation delivered to ${vendor.email}. One-click bid link activated.`,
-            recipient: vendor.name,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            rfqNumber: updated.rfqNumber,
-            buyerAccountId: updated.buyerAccountId,
-          });
         }
 
         if (vendor.phone) {
           const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-          this._background(
+          this._sendWithFeedOutcome(
             smsService.sendRFQChaserSms({
               mobile: vendor.phone,
               vendorName: vendor.name,
@@ -7164,22 +7526,13 @@ class StoreService {
               rfqTitle: updated.title,
               bidLink: bidUrl,
             }),
-            'Failed to dispatch initial SMS alert'
+            'Failed to dispatch initial SMS alert',
+            {},
+            { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
           );
-          this.addAIFeedItem({
-            id: `feed-sms-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            type: 'sms',
-            channel: 'sms',
-            title: `SMS Alert Delivered: ${vendor.name || 'Vendor'}`,
-            message: `SMS dispatch confirmed for ${vendor.name} (${vendor.phone}) on ${updated.rfqNumber}.`,
-            recipient: vendor.name,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            rfqNumber: updated.rfqNumber,
-            buyerAccountId: updated.buyerAccountId,
-          });
 
           if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
-            this._background(
+            this._sendWithFeedOutcome(
               whatsAppService.sendRFQInvitationWhatsApp({
                 phone: vendor.phone,
                 vendorName: vendor.name,
@@ -7190,19 +7543,10 @@ class StoreService {
                 deliveryDate: updated.targetDeliveryDate || updated.deadline,
                 deliveryLocation: updated.deliveryLocation || updated.deliveryCity,
               }),
-              'Failed to dispatch initial WhatsApp prompt'
+              'Failed to dispatch initial WhatsApp prompt',
+              {},
+              { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
             );
-            this.addAIFeedItem({
-              id: `feed-wa-${updated.rfqNumber}-${vendor.id || Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              type: 'whatsapp',
-              channel: 'whatsapp',
-              title: `WhatsApp Prompt Delivered: ${vendor.name || 'Vendor'}`,
-              message: `Interactive quotation prompt delivered to ${vendor.name} via WhatsApp.`,
-              recipient: vendor.name,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              rfqNumber: updated.rfqNumber,
-              buyerAccountId: updated.buyerAccountId,
-            });
         }
       }
       }
@@ -7236,6 +7580,7 @@ class StoreService {
       }
 
     this._persistRFQ(updated);
+    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-auto-assigned-vendor-invites');
     logger.info(
       `RFQ ${rfq.rfqNumber}: auto-assigned ${updated.assignedVendors.length} vendors from DB (${committedAdditions.length} added)`,
       { rfqNumber: rfq.rfqNumber, assigned: updated.assignedVendors.length },
@@ -7335,8 +7680,8 @@ class StoreService {
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => {
         if (signals.length === 0) return true;
-        if (hasMinorSignals) {
-          return signals.some((sig) => this.vendorCoversMinorCategory(v, sig));
+        if (hasMinorSignals && signals.some((sig) => this.vendorCoversMinorCategory(v, sig))) {
+          return true;
         }
         return signals.some((c) => this.vendorCoversCategory(v, c));
       })
@@ -7466,7 +7811,7 @@ class StoreService {
       const isMatch = signals.length === 0 || (
         hasCategory && (
           hasMinorSignals
-            ? signals.some((c) => this.vendorCoversMinorCategory(vendor, c))
+            ? (signals.some((c) => this.vendorCoversMinorCategory(vendor, c)) || signals.some((c) => this.vendorCoversCategory(vendor, c)))
             : signals.some((c) => this.vendorCoversCategory(vendor, c))
         )
       );
@@ -7539,10 +7884,6 @@ class StoreService {
           : `Category Manager manual assignment: Vendor ${vendor.name} (${vendor.id}) invited to RFQ ${rfq.rfqNumber}`,
         rfqNumber: rfq.rfqNumber,
       });
-
-      // Simulated multi-channel chaser outreach
-      const chaserLogs = simulateChaserOutreach(updatedRFQ, vendor);
-      chaserLogs.forEach((log) => this.addAIFeedItem(log));
 
       // Real in-app notification
       const categoryLabel = updatedRFQ.category || this._rfqCategorySignals(updatedRFQ)[0] || 'your categories';
@@ -8400,10 +8741,8 @@ class StoreService {
     let buyer = buyerOverride;
     if (!buyer) {
       try {
-        buyer = (await this.getBuyerAccountByEmail(normEmail)) || {
-          corporateEmail: normEmail,
-          organizationName: 'Valued Buyer',
-        };
+        // No buyer record is invented when none exists. The notice is then sent without a name.
+        buyer = (await this.getBuyerAccountByEmail(normEmail)) || null;
       } catch (error) {
         list.forEach((item) => this.queuePendingQuoteNotification(normEmail, item));
         logger.error('Failed to load buyer before pending quote notification delivery', {
@@ -8432,7 +8771,7 @@ class StoreService {
         const delivery = await mailerService.sendQuoteReceivedEmail(normEmail, {
           rfq: item.rfq,
           quote: item.quote,
-          recipientName: buyer.organizationName,
+          recipientName: buyer?.organizationName || null,
         });
         if (delivery?.sent === true) {
           dispatched.push(item);
@@ -8501,6 +8840,38 @@ class StoreService {
       return this.evaluations.slice(0, Math.min(Number(limit), 500));
     }
     return this.evaluations.slice(0, 500);
+  }
+
+  /**
+   * Saved evaluations for one vendor, newest first. With persistent storage the
+   * database is queried directly, so a record older than the in-memory window is
+   * still found. Without storage, the in-memory list is searched by vendor id or
+   * vendor name. A failed read throws a 503 so callers never treat an unreadable
+   * store as "no evaluation exists".
+   */
+  async getVendorEvaluationsDurably(vendorId, limit = 1) {
+    const normalizedId = String(vendorId || '').trim();
+    if (!normalizedId) return [];
+
+    if (!pool.hasStorage()) {
+      const lookupKey = normalizedId.toLowerCase();
+      return this.evaluations
+        .filter((evaluation) =>
+          String(evaluation.vendorId || '').toLowerCase() === lookupKey ||
+          String(evaluation.vendorName || '').toLowerCase() === lookupKey
+        )
+        .slice(0, limit);
+    }
+
+    try {
+      return await domainQueries.getEvaluationsForVendorFromDB(normalizedId, limit);
+    } catch (error) {
+      logger.error('Failed to read saved vendor evaluations', error, 'STORE_SERVICE');
+      const readError = new Error('Saved evaluations could not be read from storage. No evaluation request was sent. Try again.');
+      readError.statusCode = 503;
+      readError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw readError;
+    }
   }
 
   _buildEvaluationRecord(evalData) {
@@ -8674,7 +9045,7 @@ class StoreService {
     }
 
     const item = {
-      id: feedItem.id || `feed-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      id: feedItem.id || newFeedItemId(),
       timestamp: feedItem.timestamp || new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
       timeAgo: feedItem.timeAgo || 'Just now',
       type: feedItem.type || 'call',
@@ -8684,7 +9055,7 @@ class StoreService {
       recipient: feedItem.recipient || 'Vendor Contact',
       rfqNumber: feedItem.rfqNumber || null,
       buyerAccountId,
-      status: feedItem.status || 'delivered',
+      status: feedItem.status || CHASER_OUTCOME_STATUS.RECORDED,
       channelDetails: feedItem.channelDetails || {},
     };
 
@@ -8728,17 +9099,32 @@ class StoreService {
   // ==========================================
   // 7. SYSTEM CONFIG & AZURE HEALTH
   // ==========================================
+  /**
+   * Read-only configuration that the backend itself uses. Nothing here is stored or
+   * editable, so the only values listed are the ones application code reads.
+   */
   getSystemConfig() {
-    return this.systemConfig;
-  }
-
-  updateSystemConfig(updates) {
-    this.systemConfig = { ...this.systemConfig, ...updates };
-    return this.systemConfig;
+    return {
+      aiModel: GEMINI_CONFIG.PRIMARY_MODEL,
+      aiTemperature: GEMINI_CONFIG.TEMPERATURE,
+    };
   }
 
   getAzureHealth() {
     return this.azureHealth;
+  }
+
+  /** Replaces the infrastructure list with the single database row. */
+  _setDatabaseHealthRow({ status, details, latency = INFRASTRUCTURE_HEALTH.EMPTY_VALUE, service = DATABASE_HEALTH_SERVICE_LABEL }) {
+    const row = {
+      service,
+      status,
+      latency,
+      uptime: INFRASTRUCTURE_HEALTH.EMPTY_VALUE,
+      details,
+    };
+    this.azureHealth = [row];
+    return row;
   }
 
   /**
@@ -8747,30 +9133,25 @@ class StoreService {
    * The row is reported from an actual connection attempt rather than asserted:
    * `latency` is the measured round trip and `status` reflects whether the query
    * succeeded. `uptime` is left as '—' because nothing in this process observes
-   * it — the previous hardcoded '99.99%' was not measured from anything.
+   * it, so no uptime figure is claimed.
    */
   async refreshInfrastructureHealth() {
     const health = await pool.checkDatabaseHealth();
-    const row = {
+    const isConnected = Boolean(health.isConnected);
+    let status = INFRASTRUCTURE_HEALTH.STATUS.NOT_CONFIGURED;
+    if (isConnected) status = INFRASTRUCTURE_HEALTH.STATUS.ONLINE;
+    else if (health.isConfigured) status = INFRASTRUCTURE_HEALTH.STATUS.UNREACHABLE;
+
+    this._setDatabaseHealthRow({
       service: health.isConfigured
         ? `${health.providerLabel}${health.database ? ` — ${health.database}` : ''}`
         : DATABASE_HEALTH_SERVICE_LABEL,
-      status: health.isConnected ? 'ONLINE' : health.isConfigured ? 'UNREACHABLE' : 'NOT_CONFIGURED',
-      latency: health.isConnected ? `${health.latencyMs}ms` : '—',
-      uptime: '—',
-      details: health.isConnected
+      status,
+      latency: isConnected ? `${health.latencyMs}ms` : INFRASTRUCTURE_HEALTH.EMPTY_VALUE,
+      details: isConnected
         ? `${health.poolStatus}. ${health.userCount} active account(s), ${health.vendorCount} vendor(s), ${health.rfqCount} RFQ(s).`
-        : health.errorMessage || 'Database connection failed.',
-    };
-
-    const idx = this.azureHealth.findIndex(
-      (entry) => entry.service === DATABASE_HEALTH_SERVICE_LABEL || entry.service === row.service
-    );
-    if (idx === -1) {
-      this.azureHealth.unshift(row);
-    } else {
-      this.azureHealth[idx] = row;
-    }
+        : health.errorMessage || INFRASTRUCTURE_HEALTH.MESSAGES.CONNECTION_FAILED,
+    });
 
     return health;
   }
@@ -8980,8 +9361,10 @@ class StoreService {
           updatedVendor.minorCategories = minorCategories;
           updatedVendor.clientMappedCategories = minorCategories;
         }
-        if (Number.isFinite(Number(rec.rating))) updatedVendor.rating = Number(rec.rating);
-        if (Number.isFinite(Number(rec.score))) updatedVendor.score = Number(rec.score);
+        const recordedRating = optionalScore(rec.rating);
+        if (recordedRating !== null) updatedVendor.rating = recordedRating;
+        const recordedScore = optionalScore(rec.score);
+        if (recordedScore !== null) updatedVendor.score = recordedScore;
         updatedVendor.hasRecord = true;
         updatedVendor.isExistingInDatabase = true;
 
@@ -9048,6 +9431,31 @@ class StoreService {
       try {
         await this.confirmVendorPersisted(vendor);
       } catch (err) {
+        if (err && err.statusCode === 409 && pool.hasStorage()) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const existingInDB = await domainQueries.getVendorByEmailFromDB(vendor.email, { fresh: true });
+            if (existingInDB) {
+              const updated = {
+                ...existingInDB,
+                buyerId: buyerId || existingInDB.buyerId,
+                buyerAccountId: buyerAccountId || existingInDB.buyerAccountId,
+                buyerEmail: buyerEmail || existingInDB.buyerEmail,
+                addedByBuyerCompany: buyerAccount?.organizationName || existingInDB.addedByBuyerCompany,
+                minorCategories: vendor.minorCategories?.length ? vendor.minorCategories : existingInDB.minorCategories,
+                majorCategory: vendor.majorCategory || existingInDB.majorCategory,
+              };
+              // eslint-disable-next-line no-await-in-loop
+              await domainQueries.upsertVendorInDB(updated);
+              const memIdx = this.vendors.findIndex((v) => v.id === existingInDB.id);
+              if (memIdx !== -1) this.vendors[memIdx] = { ...this.vendors[memIdx], ...updated };
+              else this.vendors.push(updated);
+              continue;
+            }
+          } catch (linkErr) {
+            logger.error('Failed to link existing vendor on 409 conflict', linkErr, 'STORE_SERVICE');
+          }
+        }
         this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
         importedCount--;
         if (isMapped) mappedCount--; else unmappedCount--;
@@ -9296,9 +9704,9 @@ class StoreService {
   /**
    * Empanel a supplier whose category mapping the buyer has just approved.
    *
-   * Deliberately separate from addVendor, which defaults `rating` to 4.5,
-   * `score` to 85.0 and `status` to "PREFERRED ENTERPRISE SUPPLIER". Those
-   * defaults are wrong for this path: a supplier arriving from a vendor-master
+   * Deliberately separate from addVendor, which stores no rating or score and gives
+   * an unevaluated supplier the "PENDING EVALUATION" status. This path must not
+   * invent a status or score either: a supplier arriving from a vendor-master
    * and PO ingestion has had its categories established from real purchasing
    * evidence, but nobody has evaluated it. Carrying an invented score would let
    * the RFQ engine rank it against suppliers that were actually assessed.
@@ -9435,58 +9843,20 @@ class StoreService {
   // ==========================================
   // 11. AI SUPPORT CHAT ASSISTANT & ESCALATION
   // ==========================================
-  handleSupportChat(prompt, userRole = 'buyer') {
-    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const cleanPrompt = (prompt || '').toLowerCase().trim();
-
-    const dissatisfactionKeywords = [
-      'not happy',
-      'not satisfied',
-      'not helpful',
-      'bad',
-      'human',
-      'agent',
-      'connect with agent',
-      'support agent',
-      'further support',
-      'speak to person',
-      'transfer',
-      'unsatisfied',
-      'disappointed',
-      'no help',
-    ];
-
-    const isEscalation = dissatisfactionKeywords.some((kw) => cleanPrompt.includes(kw));
-
-    if (isEscalation) {
-      const ticketId = `TK-${Math.floor(100000 + Math.random() * 900000)}`;
-      this.addAuditLog({
-        userEmail: 'support@procucev.com',
-        action: `Support Chat Escalation (#${ticketId}) pushed to human procurement specialist for ${userRole}. Prompt: "${prompt}"`,
-      });
-
-      return {
-        reply: `I understand your requirement. I have escalated this ticket (#${ticketId}) to a Senior Sourcing Specialist. Our procurement desk will contact you via email shortly.`,
-        isEscalated: true,
-        ticketId,
-        timestamp: timeNow,
-      };
-    }
-
-    let reply = `Thank you for your message. You can manage autonomous RFQ chasing, quote matrices, and 360° vendor evaluations directly from the Command Center.`;
-
-    if (cleanPrompt.includes('subscription') || cleanPrompt.includes('plan') || cleanPrompt.includes('quota')) {
-      reply = `Procucev offers Free Starter (5 RFQs), Version 1 ($199/mo - Client Roster), Version 2 ($499/mo - Hybrid), and Version 3 ($999/mo - Autonomous AI). Vendors can choose between Premium (Free for client-uploaded), Connect ($149/qtr for 50 RFQs), and Select ($349/qtr with Catalogue).`;
-    } else if (cleanPrompt.includes('mode 1') || cleanPrompt.includes('mode 2') || cleanPrompt.includes('mode 3') || cleanPrompt.includes('mode')) {
-      reply = `Mode 1 circulates RFQs strictly to your private client roster. Mode 2 is a Hybrid pool that expands to verified Procucev network vendors if needed. Mode 3 executes full 360° 6-pillar supplier qualification audits.`;
-    } else if (cleanPrompt.includes('download') || cleanPrompt.includes('quote') || cleanPrompt.includes('rfq')) {
-      reply = `Vendors can view open opportunities in the Opportunity Feed and submit competitive quotes in 1-click. BOQ line items are automatically normalized in the Buyer Quote Matrix.`;
-    }
-
+  /**
+   * AI support chat. No assistant grounded in this application's data is connected,
+   * so no reply is composed. Every message gets the not_configured result, and no
+   * support ticket is created or claimed.
+   */
+  handleSupportChat() {
     return {
-      reply,
+      success: false,
+      status: SUPPORT_CHAT_STATUS.NOT_CONFIGURED,
+      reply: null,
       isEscalated: false,
-      timestamp: timeNow,
+      ticketId: null,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      error: SUPPORT_CHAT_MESSAGES.NOT_CONFIGURED,
     };
   }
 
@@ -9696,106 +10066,202 @@ class StoreService {
   // ==========================================
   // 13. BATCH CHASER DISPATCH & PO APPROVAL
   // ==========================================
-  triggerBatchChaser(rfqId, channels = ['call', 'whatsapp', 'sms']) {
+  /**
+   * Chases every vendor invited to an RFQ over the requested channels.
+   *
+   * WhatsApp and SMS attempts wait for the provider's answer, and only that answer
+   * is recorded: the vendor's channel status, the RFQ's channel counts and the feed.
+   * This backend has no voice-call provider, so a call is reported as not_configured
+   * and never recorded as made.
+   *
+   * @param {string} rfqId
+   * @param {string[]} channels
+   * @param {{ email?: string }|null} actor The authenticated user who triggered the batch.
+   * @returns {Promise<null|object>} null when the RFQ does not exist.
+   */
+  async triggerBatchChaser(rfqId, channels, actor = null) {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
-    // Only the vendors actually invited to this RFQ. The fallback here used to be
-    // `this.vendors.slice(0, 3)` — the first three vendors in the master roster —
-    // so an RFQ with nobody assigned would chase three uninvolved suppliers and
-    // log outreach against them.
+    // Only the vendors actually invited to this RFQ. Nobody outside the assignment
+    // list is contacted.
     const vendors = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     if (vendors.length === 0) {
       return {
         success: false,
         count: 0,
         logs: [],
-        error: 'No vendors are assigned to this RFQ, so there is nobody to chase. Assign vendors first.',
+        results: [],
+        sentCount: 0,
+        error: CHASER_OUTREACH_MESSAGES.NO_VENDORS_ASSIGNED,
       };
     }
 
-    const outreachLogs = [];
-
-    vendors.forEach((vendor) => {
-      const logs = simulateChaserOutreach(rfq, vendor);
-      outreachLogs.push(...logs);
-
-      // Real multi-channel outreach — fire-and-forget alongside simulation.
-      // Both services no-op in test env or when credentials are unset.
-      const vendorPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
-      if (vendorPhone) {
-        const bidUrl = whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email);
-
-        if (channels.includes('whatsapp')) {
-          this._background(
-            whatsAppService.sendRFQInvitationWhatsApp({
-              phone: vendorPhone,
-              vendorName: vendor.name,
-              contactPerson: vendor.contactPerson,
-              rfqNumber: rfq.rfqNumber,
-              rfqTitle: rfq.title,
-              vendorEmail: vendor.email,
-              deliveryDate: rfq.targetDeliveryDate || rfq.deadline,
-              deliveryLocation: rfq.deliveryLocation || rfq.deliveryCity,
-            }).then((result) => {
-              logger.info(
-                `[CHASER] WhatsApp to ${vendor.name} (${vendorPhone}): ${result.success ? `delivered (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
-                { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
-                'STORE_SERVICE'
-              );
-            }),
-            'Failed to dispatch chaser WhatsApp'
-          );
-        }
-
-        if (channels.includes('sms')) {
-          this._background(
-            smsService.sendRFQChaserSms({
-              mobile: vendorPhone,
-              vendorName: vendor.name,
-              rfqNumber: rfq.rfqNumber,
-              rfqTitle: rfq.title,
-              bidLink: bidUrl,
-            }).then((result) => {
-              logger.info(
-                `[CHASER] SMS to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
-                { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
-                'STORE_SERVICE'
-              );
-            }),
-            'Failed to dispatch chaser SMS'
-          );
-        }
-      }
-    });
-
-    if (rfq.followUpData) {
-      const vCount = vendors.length;
-      if (channels.includes('sms')) {
-        if (!rfq.followUpData.smsStats) rfq.followUpData.smsStats = { total: vCount, delivered: 0, clicked: 0 };
-        rfq.followUpData.smsStats.total = Math.max(rfq.followUpData.smsStats.total || 0, vCount);
-        rfq.followUpData.smsStats.delivered = vCount;
-      }
-      if (channels.includes('whatsapp')) {
-        if (!rfq.followUpData.whatsappStats) rfq.followUpData.whatsappStats = { total: vCount, delivered: 0, read: 0, replied: 0 };
-        rfq.followUpData.whatsappStats.total = Math.max(rfq.followUpData.whatsappStats.total || 0, vCount);
-        rfq.followUpData.whatsappStats.delivered = vCount;
-      }
+    const requestedChannels = Array.isArray(channels) ? [...new Set(channels)] : [];
+    if (requestedChannels.length === 0) {
+      return {
+        success: false,
+        count: 0,
+        logs: [],
+        results: [],
+        sentCount: 0,
+        error: CHASER_OUTREACH_MESSAGES.NO_CHANNELS_SELECTED,
+      };
     }
+    const dispatches = [];
+    vendors.forEach((vendor) => {
+      requestedChannels.forEach((channel) => dispatches.push(this._dispatchChaserChannel(rfq, vendor, channel)));
+    });
+    const attempts = await Promise.all(dispatches);
 
-    this.aiFeed.unshift(...outreachLogs);
-    // This bulk path bypassed addAIFeedItem's 100-item cap entirely before —
-    // trim here too so the in-memory list and the DB-side trim (which runs
-    // per insert regardless of which path added the row) stay consistent.
-    if (this.aiFeed.length > 100) this.aiFeed.splice(100);
-    outreachLogs.forEach((log) => this._persistAIFeedItem(log));
+    const sentCount = attempts.filter((attempt) => attempt.outcome.success).length;
+    const notSentCount = attempts.length - sentCount;
+    const attemptedSends = attempts.filter((attempt) => attempt.attempted);
+
+    this._recordChaserOutcomesOnRfq(rfq, attemptedSends);
+    const feedItems = attemptedSends.map((attempt) => this._recordChannelFeedItem(
+      { channel: attempt.channel, vendor: attempt.vendor, rfqNumber: rfq.rfqNumber, buyerAccountId: rfq.buyerAccountId },
+      attempt.outcome
+    ));
+
     this.addAuditLog({
-      userEmail: 'chaser.bot@procucev.com',
-      action: `Executed batch multi-channel outreach (${channels.join(' + ')}) for ${rfq.rfqNumber} to ${vendors.length} vendors`,
+      userEmail: (actor && actor.email) || SYSTEM_ACTOR_EMAIL,
+      action: formatMessage(CHASER_OUTREACH_MESSAGES.AUDIT_BATCH_CHASER, {
+        rfqNumber: rfq.rfqNumber,
+        channels: requestedChannels.join(' + '),
+        sentCount,
+        notSentCount,
+      }),
       rfqNumber: rfq.rfqNumber,
     });
 
-    return { success: true, count: outreachLogs.length, logs: outreachLogs };
+    return {
+      success: sentCount > 0,
+      count: feedItems.length,
+      logs: feedItems,
+      results: attempts.map((attempt) => this._chaserResultRow(attempt)),
+      sentCount,
+      ...(sentCount > 0 ? {} : { error: CHASER_OUTREACH_MESSAGES.NOTHING_SENT }),
+    };
+  }
+
+  /**
+   * One vendor on one channel. Never throws: a provider error becomes a failed
+   * outcome, so the batch can report every channel.
+   */
+  async _dispatchChaserChannel(rfq, vendor, channel) {
+    const notAttempted = (status, error) => ({
+      vendor,
+      channel,
+      attempted: false,
+      outcome: { success: false, status, messageId: null, error },
+    });
+
+    if (channel === 'call') {
+      return notAttempted(CHASER_OUTCOME_STATUS.NOT_CONFIGURED, CHASER_OUTREACH_MESSAGES.VOICE_NOT_CONFIGURED);
+    }
+    if (channel !== 'whatsapp' && channel !== 'sms') {
+      return notAttempted(CHASER_OUTCOME_STATUS.SKIPPED, CHASER_OUTREACH_MESSAGES.UNSUPPORTED_CHANNEL);
+    }
+    const vendorPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+    if (!vendorPhone) {
+      return notAttempted(CHASER_OUTCOME_STATUS.SKIPPED, CHASER_OUTREACH_MESSAGES.NO_PHONE_ON_RECORD);
+    }
+
+    let sendResult;
+    try {
+      if (channel === 'whatsapp') {
+        sendResult = await whatsAppService.sendRFQInvitationWhatsApp({
+          phone: vendorPhone,
+          vendorName: vendor.name,
+          contactPerson: vendor.contactPerson,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          vendorEmail: vendor.email,
+          deliveryDate: rfq.targetDeliveryDate || rfq.deadline,
+          deliveryLocation: rfq.deliveryLocation || rfq.deliveryCity,
+        });
+      } else {
+        sendResult = await smsService.sendRFQChaserSms({
+          mobile: vendorPhone,
+          vendorName: vendor.name,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          bidLink: whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email),
+        });
+      }
+    } catch (error) {
+      logger.error(
+        `[CHASER] ${CHASER_CHANNEL_LABELS[channel]} dispatch threw`,
+        { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, error },
+        'STORE_SERVICE'
+      );
+      sendResult = { success: false, status: CHASER_OUTCOME_STATUS.FAILED, error: error && error.message };
+    }
+
+    const outcome = toChannelOutcome(sendResult);
+    logger.info(
+      `[CHASER] ${CHASER_CHANNEL_LABELS[channel]} to ${vendor.name}: ${outcome.status}`,
+      { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, status: outcome.status, messageId: outcome.messageId },
+      'STORE_SERVICE'
+    );
+    return { vendor, channel, attempted: true, outcome };
+  }
+
+  /**
+   * Writes the real outcome of each attempted WhatsApp or SMS send onto the stored
+   * RFQ: the vendor's status for that channel, and one delivered-count step per
+   * message the provider accepted.
+   */
+  _recordChaserOutcomesOnRfq(rfq, attempts) {
+    const sends = attempts.filter((attempt) => attempt.channel === 'whatsapp' || attempt.channel === 'sms');
+    if (sends.length === 0) return;
+
+    const stored = this.rfqs.find((candidate) => candidate.id === rfq.id || candidate.rfqNumber === rfq.rfqNumber) || rfq;
+    this._reconcileRFQFollowUpStats(stored);
+    const followUp = stored.followUpData;
+    if (!followUp) return;
+
+    const recordedAt = new Date().toISOString();
+    sends.forEach(({ vendor, channel, outcome }) => {
+      const stats = channel === 'whatsapp' ? followUp.whatsappStats : followUp.smsStats;
+      if (stats && outcome.success) stats.delivered = recordedCount(stats.delivered) + 1;
+
+      const record = this._followUpVendorRecord(followUp, vendor);
+      record[channel] = {
+        status: outcome.status,
+        lastAttempt: recordedAt,
+        messageId: outcome.messageId,
+        error: outcome.error,
+      };
+    });
+    this._persistRFQ(stored);
+  }
+
+  /** The follow-up entry for one vendor, created when the RFQ does not have one yet. */
+  _followUpVendorRecord(followUp, vendor) {
+    if (!Array.isArray(followUp.vendors)) followUp.vendors = [];
+    let record = followUp.vendors.find((entry) => entry && (
+      (vendor.id && (entry.vendorId === vendor.id || entry.id === vendor.id))
+      || (vendor.name && (entry.vendorName === vendor.name || entry.name === vendor.name))
+    ));
+    if (!record) {
+      record = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
+      followUp.vendors.push(record);
+    }
+    return record;
+  }
+
+  _chaserResultRow({ vendor, channel, outcome }) {
+    return {
+      vendorId: vendor.id || null,
+      vendorName: vendor.name || null,
+      channel,
+      status: outcome.status,
+      success: outcome.success,
+      messageId: outcome.messageId || null,
+      error: outcome.error || null,
+    };
   }
 
   approvePurchaseOrder(rfqNumber, vendorId, vendorName, totalAmount, approverNotes = '', approverEmail = null) {
@@ -10096,8 +10562,8 @@ class StoreService {
       evaluations: (evaluations || []).slice(0, 50),
       auditLogs: (auditLogs || []).slice(0, 100),
       aiFeed: [],
-      systemConfig: this.systemConfig,
-      azureHealth: this.azureHealth,
+      systemConfig: this.getSystemConfig(),
+      azureHealth: this.getAzureHealth(),
       vendorCatalogue: scopedCatalogue,
     };
   }

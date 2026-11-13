@@ -107,25 +107,55 @@ describe('vendor subscription pricing and payment reconciliation', () => {
     expect(checkVendorPaymentLinkStatus).toHaveBeenCalledTimes(1);
   });
 
-  test.each([
-    { seller: { connect: { '12_months': { totalWithGst: 2000.7 } }, select: { '12_months': { totalWithGst: 4000.2 } } } },
-    { seller: { connect: { '6_months': { totalWithGst: 1000 } }, select: { '6_months': { totalWithGst: 2000 } } } },
-    { seller: {} },
-  ])('uses configured subscription pricing with safe missing-plan fallbacks: %p', async (config) => {
-    jest.mocked(fetchSubscriptionPricing).mockResolvedValue(config as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
+  test('opens checkout at the 12-month price the pricing API returns and reads the download balance from the backend', async () => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValue({
+      seller: {
+        connect: { '12_months': { totalWithGst: 2000.7, baseDurationPrice: 1700, gstAmount: 300.7 } },
+        select: { '12_months': { totalWithGst: 4000.2, baseDurationPrice: 3390, gstAmount: 610.2 } },
+      },
+    } as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
     mockApp.vendorSubscription = 'connect';
-    mockApp.vendorRfqDownloadsUsed = 10;
+    mockApp.vendorFreeCreditsAllocated = 50;
+    mockApp.vendorFreeCreditsUsed = 10;
+    mockApp.vendorFreeCreditsRemaining = 40;
     const { container } = render(<VendorSubscriptionCenter />);
     await act(async () => { await Promise.resolve(); });
     expect(container.querySelector('[style="width: 20%;"]')).toBeInTheDocument();
+    expect(screen.getByText('10 / 50')).toBeInTheDocument();
+    expect(screen.getByText('40 downloads remaining')).toBeInTheDocument();
     const buttons = screen.getAllByRole('button');
     fireEvent.click(buttons[2]);
-    const selectData = ('select' in config.seller ? config.seller.select : undefined);
-    const amount = selectData?.['12_months']?.totalWithGst ?? selectData?.['6_months']?.totalWithGst;
     expect(screen.getByTestId('checkout')).toHaveAttribute('data-plan', 'select');
-    expect(screen.getByTestId('checkout')).toHaveAttribute('data-price', amount ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '₹17,699');
+    expect(screen.getByTestId('checkout')).toHaveAttribute('data-price', '₹4,000');
     fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.actions.cancel }));
     expect(screen.queryByTestId('checkout')).not.toBeInTheDocument();
+  });
+
+  test.each([
+    ['only a 6-month price is returned', { seller: { select: { '6_months': { totalWithGst: 2000, baseDurationPrice: 1800, gstAmount: 200 } } } }],
+    ['no plan prices are returned', { seller: {} }],
+  ])('keeps the Select plan blocked, with no invented price, when %s', async (_label, config) => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValue(config as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
+    mockApp.vendorSubscription = 'connect';
+    render(<VendorSubscriptionCenter />);
+    await act(async () => { await Promise.resolve(); });
+    const selectButton = screen.getByRole('button', { name: 'Switch to Select Model' });
+    expect(selectButton).toBeDisabled();
+    fireEvent.click(selectButton);
+    expect(screen.queryByTestId('checkout')).not.toBeInTheDocument();
+  });
+
+  test('shows the pricing error with a retry action, and a retry loads the prices', async () => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValueOnce(null);
+    render(<VendorSubscriptionCenter />);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.vendorWorkspace.pricesUnavailableNotice));
+    expect(screen.getByRole('button', { name: 'Switch to Select Model' })).toBeDisabled();
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValueOnce({
+      seller: { select: { '12_months': { totalWithGst: 4000, baseDurationPrice: 3390, gstAmount: 610 } } },
+    } as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
+    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorWorkspace.pricesRetryAction }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Switch to Select Model' })).toBeEnabled();
   });
 
   test('ignores a late pricing response after unmount', async () => {
@@ -149,7 +179,7 @@ describe('vendor subscription pricing and payment reconciliation', () => {
     await act(async () => { fireEvent.click(premiumButton); });
     expect(updateVendorSubscription).toHaveBeenNthCalledWith(2, 'premium');
     expect(showToast).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'success');
-    expect(addAuditLog).toHaveBeenCalledWith(expect.stringContaining('Vendor'), undefined, undefined);
+    expect(addAuditLog).toHaveBeenCalledWith(expect.stringContaining('Vendor'));
   });
 });
 
@@ -223,14 +253,22 @@ describe('opportunity feed navigation, matching and access failures', () => {
   });
 
   test('lets a vendor close a paid upgrade checkout and rejects an unsuccessful free downgrade', async () => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValue({
+      seller: {
+        connect: { '12_months': { totalWithGst: 8849, baseDurationPrice: 7499, gstAmount: 1350 } },
+        select: { '12_months': { totalWithGst: 17699, baseDurationPrice: 14999, gstAmount: 2700 } },
+      },
+    } as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
     mockApp.vendorOpportunities = [makeOpportunity()];
     mockApp.vendorSubscription = 'connect';
-    mockApp.vendorRfqDownloadsUsed = 50;
+    mockApp.vendorFreeCreditsRemaining = 0;
     updateVendorSubscription.mockResolvedValue(false);
     render(<OpportunityFeed onNavigateToBidForm={jest.fn()} />);
     fireEvent.click(screen.getByTitle('Download RFQ Technical BOQ Spreadsheet on Email'));
     const selectUpgrade = document.querySelector('button[data-plan="select"]');
     if (!selectUpgrade) throw new Error('Select upgrade action missing');
+    // The plan prices load when the dialog opens, and the paid buttons stay disabled until they arrive.
+    await waitFor(() => expect(selectUpgrade).toBeEnabled());
     fireEvent.click(selectUpgrade);
     expect(screen.getByTestId('checkout')).toHaveAttribute('data-plan', 'select');
     fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.actions.cancel }));
@@ -294,14 +332,18 @@ describe('catalogue workbook preview validation', () => {
     const importButton = screen.getByRole('button', { name: /Import Valid Rows/ });
     await act(async () => { fireEvent.click(importButton); });
     expect(global.fetch).toHaveBeenCalledWith('/api/catalogue', expect.objectContaining({ method: 'POST', body: expect.stringContaining('"sku":"New"') }));
-    expect(addAuditLog).toHaveBeenCalledWith(expect.stringContaining(SESSION.name), undefined, SESSION.email);
+    expect(addAuditLog).toHaveBeenCalledWith(expect.stringContaining(SESSION.name));
   });
 
-  test('prevents an import exceeding available catalogue capacity', async () => {
+  test('prevents an import exceeding the catalogue limit the pricing API returns', async () => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValue({
+      seller: { select: { catalogueLimit: 100 } },
+    } as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
     mockApp.currentUserSession = null;
     mockApp.vendorCatalogue = Array.from({ length: 99 }, (_, index) => ({ id: `${index}`, sku: `ITEM-${index}`, name: 'Existing', category: 'Pumps', specs: '', unitPrice: 1, leadTimeDays: 1, moq: 1 }));
     jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [row(), row({ rowNumber: 3, sku: 'IMPORTED-2' })] });
     const { container } = render(<ItemCatalogue />);
+    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '100'));
     upload(new File(['workbook'], 'catalogue.xlsx'));
     await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled());
     await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
@@ -309,5 +351,203 @@ describe('catalogue workbook preview validation', () => {
     await act(async () => { fireEvent.click(importButton); });
     expect(showToast).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('1'), 'warning');
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('catalogue product limit from the pricing API', () => {
+  test('refuses a new product once the limit the pricing API returns is reached', async () => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValue({
+      seller: { select: { catalogueLimit: 1 } },
+    } as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
+    mockApp.currentUserSession = null;
+    mockApp.vendorCatalogue = [{ id: 'only', name: 'Existing', sku: 'EXISTING', category: 'Pumps', specs: '', unitPrice: 1, leadTimeDays: 1, moq: 1 }];
+    render(<ItemCatalogue />);
+    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '1'));
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Centrifugal Water Pump/), { target: { value: 'New item' } });
+    fireEvent.change(screen.getByPlaceholderText('SKU-PUMP-500'), { target: { value: 'NEW-1' } });
+    fireEvent.change(screen.getByPlaceholderText('850'), { target: { value: '100' } });
+    fireEvent.change(screen.getByPlaceholderText('5'), { target: { value: '3' } });
+    fireEvent.change(screen.getByPlaceholderText('10'), { target: { value: '1' } });
+    await act(async () => { fireEvent.submit(document.querySelector('form') as HTMLFormElement); });
+    expect(showToast).toHaveBeenCalledWith('Limit Reached', UI_STRINGS.vendorWorkspace.catalogueFullMessage, 'warning');
+    expect(global.fetch).not.toHaveBeenCalledWith('/api/catalogue', expect.objectContaining({ method: 'POST' }));
+  });
+
+  test('shows the capacity without a limit figure when the pricing API returns no limit', () => {
+    render(<ItemCatalogue />);
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithoutLimit)).toBeInTheDocument();
+    expect(screen.queryByText(/Limit:/)).not.toBeInTheDocument();
+  });
+});
+
+describe('catalogue load, save and import failure paths', () => {
+  const row = (overrides: Partial<CatalogueUploadRow> = {}): CatalogueUploadRow => ({
+    rowNumber: 2, name: 'Imported Item', sku: 'IMPORTED-1', category: 'Engineering Spares - Mechanical',
+    specs: '', unitPrice: 100, leadTimeDays: 3, moq: 1, errors: [], ...overrides,
+  });
+  const product = (overrides: Record<string, unknown> = {}) => ({
+    id: 'p-1', name: 'Existing Pump', sku: 'EXISTING-1', category: 'Pumps', specs: '',
+    unitPrice: 100, leadTimeDays: 2, moq: 1, ...overrides,
+  });
+
+  function fetchReturning(handler: (url: string, options: { method?: string; body?: string }) => unknown) {
+    global.fetch = jest.fn((url: string, options: { method?: string; body?: string } = {}) =>
+      Promise.resolve(handler(url, options))) as unknown as typeof fetch;
+  }
+
+  test('shows a placeholder value for a product whose price, lead time or MOQ is not known', () => {
+    mockApp.vendorCatalogue = [product({ unitPrice: null, leadTimeDays: null, moq: null })];
+    render(<ItemCatalogue />);
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+    fireEvent.click(screen.getByTitle('Edit Product'));
+    expect((screen.getByPlaceholderText('850') as HTMLInputElement).value).toBe('');
+    expect((screen.getByPlaceholderText('5') as HTMLInputElement).value).toBe('');
+    expect((screen.getByPlaceholderText('10') as HTMLInputElement).value).toBe('');
+  });
+
+  test.each([
+    [75, 'from-amber-500'],
+    [10, 'from-indigo-600'],
+  ])('colours the capacity bar for %i of 100 products', (count, colourClass) => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValue({
+      seller: { select: { catalogueLimit: 100 } },
+    } as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
+    mockApp.vendorCatalogue = Array.from({ length: count }, (_, index) => product({ id: `c-${index}`, sku: `SKU-${index}` }));
+    const { container } = render(<ItemCatalogue />);
+    return waitFor(() => expect(container.querySelector(`.${colourClass}`)).toBeInTheDocument());
+  });
+
+  test('loads the catalogue for the vendor and reports the failure when the vendor record cannot be read', async () => {
+    mockApp.currentUserSession = SESSION;
+    fetchReturning(() => ({ ok: false, status: 500, json: async () => ({ success: false }) }));
+    render(<ItemCatalogue />);
+    expect(await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueUnavailable)).toBeInTheDocument();
+  });
+
+  test('shows an empty catalogue when the vendor has no profile yet', async () => {
+    fetchReturning(() => ({ ok: false, status: 404, json: async () => ({ success: false }) }));
+    render(<ItemCatalogue />);
+    await waitFor(() => expect(setVendorCatalogue).toHaveBeenCalledWith([]));
+    expect(screen.queryByText(UI_STRINGS.vendorWorkspace.catalogueUnavailable)).not.toBeInTheDocument();
+  });
+
+  test('shows an empty catalogue when the vendor record has no id', async () => {
+    fetchReturning((url) => (url.startsWith('/api/vendors/')
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: {} }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }));
+    render(<ItemCatalogue />);
+    await waitFor(() => expect(setVendorCatalogue).toHaveBeenCalledWith([]));
+  });
+
+  test('reports an unreadable catalogue, and keeps an empty list when the catalogue response has no data', async () => {
+    fetchReturning((url) => (url.startsWith('/api/vendors/')
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'v-1' } }) }
+      : { ok: false, status: 503, json: async () => ({ success: false }) }));
+    const { unmount } = render(<ItemCatalogue />);
+    expect(await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueUnavailable)).toBeInTheDocument();
+    unmount();
+
+    fetchReturning((url) => (url.startsWith('/api/vendors/')
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'v-1' } }) }
+      : { ok: true, status: 200, json: async () => ({ success: true }) }));
+    render(<ItemCatalogue />);
+    await waitFor(() => expect(setVendorCatalogue).toHaveBeenCalledWith([]));
+  });
+
+  test('ignores a catalogue load that finishes after the page has closed', async () => {
+    fetchReturning((url) => (url.startsWith('/api/vendors/')
+      ? { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'v-1' } }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: [] }) }));
+    const { unmount } = render(<ItemCatalogue />);
+    unmount();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(setVendorCatalogue).not.toHaveBeenCalledWith([]);
+  });
+
+  test('reports a failed save with the server reason, and with default wording when there is no reason', async () => {
+    mockApp.vendorCatalogue = [product()];
+    fetchReturning(() => ({ ok: true, status: 200, json: async () => ({ success: false }) }));
+    render(<ItemCatalogue />);
+    fireEvent.click(screen.getByTitle('Edit Product'));
+    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Save Failed', 'Failed to update product.', 'warning'));
+
+    jest.clearAllMocks();
+    fetchReturning(() => Promise.reject('network down'));
+    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Save Failed', 'Could not save the product. Please try again.', 'warning'));
+  });
+
+  test('reports a failed add with the server reason', async () => {
+    mockApp.vendorCatalogue = [];
+    fetchReturning(() => ({ ok: true, status: 200, json: async () => ({ success: false }) }));
+    render(<ItemCatalogue />);
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Centrifugal Water Pump/), { target: { value: 'New item' } });
+    fireEvent.change(screen.getByPlaceholderText('SKU-PUMP-500'), { target: { value: 'NEW-2' } });
+    fireEvent.change(screen.getByPlaceholderText('850'), { target: { value: '100' } });
+    fireEvent.change(screen.getByPlaceholderText('5'), { target: { value: '3' } });
+    fireEvent.change(screen.getByPlaceholderText('10'), { target: { value: '1' } });
+    await act(async () => { fireEvent.submit(document.querySelector('form') as HTMLFormElement); });
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Save Failed', 'Failed to add product.', 'warning'));
+  });
+
+  test('reports a failed delete with the server reason, and with default wording when there is no reason', async () => {
+    mockApp.vendorCatalogue = [product()];
+    fetchReturning(() => ({ ok: true, status: 200, json: async () => ({ success: false }) }));
+    render(<ItemCatalogue />);
+    fireEvent.click(screen.getByTitle('Delete Product'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Delete Failed', 'Failed to delete product.', 'warning'));
+
+    jest.clearAllMocks();
+    fetchReturning(() => Promise.reject('offline'));
+    fireEvent.click(screen.getByTitle('Delete Product'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Delete Failed', 'Could not delete the product. Please try again.', 'warning'));
+  });
+
+  test('imports a workbook that fits the limit, skips a failed row with default wording, and reports it', async () => {
+    jest.mocked(fetchSubscriptionPricing).mockResolvedValue({
+      seller: { select: { catalogueLimit: 100 } },
+    } as unknown as Awaited<ReturnType<typeof fetchSubscriptionPricing>>);
+    mockApp.currentUserSession = null;
+    mockApp.vendorCatalogue = [product()];
+    jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [
+      row({ sku: 'FITS-1' }), row({ rowNumber: 3, sku: 'FAILS-2' }),
+    ] });
+    fetchReturning((_url, options) => (options.body && options.body.includes('FAILS-2')
+      ? { ok: true, status: 200, json: async () => ({ success: false }) }
+      : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'new-1', sku: 'FITS-1' } }) }));
+    const { container } = render(<ItemCatalogue />);
+    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '100'));
+    fireEvent.change(screen.getByLabelText('Upload catalogue Excel workbook'), { target: { files: [new File(['w'], 'catalogue.xlsx')] } });
+    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Import Valid Rows/ })); });
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Import Partially Completed', expect.stringContaining('Row 3: Import failed.'), 'warning'));
+  });
+
+  test('stops with a notice when no row in the workbook is valid', async () => {
+    mockApp.currentUserSession = null;
+    jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [row({ errors: ['Missing name.'] })] });
+    const { container } = render(<ItemCatalogue />);
+    fireEvent.change(screen.getByLabelText('Upload catalogue Excel workbook'), { target: { files: [new File(['w'], 'catalogue.xlsx')] } });
+    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Import Valid Rows/ })); });
+    expect(showToast).toHaveBeenCalledWith('Nothing to Import', 'Fix the validation errors before importing.', 'warning');
+  });
+
+  test('reports an import that fails before the server answers, with default wording', async () => {
+    mockApp.currentUserSession = null;
+    jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [row()] });
+    fetchReturning(() => Promise.reject('timeout'));
+    const { container } = render(<ItemCatalogue />);
+    fireEvent.change(screen.getByLabelText('Upload catalogue Excel workbook'), { target: { files: [new File(['w'], 'catalogue.xlsx')] } });
+    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Import Valid Rows/ })); });
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Import Failed', 'Could not complete the catalogue import.', 'warning'));
+  });
+
+  test('shows a category group with no minor categories without failing', () => {
+    mockApp.categoryTaxonomy = [{ majorCategory: 'Solo Group' }] as unknown as ReturnType<typeof useApp>['categoryTaxonomy'];
+    render(<ItemCatalogue />);
+    expect(screen.getByRole('option', { name: 'Solo Group' })).toBeInTheDocument();
   });
 });

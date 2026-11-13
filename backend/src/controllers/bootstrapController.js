@@ -59,8 +59,8 @@ async function getBootstrap(req, res, next) {
         evaluations: (storeService.evaluations || []).slice(0, 50),
         auditLogs: (storeService.auditLogs || []).slice(0, 50),
         aiFeed: [],
-        systemConfig: storeService.systemConfig,
-        azureHealth: storeService.azureHealth,
+        systemConfig: storeService.getSystemConfig(),
+        azureHealth: storeService.getAzureHealth(),
         vendorCatalogue: [],
       };
     }

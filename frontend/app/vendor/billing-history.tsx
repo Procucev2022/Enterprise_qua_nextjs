@@ -8,7 +8,8 @@ import { Receipt, Download, AlertCircle, RefreshCw } from 'lucide-react';
 interface PaymentLinkRecord {
   id: string;
   planId: string;
-  amount: number;
+  // Null when the server has no amount for the link. Shown as a dash, never as ₹0.00.
+  amount: number | null;
   status: string;
   activated: boolean;
   createdAt: string;
@@ -58,8 +59,8 @@ export default function VendorBillingHistory() {
           throw new Error(data?.error || 'Could not load your billing history.');
         }
         if (!cancelled) setLinks(data.data || []);
-      } catch (err: any) {
-        if (!cancelled) setError(err?.message || 'Could not load your billing history.');
+      } catch (err: unknown) {
+        if (!cancelled) setError(err instanceof Error && err.message ? err.message : 'Could not load your billing history.');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -89,8 +90,12 @@ export default function VendorBillingHistory() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-    } catch (err: any) {
-      showToast('Download Failed', err?.message || 'Could not generate the receipt.', 'warning');
+    } catch (err: unknown) {
+      showToast(
+        'Download Failed',
+        err instanceof Error && err.message ? err.message : 'Could not generate the receipt.',
+        'warning'
+      );
     } finally {
       setDownloadingId(null);
     }
@@ -153,7 +158,9 @@ export default function VendorBillingHistory() {
                   <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-white">
                     {PLAN_LABEL[link.planId] || link.planId}
                   </td>
-                  <td className="px-4 py-2.5 text-slate-700 dark:text-gray-300">₹{Number(link.amount || 0).toFixed(2)}</td>
+                  <td className="px-4 py-2.5 text-slate-700 dark:text-gray-300">
+                    {typeof link.amount === 'number' && Number.isFinite(link.amount) ? `₹${link.amount.toFixed(2)}` : '—'}
+                  </td>
                   <td className="px-4 py-2.5">
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -162,7 +169,7 @@ export default function VendorBillingHistory() {
                           : 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
                       }`}
                     >
-                      {link.activated ? 'Paid & Activated' : link.status || 'Pending'}
+                      {link.activated ? 'Paid & Activated' : link.status || '—'}
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-slate-500 dark:text-gray-400">

@@ -232,9 +232,12 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     await configController.getSystemConfig({}, res, next);
     expect(res.json).toHaveBeenCalled();
+    expect(res.json.mock.calls[0][0].data.systemConfig).toEqual({ aiModel: expect.any(String), aiTemperature: expect.any(Number) });
 
+    // Settings are not persisted, so a write is refused rather than acknowledged.
     await configController.updateSystemConfig({ body: { activeMode: 'mode_3' } }, res, next);
-    expect(res.json).toHaveBeenCalled();
+    expect(res.status).toHaveBeenLastCalledWith(501);
+    expect(res.json).toHaveBeenLastCalledWith(expect.objectContaining({ success: false }));
   });
 
   test('dbController methods & error handling', async () => {
@@ -574,7 +577,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const res = mockRes();
 
     await supportChatController.sendMessage({ body: { prompt: 'How does Mode 1 work?' } }, res, next);
-    expect(res.json).toHaveBeenCalled();
+    expect(res.status).toHaveBeenLastCalledWith(503);
+    expect(res.json).toHaveBeenLastCalledWith(expect.objectContaining({ success: false, status: 'not_configured', reply: null }));
 
     await supportChatController.sendMessage({ body: {} }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);

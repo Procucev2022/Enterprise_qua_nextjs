@@ -13,7 +13,7 @@ import {
 } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
-import type { ExtractedEntity, RFQExtractionResult, RFQItem } from '@/lib/types';
+import type { ExtractedEntity, RFQExtractionResult, RFQItem, SourcingMode } from '@/lib/types';
 
 const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
@@ -131,6 +131,11 @@ function mockCreatedRFQ(): RFQItem {
     quotes: [],
     chasingActive: false,
   };
+}
+
+/** Nothing is preselected, so a test that dispatches picks the sourcing mode it is about. */
+function chooseSourcingMode(mode: SourcingMode) {
+  fireEvent.click(screen.getByTestId(`sourcing-mode-btn-${mode}`));
 }
 
 function renderWizard(props: Partial<React.ComponentProps<typeof IngestionWizard>> = {}) {
@@ -283,7 +288,8 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     renderWizard();
 
     const select = screen.getByRole('combobox', { name: /Sourcing Mode/i }) as HTMLSelectElement;
-    expect(select.value).toBe('mode_2');
+    // Nothing is preselected, so the select shows its placeholder.
+    expect(select.value).toBe('');
 
     fireEvent.change(select, { target: { value: 'mode_3' } });
     expect(select.value).toBe('mode_3');
@@ -303,10 +309,10 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(btn2).toHaveTextContent(UI_STRINGS.sourcingModeVersions.mode_2);
     expect(btn3).toHaveTextContent(UI_STRINGS.sourcingModeVersions.mode_3);
 
-    // Initial default is Mode 2 (selected)
-    expect(btn2).toHaveAttribute('aria-checked', 'true');
+    // Nothing is preselected: every mode starts unchecked.
     expect(btn0).toHaveAttribute('aria-checked', 'false');
     expect(btn1).toHaveAttribute('aria-checked', 'false');
+    expect(btn2).toHaveAttribute('aria-checked', 'false');
     expect(btn3).toHaveAttribute('aria-checked', 'false');
 
     // Switch to Mode 0
@@ -369,7 +375,8 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
       target: { value: 'Units' },
     });
 
-    // Now submit
+    // Now choose a mode and submit
+    chooseSourcingMode('mode_2');
     fireEvent.click(submitBtn);
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -588,6 +595,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
   it('handles RFQ creation submission failures and errors', async () => {
     renderWizard();
+    chooseSourcingMode('mode_2');
 
     // Fill minimum required fields
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
@@ -805,6 +813,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
   it('drops a failed attachment upload result but still dispatches the RFQ', async () => {
     renderWizard();
+    chooseSourcingMode('mode_2');
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Pune Depot' },
@@ -832,6 +841,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
   it('ignores a second submit click while a dispatch is already in flight', async () => {
     renderWizard();
+    chooseSourcingMode('mode_2');
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Chennai Yard' },
@@ -867,6 +877,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
   it('falls back to default messages when RFQ creation fails or throws without details', async () => {
     renderWizard();
+    chooseSourcingMode('mode_2');
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Kolkata Yard' },
@@ -1096,7 +1107,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     await waitFor(() => expect(screen.getByText(UI_STRINGS.vendorCategoryUpdate.completedButton)).toBeInTheDocument());
   });
 
-  it('Mode 2 (default) also assigns the buyer\'s private roster — a category match alone no longer grants vendor visibility, so it must actually be invited', async () => {
+  it('Mode 2 also assigns the buyer\'s private roster — a category match alone no longer grants vendor visibility, so it must actually be invited', async () => {
     serveBootstrap([
       {
         id: 'v-hist-1',
@@ -1106,6 +1117,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       },
     ]);
     renderWizard();
+    chooseSourcingMode('mode_2');
     // Wait for the bootstrap vendor to actually hydrate into buyerVendors
     // before submitting — otherwise the form dispatches before context state
     // catches up, and assignedVendors comes back empty regardless of the fix.
@@ -1437,6 +1449,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       });
 
       renderWizard();
+      chooseSourcingMode('mode_3');
 
       // Fill in required fields
       fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
@@ -1494,6 +1507,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       });
 
       renderWizard();
+      chooseSourcingMode('mode_0');
 
       fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
         target: { value: 'Navi Mumbai Plant' },
@@ -1537,6 +1551,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       });
 
       renderWizard();
+      chooseSourcingMode('mode_2');
 
       fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
         target: { value: 'Navi Mumbai Plant' },
@@ -1871,6 +1886,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
   it('covers confirmation modal actions: Done, Create Another RFQ, Compare in Matrix, and V0 uncategorized message', async () => {
     const onComplete = jest.fn();
     const { unmount } = renderWizard({ onComplete });
+    chooseSourcingMode('mode_2');
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Mumbai Central Plant' },
@@ -1900,6 +1916,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
 
     // Re-render to test "Create Another RFQ"
     const { unmount: unmount2 } = renderWizard();
+    chooseSourcingMode('mode_2');
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Pune Depot' },
     });
@@ -1987,6 +2004,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     ]);
 
     renderWizard();
+    chooseSourcingMode('mode_2');
 
     await waitFor(() => expect(screen.getByText('2 Hybrid Suppliers Matched')).toBeInTheDocument());
 
@@ -2170,6 +2188,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     ]);
 
     renderWizard();
+    chooseSourcingMode('mode_2');
     await waitFor(() => expect(screen.getByText('1 Hybrid Suppliers Matched')).toBeInTheDocument());
 
     // Mode 2: click "AI Matching Criteria"
@@ -2336,6 +2355,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     ]);
 
     renderWizard();
+    chooseSourcingMode('mode_2');
 
     // Line item with Engineering Spares
     const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
@@ -2781,6 +2801,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
 
     it('covers AI extraction sourceFileName and clicking extract without files', async () => {
       renderWizard();
+      chooseSourcingMode('mode_2');
 
       // Line 891: Click extract with no files uploaded
       const extractBtn = screen.getByRole('button', { name: /Extract Line Items with AI/i });
@@ -2849,6 +2870,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       ]);
 
       renderWizard();
+      chooseSourcingMode('mode_2');
 
       // Select category on line item
       const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
@@ -2893,6 +2915,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       ]);
 
       renderWizard();
+      chooseSourcingMode('mode_2');
 
       // Set line item category to Engineering Spares to create mismatch
       const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
@@ -3406,6 +3429,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
 
       // Render wizard and submit to open confirmation modal
       renderWizard();
+      chooseSourcingMode('mode_2');
       fireEvent.change(screen.getByPlaceholderText(MODAL.titlePlaceholder), { target: { value: 'Title For Confirmation' } });
       fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), { target: { value: '411001' } });

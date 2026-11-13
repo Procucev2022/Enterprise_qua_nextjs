@@ -208,22 +208,9 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
   });
 }
 
-/** Builds and downloads a blank Vendor Master template with one example row. */
+/** Builds and downloads a Vendor Master template that contains only the column headers. No sample rows. */
 export function downloadVendorUploadTemplate(): void {
-  const exampleRow = {
-    'Vendor Code': 'VEND-001',
-    'Company Name': 'Acme Hydraulics Pvt Ltd',
-    'Person Name': 'Ramesh Kumar',
-    'Email Id': 'ramesh@acmehydraulics.example',
-    'Mobile No': '9876543210',
-    GSTIN: '29AAAPL5929R1ZX',
-    'Pin Code': '560047',
-    City: 'Bengaluru',
-    State: 'Karnataka',
-    Category: 'Hoses, Valves & Fittings',
-    Products: 'Hydraulic pumps, valves, cylinders',
-  };
-  const worksheet = XLSX.utils.json_to_sheet([exampleRow], { header: [...VENDOR_TEMPLATE_HEADERS] });
+  const worksheet = XLSX.utils.aoa_to_sheet([[...VENDOR_TEMPLATE_HEADERS]]);
   const workbook: XLSX.WorkBook = { Sheets: { 'Vendor Master': worksheet }, SheetNames: ['Vendor Master'] };
   const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
@@ -237,9 +224,7 @@ export function downloadVendorUploadTemplate(): void {
   URL.revokeObjectURL(url);
 }
 
-// 1000 rows/chunk against a batched multi-row INSERT (never one query per
-// row server-side) cuts a 634k-row upload down to ~635 requests instead of
-// ~3,200 at the old 200/chunk size.
+// Rows sent per bulk-import request, so no single request carries the whole file.
 const BULK_IMPORT_CHUNK_SIZE = 15;
 
 export async function sendBulkVendorInvitations(

@@ -56,6 +56,7 @@ function completeForm(overrides: Partial<ManualRFQForm> = {}): ManualRFQForm {
     targetDeliveryDate: A_FUTURE_DATE,
     deliveryLocation: 'Navi Mumbai Plant, Gate 3',
     deliveryPincode: '400701',
+    sourcingMode: 'mode_1',
     lineItems: [completeItem()],
     ...overrides,
   };
@@ -98,9 +99,9 @@ describe('createEmptyManualRFQForm', () => {
     expect(createEmptyManualRFQForm().estimatedBudget).toBeNull();
   });
 
-  it('defaults to the first sourcing mode and no attachments', () => {
+  it('leaves the sourcing mode unchosen and carries no attachments', () => {
     const form = createEmptyManualRFQForm();
-    expect(form.sourcingMode).toBe('mode_1');
+    expect(form.sourcingMode).toBeNull();
     expect(form.attachments).toEqual([]);
   });
 });
@@ -305,6 +306,27 @@ describe('toExtractedEntity', () => {
 
   it('coerces an unanswered quantity to zero', () => {
     expect(toExtractedEntity(completeItem({ quantity: null })).quantity).toBe(0);
+  });
+});
+
+describe('sourcing mode is chosen by the buyer', () => {
+  it('blocks a form with no sourcing mode chosen and names the field', () => {
+    const result = validateManualRFQForm(completeForm({ sourcingMode: null }));
+
+    expect(result.isValid).toBe(false);
+    expect(result.formErrors.sourcingMode).toBe(UI_STRINGS.manualRfq.sourcingModeRequired);
+  });
+
+  it('accepts a form once a mode is chosen', () => {
+    const result = validateManualRFQForm(completeForm({ sourcingMode: 'mode_2' }));
+
+    expect(result.formErrors.sourcingMode).toBeUndefined();
+  });
+
+  it('refuses to build a dispatch payload without a chosen mode', () => {
+    expect(() => toRFQCreatePayload(completeForm({ sourcingMode: null }))).toThrow(
+      UI_STRINGS.manualRfq.sourcingModeRequired
+    );
   });
 });
 

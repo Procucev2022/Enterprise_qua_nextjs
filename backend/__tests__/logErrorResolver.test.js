@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { LogErrorResolver, logErrorResolver } = require('../src/services/logErrorResolver');
+const pool = require('../src/db/pool');
 
 describe('LogErrorResolver Unit Tests', () => {
   const tempLogsDir = path.join(__dirname, 'temp_logs_test');
@@ -91,34 +92,72 @@ describe('LogErrorResolver Unit Tests', () => {
     const dbIssue = diagnosed.find((d) => d.issueType === 'DATABASE_CONNECTION_FAULT');
     expect(dbIssue).toBeDefined();
     expect(dbIssue.severity).toBe('HIGH');
+    expect(dbIssue.suggestedAction).toBe('RECONNECT_POOL_AND_INVALIDATE_CACHE');
 
+    // No automated fix exists for GraphQL faults, so none is suggested.
     const graphqlIssue = diagnosed.find((d) => d.issueType === 'GRAPHQL_VALIDATION_FAULT');
     expect(graphqlIssue).toBeDefined();
     expect(graphqlIssue.severity).toBe('LOW');
+    expect(graphqlIssue.suggestedAction).toBeNull();
 
     const memIssue = diagnosed.find((d) => d.issueType === 'MEMORY_PRESSURE');
     expect(memIssue).toBeDefined();
     expect(memIssue.severity).toBe('CRITICAL');
+
+    // The unstructured line has no timestamp of its own, so none is invented.
+    expect(parsed[parsed.length - 1].timestamp).toBeNull();
+    expect(diagnosed.every((d) => d.suggestedAction !== 'INSPECT_PAYLOAD')).toBe(true);
+    expect(diagnosed.every((d) => d.suggestedAction !== 'VALIDATE_SCHEMA_CLIENT_COMPATIBILITY')).toBe(true);
   });
 
-  test('executeRemediation applies remediation strategies and tracks history exceeding buffer limit', async () => {
+  test('executeRemediation runs the supported actions and reports what really happened', async () => {
     const resolver = new LogErrorResolver({ logsDir: tempLogsDir });
+    jest.spyOn(pool, 'checkDatabaseHealth').mockResolvedValue({ isConnected: true });
 
     const rem1 = await resolver.executeRemediation('RECONNECT_POOL_AND_INVALIDATE_CACHE');
-    expect(rem1.actionType).toBe('RECONNECT_POOL_AND_INVALIDATE_CACHE');
+    expect(rem1).toMatchObject({ actionType: 'RECONNECT_POOL_AND_INVALIDATE_CACHE', success: true, status: 'applied' });
 
     const rem2 = await resolver.executeRemediation('OPTIMIZE_QUERY_CACHE');
-    expect(rem2.actionType).toBe('OPTIMIZE_QUERY_CACHE');
+    expect(rem2).toMatchObject({ actionType: 'OPTIMIZE_QUERY_CACHE', success: true, status: 'applied', message: 'Cleared the query cache.' });
 
     const rem3 = await resolver.executeRemediation('PURGE_EXPIRED_LOGS_AND_FLUSH_CACHE');
-    expect(rem3.actionType).toBe('PURGE_EXPIRED_LOGS_AND_FLUSH_CACHE');
+    expect(rem3).toMatchObject({ actionType: 'PURGE_EXPIRED_LOGS_AND_FLUSH_CACHE', success: true, status: 'applied' });
 
-    const rem4 = await resolver.executeRemediation('VALIDATE_SCHEMA_CLIENT_COMPATIBILITY');
-    expect(rem4.actionType).toBe('VALIDATE_SCHEMA_CLIENT_COMPATIBILITY');
+    jest.restoreAllMocks();
+  });
 
-    // Default remediation branch
-    const remDefault = await resolver.executeRemediation('CUSTOM_ACTION');
-    expect(remDefault.message).toMatch(/Validated schema stability/i);
+  test('a supported action whose database did not answer is recorded as failed, not applied', async () => {
+    const resolver = new LogErrorResolver({ logsDir: tempLogsDir });
+    jest.spyOn(pool, 'checkDatabaseHealth').mockResolvedValue({ isConnected: false, errorMessage: 'connection refused' });
+
+    const rem = await resolver.executeRemediation('RECONNECT_POOL_AND_INVALIDATE_CACHE');
+    expect(rem).toMatchObject({ success: false, status: 'failed' });
+    expect(rem.message).toContain('connection refused');
+    expect(resolver.getRemediationHistory()[0]).toMatchObject({ status: 'failed' });
+
+    jest.spyOn(pool, 'checkDatabaseHealth').mockRejectedValue(new Error('pool exploded'));
+    const thrown = await resolver.executeRemediation('RECONNECT_POOL_AND_INVALIDATE_CACHE');
+    expect(thrown).toMatchObject({ success: false, status: 'failed' });
+    expect(thrown.message).toContain('pool exploded');
+    jest.restoreAllMocks();
+  });
+
+  test('refuses an unsupported action without claiming it was applied or recording it', async () => {
+    const resolver = new LogErrorResolver({ logsDir: tempLogsDir });
+    const before = resolver.getRemediationHistory().length;
+
+    for (const action of ['VALIDATE_SCHEMA_CLIENT_COMPATIBILITY', 'INSPECT_PAYLOAD', 'CUSTOM_ACTION']) {
+      const refused = await resolver.executeRemediation(action);
+      expect(refused).toMatchObject({ actionType: action, success: false, status: 'not_supported', remediationId: null });
+      expect(refused.message).toMatch(/No automated remediation exists/);
+      expect(refused.message).not.toMatch(/Validated schema stability/i);
+    }
+    expect(resolver.getRemediationHistory().length).toBe(before);
+  });
+
+  test('executeRemediation keeps history bounded to the latest 50 runs', async () => {
+    const resolver = new LogErrorResolver({ logsDir: tempLogsDir });
+    jest.spyOn(pool, 'checkDatabaseHealth').mockResolvedValue({ isConnected: true });
 
     // Fill history to > 50
     for (let i = 0; i < 55; i++) {
@@ -126,6 +165,7 @@ describe('LogErrorResolver Unit Tests', () => {
     }
     const history = resolver.getRemediationHistory();
     expect(history.length).toBe(50);
+    jest.restoreAllMocks();
   });
 
   test('autoResolveAll diagnoses and resolves all detected errors', async () => {

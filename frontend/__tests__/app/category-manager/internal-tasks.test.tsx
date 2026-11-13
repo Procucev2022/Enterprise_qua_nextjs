@@ -23,26 +23,30 @@ jest.mock('@/app/category-manager/components/ApprovalsDashboard', () => {
 jest.mock('@/app/category-manager/components/ScorecardDashboard', () => ({
   ScorecardDashboard: () => <div data-testid="scorecard-dashboard">Scorecard Dashboard Mock</div>,
 }));
-jest.mock('@/app/category-manager/buyers-directory', () => () => (
-  <div data-testid="buyers-directory">Buyers Directory Mock</div>
-));
-jest.mock('@/app/category-manager/sellers-directory', () => () => (
-  <div data-testid="sellers-directory">Sellers Directory Mock</div>
-));
-jest.mock('@/app/category-manager/components/RegistrationsDashboard', () => () => (
-  <div data-testid="registrations-dashboard">Registrations Dashboard Mock</div>
-));
+jest.mock('@/app/category-manager/buyers-directory', () => function BuyersDirectoryMock() {
+  return <div data-testid="buyers-directory">Buyers Directory Mock</div>;
+});
+jest.mock('@/app/category-manager/sellers-directory', () => function SellersDirectoryMock() {
+  return <div data-testid="sellers-directory">Sellers Directory Mock</div>;
+});
+jest.mock('@/app/category-manager/components/RegistrationsDashboard', () => function RegistrationsDashboardMock() {
+  return <div data-testid="registrations-dashboard">Registrations Dashboard Mock</div>;
+});
 jest.mock('@/app/category-manager/components/PaymentDuesDashboard', () => ({
   PaymentDuesDashboard: () => <div data-testid="payment-dues-dashboard">Payment Dues Dashboard Mock</div>,
 }));
-jest.mock('@/app/category-manager/components/LoginLogsDashboard', () => () => (
-  <div data-testid="login-logs-dashboard">Login Logs Dashboard Mock</div>
-));
+jest.mock('@/app/category-manager/components/LoginLogsDashboard', () => function LoginLogsDashboardMock() {
+  return <div data-testid="login-logs-dashboard">Login Logs Dashboard Mock</div>;
+});
 jest.mock('@/lib/ticketClient', () => ({
-  fetchTicketSummary: jest.fn().mockResolvedValue({ total: 5, pending: 2, inProgress: 1, escalated: 1, completed: 1, criticalCount: 1 }),
+  fetchTicketSummary: jest.fn().mockResolvedValue({
+    summary: { total: 5, pending: 2, inProgress: 1, escalated: 1, completed: 1, criticalCount: 1 },
+  }),
 }));
 jest.mock('@/lib/approvalClient', () => ({
-  fetchApprovalSummary: jest.fn().mockResolvedValue({ total: 4, pending: 1, approved: 2, rejected: 1 }),
+  fetchApprovalSummary: jest.fn().mockResolvedValue({
+    summary: { total: 4, pending: 1, approved: 2, rejected: 1 },
+  }),
 }));
 
 jest.mock('@/lib/internalTaskClient', () => {
@@ -59,11 +63,11 @@ jest.mock('@/lib/internalTaskClient', () => {
     deleteInternalTask: jest.fn(),
     searchRelatedEntities: jest.fn(),
     getExportTasksUrl: jest.fn(),
-    fetchInternalAssignees: jest.fn().mockResolvedValue([
+    fetchInternalAssignees: jest.fn().mockResolvedValue({ assignees: [
       { id: 'exec-1', name: 'Pavani', role: 'CRM Executive' },
       { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist' },
       { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead' },
-    ]),
+    ] }),
     completeInternalTask: jest.fn(),
     approveCreditTask: jest.fn(),
     rejectCreditTask: jest.fn(),
@@ -219,18 +223,18 @@ describe('Action Center & Internal Tasks Redesign', () => {
       email: 'navin@procucev.com',
       role: 'category_manager',
     });
-    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValue([
+    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValue({ assignees: [
       { id: 'exec-1', name: 'Pavani', role: 'CRM Executive' },
       { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist' },
       { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead' },
-    ]);
+    ] });
     jest.clearAllMocks();
     (internalTaskClient.updateInternalTask as jest.Mock).mockReset();
     (internalTaskClient.completeInternalTask as jest.Mock).mockReset();
     (internalTaskClient.createInternalTask as jest.Mock).mockReset();
     (internalTaskClient.fetchTaskById as jest.Mock).mockReset();
     (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(null);
-    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValue(mockTaskTypes);
+    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValue({ taskTypes: mockTaskTypes });
     (internalTaskClient.fetchTaskSummary as jest.Mock).mockResolvedValue({
       total: 5,
       pending: 1,
@@ -417,6 +421,53 @@ describe('Action Center & Internal Tasks Redesign', () => {
     }
   });
 
+  test('tells the user when a quick status toggle is not saved and leaves the row unchanged', async () => {
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('checkbox')[0]);
+
+    expect(await screen.findByText(UI_STRINGS.actionCenter.tasks.taskStatusUpdateFailed)).toBeInTheDocument();
+    expect(screen.queryByText(/marked as Completed/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+  });
+
+  test('keeps the task summary open and says so when the full task record cannot be read', async () => {
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValueOnce(null);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_101'));
+
+    expect(await screen.findByText(UI_STRINGS.actionCenter.tasks.taskDetailsLoadFailed)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
+    expect(screen.getAllByText('Audit Mechanical Spares RFQ Quotes').length).toBeGreaterThan(0);
+  });
+
+  test('reports a thrown error while loading the full task record', async () => {
+    (internalTaskClient.fetchTaskById as jest.Mock).mockRejectedValueOnce(new Error('Task service unreachable'));
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_101'));
+
+    expect(await screen.findByText(UI_STRINGS.actionCenter.tasks.taskDetailsLoadFailed)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
+  });
+
   test('quick toggles task status via checkbox', async () => {
     (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValue({
       ...mockTasks[0],
@@ -475,7 +526,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     expect(screen.getByRole('heading', { name: 'Create Internal Task' })).toBeInTheDocument();
 
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Review New Solar Vendor Catalog' } });
 
     const descInput = screen.getByPlaceholderText(/Provide context/i);
@@ -492,7 +543,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     // Change Assign To via custom assignee toggle
     const customAssigneeBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tasks.customAssignee });
     fireEvent.click(customAssigneeBtn);
-    const assignInput = screen.getByPlaceholderText(/e\.g\. Sudheer Kangala/i);
+    const assignInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customAssigneePlaceholder);
     fireEvent.change(assignInput, { target: { value: 'Sudheer Kangala' } });
 
     // Change Due Date
@@ -574,10 +625,10 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const addCustomBtn = screen.getByRole('button', { name: /\+ Add Custom Task Type/i });
     fireEvent.click(addCustomBtn);
 
-    const customTypeInput = screen.getByPlaceholderText(/e\.g\. GST Exemption Verification/i);
+    const customTypeInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder);
     fireEvent.change(customTypeInput, { target: { value: 'Solar Panel Compliance' } });
 
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Task with Custom Type' } });
 
     const submitBtn = screen.getByRole('button', { name: 'Create Task' });
@@ -690,7 +741,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
     fireEvent.click(createBtn);
 
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Task will fail' } });
 
     const submitBtn = screen.getByRole('button', { name: 'Create Task' });
@@ -756,7 +807,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const addCustomBtn = screen.getByRole('button', { name: /\+ Add Custom Task Type/i });
     fireEvent.click(addCustomBtn);
 
-    expect(screen.getByPlaceholderText(/e\.g\. GST Exemption Verification/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder)).toBeInTheDocument();
 
     // Toggle back to existing
     const chooseExistingBtn = screen.getByRole('button', { name: /Choose Existing/i });
@@ -849,7 +900,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
   });
 
   test('handles loadTaskTypes when fetchTaskTypes returns empty array', async () => {
-    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValueOnce([]);
+    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValueOnce({ taskTypes: [] });
 
     render(<InternalTasksDashboard />);
 
@@ -993,7 +1044,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.click(chooseExistingBtn);
 
     // Enter title & submit
-    const titleInput = screen.getByPlaceholderText(/e.g. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Test Task with Assignee' } });
 
     const submitBtn = screen.getByRole('button', { name: 'Create Task' });
@@ -1271,9 +1322,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const { fetchApprovalSummary } = require('@/lib/approvalClient');
     const { authClient } = require('@/lib/authClient');
 
-    (fetchTicketSummary as jest.Mock).mockResolvedValueOnce(null);
-    (fetchApprovalSummary as jest.Mock).mockResolvedValueOnce(null);
-    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce([]);
+    (fetchTicketSummary as jest.Mock).mockResolvedValueOnce({ summary: null, error: 'Ticket summary unavailable.' });
+    (fetchApprovalSummary as jest.Mock).mockResolvedValueOnce({ summary: null, error: 'Approval summary unavailable.' });
+    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce({ assignees: [] });
     (authClient.getSessionUser as jest.Mock).mockReturnValueOnce(null);
 
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
@@ -1299,6 +1350,8 @@ describe('Action Center & Internal Tasks Redesign', () => {
     await waitFor(() => {
       expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
+    // A failed count is reported in the banner. The first failure is shown.
+    expect(screen.getByText('Ticket summary unavailable.')).toBeInTheDocument();
 
     // Dispatch event with null detail to cover customEvent.detail falsy branch
     act(() => {
@@ -1406,9 +1459,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
   });
 
   test('covers assignee dropdown with member having no id and no role, plus custom type null return', async () => {
-    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce([
+    (internalTaskClient.fetchInternalAssignees as jest.Mock).mockResolvedValueOnce({ assignees: [
       { id: '', name: 'Special Ops User', role: '' },
-    ]);
+    ] });
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
       tasks: mockTasks,
       total: mockTasks.length,
@@ -1438,7 +1491,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     // Switch to inline custom type mode and mock createNewTaskType returning null
     const addTypeBtn = screen.getByRole('button', { name: '+ Add Custom Task Type' });
     fireEvent.click(addTypeBtn);
-    const customTypeInput = screen.getByPlaceholderText('e.g. GST Exemption Verification');
+    const customTypeInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder);
     fireEvent.change(customTypeInput, { target: { value: 'Experimental Type' } });
 
     (internalTaskClient.createNewTaskType as jest.Mock).mockResolvedValueOnce(null);
@@ -1447,7 +1500,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
       id: 'tsk_experimental',
     });
 
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Task with custom type failure' } });
 
     const submitBtn = screen.getByRole('button', { name: 'Create Task' });
@@ -1885,7 +1938,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.change(catSelect, { target: { value: 'CREDIT_MANAGEMENT' } });
 
     // Fill title
-    const titleInput = screen.getByPlaceholderText(/e.g. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Extend 100 Credits for Steel Plant' } });
 
     // Fill credit specific fields
@@ -1939,7 +1992,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const catSelect = screen.getByTestId('create-task-category-select');
     fireEvent.change(catSelect, { target: { value: 'DEMO_SCHEDULING' } });
 
-    const titleInput = screen.getByPlaceholderText(/e.g. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Demo of enterprise bidding platform' } });
 
     const dateInput = screen.getByTestId('create-demo-date-input');
@@ -1965,7 +2018,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
     fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'CREDIT_MANAGEMENT' } });
     fireEvent.change(screen.getByTestId('create-credit-account-type-select'), { target: { value: 'BUYER' } });
-    fireEvent.change(screen.getByPlaceholderText(/e.g. Verify mechanical spare specifications/i), { target: { value: 'Buyer Credit Test' } });
+    fireEvent.change(screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder), { target: { value: 'Buyer Credit Test' } });
     (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce(mockCreditTask);
     fireEvent.click(screen.getByRole('button', { name: 'Create Task' }));
     await waitFor(() => {
@@ -3065,7 +3118,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
     fireEvent.click(createBtn);
 
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Branch Coverage Test Task' } });
 
     const selects = screen.getAllByRole('combobox');

@@ -149,12 +149,12 @@ describe('Email & Ingestion RFQ Title Analysis Pipeline Tests', () => {
       expect(emailIngestionService.decodeAndNormalizeEmailSubject('   ')).toBe('');
     });
 
-    test('resolveEmailRfqTitle returns subject or fallback when empty', () => {
+    test('resolveEmailRfqTitle returns the subject, and leaves an empty subject blank for the caller', () => {
       expect(emailIngestionService.resolveEmailRfqTitle('CCTV Requirement for Bangalore Office')).toBe('CCTV Requirement for Bangalore Office');
       expect(emailIngestionService.resolveEmailRfqTitle('   Urgent Requirement - Dell Laptops   ')).toBe('Urgent Requirement - Dell Laptops');
-      expect(emailIngestionService.resolveEmailRfqTitle('')).toBe('Request for Quotation');
-      expect(emailIngestionService.resolveEmailRfqTitle('   ')).toBe('Request for Quotation');
-      expect(emailIngestionService.resolveEmailRfqTitle(null)).toBe('Request for Quotation');
+      expect(emailIngestionService.resolveEmailRfqTitle('')).toBe('');
+      expect(emailIngestionService.resolveEmailRfqTitle('   ')).toBe('');
+      expect(emailIngestionService.resolveEmailRfqTitle(null)).toBe('');
       expect(emailIngestionService.resolveEmailRfqTitle('', 'Custom Fallback')).toBe('Custom Fallback');
     });
   });
@@ -260,12 +260,12 @@ describe('Email & Ingestion RFQ Title Analysis Pipeline Tests', () => {
       expect(outcome.rfq.title).toBe('Dell Laptop Procurement');
     });
 
-    test('Case 5: Empty line items in buildRFQDraft → safe fallback title "Request for Quotation"', async () => {
+    test('Case 5: Empty line items in buildRFQDraft leave the title blank instead of inventing one', async () => {
       const draft = await rfqIngestionService.buildRFQDraft({
         lineItems: [],
         source: 'email_gateway',
       });
-      expect(draft.draft.title).toBe('Request for Quotation');
+      expect(draft.draft.title).toBe('');
     });
 
     test('Case 6: Email containing multiple products → analyzes item data and derives title', async () => {

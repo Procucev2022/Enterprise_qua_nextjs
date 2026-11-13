@@ -878,6 +878,8 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
           }),
         })
       );
+      // The import is attributed to the signed-in user, not to a built-in mailbox.
+      expect(storeService.bulkAddVendors).toHaveBeenCalledWith(expect.any(Array), 'buyer@authed.com');
     });
 
     test('isHydratedFromDB surfaces persisted source in getVendors and getVendorById', async () => {
@@ -1123,6 +1125,63 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         next
       );
       expect(resPubInvalid.status).toHaveBeenCalledWith(404);
+    });
+
+    test('deleteVendor and bulkDeleteVendors allow buyers to delete their uploaded vendors permanently', async () => {
+      const next = jest.fn();
+      const buyerUser = { role: 'buyer', email: 'procurement@acme.com', sub: 'buyer-sub-1' };
+      const timestampVendor = {
+        id: 'v-1792579884052-6ip0',
+        name: 'Internal Rigor Supplies',
+        email: 'rigor@internal.com',
+        buyerEmail: 'procurement@acme.com',
+        addedByBuyerCompany: 'Acme Corp',
+        source: 'buyer_manual',
+      };
+
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'acc-buyer-1',
+        organizationName: 'Acme Corp',
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(timestampVendor);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(timestampVendor);
+      const deleteDurablySpy = jest.spyOn(storeService, 'deleteVendorDurably').mockResolvedValue(true);
+
+      // Single delete
+      const resDelete = mockRes();
+      await vendorController.deleteVendor(
+        { params: { id: 'v-1792579884052-6ip0' }, user: buyerUser },
+        resDelete,
+        next
+      );
+      expect(resDelete.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('deleted successfully') })
+      );
+      expect(deleteDurablySpy).toHaveBeenCalledWith('v-1792579884052-6ip0', 'procurement@acme.com');
+
+      // Deletion when vendor is not in memory (DB fallback / cleanup)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      const resCleanup = mockRes();
+      await vendorController.deleteVendor(
+        { params: { id: 'v-1792579884052-6ip0' }, user: buyerUser },
+        resCleanup,
+        next
+      );
+      expect(resCleanup.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('deleted successfully') })
+      );
+
+      // Bulk delete
+      const resBulk = mockRes();
+      await vendorController.bulkDeleteVendors(
+        { body: { vendorIds: ['v-1792579884052-6ip0'] }, user: buyerUser },
+        resBulk,
+        next
+      );
+      expect(resBulk.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, deletedCount: 1, deletedIds: ['v-1792579884052-6ip0'] })
+      );
     });
   });
 });

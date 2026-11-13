@@ -1,5 +1,18 @@
 const whatsAppService = require('../src/services/whatsAppService');
 
+const { WHATSAPP_SEND_STATUS } = whatsAppService;
+
+// Every variable these tests change is restored after each case.
+const ENV_KEYS = [
+  'WHATSAPP_USERNAME',
+  'WHATSAPP_PASSWORD',
+  'WHATSAPP_FROM_NUMBER',
+  'WHATSAPP_PHONE_NUMBER_ID',
+  'WHATSAPP_ACCESS_TOKEN',
+  'WHATSAPP_TEMPLATE_RFQ_INVITE',
+  'WHATSAPP_TEMPLATE_RFQ_NOTIFICATION',
+];
+
 describe('WhatsApp Service Unit Tests', () => {
   beforeEach(() => {
     whatsAppService.clearWhatsAppThrottleCache();
@@ -14,10 +27,10 @@ describe('WhatsApp Service Unit Tests', () => {
   });
 
   test('generateOneClickBidUrl creates 1-click tokenized bid link', () => {
-    const url = whatsAppService.generateOneClickBidUrl('RFQ-2026-001', 'supplier@apex.com');
+    const url = whatsAppService.generateOneClickBidUrl('RFQ-2026-001', 'supplier@supplier.test');
     expect(url).toContain('RFQ-2026-001');
     expect(url).toContain('source=wa_1click');
-    expect(url).toContain('supplier%40apex.com');
+    expect(url).toContain('supplier%40supplier.test');
   });
 
   test('buildDirectWhatsAppLink returns a wa.me deep-link', () => {
@@ -26,37 +39,66 @@ describe('WhatsApp Service Unit Tests', () => {
     expect(link).toContain(encodeURIComponent('Hello RFQ-001'));
   });
 
-  test('sendRFQInvitationWhatsApp dispatches RFQ invitation and generates wa.me deep-link', async () => {
-    const res = await whatsAppService.sendRFQInvitationWhatsApp({
-      phone: '9876543210',
-      vendorName: 'Apex Supplies Ltd',
-      contactPerson: 'Rajesh Kumar',
-      rfqNumber: 'RFQ-2026-001',
-      rfqTitle: 'Centrifugal Pumps & Valves',
-      vendorEmail: 'rajesh@apex.com',
-      deliveryDate: '2026-12-01',
-      deliveryLocation: 'Mumbai, Maharashtra',
+  test('sendRFQInvitationWhatsApp returns not_configured with a wa.me link and never reports the message as sent', async () => {
+    const savedEnv = {};
+    ENV_KEYS.forEach((key) => {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
     });
+    let res;
+    try {
+      res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        vendorName: 'Test Supplier Ltd',
+        contactPerson: 'Test Contact',
+        rfqNumber: 'RFQ-2026-001',
+        rfqTitle: 'Centrifugal Pumps & Valves',
+        vendorEmail: 'contact@supplier.test',
+        deliveryDate: '2026-12-01',
+        deliveryLocation: 'Mumbai, Maharashtra',
+      });
+    } finally {
+      ENV_KEYS.forEach((key) => {
+        if (savedEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = savedEnv[key];
+      });
+    }
 
-    expect(res.success).toBe(true);
-    expect(res.messageId).toBeDefined();
+    expect(res.success).toBe(false);
+    expect(res.status).toBe(WHATSAPP_SEND_STATUS.NOT_CONFIGURED);
+    expect(res.messageId).toBeUndefined();
+    expect(res.error).toBe('No WhatsApp provider is configured. Set WHATSAPP_USERNAME, WHATSAPP_PASSWORD and WHATSAPP_FROM_NUMBER for sendmsg.in, or WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN for Meta Cloud API. Share the returned link manually until then.');
     expect(res.link).toContain('https://wa.me/919876543210');
     expect(res.bidUrl).toContain('RFQ-2026-001');
   });
 
-  test('sendRFQInvitationWhatsApp rejects invalid phone number', async () => {
+  test('sendRFQInvitationWhatsApp rejects invalid phone number with status skipped', async () => {
     const res = await whatsAppService.sendRFQInvitationWhatsApp({
       phone: '123',
-      vendorName: 'Apex Supplies Ltd',
+      vendorName: 'Test Supplier Ltd',
       rfqNumber: 'RFQ-2026-001',
       rfqTitle: 'Centrifugal Pumps',
     });
 
     expect(res.success).toBe(false);
+    expect(res.status).toBe(WHATSAPP_SEND_STATUS.SKIPPED);
     expect(res.error).toBe('Invalid phone number format');
+    expect(res.link).toBeUndefined();
   });
 
-  test('sendRFQInvitationWhatsApp handles missing optional fields gracefully', async () => {
+  test('sendRFQInvitationWhatsApp refuses to build a message without an RFQ number', async () => {
+    const res = await whatsAppService.sendRFQInvitationWhatsApp({
+      phone: '9876543210',
+      vendorName: 'Test Vendor',
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.status).toBe(WHATSAPP_SEND_STATUS.SKIPPED);
+    expect(res.error).toBe('An RFQ number is required to send a WhatsApp RFQ invitation.');
+    expect(res.link).toBeUndefined();
+  });
+
+  test('sendRFQInvitationWhatsApp shows "Not specified" for missing optional fields in the link text', async () => {
     const res = await whatsAppService.sendRFQInvitationWhatsApp({
       phone: '9876543210',
       vendorName: 'Test Vendor',
@@ -64,7 +106,11 @@ describe('WhatsApp Service Unit Tests', () => {
       rfqTitle: '',
     });
 
-    expect(res.success).toBe(true);
+    expect(res.status).toBe(WHATSAPP_SEND_STATUS.LINK_ONLY);
+    const linkText = decodeURIComponent(res.link);
+    expect(linkText).toContain('*Delivery Date:* Not specified');
+    expect(linkText).toContain('*Delivery Location:* Not specified');
+    expect(linkText).toContain('*Description:* Not specified');
     expect(res.bidUrl).toContain('RFQ-2026-099');
   });
 
@@ -81,22 +127,35 @@ describe('WhatsApp Service Unit Tests', () => {
   describe('production dispatch and gateway fallbacks', () => {
     const origEnv = process.env.NODE_ENV;
     const origFetch = global.fetch;
+    const savedEnv = {};
 
     beforeEach(() => {
       process.env.NODE_ENV = 'production';
+      ENV_KEYS.forEach((key) => {
+        savedEnv[key] = process.env[key];
+      });
+      process.env.WHATSAPP_USERNAME = 'testuser';
+      process.env.WHATSAPP_PASSWORD = 'testpass';
+      process.env.WHATSAPP_FROM_NUMBER = '919606848835';
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+      delete process.env.WHATSAPP_ACCESS_TOKEN;
       whatsAppService.clearWhatsAppThrottleCache();
-      whatsAppService.WHATSAPP_CONFIG.USERNAME = 'testuser';
-      whatsAppService.WHATSAPP_CONFIG.PASSWORD = 'testpass';
-      whatsAppService.WHATSAPP_CONFIG.FROM_NUMBER = '919606848835';
     });
 
     afterEach(() => {
       process.env.NODE_ENV = origEnv;
       global.fetch = origFetch;
+      ENV_KEYS.forEach((key) => {
+        if (savedEnv[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = savedEnv[key];
+        }
+      });
       whatsAppService.clearWhatsAppThrottleCache();
     });
 
-    test('successfully dispatches via sendmsg.in in production', async () => {
+    test('reports sent with the provider message id when sendmsg.in returns one', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -105,17 +164,35 @@ describe('WhatsApp Service Unit Tests', () => {
 
       const res = await whatsAppService.sendRFQInvitationWhatsApp({
         phone: '9876543210',
-        vendorName: 'Apex',
+        vendorName: 'Test Supplier',
         contactPerson: 'Rahul',
         rfqNumber: 'RFQ-WA-01',
         rfqTitle: 'Valves',
       });
 
       expect(res.success).toBe(true);
-      expect(res.messageId).toContain('sendmsg-');
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.SENT);
+      expect(res.messageId).toBe('wa-123');
     });
 
-    test('throttles rapid duplicate WhatsApp dispatches in production', async () => {
+    test('leaves messageId undefined when sendmsg.in accepts the message without an id', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'success' }),
+      });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-WA-NOID',
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.SENT);
+      expect(res.messageId).toBeUndefined();
+    });
+
+    test('throttles rapid duplicate WhatsApp dispatches with status throttled', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -127,21 +204,24 @@ describe('WhatsApp Service Unit Tests', () => {
         rfqNumber: 'RFQ-WA-01',
       });
       expect(first.success).toBe(true);
+      expect(first.status).toBe(WHATSAPP_SEND_STATUS.SENT);
 
       const second = await whatsAppService.sendRFQInvitationWhatsApp({
         phone: '9876543210',
         rfqNumber: 'RFQ-WA-01',
       });
-      expect(second.success).toBe(true);
+      expect(second.success).toBe(false);
+      expect(second.status).toBe(WHATSAPP_SEND_STATUS.THROTTLED);
       expect(second.throttled).toBe(true);
-      expect(second.messageId).toBe('wa-throttled');
+      expect(second.messageId).toBeUndefined();
+      expect(second.link).toContain('https://wa.me/919876543210');
+      expect(global.fetch).toHaveBeenCalledTimes(1);
     });
 
-    test('handles sendmsg.in gateway failure and falls back to Meta or deep-link', async () => {
+    test('falls back to Meta Cloud API after a sendmsg.in rejection', async () => {
       process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
       process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
 
-      // sendmsg.in fails, Meta succeeds
       global.fetch = jest
         .fn()
         .mockResolvedValueOnce({
@@ -160,10 +240,8 @@ describe('WhatsApp Service Unit Tests', () => {
         rfqNumber: 'RFQ-WA-02',
       });
       expect(res.success).toBe(true);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.SENT);
       expect(res.messageId).toBe('meta-msg-99');
-
-      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
-      delete process.env.WHATSAPP_ACCESS_TOKEN;
     });
 
     test('formats placeholders strictly for rfq_notification_for_sellers_for_rfq_feb_5 without rogue keys', async () => {
@@ -184,7 +262,7 @@ describe('WhatsApp Service Unit Tests', () => {
         deliveryLocation: 'Ahmedabad',
         rfqTitle: 'Industrial Pumps',
       });
-      expect(res.success).toBe(true);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.SENT);
       expect(sentPayload).toBeDefined();
       const placeholders = sentPayload.whatsapptosend[0].placeholders[0];
       expect(placeholders).toEqual({
@@ -197,39 +275,64 @@ describe('WhatsApp Service Unit Tests', () => {
       expect(placeholders['0']).toBeUndefined();
     });
 
-    test('supports 6-placeholder reminder template with v2 in template name', async () => {
-      const origTemplate = process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
-      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'rfq_reminder_notification_v2';
+    test('uses "Not specified" in template placeholders when optional fields are missing', async () => {
+      process.env.WHATSAPP_TEMPLATE_RFQ_INVITE = 'rfq_reminder_notification_v2';
+      let capturedBody = null;
+      global.fetch = jest.fn().mockImplementation(async (url, opts) => {
+        capturedBody = JSON.parse(opts.body);
+        return { ok: true, status: 200, text: async () => JSON.stringify({ status: 'success' }) };
+      });
 
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-PH-01' });
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.SENT);
+      const placeholders = capturedBody.whatsapptosend[0].placeholders[0];
+      expect(placeholders['1']).toBe('RFQ-PH-01');
+      expect(placeholders['2']).toBe('Not specified');
+      expect(placeholders['3']).toBe('Not specified');
+      expect(placeholders['4']).toBe('Not specified');
+      expect(placeholders['5']).toContain('RFQ-PH-01');
+    });
+
+    test('never calls a provider when no RFQ number is supplied', async () => {
+      global.fetch = jest.fn();
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', contactPerson: 'Aditi' });
+
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.SKIPPED);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    test('returns not_configured without calling any provider, and a later configured send is not throttled', async () => {
+      delete process.env.WHATSAPP_USERNAME;
+      delete process.env.WHATSAPP_PASSWORD;
+      delete process.env.WHATSAPP_FROM_NUMBER;
+      global.fetch = jest.fn();
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-NOGW-01' });
+
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.NOT_CONFIGURED);
+      expect(res.messageId).toBeUndefined();
+      expect(res.link).toContain('https://wa.me/919876543210');
+
+      process.env.WHATSAPP_USERNAME = 'testuser';
+      process.env.WHATSAPP_PASSWORD = 'testpass';
+      process.env.WHATSAPP_FROM_NUMBER = '919606848835';
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         status: 200,
         text: async () => JSON.stringify({ status: 'success' }),
       });
-
-      const res = await whatsAppService.sendRFQInvitationWhatsApp({
-        phone: '9876543210',
-        rfqNumber: 'RFQ-REMIND-01',
-        contactPerson: 'Aditi',
-        vendorName: 'Aditi Corp',
-        deliveryDate: '2026-11-15',
-        deliveryLocation: 'Hyderabad',
-        rfqTitle: 'Bearings',
-      });
-      expect(res.success).toBe(true);
-
-      if (origTemplate) {
-        process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = origTemplate;
-      } else {
-        delete process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
-      }
+      const retry = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-NOGW-01' });
+      expect(retry.status).toBe(WHATSAPP_SEND_STATUS.SENT);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
     });
 
-    test('handles network exceptions in sendmsg.in and Meta Cloud gracefully', async () => {
+    test('reports link_only with the error text when every gateway throws', async () => {
       process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
       process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
 
-      // sendmsg throws, Meta throws -> falls through to deep-link
       global.fetch = jest
         .fn()
         .mockRejectedValueOnce(new Error('Network connection timeout on sendmsg'))
@@ -239,18 +342,17 @@ describe('WhatsApp Service Unit Tests', () => {
         phone: '9876543210',
         rfqNumber: 'RFQ-ERR-01',
       });
-      expect(res.success).toBe(true);
-      expect(res.messageId).toContain('wa-link-');
-
-      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
-      delete process.env.WHATSAPP_ACCESS_TOKEN;
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.LINK_ONLY);
+      expect(res.error).toBe('Network connection timeout on Meta');
+      expect(res.messageId).toBeUndefined();
+      expect(res.link).toContain('https://wa.me/919876543210');
     });
 
-    test('handles Meta Cloud API returning error status code', async () => {
+    test('reports link_only with the provider error when the Meta Cloud API returns an error payload', async () => {
       process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
       process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
 
-      // sendmsg fails, Meta returns 400 error payload
       global.fetch = jest
         .fn()
         .mockResolvedValueOnce({
@@ -268,18 +370,16 @@ describe('WhatsApp Service Unit Tests', () => {
         phone: '9876543210',
         rfqNumber: 'RFQ-META-ERR-01',
       });
-      expect(res.success).toBe(true);
-      expect(res.messageId).toContain('wa-link-');
-
-      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
-      delete process.env.WHATSAPP_ACCESS_TOKEN;
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.LINK_ONLY);
+      expect(res.error).toBe('OAuth Exception: Invalid OAuth access token');
+      expect(res.messageId).toBeUndefined();
     });
 
-    test('handles Meta Cloud API with empty response and json parse error', async () => {
+    test('reports link_only with the HTTP status when Meta returns an unreadable body', async () => {
       process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
       process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
 
-      // sendmsg fails, Meta returns 502 with throwing json
       global.fetch = jest
         .fn()
         .mockResolvedValueOnce({
@@ -297,11 +397,36 @@ describe('WhatsApp Service Unit Tests', () => {
         phone: '9876543210',
         rfqNumber: 'RFQ-META-ERR-02',
       });
-      expect(res.success).toBe(true);
-      expect(res.messageId).toContain('wa-link-');
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(WHATSAPP_SEND_STATUS.LINK_ONLY);
+      expect(res.error).toBe('HTTP 502');
+      expect(res.messageId).toBeUndefined();
+    });
 
-      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
-      delete process.env.WHATSAPP_ACCESS_TOKEN;
+    test('reports link_only for sendmsg.in 200 responses that carry an error status (array and object payloads)', async () => {
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify([{ Status: 'Error', error: 'Balance zero' }]),
+      });
+
+      const res1 = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-ARR-ERR' });
+      expect(res1.success).toBe(false);
+      expect(res1.status).toBe(WHATSAPP_SEND_STATUS.LINK_ONLY);
+      expect(res1.error).toBe('sendmsg.in: Balance zero');
+      expect(res1.messageId).toBeUndefined();
+
+      whatsAppService.clearWhatsAppThrottleForPhone('9876543210');
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'failure', reason: 'Blocked recipient' }),
+      });
+
+      const res2 = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-OBJ-ERR' });
+      expect(res2.success).toBe(false);
+      expect(res2.status).toBe(WHATSAPP_SEND_STATUS.LINK_ONLY);
+      expect(res2.error).toBe('sendmsg.in: Blocked recipient');
     });
 
     test('WHATSAPP_CONFIG getters all resolve correctly', () => {
@@ -317,10 +442,10 @@ describe('WhatsApp Service Unit Tests', () => {
       expect(whatsAppService.WHATSAPP_CONFIG.SUPPORT_NUMBER).toBeDefined();
 
       // Test CF environment shim branch
-      globalThis.__CF_ENV__ = { WHATSAPP_SUPPORT_NUMBER: '919999999999' };
+      globalThis.__CF_ENV__ = { WHATSAPP_SUPPORT_NUMBER: '919000000001' };
       const origSupport = process.env.WHATSAPP_SUPPORT_NUMBER;
       delete process.env.WHATSAPP_SUPPORT_NUMBER;
-      expect(whatsAppService.WHATSAPP_CONFIG.SUPPORT_NUMBER).toBe('919999999999');
+      expect(whatsAppService.WHATSAPP_CONFIG.SUPPORT_NUMBER).toBe('919000000001');
       if (origSupport !== undefined) process.env.WHATSAPP_SUPPORT_NUMBER = origSupport;
       delete globalThis.__CF_ENV__;
     });
@@ -329,84 +454,6 @@ describe('WhatsApp Service Unit Tests', () => {
       whatsAppService.clearWhatsAppThrottleForPhone('9876543210');
       whatsAppService.clearWhatsAppThrottleForPhone('');
       expect(true).toBe(true);
-    });
-
-    test('covers placeholder fallbacks for v2 and legacy templates', async () => {
-      process.env.NODE_ENV = 'production';
-      process.env.WHATSAPP_USERNAME = 'user';
-      process.env.WHATSAPP_PASSWORD = 'pass';
-      process.env.WHATSAPP_FROM_NUMBER = '919000000000';
-
-      // v2 template with empty fields
-      process.env.WHATSAPP_TEMPLATE_RFQ_INVITE = 'rfq_reminder_notification_v2';
-      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'rfq_reminder_notification_v2';
-      let capturedBody = null;
-      global.fetch = jest.fn().mockImplementation(async (url, opts) => {
-        capturedBody = JSON.parse(opts.body);
-        return { ok: true, text: async () => JSON.stringify({ status: 'success' }) };
-      });
-
-      const res = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210' });
-      expect(res.success).toBe(true);
-      const ph1 = capturedBody.whatsapptosend[0].placeholders[0];
-      expect(ph1['1']).toBe('N/A');
-      expect(ph1['2']).toBe('As per RFQ');
-      expect(ph1['3']).toBe('As per RFQ');
-      expect(ph1['4']).toBe('Procurement Requisition');
-      expect(ph1['5']).toContain('https://');
-
-      // legacy template with empty fields
-      whatsAppService.clearWhatsAppThrottleForPhone('9876543210');
-      process.env.WHATSAPP_TEMPLATE_RFQ_INVITE = 'legacy_rfq_invite';
-      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'legacy_rfq_invite';
-      await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210' });
-      const ph2 = capturedBody.whatsapptosend[0].placeholders[0];
-      expect(ph2['1']).toBe('N/A');
-      expect(ph2['2']).toBe('As per RFQ');
-      expect(ph2['3']).toBe('As per RFQ');
-      expect(ph2['4']).toBe('Procurement Requisition');
-
-      delete process.env.WHATSAPP_TEMPLATE_RFQ_INVITE;
-      delete process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
-      delete process.env.WHATSAPP_USERNAME;
-      delete process.env.WHATSAPP_PASSWORD;
-      delete process.env.WHATSAPP_FROM_NUMBER;
-      process.env.NODE_ENV = 'test';
-    });
-
-    test('handles sendmsg.in gateway status errors in 200 response with array and object payloads', async () => {
-      process.env.NODE_ENV = 'production';
-      process.env.WHATSAPP_USERNAME = 'user';
-      process.env.WHATSAPP_PASSWORD = 'pass';
-      process.env.WHATSAPP_FROM_NUMBER = '919000000000';
-
-      // Array body with Status and error property
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify([{ Status: 'Error', error: 'Balance zero' }]),
-      });
-
-      const res1 = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-ARR-ERR' });
-      expect(res1.success).toBe(true); // Falls back to deep-link
-      expect(res1.messageId).toContain('wa-link-');
-
-      // Object body with failure status and reason property
-      whatsAppService.clearWhatsAppThrottleForPhone('9876543210');
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ status: 'failure', reason: 'Blocked recipient' }),
-      });
-
-      const res2 = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-OBJ-ERR' });
-      expect(res2.success).toBe(true); // Falls back to deep-link
-      expect(res2.messageId).toContain('wa-link-');
-
-      delete process.env.WHATSAPP_USERNAME;
-      delete process.env.WHATSAPP_PASSWORD;
-      delete process.env.WHATSAPP_FROM_NUMBER;
-      process.env.NODE_ENV = 'test';
     });
   });
 });

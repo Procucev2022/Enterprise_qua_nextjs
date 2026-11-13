@@ -6,7 +6,6 @@ import {
   WhatsAppChaserModal,
   RFQFollowUpDeepDiveModal,
   VendorSurveyModal,
-  RbacModal,
   VendorEvaluationSummaryModal,
   ActivePipelineModal,
   IntakeSourcesModal,
@@ -14,7 +13,9 @@ import {
   SubscriptionPaymentModal,
 } from '@/app/components/Modals';
 import * as storeModule from '@/lib/store';
-import { RFQItem, VendorEvaluationRecord } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { VENDOR_QUOTATION_ROUTE } from '@/lib/constants';
+import { QuoteComparison, RFQItem, VendorEvaluationRecord } from '@/lib/types';
 
 jest.mock('@/lib/store');
 
@@ -51,6 +52,8 @@ describe('Modals.tsx', () => {
 
   describe('PurchaseOrderModal', () => {
     const mockOnClose = jest.fn();
+    // A quote that records only a tax amount, which is the input GST and the grand total are computed from.
+    const taxOnly = (taxes: number) => ({ taxes } as Partial<QuoteComparison>) as QuoteComparison;
 
     const baseLineItems = [{ description: 'Centrifugal Water Pump', quantity: 12, unit: 'Nos' }];
 
@@ -92,7 +95,9 @@ describe('Modals.tsx', () => {
       );
 
       expect(screen.getByText('Pre-Purchase Order Generation & Dispatch')).toBeInTheDocument();
-      expect(screen.getByText('PRE-PURCHASE ORDER: PO-2026-001')).toBeInTheDocument();
+      // Before approval the server has issued no number, so the preview says so instead of showing a built number.
+      expect(screen.getByText(`PRE-PURCHASE ORDER: ${UI_STRINGS.modals.purchaseOrder.notIssuedYet}`)).toBeInTheDocument();
+      expect(screen.queryByText(/PO-2026-/)).not.toBeInTheDocument();
 
       // Export PDF button — now just triggers the browser print dialog
       const exportBtn = screen.getByText(/Export PDF/);
@@ -109,8 +114,9 @@ describe('Modals.tsx', () => {
       fireEvent.click(cancelBtn);
       expect(mockOnClose).toHaveBeenCalled();
 
-      // Notes input
-      const notesInput = screen.getByDisplayValue(/Approved based on AI/);
+      // Notes input starts empty. No sign-off note is supplied unless the approver types one.
+      const notesInput = screen.getByRole('textbox');
+      expect(notesInput).toHaveValue('');
       fireEvent.change(notesInput, { target: { value: 'Custom approver note' } });
 
       // Approve button — approvePO is now async and only resolves via the
@@ -260,6 +266,127 @@ describe('Modals.tsx', () => {
       jest.useRealTimers();
     });
 
+    it('shows the PO number, issue date and seal the server returns after approval', async () => {
+      jest.useFakeTimers();
+      mockApprovePO.mockResolvedValueOnce({
+        success: true,
+        poNumber: 'PO-SERVER-9',
+        issueDate: '2026-09-05',
+        shaSignature: 'c'.repeat(64),
+      });
+
+      render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqNumber="RFQ-2026-088"
+          vendorId="v-088"
+          vendorName="Seal Vendor"
+          totalAmount={1000}
+          unitPrice={1000}
+          leadTime={5}
+          deliveryDate="2026-09-30"
+          lineItems={baseLineItems}
+        />
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByText(/APPROVE & GENERATE PRE-PURCHASE ORDER/));
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText('PRE-PURCHASE ORDER: PO-SERVER-9')).toBeInTheDocument();
+      expect(screen.getByText('Issue Date: 2026-09-05')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.modals.purchaseOrder.sealedBadge)).toBeInTheDocument();
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Pre-Purchase Order Finalised',
+        formatString(UI_STRINGS.modals.purchaseOrder.finalisedToast, { poNumber: 'PO-SERVER-9', vendorName: 'Seal Vendor' }),
+        'success'
+      );
+
+      act(() => {
+        jest.advanceTimersByTime(1900);
+      });
+      jest.useRealTimers();
+    });
+
+    it('reports an approval that returns no PO number without inventing one', async () => {
+      jest.useFakeTimers();
+      mockApprovePO.mockResolvedValueOnce({ success: true });
+      const mockOnFinalized = jest.fn();
+
+      render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqNumber="RFQ-2026-089"
+          vendorId="v-089"
+          vendorName="Silent Vendor"
+          totalAmount={1000}
+          unitPrice={1000}
+          leadTime={5}
+          deliveryDate="2026-09-30"
+          lineItems={baseLineItems}
+          onFinalized={mockOnFinalized}
+        />
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByText(/APPROVE & GENERATE PRE-PURCHASE ORDER/));
+        await Promise.resolve();
+      });
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Pre-Purchase Order Finalised',
+        formatString(UI_STRINGS.modals.purchaseOrder.finalisedWithoutNumberToast, { vendorName: 'Silent Vendor' }),
+        'success'
+      );
+      expect(screen.getByText(`PRE-PURCHASE ORDER: ${UI_STRINGS.modals.purchaseOrder.notIssuedYet}`)).toBeInTheDocument();
+
+      act(() => {
+        jest.advanceTimersByTime(1900);
+      });
+      expect(mockOnFinalized).toHaveBeenCalledWith('');
+      jest.useRealTimers();
+    });
+
+    it('shows placeholders, never zero or a default party or term, for values the record does not hold', () => {
+      const mockWrite = jest.fn();
+      window.open = jest.fn().mockReturnValue({
+        document: { open: jest.fn(), write: mockWrite, close: jest.fn() },
+        focus: jest.fn(),
+        print: jest.fn(),
+      });
+
+      render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqNumber="RFQ-2026-090"
+          vendorId="v-090"
+          vendorName="Blank Vendor"
+          totalAmount={0}
+          unitPrice={0}
+          leadTime={0}
+          deliveryDate=""
+          lineItems={[{ description: '', quantity: 0, unit: '' }]}
+        />
+      );
+
+      expect(screen.queryByText('₹0')).not.toBeInTheDocument();
+      expect(screen.queryByText('Net 30 Days')).not.toBeInTheDocument();
+      expect(screen.queryByText('Purchasing Entity')).not.toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notAvailable).length).toBeGreaterThanOrEqual(4);
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThanOrEqual(3);
+
+      fireEvent.click(screen.getByText(/Export PDF/));
+      const html = String(mockWrite.mock.calls[0][0]);
+      expect(html).not.toContain('PO-2026-');
+      expect(html).not.toContain('Purchasing Entity');
+      expect(html).not.toContain('₹0');
+      expect(html).toContain(UI_STRINGS.modals.purchaseOrder.notIssuedYet);
+    });
+
     it('displays grand total in words for various amounts', () => {
       const { rerender } = render(
         <PurchaseOrderModal
@@ -268,8 +395,9 @@ describe('Modals.tsx', () => {
           rfqNumber="RFQ-WORDS-01"
           vendorId="v-words"
           vendorName="Words Vendor"
-          totalAmount={25000000}
-          unitPrice={25000000}
+          totalAmount={20000000}
+          unitPrice={20000000}
+          quote={taxOnly(5000000)}
           leadTime={10}
           deliveryDate="2026-12-01"
           lineItems={[{ description: 'Heavy Turbine', quantity: 1, unit: 'Nos' }]}
@@ -287,6 +415,7 @@ describe('Modals.tsx', () => {
           vendorName="Words Vendor"
           totalAmount={1000000000000}
           unitPrice={1000000000000}
+          quote={taxOnly(100)}
           leadTime={10}
           deliveryDate="2026-12-01"
           lineItems={[{ description: 'Mega Project', quantity: 1, unit: 'Nos' }]}
@@ -424,6 +553,158 @@ describe('Modals.tsx', () => {
     });
   });
 
+  describe('MultiChannelChaserModal quotation link and templates', () => {
+    const mockOnCloseChaser = jest.fn();
+
+    it('links the urgent message to the vendor quotation form on this origin, with no guessed domain or deadline', () => {
+      render(
+        <MultiChannelChaserModal
+          isOpen={true}
+          onClose={mockOnCloseChaser}
+          rfqNumber="RFQ-2026-001"
+          vendorName="Apex Industrial"
+          initialChannel="whatsapp"
+        />
+      );
+
+      const quotationLink = `${window.location.origin}${VENDOR_QUOTATION_ROUTE}?rfq=RFQ-2026-001`;
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.modals.chaser.urgentReminderWithLink, {
+            vendorName: 'Apex Industrial',
+            rfqNumber: 'RFQ-2026-001',
+            quotationLink,
+          })
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/portal\.procucev\.com/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/within 24 hours/)).not.toBeInTheDocument();
+    });
+
+    it('switches between the urgent and technical templates', () => {
+      render(
+        <MultiChannelChaserModal
+          isOpen={true}
+          onClose={mockOnCloseChaser}
+          rfqNumber="RFQ-2026-002"
+          vendorName="Beta Tools"
+          initialChannel="sms"
+        />
+      );
+
+      const templateSelect = screen.getByRole('combobox');
+      fireEvent.change(templateSelect, { target: { value: 'technical_request' } });
+      expect(
+        screen.getByText(formatString(UI_STRINGS.modals.chaser.technicalRequestTemplate, { rfqNumber: 'RFQ-2026-002' }))
+      ).toBeInTheDocument();
+
+      fireEvent.change(templateSelect, { target: { value: 'urgent_reminder' } });
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.modals.chaser.urgentReminderWithLink, {
+            vendorName: 'Beta Tools',
+            rfqNumber: 'RFQ-2026-002',
+            quotationLink: `${window.location.origin}${VENDOR_QUOTATION_ROUTE}?rfq=RFQ-2026-002`,
+          })
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('shows the AI voice script without an invented 4:00 PM deadline', () => {
+      render(
+        <MultiChannelChaserModal
+          isOpen={true}
+          onClose={mockOnCloseChaser}
+          rfqNumber="RFQ-2026-003"
+          vendorName="Gamma Pumps"
+          initialChannel="call"
+        />
+      );
+
+      expect(
+        screen.getByDisplayValue(formatString(UI_STRINGS.modals.chaser.callScript, { rfqNumber: 'RFQ-2026-003' }))
+      ).toBeInTheDocument();
+      expect(screen.queryByDisplayValue(/4:00 PM/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('RFQFollowUpDeepDiveModal rows with no outreach record', () => {
+    const rfqWithoutOutreach = {
+      id: 'rfq-quiet',
+      rfqNumber: 'RFQ-2026-004',
+      title: 'Quiet RFQ',
+      category: 'Mechanical',
+      sourcingMode: 'mode_1',
+      status: 'Quotes Pending',
+      quotesCount: 0,
+      createdAt: '2026-08-29',
+      assignedVendors: [{ id: 'av-quiet', name: 'Quiet Vendor', contactPerson: '', phone: '' }],
+    } as unknown as RFQItem;
+
+    it('marks every channel not dispatched and invents no attempt count, escalation, time or statistic', () => {
+      render(<RFQFollowUpDeepDiveModal isOpen={true} onClose={jest.fn()} rfq={rfqWithoutOutreach} />);
+
+      // Call, WhatsApp, SMS and 24h email each show the not-dispatched badge.
+      expect(screen.getAllByText(`⏳ ${UI_STRINGS.recordPlaceholders.notDispatched}`)).toHaveLength(4);
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notDispatched)).toHaveLength(1);
+      expect(screen.getByText(`Target Delivery: ${UI_STRINGS.recordPlaceholders.notRecorded}`)).toBeInTheDocument();
+      expect(screen.queryByText(/Attempt #/)).not.toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.modals.followUp.escalationQueued)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Callback Queued|Pending 24h|Pending outreach|Standard/)).not.toBeInTheDocument();
+      expect(screen.queryByText('0 / 0')).not.toBeInTheDocument();
+      // The stat cards and tab counts read "Not available" where the server sent no count.
+      expect(screen.getAllByText(new RegExp(UI_STRINGS.recordPlaceholders.notAvailable)).length).toBeGreaterThan(0);
+      expect(screen.getByText(UI_STRINGS.recordPlaceholders.notRecorded, { selector: 'strong' })).toBeInTheDocument();
+    });
+  });
+
+  describe('VendorEvaluationSummaryModal recorded and unrecorded values', () => {
+    it('shows placeholders for unrecorded scores and remarks and checks only documents that are verified', () => {
+      const record = {
+        vendorName: 'Check Vendor',
+        category: 'Electrical',
+        submissionDate: '2026-08-30',
+        overallScore: 80,
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        systemAction: 'Review',
+        moduleScores: {
+          commercial: { score: 20, weightedScore: 20, maxScore: 25, weight: 25 },
+        },
+        documents: [
+          { id: 'd-1', name: 'Verified Cert.pdf', status: 'Verified', verified: true },
+          { id: 'd-2', name: 'Pending Cert.pdf', status: 'Pending Review', verified: false },
+        ],
+      } as unknown as VendorEvaluationRecord;
+
+      render(<VendorEvaluationSummaryModal isOpen={true} onClose={jest.fn()} record={record} />);
+
+      expect(screen.getByText('20 / 25 pts')).toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notEvaluated)).toHaveLength(5);
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded)).toHaveLength(6);
+      expect(screen.getByText(UI_STRINGS.modals.evaluation.documentsHeading)).toBeInTheDocument();
+      expect(screen.queryByText('Verified Statutory PDFs & Certifications')).not.toBeInTheDocument();
+      expect(screen.getByText('✓ Verified')).toBeInTheDocument();
+      expect(screen.getByText('Pending Review')).toBeInTheDocument();
+      expect(screen.queryByText('✓ Pending Review')).not.toBeInTheDocument();
+    });
+
+    it('shows not-evaluated in place of an overall score the record does not hold', () => {
+      const record = {
+        vendorName: 'Unscored Vendor',
+        category: 'Electrical',
+        submissionDate: '2026-08-30',
+        status: 'REGISTERED / NOT EVALUATED',
+        systemAction: 'Review',
+      } as unknown as VendorEvaluationRecord;
+
+      render(<VendorEvaluationSummaryModal isOpen={true} onClose={jest.fn()} record={record} />);
+
+      // The overall score plus the six module scores.
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notEvaluated)).toHaveLength(7);
+      expect(screen.queryByText(/%$/)).not.toBeInTheDocument();
+    });
+  });
+
   describe('RFQFollowUpDeepDiveModal', () => {
     const mockOnClose = jest.fn();
     const sampleRfq: RFQItem = {
@@ -558,6 +839,12 @@ describe('Modals.tsx', () => {
 
       expect(screen.getByText('Vendor Follow-Up Details')).toBeInTheDocument();
       expect(screen.getByText('Apex Industrial Dynamics Pvt Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Precision Hydro Pumps')).toBeInTheDocument();
+
+      // Enforce confidentiality: vendor company name only; personal contact names and mobile numbers are hidden
+      expect(screen.queryByText('+91 98201 44999')).not.toBeInTheDocument();
+      expect(screen.queryByText('Karan Sharma')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Contact:/i)).not.toBeInTheDocument();
 
       // Test all channel filter tabs using button role
       const tabButtons = screen.getAllByRole('button');
@@ -573,11 +860,13 @@ describe('Modals.tsx', () => {
       const allTab = tabButtons.find((b) => b.textContent?.includes('All Channels ('));
       if (allTab) fireEvent.click(allTab);
 
-      // Click on vendor Call button (which opens submodal)
+      // Click on vendor Call button (which opens submodal with phone hidden)
       const callTextElements = screen.getAllByText('Call');
       if (callTextElements.length > 0) {
         fireEvent.click(callTextElements[0]);
         expect(screen.getByText(/Dispatch AI Follow-Up/)).toBeInTheDocument();
+        expect(screen.getByText('Target Vendor')).toBeInTheDocument();
+        expect(screen.queryByText('Target Vendor & Phone Number')).not.toBeInTheDocument();
         fireEvent.click(screen.getByText('Cancel'));
       }
 
@@ -627,7 +916,9 @@ describe('Modals.tsx', () => {
       const { unmount: unmountNull } = render(
         <RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={nullFollowUpRfq} />
       );
-      expect(screen.getByText('Today 03:00 PM')).toBeInTheDocument();
+      // No next chaser time is recorded, so the footer shows the placeholder rather than an invented time.
+      expect(screen.getByText(UI_STRINGS.recordPlaceholders.notRecorded, { selector: 'strong' })).toBeInTheDocument();
+      expect(screen.queryByText('Today 03:00 PM')).not.toBeInTheDocument();
       expect(screen.getByText('Assigned Vendor 1')).toBeInTheDocument();
       unmountNull();
     });
@@ -641,23 +932,15 @@ describe('Modals.tsx', () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it('renders and handles survey form submission and cancel and close X button', () => {
-      jest.useFakeTimers();
+    it('states that no survey is connected, offers no dispatch action and sends nothing', () => {
       const { unmount } = render(<VendorSurveyModal isOpen={true} onClose={mockOnClose} />);
       expect(screen.getByText('Mode 3 AI Vendor Survey')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorSurvey.notConnected)).toBeInTheDocument();
+      expect(screen.queryByText(/Execute Mode 3 Survey/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/24/)).not.toBeInTheDocument();
+      expect(mockShowToast).not.toHaveBeenCalled();
 
-      const cancelBtn = screen.getByText('Cancel');
-      fireEvent.click(cancelBtn);
-      expect(mockOnClose).toHaveBeenCalled();
-
-      const submitBtn = screen.getByText(/Execute Mode 3 Survey/);
-      fireEvent.click(submitBtn);
-
-      act(() => {
-        jest.advanceTimersByTime(1100);
-      });
-
-      expect(mockShowToast).toHaveBeenCalledWith('Mode 3 Survey Dispatched', expect.any(String), 'success');
+      fireEvent.click(screen.getByText(UI_STRINGS.vendorSurvey.closeButton));
       expect(mockOnClose).toHaveBeenCalled();
       unmount();
 
@@ -665,40 +948,7 @@ describe('Modals.tsx', () => {
       render(<VendorSurveyModal isOpen={true} onClose={mockOnClose} />);
       const topX = screen.getAllByRole('button')[0];
       fireEvent.click(topX);
-      expect(mockOnClose).toHaveBeenCalled();
-
-      jest.useRealTimers();
-    });
-  });
-
-  describe('RbacModal', () => {
-    const mockOnClose = jest.fn();
-
-    it('returns null when closed', () => {
-      const { container } = render(<RbacModal isOpen={false} onClose={mockOnClose} />);
-      expect(container.firstChild).toBeNull();
-    });
-
-    it('renders and allows clicking Sync Azure AD Roles and close button and top X button', () => {
-      const { unmount } = render(<RbacModal isOpen={true} onClose={mockOnClose} />);
-      expect(screen.getByText('Azure Active Directory & RBAC Matrix')).toBeInTheDocument();
-
-      const closeBtn = screen.getByText('Close');
-      fireEvent.click(closeBtn);
-      expect(mockOnClose).toHaveBeenCalled();
-
-      const syncBtn = screen.getByText(/Sync Azure AD Roles/);
-      fireEvent.click(syncBtn);
-
-      expect(mockShowToast).toHaveBeenCalledWith('RBAC Policies Synchronized', expect.any(String), 'success');
-      expect(mockOnClose).toHaveBeenCalled();
-      unmount();
-
-      // Top X
-      render(<RbacModal isOpen={true} onClose={mockOnClose} />);
-      const topX = screen.getAllByRole('button')[0];
-      fireEvent.click(topX);
-      expect(mockOnClose).toHaveBeenCalled();
+      expect(mockOnClose).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -808,7 +1058,9 @@ describe('Modals.tsx', () => {
         <VendorEvaluationSummaryModal isOpen={true} onClose={mockOnClose} record={minimalRecord} />
       );
       expect(screen.getByText('Minimal Vendor Ltd')).toBeInTheDocument();
-      expect(screen.getByText('24 / 25 pts')).toBeInTheDocument();
+      // Each module with no recorded score shows the not-evaluated placeholder, never a substitute number.
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notEvaluated)).toHaveLength(6);
+      expect(screen.queryByText('24 / 25 pts')).not.toBeInTheDocument();
       unmount3();
 
       (storeModule.useApp as jest.Mock).mockReturnValue({
@@ -1333,10 +1585,33 @@ describe('Modals.tsx', () => {
 
       expect(screen.getByText('Base Plan Price')).toBeInTheDocument();
       expect(screen.getByText('₹4,999')).toBeInTheDocument();
-      expect(screen.getByText('GST (18%)')).toBeInTheDocument();
+      // No GST rate is supplied with this breakdown, so the label carries no percentage.
+      expect(screen.getByText(UI_STRINGS.modals.subscriptionPayment.gstLabel)).toBeInTheDocument();
+      expect(screen.queryByText(/GST \(\d+%\)/)).not.toBeInTheDocument();
       expect(screen.getByText('₹899.82')).toBeInTheDocument();
       expect(screen.getByText('Amount Due')).toBeInTheDocument();
       expect(screen.getByText('₹5,898.82')).toBeInTheDocument();
+    });
+
+    it('shows the GST rate in the label only when the pricing data supplies it', () => {
+      render(
+        <SubscriptionPaymentModal
+          isOpen={true}
+          onClose={mockOnClose}
+          planId="version_1"
+          planName="Version 1 Plan"
+          price="₹5,898.82"
+          breakdown={{
+            basePrice: '₹4,999',
+            gstAmount: '₹899.82',
+            gstPercent: 18,
+          }}
+          createPaymentLink={mockCreatePaymentLink}
+        />
+      );
+
+      expect(screen.getByText(formatString(UI_STRINGS.modals.subscriptionPayment.gstLabelWithRate, { gstPercent: 18 }))).toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.modals.subscriptionPayment.gstLabel)).not.toBeInTheDocument();
     });
 
     it('handles checkout error when payment link creation fails', async () => {

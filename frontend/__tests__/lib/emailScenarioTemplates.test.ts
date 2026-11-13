@@ -7,6 +7,22 @@ import {
 
 describe('Email Scenario Templates', () => {
   describe('EMAIL_SCENARIO_TEMPLATES definitions', () => {
+    test('copy contains no invented statistics, prices, credit terms, offers or fixed times', () => {
+      for (const template of EMAIL_SCENARIO_TEMPLATES) {
+        const copy = `${template.name}\n${template.description}\n${template.subjectTemplate}\n${template.bodyTemplate}`;
+        expect(copy).not.toMatch(/\d+(\.\d+)?\s?%/);
+        expect(copy).not.toMatch(/₹|Crore|Lakh|\bIST\b|\d+(\.\d+)?x\b/);
+        expect(copy).not.toMatch(/\d{1,2}:\d{2}\s?(AM|PM)/i);
+        expect(copy).not.toMatch(/zero|complimentary|guaranteed|free of charge/i);
+      }
+    });
+
+    test('meeting time and date come from placeholders, not fixed text', () => {
+      const demo = EMAIL_SCENARIO_TEMPLATES.find((s) => s.id === 'buyer_demo_trial');
+      expect(demo?.bodyTemplate).toContain('{followupTime}');
+      expect(demo?.bodyTemplate).toContain('{followupDate}');
+    });
+
     test('contains buyer conversion scenarios', () => {
       const buyerScenarios = EMAIL_SCENARIO_TEMPLATES.filter((s) => s.targetCategory === 'BUYER');
       expect(buyerScenarios.length).toBeGreaterThanOrEqual(8);
@@ -15,7 +31,6 @@ describe('Email Scenario Templates', () => {
       expect(ids).toContain('buyer_conversion_followup');
       expect(ids).toContain('buyer_demo_trial');
       expect(ids).toContain('buyer_subscription_offer');
-      expect(ids).toContain('buyer_credit_activation');
       expect(ids).toContain('buyer_call_outcome_connected');
       expect(ids).toContain('buyer_call_outcome_left_voicemail');
       expect(ids).toContain('buyer_call_outcome_busy');

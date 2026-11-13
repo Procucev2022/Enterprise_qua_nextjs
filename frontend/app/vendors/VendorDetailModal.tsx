@@ -480,10 +480,10 @@ function PerformanceTab({ vendor }: { vendor: PublicVendor }) {
             <BadgeCheck size={18} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
             <div>
               <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                GSTIN / Tax Verified
+                {UI_STRINGS.vendorWorkspace.publicDirectory.gstinRecorded}
               </p>
               <p className="text-xs text-emerald-600/70 dark:text-emerald-400/70">
-                Registered business entity with valid tax credentials.
+                {UI_STRINGS.vendorWorkspace.publicDirectory.gstinNotChecked}
               </p>
             </div>
           </div>

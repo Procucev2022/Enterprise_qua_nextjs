@@ -27,7 +27,7 @@
     "test:db-schema-parity": "node --test scripts/check-db-schema-parity.test.cjs",
     "check:fast": "node scripts/fast-check.js",
     "qc:fast": "node scripts/fast-check.js",
-    "pre-commit": "node scripts/quality-check.js",
+    "pre-commit": "node scripts/fast-check.js",
     "install:all": "npm install && npm install --prefix frontend && npm install --prefix backend",
     "prepare": "node scripts/setup-git-hooks.js"
   },

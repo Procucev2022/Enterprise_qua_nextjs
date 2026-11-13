@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import DailyDownloadableReports from '@/app/category-manager/daily-reports';
 import CategoryManagerDailyReportsPage from '@/app/category-manager/daily-reports/page';
 import * as reportsClient from '@/lib/reportsClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/reportsClient', () => {
   const actual = jest.requireActual('@/lib/reportsClient');
@@ -238,17 +239,19 @@ describe('DailyDownloadableReports Component Suite', () => {
     });
   });
 
-  test('renders Mode 0 fallback when SourcingMode is empty', async () => {
+  test('shows a dash instead of a sourcing mode when SourcingMode is empty', async () => {
     (reportsClient.fetchReportData as jest.Mock).mockResolvedValueOnce({
       success: true,
-      data: [{ RFQID: 'RFQ-FALLBACK', SourcingMode: '' }],
+      data: [{ RFQID: 'RFQ-NO-MODE', SourcingMode: '' }],
     });
 
     render(<DailyDownloadableReports initialCategory="seller" />);
 
     await waitFor(() => {
-      expect(screen.getByText('Mode 0')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-NO-MODE')).toBeInTheDocument();
     });
+    expect(screen.getByText(UI_STRINGS.dataLoad.emptyCell)).toBeInTheDocument();
+    expect(screen.queryByText('Mode 0')).not.toBeInTheDocument();
   });
 
   test('page wrapper component CategoryManagerDailyReportsPage mounts successfully', () => {

@@ -646,7 +646,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       );
     });
 
-    test('getCreditHistory handles missing createdDate, sourcingMode, and plan', async () => {
+    test('getCreditHistory reports missing sourcingMode, plan, and free-RFQ count as null, not as invented values', async () => {
       const minimalBuyer = { id: 'b-min', corporateEmail: 'min@b.com' };
       jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([minimalBuyer]);
       jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockResolvedValue([]);
@@ -662,9 +662,9 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         expect.objectContaining({
           success: true,
           summary: expect.objectContaining({
-            remainingFreeCredits: 5,
-            currentEntitlementMode: 'mode_0',
-            currentSubscriptionPlan: 'free_trial',
+            remainingFreeCredits: null,
+            currentEntitlementMode: null,
+            currentSubscriptionPlan: null,
           }),
         })
       );
@@ -883,6 +883,9 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
     test('getBuyerAccounts exercises query limit and store hydration branches', async () => {
       const res = { json: jest.fn() };
       const req = { user: { role: 'admin' }, query: { limit: '25' } };
+      const listStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const listByEmailSpy = jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockResolvedValue(null);
+      const listAllSpy = jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValue({ accounts: [] });
       await buyerAccountController.getBuyerAccounts(req, res, jest.fn());
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
@@ -897,6 +900,9 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: {} }, res, jest.fn());
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
       storeService.isHydratedFromDB = prevHydrated;
+      listStorageSpy.mockRestore();
+      listByEmailSpy.mockRestore();
+      listAllSpy.mockRestore();
     });
 
     test('getBuyerAccounts rejects invalid callers and selects durable buyer/admin records', async () => {
@@ -911,9 +917,9 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       await buyerAccountController.getBuyerAccounts({ user: vendorUser }, forbidden, next);
       expect(forbidden.status).toHaveBeenCalledWith(403);
 
-      const hasStorage = jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const hasStorage = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const missingBuyer = response();
-      storeService.getBuyerAccountByEmail.mockResolvedValueOnce(null);
+      jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockResolvedValueOnce(null);
       await buyerAccountController.getBuyerAccounts({ user: buyerUser, query: {} }, missingBuyer, next);
       expect(missingBuyer.json).toHaveBeenCalledWith(expect.objectContaining({ data: [] }));
 
@@ -933,6 +939,14 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockRejectedValueOnce(error);
       await buyerAccountController.getBuyerAccounts({ user: adminUser, query: {} }, dbError, next);
       expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 503, retryable: true }));
+
+      // No database configured: the listing is refused, never answered from memory.
+      const noStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const noStorageRes = response();
+      await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: {} }, noStorageRes, jest.fn());
+      noStorageSpy.mockRestore();
+      expect(noStorageRes.status).toHaveBeenCalledWith(503);
+      expect(noStorageRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, code: 'PERSISTENCE_UNAVAILABLE' }));
     });
 
     test('createSubscriptionPaymentLink exercises duration, missing phone fallback, and auto-creation', async () => {
@@ -1160,7 +1174,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
 
       // recordBuyerCommunication with empty body, fallback recipient from phone and caller without email
       jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'comm-rec-1' });
-      const reqRecEmpty = { user: { role: 'category_manager' }, params: { id: 'b-phone' } };
+      const reqRecEmpty = { user: { role: 'category_manager', name: 'Category Manager Test' }, params: { id: 'b-phone' } };
       const resRecEmpty = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await buyerAccountController.recordBuyerCommunication(reqRecEmpty, resRecEmpty, jest.fn());
       expect(resRecEmpty.status).toHaveBeenCalledWith(201);
@@ -1184,15 +1198,20 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       const req = { user: adminUser, params: { id: 'b-bare' } };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await buyerAccountController.getBuyerPaymentHistory(req, res, jest.fn());
+      // A link with no stored status is not counted as pending: its state is unknown.
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
           summary: expect.objectContaining({
             totalSuccessfulPayments: 1,
-            pendingPayments: 2,
+            totalAmountPaid: 5000,
+            pendingPayments: 1,
           }),
         })
       );
+      const payload = res.json.mock.calls[0][0];
+      const unknownLink = payload.payments.find((p) => p.id === 'bl-3');
+      expect(unknownLink).toMatchObject({ status: null, amount: null, date: null, paymentMethod: null, invoiceNumber: null });
     });
 
     test('getCreditHistory does not infer consumption from the isolate RFQ cache', async () => {
@@ -1444,7 +1463,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
           nextFollowupDate: '2026-11-10T10:00:00.000Z',
           followupPriority: 'High',
           followupAssigneeId: 'exec-2',
-          followupAssigneeName: 'Navin Chaudhary',
+          followupAssigneeName: 'Follow-up Owner',
           followupNotes: 'Finalize payment terms',
         },
       };
@@ -1511,7 +1530,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         .mockResolvedValueOnce({ id: 'btask-email-fol' });
 
       const reqEmail = {
-        user: { role: 'admin', id: 'actor-id-only' },
+        user: { role: 'admin', id: 'actor-id-only', name: 'Admin Test User' },
         params: { id: 'b-fallback' },
         body: {
           channel: 'EMAIL',
@@ -1555,6 +1574,156 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       const resErr = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await buyerAccountController.createSubscriptionPaymentLink(reqErr, resErr, jest.fn());
       expect(resErr.status).toHaveBeenCalledWith(502);
+    });
+  });
+});
+
+describe('buyerAccountController values come from real records and the session, never from defaults', () => {
+  const sessionMaker = { email: 'maker@test.com', name: 'Maker Name', role: 'category_manager', sub: 'cm-1' };
+  const adminUser = { email: 'admin@test.com', role: 'admin', sub: 'admin-1' };
+
+  function jsonRes() {
+    return { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis(), setHeader: jest.fn(), send: jest.fn() };
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  describe('aiCrossMatch category mappings', () => {
+    const vendors = [
+      { id: 'v-1', companyName: 'Alpha Steel', vendorCode: 'A1' },
+      { id: 'v-2', companyName: 'Beta Cloud', vendorCode: 'B2' },
+    ];
+
+    test('takes the first-set major and second-set minors from the PO lines category fields', () => {
+      const poLineItems = [
+        {
+          vendorIdentifier: 'Alpha Steel',
+          itemName: 'Centrifugal pump',
+          totalSpend: 100,
+          existingCategory: 'Engineering Spares - Mechanical',
+          existingSubcategory: 'Pumps & Accessories',
+        },
+        {
+          vendorIdentifier: 'Alpha Steel',
+          itemName: 'Gate valve',
+          totalSpend: 50,
+          existingCategory: 'Engineering Spares - Mechanical',
+          existingSubcategory: 'Hoses, Valves & Fittings',
+        },
+      ];
+      const res = jsonRes();
+      buyerAccountController.aiCrossMatch({ user: adminUser, body: { vendors, poLineItems } }, res, jest.fn());
+      const alpha = res.json.mock.calls[0][0].data.find((v) => v.id === 'v-1');
+      expect(alpha.firstSetMajorCategory).toBe('Engineering Spares - Mechanical');
+      expect(alpha.secondSetMinorCategories).toEqual(['Pumps & Accessories', 'Hoses, Valves & Fittings']);
+      expect(alpha.secondSetSecondaryMajors).toEqual([]);
+    });
+
+    test('guesses no category from item text, and assumes no secondary majors, when the PO lines carry no category', () => {
+      const poLineItems = [
+        { vendorIdentifier: 'Beta Cloud', itemName: 'Azure cloud licence Microsoft 365', totalSpend: 900 },
+      ];
+      const res = jsonRes();
+      buyerAccountController.aiCrossMatch({ user: adminUser, body: { vendors, poLineItems } }, res, jest.fn());
+      const beta = res.json.mock.calls[0][0].data.find((v) => v.id === 'v-2');
+      expect(beta.hasPoHistory).toBe(true);
+      expect(beta.firstSetMajorCategory).toBe('');
+      expect(beta.secondSetMinorCategories).toEqual([]);
+      expect(beta.secondSetSecondaryMajors).toEqual([]);
+    });
+
+    test('a PO line with no vendor identifier never matches a vendor', () => {
+      const poLineItems = [
+        { vendorIdentifier: '', itemName: 'Unattributed item', totalSpend: 10 },
+        { itemName: 'Line without any identifier', totalSpend: 20 },
+      ];
+      const res = jsonRes();
+      buyerAccountController.aiCrossMatch({ user: adminUser, body: { vendors, poLineItems } }, res, jest.fn());
+      const payload = res.json.mock.calls[0][0];
+      expect(payload.totalMatched).toBe(0);
+      expect(payload.data.every((v) => v.poCount === 0 && v.hasPoHistory === false)).toBe(true);
+    });
+  });
+
+  describe('addCredit actor', () => {
+    test('records the signed-in account as the actor on the transaction and the audit line', async () => {
+      const buyer = { id: 'b-1', organizationName: 'Org', corporateEmail: 'org@test.com' };
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      const creditSpy = jest.spyOn(storeService, 'addBuyerCreditsDurably').mockResolvedValue({
+        previousBalance: 0,
+        updatedBalance: 10,
+        transaction: { id: 'tx-1' },
+        replayed: false,
+      });
+      const auditSpy = jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      const res = jsonRes();
+
+      await buyerAccountController.addCredit({ user: adminUser, params: { id: 'b-1' }, body: { amount: 10, reason: 'Top up' } }, res, jest.fn());
+
+      expect(res.status).not.toHaveBeenCalledWith(400);
+      const tx = creditSpy.mock.calls[0][2];
+      expect(tx.paymentReference).toBe('MANUAL-admin@test.com');
+      expect(tx.creditSource).toBeNull();
+      expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({ userEmail: 'admin@test.com' }));
+    });
+  });
+
+  describe('requestCreditApproval', () => {
+    // The approver must be one of the configured approvers. The maker recorded on the
+    // request is the signed-in account, so an initiatorName sent in the body is ignored.
+    const payload = { amount: 5, approverName: 'Srinu Sir', initiatorName: 'Govardhan', reason: 'Quarterly top up' };
+
+    test('refuses the request when the buyer has no credit balance on record, before any task is written', async () => {
+      const buyer = { id: 'b-2', organizationName: 'No Balance Org', corporateEmail: 'nb@test.com' };
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      const createSpy = jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval');
+      const res = jsonRes();
+
+      await buyerAccountController.requestCreditApproval({ user: sessionMaker, params: { id: 'b-2' }, body: payload }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    test('records the real balance and the signed-in maker, not the typed name or a fixed role', async () => {
+      const buyer = { id: 'b-3', organizationName: 'Funded Org', corporateEmail: 'funded@test.com', creditBalance: 40 };
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      const createSpy = jest
+        .spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockResolvedValue({ id: 'task-1', task_number: 'TASK-1' });
+      const res = jsonRes();
+
+      await buyerAccountController.requestCreditApproval({ user: sessionMaker, params: { id: 'b-3' }, body: payload }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const [, initiator, approval] = createSpy.mock.calls[0];
+      expect(initiator).toMatchObject({ email: 'maker@test.com', name: 'Maker Name', role: 'category_manager' });
+      expect(approval).toMatchObject({
+        available_balance: 40,
+        maker_name: 'Maker Name',
+        maker_role: 'category_manager',
+      });
+      expect(approval.history[0]).toMatchObject({ actor_name: 'Maker Name', actor_role: 'category_manager' });
+      expect(approval.raw.available_balance).toBe(40);
+    });
+  });
+
+  describe('updateSupportedCategories actor', () => {
+    test('audits the signed-in account, not a hard-coded administrator address', async () => {
+      const buyer = { id: 'b-4', organizationName: 'Org Four', corporateEmail: 'four@test.com' };
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ ...buyer, supportedMajorCategories: ['Pumps'] });
+      const auditSpy = jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      const res = jsonRes();
+
+      await buyerAccountController.updateSupportedCategories({ user: sessionMaker, params: { id: 'b-4' }, body: { categories: ['Pumps'] } }, res, jest.fn());
+
+      expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({ userEmail: 'maker@test.com' }));
     });
   });
 });

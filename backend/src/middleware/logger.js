@@ -1,4 +1,6 @@
 const { logger } = require('../services/loggerService');
+const crypto = require('crypto');
+const { REQUEST_ID_CONFIG } = require('../config/constants');
 
 /**
  * HTTP Request Structured Logging Middleware
@@ -10,7 +12,10 @@ function requestLogger(req, res, next) {
 
   const start = Date.now();
   const headers = req.headers || {};
-  const requestId = headers['x-request-id'] || `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const clientRequestId = headers['x-request-id'];
+  const requestId = typeof clientRequestId === 'string' && REQUEST_ID_CONFIG.HEADER_PATTERN.test(clientRequestId)
+    ? clientRequestId
+    : `req-${crypto.randomUUID()}`;
   const requestPath = req.originalUrl.split('?')[0];
   req.requestId = requestId;
   if (typeof res.setHeader === 'function') res.setHeader('X-Request-Id', requestId);

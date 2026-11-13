@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const storeService = require('../services/storeService');
 const buyerAccountResolver = require('../services/buyerAccountResolver');
 const zohoPaymentService = require('../services/zohoPaymentService');
@@ -15,6 +16,46 @@ const identityQueries = require('../db/identityQueries');
 const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+
+/** A stored number, or null when the record holds no usable value. */
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Trimmed text from a source field, or '' when it is absent. */
+function cleanText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * The most frequent non-empty value in a list, ties going to the value seen first.
+ * Used for category values read from the buyer's own PO lines.
+ */
+function mostFrequent(values) {
+  const counts = new Map();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  let best = '';
+  let bestCount = 0;
+  for (const [value, count] of counts) {
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * The buyer's real credit balance, or null when the record does not hold one.
+ * Callers must not substitute a number for null.
+ */
+function knownCreditBalance(buyer) {
+  return numberOrNull(buyer.creditBalance);
+}
 
 /**
  * Buyer accounts are buyer-side org records: only a buyer (or an admin acting
@@ -119,22 +160,27 @@ async function getBuyerAccounts(req, res, next) {
       logger.warn('Rejected buyer account listing from a non-buyer role', { role: user.role }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(403).json({ success: false, error: 'You do not have permission to access buyer accounts.' });
     }
+    if (!pool.hasStorage()) {
+      logger.error('Buyer account listing refused: database storage is not configured', {}, 'BUYER_ACCOUNT_CONTROLLER');
+      return res.status(503).json({
+        success: false,
+        code: 'PERSISTENCE_UNAVAILABLE',
+        retryable: true,
+        error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+      });
+    }
     logger.info('Fetching buyer accounts', {}, 'BUYER_ACCOUNT_CONTROLLER');
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
     let accounts;
     if (user.role === 'buyer') {
-      const account = pool.hasStorage()
-        ? await domainQueries.getBuyerAccountByEmailFromDB(user.email)
-        : await storeService.getBuyerAccountByEmail(user.email);
+      const account = await domainQueries.getBuyerAccountByEmailFromDB(user.email);
       accounts = account ? [account] : [];
-    } else if (pool.hasStorage()) {
+    } else {
       const persisted = await domainQueries.getBuyerAccountsFromDB(limit);
       accounts = persisted.accounts;
-    } else {
-      accounts = storeService.getBuyerAccounts(limit);
     }
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: accounts });
+    res.json({ success: true, source: 'persisted', data: accounts });
   } catch (err) {
     if (pool.hasStorage()) {
       err.status = 503;
@@ -349,7 +395,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // here would lie about a real cancellation. The frontend instead looks
     // this id up against GET .../payment-links on return to show the link's
     // real status (PAID/CANCELED/EXPIRED/still CREATED).
-    const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const linkId = `pl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     const returnBase = String(ZOHO_CONFIG.RETURN_URL_BASE || '').replace(/\/+$/, '');
     const returnUrl = `${returnBase}/buyer/subscription-center?linkId=${linkId}`;
 
@@ -489,8 +535,11 @@ function aiCrossMatch(req, res, next) {
       const vName = (v.companyName || '').toLowerCase().trim();
       const vCode = (v.vendorCode || '').toLowerCase().trim();
 
+      // An empty identifier on either side must never match: `'x'.includes('')`
+      // is true, which would attach every PO line to every vendor.
       const matchingPOs = poLineItems.filter((po) => {
-        const pVendor = (po.vendorIdentifier || '').toLowerCase().trim();
+        const pVendor = cleanText(po.vendorIdentifier).toLowerCase();
+        if (!pVendor) return false;
         return (
           (vName && (pVendor.includes(vName) || vName.includes(pVendor))) ||
           (vCode && pVendor.includes(vCode))
@@ -501,64 +550,15 @@ function aiCrossMatch(req, res, next) {
       const items = matchingPOs.map((p) => p.itemName).filter(Boolean);
       const totalAmount = matchingPOs.reduce((acc, p) => acc + (Number(p.totalSpend) || 0), 0);
 
-      let firstSetMajor = '';
-      let secondSetMinors = [];
-
-      if (hasMatchingPOs) {
-        const itemText = (items.join(' ') + ' ' + (v.companyName || '')).toLowerCase();
-        if (
-          itemText.includes('microsoft') ||
-          itemText.includes('google') ||
-          itemText.includes('azure') ||
-          itemText.includes('workspace') ||
-          itemText.includes('cloud') ||
-          itemText.includes('license') ||
-          itemText.includes('software') ||
-          itemText.includes('power bi') ||
-          itemText.includes('bigquery') ||
-          itemText.includes('gcp') ||
-          itemText.includes('saas') ||
-          itemText.includes('datacenter')
-        ) {
-          firstSetMajor = 'Information Technology (IT) & Software';
-          if (itemText.includes('cloud') || itemText.includes('azure') || itemText.includes('gcp') || itemText.includes('storage') || itemText.includes('compute') || itemText.includes('credits')) {
-            secondSetMinors.push('Cloud Infrastructure & Storage');
-          }
-          if (itemText.includes('license') || itemText.includes('subscription') || itemText.includes('renewal') || itemText.includes('365') || itemText.includes('workspace') || itemText.includes('teams') || itemText.includes('windows server')) {
-            secondSetMinors.push('Enterprise Software & Licenses');
-          }
-          if (itemText.includes('bigquery') || itemText.includes('power bi') || itemText.includes('analytics') || itemText.includes('data')) {
-            secondSetMinors.push('Data & Analytics Platforms');
-          }
-          if (itemText.includes('datacenter') || itemText.includes('infrastructure') || itemText.includes('server')) {
-            secondSetMinors.push('IT Infrastructure');
-          }
-          if (secondSetMinors.length === 0) {
-            secondSetMinors.push('Enterprise Software & Licenses');
-          }
-        } else if (itemText.includes('pump') || itemText.includes('valve') || itemText.includes('hose') || itemText.includes('compressor')) {
-          firstSetMajor = 'Engineering Spares - Mechanical';
-          if (itemText.includes('pump')) secondSetMinors.push('Pumps & Accessories');
-          if (itemText.includes('valve') || itemText.includes('gate') || itemText.includes('globe')) secondSetMinors.push('Hoses, Valves & Fittings');
-          if (itemText.includes('hose')) secondSetMinors.push('Hoses, Valves & Fittings');
-          if (itemText.includes('compressor')) secondSetMinors.push('Compressors & Accessories');
-          if (itemText.includes('motor')) secondSetMinors.push('Machinery Parts');
-        } else if (itemText.includes('switchgear') || itemText.includes('panel') || itemText.includes('breaker') || itemText.includes('cable')) {
-          firstSetMajor = 'Engineering Spares - Electrical';
-          if (itemText.includes('panel') || itemText.includes('switchgear')) secondSetMinors.push('Panels');
-          if (itemText.includes('breaker') || itemText.includes('mccb')) secondSetMinors.push('Circuit Breakers');
-        } else if (itemText.includes('tmt') || itemText.includes('steel') || itemText.includes('civil') || itemText.includes('peb')) {
-          firstSetMajor = 'Civil Works';
-          if (itemText.includes('peb')) secondSetMinors.push('PEB Structure');
-          if (itemText.includes('tmt')) secondSetMinors.push('TMT BARS');
-          secondSetMinors.push('Roofing Sheets');
-        } else {
-          firstSetMajor = 'General Spares & Consumables';
-          secondSetMinors.push('Customised Parts');
-        }
-
-        secondSetMinors = Array.from(new Set(secondSetMinors));
-      }
+      // Category mappings come only from category fields on the buyer's own PO
+      // lines. Item text is not classified by keyword, and no category is assumed.
+      // If the PO lines carry no category, these stay empty.
+      const firstSetMajor = hasMatchingPOs
+        ? mostFrequent(matchingPOs.map((p) => cleanText(p.existingCategory)).filter(Boolean))
+        : '';
+      const secondSetMinors = hasMatchingPOs
+        ? Array.from(new Set(matchingPOs.map((p) => cleanText(p.existingSubcategory)).filter(Boolean)))
+        : [];
 
       const formattedTotal = totalAmount >= 10000000
         ? `₹${(totalAmount / 10000000).toFixed(2)} Cr`
@@ -585,7 +585,8 @@ function aiCrossMatch(req, res, next) {
         poCount: matchingPOs.length,
         firstSetMajorCategory: firstSetMajor,
         secondSetMinorCategories: secondSetMinors,
-        secondSetSecondaryMajors: hasMatchingPOs ? ['Engineering Spares - Electrical', 'Civil Works'] : [],
+        // No stored source for secondary majors exists in the PO dump, so none is assumed.
+        secondSetSecondaryMajors: [],
       };
     });
 
@@ -617,9 +618,9 @@ async function getCreditHistory(req, res, next) {
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
-    const remainingFree = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
-    const sourcingMode = buyer.sourcingMode || 'mode_0';
-    const subscriptionPlan = buyer.subscriptionPlan || 'free_trial';
+    const remainingFree = numberOrNull(buyer.remainingFreeRFQs);
+    const sourcingMode = buyer.sourcingMode || null;
+    const subscriptionPlan = buyer.subscriptionPlan || null;
 
     const transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
 
@@ -663,15 +664,15 @@ async function getCreditHistory(req, res, next) {
       transactionId: t.id,
       transactionDate: t.created_at || t.createdAt,
       transactionType: t.transaction_type || t.transactionType,
-      creditSource: t.credit_source || t.creditSource || 'Enterprise System',
-      creditsAdded: Number(t.credits_added || t.creditsAdded || 0),
-      creditsConsumed: Number(t.credits_consumed || t.creditsConsumed || 0),
-      previousBalance: Number(t.previous_balance || t.previousBalance || 0),
-      updatedBalance: Number(t.updated_balance || t.updatedBalance || 0),
+      creditSource: t.credit_source || t.creditSource || null,
+      creditsAdded: numberOrNull(t.credits_added ?? t.creditsAdded),
+      creditsConsumed: numberOrNull(t.credits_consumed ?? t.creditsConsumed),
+      previousBalance: numberOrNull(t.previous_balance ?? t.previousBalance),
+      updatedBalance: numberOrNull(t.updated_balance ?? t.updatedBalance),
       relatedRfqId: t.rfq_id || t.rfqId || null,
       paymentReference: t.payment_reference || t.paymentReference || null,
-      status: t.status || 'COMPLETED',
-      description: t.description || 'Credit balance update',
+      status: t.status || null,
+      description: t.description || null,
     }));
 
     return res.json({
@@ -705,7 +706,8 @@ async function addCredit(req, res, next) {
     const { amount, reason, source } = bodyValidation.sanitizedData;
     const creditAmount = amount;
 
-    const crypto = require('crypto');
+    // The guard above guarantees an authenticated caller, so the actor is the session.
+    const actorEmail = req.user.email;
 
     const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
     if (!buyer) {
@@ -718,12 +720,12 @@ async function addCredit(req, res, next) {
       buyerId: id,
       rfqId: null,
       transactionType: 'Admin Credit Addition',
-      creditSource: source || 'Category Manager Console',
+      creditSource: source || null,
       creditsAdded: creditAmount,
       creditsConsumed: 0,
-      paymentReference: `MANUAL-${req.user?.email || 'ADMIN'}`,
+      paymentReference: `MANUAL-${actorEmail}`,
       status: 'COMPLETED',
-      description: reason || `Admin manual credit addition of ${creditAmount} credits by ${req.user?.email || 'Category Manager'}`,
+      description: reason || `Admin manual credit addition of ${creditAmount} credits by ${actorEmail}`,
       idempotencyKey: idempotencyValidation.sanitizedData.idempotencyKey || `add-${txId}`,
       createdAt: new Date().toISOString(),
     };
@@ -739,7 +741,7 @@ async function addCredit(req, res, next) {
 
     if (!creditUpdate.replayed) {
       storeService.addAuditLog({
-        userEmail: req.user?.email || 'admin@procucev.com',
+        userEmail: actorEmail,
         action: `Added ${creditAmount} credits to ${buyer.organizationName} (${buyer.corporateEmail}). New balance: ${updatedBalance}`,
       });
     }
@@ -783,7 +785,22 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, initiatorName, idempotencyKey } = validation.sanitizedData;
+    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+
+    // The maker is the signed-in account, not a name typed into the form.
+    const makerEmail = req.user.email;
+    const makerRole = req.user.role;
+    const makerName = req.user.fullName || req.user.name || req.user.email;
+
+    // The approver decides against the balance this request is made on. A buyer
+    // with no balance on record is refused, not shown an assumed balance.
+    const balance = knownCreditBalance(buyer);
+    if (balance === null) {
+      return res.status(422).json({
+        success: false,
+        error: `The credit balance for ${buyer.organizationName} is not on record, so the approver cannot see the balance this request is made against. Refresh the buyer account and try again.`,
+      });
+    }
 
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
@@ -801,16 +818,16 @@ async function requestCreditApproval(req, res, next) {
         creditAccountName: buyer.organizationName,
         creditQuantity: amount,
         creditReason: reason,
-        notes: `Initiated By: ${initiatorName}. Requires review and approval by ${approverName}.`,
+        notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'BUYER',
         relatedEntityId: buyer.id,
         relatedEntityLabel: buyer.organizationName,
       },
       {
-        fullName: initiatorName,
-        name: initiatorName,
-        email: req.user?.email || 'cm@procucev.com',
-        role: 'category_manager',
+        fullName: makerName,
+        name: makerName,
+        email: makerEmail,
+        role: makerRole,
       },
       {
         module: 'Buyer Credit Addition',
@@ -822,9 +839,9 @@ async function requestCreditApproval(req, res, next) {
         value_impact: `${amount} RFQ Credits (${buyer.organizationName})`,
         amount,
         quantity: amount,
-        available_balance: buyer.creditBalance ?? 5,
-        maker_name: initiatorName,
-        maker_role: 'Category Manager',
+        available_balance: balance,
+        maker_name: makerName,
+        maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
         details: reason || `Requested credit top-up for ${buyer.organizationName}`,
@@ -832,8 +849,8 @@ async function requestCreditApproval(req, res, next) {
         history: [
           {
             action: 'SUBMITTED',
-            actor_name: initiatorName,
-            actor_role: 'Category Manager',
+            actor_name: makerName,
+            actor_role: makerRole,
             timestamp: new Date().toISOString(),
             remarks: reason || `Submitted for credit approval by ${approverName}.`,
           },
@@ -842,7 +859,7 @@ async function requestCreditApproval(req, res, next) {
           buyer_id: buyer.id,
           amount,
           quantity: amount,
-          available_balance: buyer.creditBalance ?? 5,
+          available_balance: balance,
           assigned_approver: approverName,
           request_type: 'Buyer Credit Addition',
         },
@@ -858,6 +875,14 @@ async function requestCreditApproval(req, res, next) {
     });
   } catch (err) {
     logger.error('Error requesting credit approval for buyer', err, 'BUYER_ACCOUNT_CONTROLLER');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
+      return res.status(503).json({
+        success: false,
+        error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+        code: 'PERSISTENCE_UNAVAILABLE',
+        retryable: true,
+      });
+    }
     next(err);
   }
 }
@@ -883,7 +908,7 @@ async function updateSupportedCategories(req, res, next) {
     });
 
     storeService.addAuditLog({
-      userEmail: req.user?.email || 'admin@procucev.com',
+      userEmail: req.user.email,
       action: `Updated supported major categories for ${buyer.organizationName}: [${cleanCategories.join(', ')}]`,
     });
 
@@ -946,6 +971,16 @@ async function recordBuyerCommunication(req, res, next) {
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
+    // The sender recorded on the communication is the signed-in user. A request without
+    // a name or email fails here instead of recording an unknown sender.
+    const actorName = req.user.fullName || req.user.name || req.user.email || null;
+    if (!actorName) {
+      return res.status(401).json({
+        success: false,
+        error: 'Sign in with a staff account to record this buyer communication. The signed-in session has no name or email, so the action cannot be attributed.',
+      });
+    }
+
     const normalizedChannel = (channel || 'EMAIL').toUpperCase();
     const commNotes = [
       callOutcome ? `Call Outcome: ${callOutcome}` : null,
@@ -953,7 +988,7 @@ async function recordBuyerCommunication(req, res, next) {
       notes || null,
     ].filter(Boolean).join(' | ');
 
-    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const isStaff = ['admin', 'category_manager', 'support'].includes(req.user.role);
     const smsService = require('../services/smsService');
     const normalizedBuyerPhone = smsService.formatMobileNumber(recipient);
     const buyerEmail = (recipient && recipient.includes('@')) ? recipient : (buyer.corporateEmail || buyer.email);
@@ -973,7 +1008,7 @@ async function recordBuyerCommunication(req, res, next) {
       notificationStatus: deliveryPending ? 'Delivery Pending' : 'Delivered',
       deliveryStatus: deliveryPending ? 'Pending' : 'Delivered',
       acknowledgementStatus: deliveryPending ? 'Delivery Pending' : 'Acknowledgement Pending',
-      communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
+      communicatedBy: actorName,
       notes: commNotes || null,
       metadata: {
         ...(metadata || {}),
@@ -985,7 +1020,7 @@ async function recordBuyerCommunication(req, res, next) {
           ...(req.user?.email ? { deliveryReplyTo: req.user.email } : {}),
         } : {}),
         ...(shouldDispatchSms ? {
-          deliveryRecipientName: buyer.organizationName || 'Buyer',
+          deliveryRecipientName: buyer.organizationName || null,
           deliveryEntityType: 'buyer_dossier',
         } : {}),
       },
@@ -1045,7 +1080,7 @@ async function recordBuyerCommunication(req, res, next) {
         try {
           const result = await smsService.sendActionCenterSms({
             mobile: buyerPhone,
-            recipientName: buyer.organizationName || 'Buyer',
+            recipientName: buyer.organizationName || null,
             message: message || subject || 'Buyer account notification',
             entityType: 'buyer_dossier',
           });
@@ -1089,7 +1124,7 @@ async function recordBuyerCommunication(req, res, next) {
     let completedTask = null;
     try {
       const channelLabel = normalizedChannel === 'CALL' ? 'Call' : normalizedChannel === 'WHATSAPP' ? 'WhatsApp' : normalizedChannel === 'SMS' ? 'SMS' : 'Email';
-      const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+      const actor = req.user;
       completedTask = await internalTaskQueries.createInternalTask({
         title: `[${channelLabel} Log / Completed] ${subject || buyer.organizationName}`,
         description: message || commNotes || 'Buyer communication activity recorded.',
@@ -1100,7 +1135,7 @@ async function recordBuyerCommunication(req, res, next) {
         relatedEntityId: buyer.id,
         relatedEntityLabel: buyer.organizationName,
         assignedToUserId: actor.uuid || actor.id || null,
-        assignedToName: actor.fullName || actor.name || actor.email || 'Category Manager',
+        assignedToName: actor.fullName || actor.name || actor.email || null,
         dueDate: new Date().toISOString(),
         notes: commNotes || '',
       }, actor);
@@ -1111,7 +1146,7 @@ async function recordBuyerCommunication(req, res, next) {
     let followupTask = null;
     if (nextFollowupDate) {
       try {
-        const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+        const actor = req.user;
         followupTask = await internalTaskQueries.createInternalTask({
           title: `[Follow-up] ${buyer.organizationName} - ${subject || 'Buyer Follow-up'}`,
           description: followupNotes || `Follow-up needed following ${normalizedChannel} outreach: ${message || ''}`,
@@ -1122,7 +1157,7 @@ async function recordBuyerCommunication(req, res, next) {
           relatedEntityId: buyer.id,
           relatedEntityLabel: buyer.organizationName,
           assignedToUserId: followupAssigneeId || actor.uuid || actor.id || null,
-          assignedToName: followupAssigneeName || actor.fullName || actor.name || actor.email || 'Category Manager',
+          assignedToName: followupAssigneeName || actor.fullName || actor.name || actor.email || null,
           dueDate: nextFollowupDate,
           notes: followupNotes || '',
         }, actor);
@@ -1159,24 +1194,25 @@ async function getBuyerPaymentHistory(req, res, next) {
 
     const payments = [];
 
-    const planName = buyer.subscriptionPlan || 'Free Enterprise Trial';
     // Subscription state is not proof of a payment; only provider records count.
+    // Each field is what the stored payment link holds. A missing value stays
+    // null: nothing is assumed about the method, currency, status, or date.
     for (const link of links) {
       payments.push({
         id: link.id,
         paymentId: link.id,
-        invoiceNo: link.invoiceNumber || `INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
-        invoiceNumber: link.invoiceNumber || `INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
-        description: `Subscription Renewal: ${link.planId || planName}`,
-        subscriptionPlan: link.planId || planName,
-        amount: Number(link.amount || 0),
-        currency: link.currency || 'INR',
+        invoiceNo: link.invoiceNumber || null,
+        invoiceNumber: link.invoiceNumber || null,
+        description: link.planId ? `Subscription Renewal: ${link.planId}` : 'Subscription payment',
+        subscriptionPlan: link.planId || null,
+        amount: numberOrNull(link.amount),
+        currency: link.currency || null,
         gateway: 'Zoho Payments',
-        paymentMethod: 'Credit Card / NetBanking / UPI',
-        status: (link.status || 'CREATED').toUpperCase(),
+        paymentMethod: null,
+        status: link.status ? String(link.status).toUpperCase() : null,
         gatewayRef: link.zohoPaymentLinkId || link.id,
-        date: link.createdAt || new Date().toISOString(),
-        transactionDate: link.createdAt || new Date().toISOString(),
+        date: link.createdAt || null,
+        transactionDate: link.createdAt || null,
         receiptUrl: `/api/buyer-accounts/${buyer.id}/payment-links/${link.id}/invoice`,
       });
     }
@@ -1188,17 +1224,19 @@ async function getBuyerPaymentHistory(req, res, next) {
     let failed = 0;
     let refunded = 0;
 
+    // Totals add only amounts that are on record. A payment with no amount is
+    // counted by status but adds nothing to the money totals.
     for (const p of payments) {
-      const st = String(p.status).toUpperCase();
+      const st = String(p.status || '').toUpperCase();
       if (st === 'PAID' || st === 'SUCCESS' || st === 'COMPLETED') {
-        totalPaid += p.amount;
+        if (p.amount !== null) totalPaid += p.amount;
         totalSuccessful += 1;
       } else if (st === 'PENDING' || st === 'CREATED' || st === 'IN_PROGRESS') {
         pending += 1;
       } else if (st === 'FAILED' || st === 'EXPIRED') {
         failed += 1;
       } else if (st === 'REFUNDED') {
-        refunded += p.amount;
+        if (p.amount !== null) refunded += p.amount;
       }
     }
 

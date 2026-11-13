@@ -228,7 +228,7 @@ describe('mailerService', () => {
         recipientName: 'Vendor',
       });
 
-      expect(res).toEqual({ sent: true, messageId: 'gmail-vendor-msg-id' });
+      expect(res).toEqual({ sent: true, success: true, status: 'sent', messageId: 'gmail-vendor-msg-id' });
       const decoded = Buffer.from(capturedRequestBody.raw, 'base64url').toString('utf8');
       expect(decoded).toContain('To: vendor@example.com');
 
@@ -288,7 +288,8 @@ describe('mailerService', () => {
         extractedEntities: [{}],
       };
       const msg = mailerService.buildRfqInviteEmail('v@x.com', { rfq: bare, recipientName: '' });
-      expect(msg.html).toContain('1. Line item');
+      expect(msg.html).toContain('1. Not specified');
+      expect(msg.html).not.toContain('Line item');
       expect(msg.subject).toBe('New RFQ RFQ-2026-00777');
       expect(msg.html).toContain('Hello,');
       expect(msg.html).not.toContain('Category');
@@ -355,7 +356,7 @@ describe('mailerService', () => {
           submittedAt: '2026-10-15T09:21:00.000Z',
           attachments: [{ id: 'att-1', fileName: 'RFQ_Requirements_9MB.pdf', size: 9441150 }],
         },
-        recipientName: 'Procucev Navin Buyer',
+        recipientName: 'Procucev Test Buyer',
       });
 
       expect(msg.subject).toBe('New quote on RFQ-2026-00500 from hsbc');
@@ -428,10 +429,14 @@ describe('mailerService', () => {
     test('both no-op under the test environment', async () => {
       expect(await mailerService.sendRfqInviteEmail('v@x.com', ctxRfq)).toEqual({
         sent: false,
+        success: false,
+        status: 'skipped',
         reason: 'test environment',
       });
       expect(await mailerService.sendQuoteReceivedEmail('b@x.com', ctxQuote)).toEqual({
         sent: false,
+        success: false,
+        status: 'skipped',
         reason: 'test environment',
       });
     });
@@ -447,7 +452,7 @@ describe('mailerService', () => {
         delete process.env.VENDOR_SMTP_PASSWORD;
         fresh = require('../src/services/mailerService');
       });
-      expect(await fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).toMatchObject({ sent: false, reason: 'SMTP not configured' });
+      expect(await fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).toMatchObject({ sent: false, success: false, status: 'not_configured', reason: 'SMTP not configured' });
 
       jest.isolateModules(() => {
         process.env.NODE_ENV = 'development';
@@ -463,7 +468,7 @@ describe('mailerService', () => {
         }));
         fresh = require('../src/services/mailerService');
       });
-      expect(await fresh.sendQuoteReceivedEmail('b@x.com', ctxQuote)).toEqual({ sent: true, messageId: 'id-1' });
+      expect(await fresh.sendQuoteReceivedEmail('b@x.com', ctxQuote)).toEqual({ sent: true, success: true, status: 'sent', messageId: 'id-1' });
       expect(captured[0].to).toBe('b@x.com');
 
       jest.isolateModules(() => {
@@ -490,7 +495,7 @@ describe('mailerService', () => {
       const msg = mailerService.buildQuoteAcknowledgementEmail('vendor@example.com', {
         rfqNumber: 'RFQ-2026-00100',
         rfqTitle: 'Pumps Procurement',
-        vendorName: 'Apex Supplies',
+        vendorName: 'Test Supplier Co',
         quote: {
           unitPrice: 5000,
           totalPrice: 10000,
@@ -505,7 +510,7 @@ describe('mailerService', () => {
       expect(msg.to).toBe('vendor@example.com');
       expect(msg.cc).toBe('buyer@example.com, support@procucev.com');
       expect(msg.subject).toBe('Quotation Received – RFQ RFQ-2026-00100');
-      expect(msg.html).toContain('Dear <strong>Apex Supplies</strong>');
+      expect(msg.html).toContain('Dear <strong>Test Supplier Co</strong>');
       expect(msg.html).toContain('₹5000');
       expect(msg.html).toContain('₹10000');
       expect(msg.html).toContain('14 days');
@@ -525,7 +530,7 @@ describe('mailerService', () => {
       const res = await mailerService.sendQuoteAcknowledgementEmail('vendor@example.com', {
         rfqNumber: 'RFQ-2026-00100',
       });
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
 
     test('does not add buyer in CC for quotation submissions when buyerEmail is specified', () => {
@@ -544,7 +549,7 @@ describe('mailerService', () => {
       const msg = mailerService.buildQuoteFailureEmail('vendor@example.com', {
         rfqNumber: 'RFQ-2026-00100',
         rfqTitle: 'Pumps Procurement',
-        vendorName: 'Apex Supplies',
+        vendorName: 'Test Supplier Co',
         reason: 'Unit price must be > 0',
         missingFields: ['Unit Price (₹)'],
         cc: 'buyer@example.com',
@@ -569,7 +574,7 @@ describe('mailerService', () => {
         to: 'vendor@example.com',
         rfqNumber: 'RFQ-2026-00100',
       });
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
   });
 
@@ -594,7 +599,7 @@ describe('mailerService', () => {
       const res = await mailerService.sendRfqFinalComparisonEmail('buyer@example.com', {
         rfq: { rfqNumber: 'RFQ260409000900' },
       });
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
 
     test('builds final comparison email with no quotes received fallback', () => {
@@ -633,15 +638,21 @@ describe('mailerService', () => {
         rfq: { rfqNumber: 'RFQ260409000901' },
         quotesCount: 3,
       });
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
 
-    test('falls back to generic greeting and default RFQ fields when optional context is absent', () => {
-      const email = mailerService.buildRfqAutoClosureAcknowledgementEmail('buyer@example.com', {});
-      expect(email.subject).toContain('RFQ');
+    test('requires an RFQ number and an exact quote count, and shows "Not specified" for absent optional fields', () => {
+      expect(() => mailerService.buildRfqAutoClosureAcknowledgementEmail('buyer@example.com', {})).toThrow(
+        'requires rfq.rfqNumber'
+      );
+      const email = mailerService.buildRfqAutoClosureAcknowledgementEmail('buyer@example.com', {
+        rfq: { rfqNumber: 'RFQ-FALL-1' },
+        quotesCount: 0,
+      });
+      expect(email.subject).toContain('RFQ-FALL-1');
       expect(email.html).toContain('Hello,');
-      // Default placeholders for missing category / delivery location.
       expect(email.html).toContain('0 vendor(s)');
+      expect(email.html).toContain('Not specified');
     });
   });
 
@@ -649,7 +660,7 @@ describe('mailerService', () => {
     test('builds the portal redirect email with the item count and vendor portal link', async () => {
       const email = mailerService.buildComplexRfqPortalRedirectEmail('vendor@example.com', {
         rfq: { rfqNumber: 'RFQ260409000902', title: 'Multi-Item Overhaul' },
-        vendorName: 'Apex Supplies',
+        vendorName: 'Test Supplier Co',
         itemCount: 11,
       });
 
@@ -657,22 +668,31 @@ describe('mailerService', () => {
       expect(email.to).toBe('vendor@example.com');
       expect(email.subject).toContain('RFQ260409000902');
       expect(email.subject).toContain('11 Items');
-      expect(email.html).toContain('Apex Supplies');
+      expect(email.html).toContain('Test Supplier Co');
       expect(email.html).toContain('11 Line Items');
       // Button links to the vendor quotation form for this opportunity.
       expect(email.html).toContain('/vendor/quotation-form?opportunity=RFQ260409000902');
 
       const res = await mailerService.sendComplexRfqPortalRedirectEmail('vendor@example.com', {
         rfq: { rfqNumber: 'RFQ260409000902' },
-        vendorName: 'Apex Supplies',
+        vendorName: 'Test Supplier Co',
         itemCount: 11,
       });
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
 
-    test('falls back to generic greeting and default fields when optional context is absent', () => {
-      const email = mailerService.buildComplexRfqPortalRedirectEmail('vendor@example.com', {});
-      expect(email.subject).toContain('RFQ');
+    test('requires an RFQ number and a line-item count before building the portal redirect', () => {
+      expect(() => mailerService.buildComplexRfqPortalRedirectEmail('vendor@example.com', {})).toThrow(
+        'requires rfq.rfqNumber'
+      );
+      expect(() => mailerService.buildComplexRfqPortalRedirectEmail('vendor@example.com', { rfq: { rfqNumber: 'RFQ-CX-1' } })).toThrow(
+        'requires itemCount'
+      );
+      const email = mailerService.buildComplexRfqPortalRedirectEmail('vendor@example.com', {
+        rfq: { rfqNumber: 'RFQ-CX-1' },
+        itemCount: 0,
+      });
+      expect(email.subject).toContain('RFQ-CX-1');
       expect(email.subject).toContain('0 Items');
       expect(email.html).toContain('Hello,');
     });
@@ -683,7 +703,7 @@ describe('mailerService', () => {
       const email = mailerService.buildVendorIssueAcknowledgementEmail('vendor@example.com', {
         rfqNumber: 'RFQ260409000900',
         rfqTitle: 'Pumps Procurement',
-        vendorName: 'Apex Supplies',
+        vendorName: 'Test Supplier Co',
         issueMessage: 'Drawing missing for Item 2',
         cc: 'buyer@example.com',
       });
@@ -697,7 +717,7 @@ describe('mailerService', () => {
       const res = await mailerService.sendVendorIssueAcknowledgementEmail('vendor@example.com', {
         rfqNumber: 'RFQ260409000900',
       });
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
   });
 
@@ -713,7 +733,13 @@ describe('mailerService', () => {
           { itemName: 'Check Valve', quantity: 5, unit: 'pcs', specifications: 'DN50 PN16' },
         ],
       };
-      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', { rfq: rfqWithSpecs });
+      process.env.VENDOR_EMAIL_GATEWAY_ADDRESS = 'vendor-gateway@example.test';
+      let msg;
+      try {
+        msg = mailerService.buildRfqInviteEmail('vendor@example.com', { rfq: rfqWithSpecs });
+      } finally {
+        delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      }
       expect(msg.html).toContain('DN100 PN16');
       expect(msg.html).toContain('DN50 PN16');
       expect(msg.html).toContain('₹5,00,000');
@@ -721,7 +747,7 @@ describe('mailerService', () => {
       expect(msg.html).toContain('For multi-item RFQs, please quote unit price per item');
       expect(msg.html).toContain('Open in Vendor Web Portal');
       expect(msg.html).toContain('Email Reply Format (Copy, Fill & Send)');
-      expect(msg.replyTo).toBeTruthy();
+      expect(msg.replyTo).toBe('vendor-gateway@example.test');
     });
 
     test('allows email submission at ten items but makes larger RFQs portal-only', () => {
@@ -773,7 +799,8 @@ describe('mailerService', () => {
       const original = process.env.EMAIL_GATEWAY_ADDRESS;
       delete process.env.EMAIL_GATEWAY_ADDRESS;
       delete process.env.EMAIL_GATEWAY_USER;
-      expect(mailerService.emailGatewayAddress()).toBe('rfqprocucev@gmail.com');
+      // No default gateway mailbox: an unset address stays unset.
+      expect(mailerService.emailGatewayAddress()).toBe('');
 
       process.env.EMAIL_GATEWAY_ADDRESS = 'custom@procucev.com';
       expect(mailerService.emailGatewayAddress()).toBe('custom@procucev.com');
@@ -855,7 +882,7 @@ describe('mailerService', () => {
     });
 
     const res = await freshMailerService.sendRequisitionNotificationEmail(
-      'navinchaudhary.dev@gmail.com',
+      'buyer.recipient@corp.test',
       {
         rfqNumber: 'RFQ-2026-101',
         title: 'Stainless Steel Flanges',
@@ -873,7 +900,7 @@ describe('mailerService', () => {
 
     expect(res.sent).toBe(true);
     expect(res.messageId).toBe('req-msg-123');
-    expect(capturedMail.to).toBe('navinchaudhary.dev@gmail.com');
+    expect(capturedMail.to).toBe('buyer.recipient@corp.test');
     expect(capturedMail.replyTo).toBe('buyer@procucev.com');
     expect(capturedMail.subject).toContain('RFQ-2026-101');
     expect(capturedMail.html).toContain('SS 316 Flange 4-inch');
@@ -903,14 +930,21 @@ describe('mailerService', () => {
     });
 
     const res = await freshMailerService.sendRequisitionNotificationEmail(
-      '',
+      'requisitions@example.test',
       null,
       ''
     );
 
     expect(res.sent).toBe(true);
-    expect(capturedMail.to).toBe('navinchaudhary.dev@gmail.com');
+    expect(capturedMail.to).toBe('requisitions@example.test');
     expect(capturedMail.html).toContain('No specific line items itemized');
+    expect(capturedMail.subject).toContain('Not specified');
+
+    // With no recipient configured, nothing is sent and no personal mailbox is substituted.
+    capturedMail = undefined;
+    const skipped = await freshMailerService.sendRequisitionNotificationEmail('', null, '');
+    expect(skipped).toEqual({ sent: false, success: false, status: 'skipped', reason: 'missing recipient email' });
+    expect(capturedMail).toBeUndefined();
 
     delete process.env.SMTP_USER;
     delete process.env.SMTP_PASSWORD;
@@ -967,7 +1001,7 @@ describe('mailerService', () => {
     test('buildVendorCategoryMappingEmail renders correctly with and without minors', () => {
       const email1 = mailerService.buildVendorCategoryMappingEmail({
         to: 'vendor@test.com',
-        recipientName: 'Rajesh',
+        recipientName: 'Meera',
         buyerOrganizationName: 'Tata Steel',
         vendorCode: 'V-1001',
         majorCategory: 'Industrial Valves',
@@ -976,7 +1010,7 @@ describe('mailerService', () => {
       });
       expect(email1.to).toBe('vendor@test.com');
       expect(email1.subject).toContain('Tata Steel has mapped your supply categories');
-      expect(email1.html).toContain('Rajesh');
+      expect(email1.html).toContain('Meera');
       expect(email1.html).toContain('Ball Valves');
       expect(email1.html).toContain('Mobile Number');
       expect(email1.html).toContain('+91 98765 43210');
@@ -1087,7 +1121,7 @@ describe('mailerService', () => {
       const email = mailerService.buildRatingRevisionEmail({
         to: 'rating@test.com',
         recipientName: 'Vikram',
-        vendorName: 'Apex Tools',
+        vendorName: 'Test Tools Co',
         buyerCompany: 'Mahindra',
         buyerName: 'Buyer Lead',
         previousRating: 3.5,
@@ -1126,6 +1160,32 @@ describe('mailerService', () => {
       expect(email.html).not.toContain('<script>');
       expect(email.subject).not.toMatch(/[\r\n]/);
       expect(email.subject).toContain('Bcc: attacker@example.test');
+    });
+
+    test('buildVendorEvaluationRequestEmail renders evaluation request content', () => {
+      const email = mailerService.buildVendorEvaluationRequestEmail({
+        to: 'eval-vendor@test.com',
+        recipientName: 'Vikram',
+        vendorName: 'Apex Tools Ltd',
+        buyerCompany: 'Larsen & Toubro',
+        buyerName: 'Procurement Officer',
+        buyerEmail: 'officer@lt.test',
+        notes: 'Please submit 2026 ISO quality compliance certificate.',
+      });
+      expect(email.to).toBe('eval-vendor@test.com');
+      expect(email.subject).toContain('Larsen & Toubro');
+      expect(email.html).toContain('Apex Tools Ltd');
+      expect(email.html).toContain('Please submit 2026 ISO quality compliance certificate.');
+    });
+
+    test('sendVendorEvaluationRequestEmail delivers email message', async () => {
+      const result = await mailerService.sendVendorEvaluationRequestEmail({
+        to: 'eval-vendor@test.com',
+        recipientName: 'Vikram',
+        vendorName: 'Apex Tools Ltd',
+        buyerCompany: 'Larsen & Toubro',
+      });
+      expect(result).toHaveProperty('sent');
     });
 
     test('sendVendorIngestionEmail and isConfigured work properly', async () => {
@@ -1255,9 +1315,9 @@ describe('mailerService', () => {
       expect(mailerService.getPublicFrontendUrl()).toBe('https://equa.procucev.com');
       expect(mailerService.vendorSignInUrl()).toBe('https://equa.procucev.com/login');
 
-      process.env.PUBLIC_FRONTEND_URL = 'https://procucev-enterprise-frontend.srinivas-mukku.workers.dev';
-      expect(mailerService.getPublicFrontendUrl()).toBe('https://equa.procucev.com');
-      expect(mailerService.vendorSignInUrl()).toBe('https://equa.procucev.com/login');
+      process.env.PUBLIC_FRONTEND_URL = 'https://procucev-enterprise-frontend.configured.example.test';
+      expect(mailerService.getPublicFrontendUrl()).toBe('https://procucev-enterprise-frontend.configured.example.test');
+      expect(mailerService.vendorSignInUrl()).toBe('https://procucev-enterprise-frontend.configured.example.test/login');
       delete process.env.PUBLIC_FRONTEND_URL;
       process.env.NODE_ENV = 'test';
 
@@ -1323,7 +1383,7 @@ describe('mailerService', () => {
       expect(email.text).toContain('RFQ ID: RFQ260909223278');
       expect(email.text).toContain('100 MT Structural Steel Beams');
       expect(email.text).toContain('Category: Structural Steel');
-      expect(email.text).toContain('ISMB 300 | Grade E250 | Qty: 50 MT');
+      expect(email.text).toContain('ISMB 300 | Grade E250 | Qty: 50 | Unit: MT');
       expect(email.text).toContain('+91 8247722944');
       expect(email.text).toContain('info@procucev.com');
       expect(email.text).toContain('Team Qua AI');
@@ -1339,15 +1399,23 @@ describe('mailerService', () => {
       expect(email.html).toContain('View RFQ Summary');
     });
 
-    test('buildRfqAcknowledgementEmail handles default fallbacks when fields are omitted', () => {
+    test('buildRfqAcknowledgementEmail refuses to build without an RFQ number or supplier count, and shows "Not specified" for omitted fields', () => {
+      expect(() => mailerService.buildRfqAcknowledgementEmail({ to: 'buyer@example.com' })).toThrow("requires 'rfq_id'");
+      expect(() => mailerService.buildRfqAcknowledgementEmail({ to: 'buyer@example.com', rfqNumber: 'RFQ-NOSUP' })).toThrow(
+        "requires 'suppliers_invited'"
+      );
+
       const email = mailerService.buildRfqAcknowledgementEmail({
         to: 'buyer@example.com',
+        rfqNumber: 'RFQ-FB-1',
+        suppliersInvited: 0,
       });
 
       expect(email.to).toBe('buyer@example.com');
       expect(email.text).toContain('Hi there,');
-      expect(email.subject).toBe('Congratulations, RFQ RFQ is live. Qua AI is on it');
-      expect(email.text).toContain('RFQ ID: RFQ');
+      expect(email.subject).toBe('Congratulations, RFQ RFQ-FB-1 is live. Qua AI is on it');
+      expect(email.text).toContain('RFQ ID: RFQ-FB-1');
+      expect(email.text).toContain('Not specified');
     });
 
     test('buildBuyerOnboardingWithRfqEmail formats Email 1 with Qua AI template, credentials and steps', () => {
@@ -1364,7 +1432,8 @@ describe('mailerService', () => {
       expect(email.text).toContain('Hi Ramesh,');
       expect(email.text).toContain('RFQ: RFQ262410215084 : Centrifugal Pumps');
       expect(email.text).toContain('Login ID: newbuyer@example.com');
-      expect(email.text).toContain('Registered Mobile: 9999999999');
+      expect(email.text).toContain('Registered Mobile: Not specified');
+      expect(email.text).not.toContain('9999999999');
       expect(email.text).toContain('Temporary password: TempPassword123 (valid for 48 hours)');
       expect(email.text).toContain('Three quick steps to finish');
       expect(email.text).toContain('Log in & review my RFQ');
@@ -1375,7 +1444,8 @@ describe('mailerService', () => {
       expect(email.html).toContain('Hi <strong>Ramesh</strong>,');
       expect(email.html).toContain('TempPassword123');
       expect(email.html).toContain('Registered Mobile:');
-      expect(email.html).toContain('9999999999');
+      expect(email.html).toContain('Not specified');
+      expect(email.html).not.toContain('9999999999');
       expect(email.html).toContain('/login?redirect=/buyer/rfq-summary');
     });
 
@@ -1384,6 +1454,7 @@ describe('mailerService', () => {
         to: 'buyer@example.com',
         buyerName: 'Buyer',
         rfqNumber: 'RFQ123',
+        suppliersInvited: 2,
       });
       expect(testRes.sent).toBe(false);
       expect(testRes.reason).toBe('test environment');
@@ -1409,6 +1480,7 @@ describe('mailerService', () => {
         to: 'buyer@example.com',
         buyerName: 'Veerababu',
         rfqNumber: 'RFQ260909223278',
+        suppliersInvited: 4,
       });
       expect(devRes.sent).toBe(true);
       expect(devRes.messageId).toBe('ack-msg-id-123');
@@ -1483,8 +1555,9 @@ describe('mailerService', () => {
 
   describe('Vendor Transporter & Gateway Address', () => {
     test('vendorFromAddress and vendorGatewayAddress support custom and fallback envs', () => {
-      expect(mailerService.vendorFromAddress()).toContain('srinu20252026@gmail.com');
-      expect(mailerService.vendorGatewayAddress()).toBe('srinu20252026@gmail.com');
+      // No default vendor mailbox: unset env values produce no sender or gateway address.
+      expect(mailerService.vendorFromAddress()).toBe('');
+      expect(mailerService.vendorGatewayAddress()).toBe('');
 
       const origFrom = process.env.VENDOR_SMTP_FROM;
       const origAddr = process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
@@ -1515,7 +1588,7 @@ describe('mailerService', () => {
         delete process.env.SMTP_PASSWORD;
         expect(mailerService.isVendorConfigured()).toBe(false);
 
-        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
         process.env.VENDOR_SMTP_PASSWORD = 'app-password';
         expect(mailerService.isVendorConfigured()).toBe(true);
       } finally {
@@ -1533,7 +1606,7 @@ describe('mailerService', () => {
     test('getVendorTransporter handles custom VENDOR_SMTP_PORT, VENDOR_SMTP_SECURE, and host configs', () => {
       let fresh;
       jest.isolateModules(() => {
-        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
         process.env.VENDOR_SMTP_PASSWORD = 'password';
         process.env.VENDOR_SMTP_HOST = 'mail.custom.com';
         process.env.VENDOR_SMTP_PORT = '2525';
@@ -1554,7 +1627,7 @@ describe('mailerService', () => {
 
       // Branch: VENDOR_SMTP_SECURE set without port
       jest.isolateModules(() => {
-        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
         process.env.VENDOR_SMTP_PASSWORD = 'password';
         delete process.env.VENDOR_SMTP_PORT;
         process.env.VENDOR_SMTP_SECURE = 'true';
@@ -1570,7 +1643,7 @@ describe('mailerService', () => {
 
       // Branch: Non-gmail without port or secure
       jest.isolateModules(() => {
-        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
         process.env.VENDOR_SMTP_PASSWORD = 'password';
         delete process.env.VENDOR_SMTP_PORT;
         delete process.env.VENDOR_SMTP_SECURE;
@@ -1591,7 +1664,7 @@ describe('mailerService', () => {
       let deliveredMsg;
       jest.isolateModules(() => {
         process.env.NODE_ENV = 'development';
-        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
         process.env.VENDOR_SMTP_PASSWORD = 'password';
         jest.doMock('nodemailer', () => ({
           createTransport: jest.fn(() => ({
@@ -1612,7 +1685,7 @@ describe('mailerService', () => {
       // Failure case
       jest.isolateModules(() => {
         process.env.NODE_ENV = 'development';
-        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
         process.env.VENDOR_SMTP_PASSWORD = 'password';
         jest.doMock('nodemailer', () => ({
           createTransport: jest.fn(() => ({
@@ -1638,7 +1711,7 @@ describe('mailerService', () => {
       let fresh;
       jest.isolateModules(() => {
         process.env.NODE_ENV = 'development';
-        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
         process.env.VENDOR_SMTP_PASSWORD = 'password';
         process.env.GMAIL_CLIENT_ID = 'client-id';
         process.env.GMAIL_CLIENT_SECRET = 'client-secret';
@@ -1720,10 +1793,10 @@ describe('mailerService', () => {
           process.env.GMAIL_CLIENT_ID = 'client-id';
           process.env.GMAIL_CLIENT_SECRET = 'client-secret';
           process.env.VENDOR_GMAIL_REFRESH_TOKEN = 'vendor-refresh-token';
-          process.env.VENDOR_GMAIL_SENDER_EMAIL = 'srinu20252026@gmail.com';
+          process.env.VENDOR_GMAIL_SENDER_EMAIL = 'vendor-smtp@supplier.test';
           // Present but must never be touched — vendor Gmail API takes
           // priority, so this transporter should never even be built.
-          process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+          process.env.VENDOR_SMTP_USER = 'vendor-smtp@supplier.test';
           process.env.VENDOR_SMTP_PASSWORD = 'password';
           createTransport = jest.fn();
           jest.doMock('nodemailer', () => ({ createTransport }));
@@ -1750,7 +1823,7 @@ describe('mailerService', () => {
         expect(res.sent).toBe(true);
         expect(res.messageId).toBe('vendor-gmail-msg-1');
         const decodedRaw = Buffer.from(sendArgs.requestBody.raw, 'base64url').toString('utf8');
-        expect(decodedRaw).toContain('srinu20252026@gmail.com');
+        expect(decodedRaw).toContain('vendor-smtp@supplier.test');
         expect(createTransport).not.toHaveBeenCalled();
       });
     });
@@ -1799,7 +1872,7 @@ describe('mailerService', () => {
           process.env.GMAIL_CLIENT_ID = 'client-id';
           process.env.GMAIL_CLIENT_SECRET = 'client-secret';
           process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = 'quote-alert-refresh-token';
-          process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL = 'manav.procucev@gmail.com';
+          process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL = 'quote-alert@supplier.test';
           jest.doMock('googleapis', () => ({
             google: {
               auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
@@ -1827,7 +1900,7 @@ describe('mailerService', () => {
         expect(res.sent).toBe(true);
         expect(res.messageId).toBe('quote-alert-msg-1');
         const decodedRaw = Buffer.from(sendArgs.requestBody.raw, 'base64url').toString('utf8');
-        expect(decodedRaw).toContain('manav.procucev@gmail.com');
+        expect(decodedRaw).toContain('quote-alert@supplier.test');
       });
 
       test('sendQuoteReceivedEmail falls back to the buyer Gmail API when the quote-alert mailbox is not configured', async () => {
@@ -1875,7 +1948,7 @@ describe('mailerService', () => {
         rfqNumber: 'RFQ-999',
         rfqTitle: 'Heavy Machinery Steel Plates',
         rfqCategory: 'Raw Material',
-        vendorName: 'Apex Industrial',
+        vendorName: 'Test Industrial Co',
         vendorCurrentCategory: 'IT Hardware',
         buyerAccountName: 'Tata Steel Procurement',
         buyerEmail: 'buyer@tatasteel.com',
@@ -1884,7 +1957,7 @@ describe('mailerService', () => {
       expect(email.to).toBe('vendor@example.com');
       expect(email.cc).toBe('buyer@tatasteel.com');
       expect(email.subject).toContain('Action Required: Category Mismatch for RFQ #RFQ-999');
-      expect(email.html).toContain('Apex Industrial');
+      expect(email.html).toContain('Test Industrial Co');
       expect(email.html).toContain('Heavy Machinery Steel Plates');
       expect(email.html).toContain('Raw Material');
       expect(email.html).toContain('IT Hardware');
@@ -1900,7 +1973,7 @@ describe('mailerService', () => {
         vendorName: 'Delta Bearings',
       });
 
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
   });
 
@@ -1933,7 +2006,7 @@ describe('mailerService', () => {
       });
       expect(viaLineItems.html).toBeDefined();
 
-      // Multi-item + buyerAccountName => the items.length > 1 sample-format and
+      // Multi-item + buyerAccountName => the items.length > 1 reply-format and
       // the named-buyer greeting branches when vendor is buyer-uploaded.
       const multiItem = mailerService.buildRfqInviteEmail('vendor@x.com', {
         rfq: {
@@ -2089,7 +2162,7 @@ describe('mailerService', () => {
       expect(mailerService.buildVendorIssueAcknowledgementEmail({ to: 'v@x.com', rfqNumber: 'RFQ-SOF-3' }).to).toBe('v@x.com');
       expect(mailerService.buildVendorCategoryMismatchEmail({ to: 'v@x.com', rfqNumber: 'RFQ-SOF-4' }).to).toBe('v@x.com');
       expect(mailerService.buildComplexRfqPortalRedirectEmail({ to: 'v@x.com', rfq: { rfqNumber: 'RFQ-SOF-5' }, itemCount: 12 }).to).toBe('v@x.com');
-      expect(mailerService.buildRfqAutoClosureAcknowledgementEmail({ to: 'b@x.com', rfq: { rfqNumber: 'RFQ-SOF-6' } }).to).toBe('b@x.com');
+      expect(mailerService.buildRfqAutoClosureAcknowledgementEmail({ to: 'b@x.com', rfq: { rfqNumber: 'RFQ-SOF-6' }, quotesCount: 0 }).to).toBe('b@x.com');
       expect(mailerService.buildRfqFinalComparisonEmail({ to: 'b@x.com', rfq: { rfqNumber: 'RFQ-SOF-7' } }).to).toBe('b@x.com');
     });
 
@@ -2132,7 +2205,7 @@ describe('mailerService', () => {
 
     test('sendOtpEmail with no expiry argument uses the default 10-minute window on the main module', async () => {
       const res = await mailerService.sendOtpEmail('nodefault@example.com', '1234');
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
 
     test('sendOtpEmail builds the registration subject variant on the main module (deliver no-ops in test env)', async () => {
@@ -2140,7 +2213,7 @@ describe('mailerService', () => {
       // before deliver's test-env short-circuit, so the registration branch is
       // exercised on the live module instance even though nothing is sent.
       const res = await mailerService.sendOtpEmail('newuser@example.com', '4321', 60, { isRegistration: true });
-      expect(res).toEqual({ sent: false, reason: 'test environment' });
+      expect(res).toEqual({ sent: false, success: false, status: 'skipped', reason: 'test environment' });
     });
 
     test('wrapEmail and mailerService templates produce responsive full-width presentation table layouts', () => {

@@ -199,7 +199,7 @@ describe('Category Manager Vendor Directory Authentication', () => {
       expect(res.body.error).toBe(AUTH_MESSAGES.OTP_STORAGE_FAILED);
     });
 
-    test('succeeds even if mailerService throws error (local/test fallback)', async () => {
+    test('fails with a delivery error and does not report the code as sent when the email provider throws', async () => {
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(cmRecord());
       jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValue(true);
       jest.spyOn(mailerService, 'sendOtpEmail').mockRejectedValue(new Error('SMTP down'));
@@ -208,9 +208,11 @@ describe('Category Manager Vendor Directory Authentication', () => {
         .post('/api/auth/vendor-directory/request-otp')
         .send({ email: validEmail });
 
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.email).toBe(validEmail);
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.message).toBeUndefined();
+      expect(res.body.email).toBeUndefined();
     });
   });
 

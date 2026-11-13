@@ -9,6 +9,9 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   FORM_SCHEMAS,
   INDIAN_MOBILE_PATTERN,
+  EXACT_10_DIGIT_MOBILE_PATTERN,
+  sanitize10DigitMobile,
+  GSTIN_PATTERN,
   validateFormData,
   validatePincode,
   PostOfficeDetail,
@@ -16,7 +19,7 @@ import {
   isDummyPincode,
 } from '@/lib/validationSchemas';
 import PasswordInput from '@/app/components/PasswordInput';
-import type { UserSession } from '@/lib/types';
+import type { OtpDeliveryReport, UserSession } from '@/lib/types';
 import {
   Building2,
   Truck,
@@ -45,6 +48,18 @@ function sanitizeRedirect(url: string | null | undefined): string {
     return url.replace('/buyer/rfqs', '/buyer/rfq-summary');
   }
   return url;
+}
+
+/**
+ * Severity for an OTP request toast. A channel the server reports as failed is a
+ * warning and a channel still in flight is informational, so a partial result is
+ * never shown as a clean success.
+ */
+function otpToastType(delivery?: OtpDeliveryReport): 'success' | 'info' | 'warning' {
+  const channels = [delivery?.email, delivery?.sms];
+  if (channels.includes('failed')) return 'warning';
+  if (channels.includes('pending')) return 'info';
+  return 'success';
 }
 
 /** Steps shown in the "Automated from PR to Comparison" strip. */
@@ -77,8 +92,6 @@ function LoginPageContent() {
     setIsLoggedIn,
     setCurrentUserSession,
     showToast,
-    setRemainingFreeRFQs,
-    setActiveSubscription,
     setInitialSetupModalOpen,
     initialSetupCompleted,
     addBuyerAccount,
@@ -140,6 +153,7 @@ function LoginPageContent() {
   const [regMobile, setRegMobile] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regGstin, setRegGstin] = useState('');
+  const [regGstinError, setRegGstinError] = useState<string | null>(null);
   const [regCity, setRegCity] = useState('');
   const [regState, setRegState] = useState('');
   const [regPincode, setRegPincode] = useState('');
@@ -261,15 +275,33 @@ function LoginPageContent() {
 
   const fail = (title: string, error?: string) => showToast(title, error || AUTH.serverErrorFallback, 'warning');
 
+  /** A failed OTP request: the server's reason, then what the user can do about it. */
+  const failOtpRequest = (title: string, error?: string) =>
+    showToast(title, `${error || AUTH.serverErrorFallback} ${AUTH.otpSendFailureGuidance}`, 'warning');
+
+  /** Fallback text for an OTP request that the server answered without a message. */
+  const otpDispatchFallback = (email: string) =>
+    formatString(AUTH.otpDispatched, {
+      email,
+      codeLength: OTP_CODE_LENGTH,
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
+
   // ── Password sign-in (all roles) ───────────────────────────────────────────
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const email = loginEmail.trim();
-    const mobile = loginMobile.trim();
+    const rawMobile = loginMobile.trim();
+    const mobile = rawMobile.replace(/\D/g, '');
 
     if (!email || !mobile || !loginPassword) {
       showToast(AUTH.missingFieldsTitle, AUTH.loginFieldsRequired, 'warning');
+      return;
+    }
+
+    if (mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
+      showToast(AUTH.signInFailedTitle, AUTH.mobileInvalid, 'warning');
       return;
     }
 
@@ -304,13 +336,13 @@ function LoginPageContent() {
     e.preventDefault();
 
     const rawMobile = loginMobile.trim();
-    const mobile = rawMobile.replace(/[\s\-()]/g, '');
+    const mobile = rawMobile.replace(/\D/g, '');
 
     if (!loginEmail.trim() || !mobile) {
       showToast(AUTH.missingFieldsTitle, AUTH.emailAndMobileRequired, 'warning');
       return;
     }
-    if (!INDIAN_MOBILE_PATTERN.test(mobile)) {
+    if (mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.otpRequestFailedTitle, AUTH.mobileInvalid, 'warning');
       return;
     }
@@ -320,19 +352,16 @@ function LoginPageContent() {
       const email = loginEmail.trim().toLowerCase();
       const response = await authClient.requestOtp(email, mobile);
       if (!response.success) {
-        fail(AUTH.otpRequestFailedTitle, response.error);
+        failOtpRequest(AUTH.otpRequestFailedTitle, response.error);
         return;
       }
-      setLoginOtpInput(response.demoCode || '');
+      // The code is never filled in or shown here. The user types the one that arrives.
+      setLoginOtpInput('');
       setLoginOtpSent(true);
       showToast(
-        AUTH.welcomeBackTitle,
-        formatString(AUTH.otpDispatched, {
-          email,
-          codeLength: OTP_CODE_LENGTH,
-          expiryMinutes: OTP_EXPIRY_MINUTES,
-        }) + (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
-        'success'
+        AUTH.otpRequestedTitle,
+        response.message || otpDispatchFallback(email),
+        otpToastType(response.delivery)
       );
     } finally {
       setSubmitting(false);
@@ -342,8 +371,8 @@ function LoginPageContent() {
   const handleResendLoginOtp = async () => {
     if (submitting) return;
     const email = loginEmail.trim().toLowerCase();
-    const mobile = loginMobile.trim().replace(/[\s\-()]/g, '');
-    if (!email || !mobile) {
+    const mobile = loginMobile.trim().replace(/\D/g, '');
+    if (!email || !mobile || mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.missingFieldsTitle, AUTH.emailAndMobileRequired, 'warning');
       return;
     }
@@ -351,16 +380,13 @@ function LoginPageContent() {
     try {
       const response = await authClient.requestOtp(email, mobile);
       if (!response.success) {
-        fail(AUTH.otpRequestFailedTitle, response.error);
+        failOtpRequest(AUTH.otpRequestFailedTitle, response.error);
         return;
       }
-      if (response.demoCode) {
-        setLoginOtpInput(response.demoCode);
-      }
       showToast(
-        'OTP Resent',
-        `Fresh verification code dispatched to ${email}` + (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
-        'success'
+        AUTH.otpRequestedTitle,
+        response.message || otpDispatchFallback(email),
+        otpToastType(response.delivery)
       );
     } finally {
       setSubmitting(false);
@@ -403,7 +429,8 @@ function LoginPageContent() {
     e.preventDefault();
 
     const rawMobile = regMobile.trim();
-    const mobile = rawMobile.replace(/[\s\-()]/g, '');
+    const mobile = rawMobile.replace(/\D/g, '');
+    const cleanGstin = regGstin.trim().toUpperCase();
 
     if (
       !regName.trim() ||
@@ -411,7 +438,7 @@ function LoginPageContent() {
       !regEmail.trim() ||
       !mobile ||
       !regPassword ||
-      !regGstin.trim() ||
+      !cleanGstin ||
       !regCity.trim() ||
       !regState.trim() ||
       !regPincode.trim()
@@ -423,8 +450,13 @@ function LoginPageContent() {
       showToast(AUTH.registrationFailedTitle, AUTH.passwordTooShort, 'warning');
       return;
     }
-    if (!INDIAN_MOBILE_PATTERN.test(mobile)) {
+    if (mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.registrationFailedTitle, AUTH.mobileInvalid, 'warning');
+      return;
+    }
+    if (!GSTIN_PATTERN.test(cleanGstin)) {
+      setRegGstinError(AUTH.gstinInvalid);
+      showToast(AUTH.registrationFailedTitle, AUTH.gstinInvalid, 'warning');
       return;
     }
     if (!/^[1-9][0-9]{5}$/.test(regPincode.trim())) {
@@ -442,17 +474,17 @@ function LoginPageContent() {
       const response = await authClient.requestOtp(email, mobile, selectedRegRole, true);
 
       if (!response.success) {
-        fail(AUTH.registrationFailedTitle, response.error);
+        failOtpRequest(AUTH.registrationFailedTitle, response.error);
         return;
       }
 
       setRegStep('dual_otp');
-      setRegEmailOtp(response.demoEmailCode || response.demoCode || '');
-      setRegMobileOtp(response.demoMobileCode || response.demoCode || '');
+      setRegEmailOtp('');
+      setRegMobileOtp('');
       showToast(
-        'Verification Codes Sent',
-        `6-digit OTPs have been dispatched to ${email} (Email OTP) and mobile +91 ${mobile} (SMS OTP).`,
-        'success'
+        AUTH.registrationCodesTitle,
+        response.message || formatString(AUTH.registrationCodesFallback, { email, mobile }),
+        otpToastType(response.delivery)
       );
     } finally {
       setSubmitting(false);
@@ -462,8 +494,8 @@ function LoginPageContent() {
   const handleResendRegOtp = async () => {
     if (submitting) return;
     const email = regEmail.trim().toLowerCase();
-    const mobile = regMobile.trim().replace(/[\s\-()]/g, '');
-    if (!email || !mobile) {
+    const mobile = regMobile.trim().replace(/\D/g, '');
+    if (!email || !mobile || mobile.length !== 10 || !EXACT_10_DIGIT_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.missingFieldsTitle, AUTH.registrationFieldsRequired, 'warning');
       return;
     }
@@ -471,19 +503,13 @@ function LoginPageContent() {
     try {
       const response = await authClient.requestOtp(email, mobile, selectedRegRole, true);
       if (!response.success) {
-        fail(AUTH.registrationFailedTitle, response.error);
+        failOtpRequest(AUTH.registrationFailedTitle, response.error);
         return;
       }
-      if (response.demoEmailCode || response.demoCode) {
-        setRegEmailOtp(response.demoEmailCode || response.demoCode || '');
-      }
-      if (response.demoMobileCode || response.demoCode) {
-        setRegMobileOtp(response.demoMobileCode || response.demoCode || '');
-      }
       showToast(
-        'OTPs Resent',
-        `Fresh separate 6-digit OTPs sent to ${email} and +91 ${mobile}.`,
-        'success'
+        AUTH.registrationCodesTitle,
+        response.message || formatString(AUTH.registrationCodesFallback, { email, mobile }),
+        otpToastType(response.delivery)
       );
     } finally {
       setSubmitting(false);
@@ -498,7 +524,7 @@ function LoginPageContent() {
     const mobileOtp = regMobileOtp.trim();
 
     if (emailOtp.length !== OTP_CODE_LENGTH || mobileOtp.length !== OTP_CODE_LENGTH) {
-      showToast('Both OTPs Required', 'Please enter both the 6-digit Email OTP and the 6-digit Mobile SMS OTP.', 'warning');
+      showToast(AUTH.bothOtpsRequiredTitle, AUTH.bothOtpsRequiredMessage, 'warning');
       return;
     }
 
@@ -506,7 +532,7 @@ function LoginPageContent() {
     try {
       const email = regEmail.trim().toLowerCase();
       const cleanGstin = regGstin.trim().toUpperCase();
-      const derivedPan = cleanGstin.length === 15 ? cleanGstin.slice(2, 12) : '';
+      const derivedPan = '';
       const cleanCity = regCity.trim();
       const cleanState = regState.trim();
       const cleanPincode = regPincode.trim();
@@ -541,7 +567,6 @@ function LoginPageContent() {
           brandName: regOrgName.trim() || regName.trim(),
           corporateEmail: email,
           contactPerson: regName.trim(),
-          contactDesignation: 'Procurement Specialist',
           mobileNumber: regMobile.trim(),
           gstin: cleanGstin,
           pan: derivedPan,
@@ -551,7 +576,8 @@ function LoginPageContent() {
           zip_code: cleanPincode,
           country: 'India',
           primaryPlantLocation: plantLocation,
-          industrySector: 'Enterprise SCM & Manufacturing',
+          // Not asked at registration, so it is sent empty rather than a guessed sector.
+          industrySector: '',
           sourcingMode: 'mode_2',
           subscriptionPlan: 'free_trial',
           remainingFreeRFQs: 5,
@@ -563,8 +589,8 @@ function LoginPageContent() {
           totalSpend: '₹0',
         });
 
-        setActiveSubscription('free_trial');
-        setRemainingFreeRFQs(5);
+        // The plan and free-RFQ balance come from the stored account record, which the
+        // store syncs into state. The page does not write its own values here.
         setInitialSetupModalOpen(true);
       } else if (selectedRegRole === 'vendor') {
         if (typeof refreshFromDB === 'function') {
@@ -752,9 +778,6 @@ function LoginPageContent() {
                   <div className="flex-1 min-h-0 flex flex-col justify-between gap-2">
                     <div>
                       <h3 className="text-lg sm:text-xl font-bold text-[#0B1B3D] dark:text-white tracking-tight">Welcome back</h3>
-                      <p className="text-xs text-slate-600 dark:text-gray-400 mt-1 leading-relaxed">
-                        Sign in with your Procucev account. Credentials are verified against the enterprise user directory.
-                      </p>
                     </div>
 
                     {/* Auth method switcher */}
@@ -784,7 +807,7 @@ function LoginPageContent() {
                             id="login-email"
                             type="email"
                             autoComplete="username"
-                            placeholder="name@company.com"
+                            placeholder={AUTH.fieldPlaceholders.corporateEmail}
                             value={loginEmail}
                             onChange={(e) => setLoginEmail(e.target.value)}
                             className={fieldInput}
@@ -799,9 +822,10 @@ function LoginPageContent() {
                             type="tel"
                             inputMode="numeric"
                             autoComplete="tel"
-                            placeholder="e.g. 9811223344"
+                            maxLength={10}
+                            placeholder={AUTH.fieldPlaceholders.mobileNumber}
                             value={loginMobile}
-                            onChange={(e) => setLoginMobile(e.target.value)}
+                            onChange={(e) => setLoginMobile(sanitize10DigitMobile(e.target.value))}
                             className={fieldInput}
                             required
                           />
@@ -813,7 +837,7 @@ function LoginPageContent() {
                         <PasswordInput
                           id="login-password"
                           label="PASSWORD"
-                          placeholder="Enter password"
+                          placeholder={AUTH.fieldPlaceholders.password}
                           value={loginPassword}
                           onChange={setLoginPassword}
                           autoComplete="current-password"
@@ -838,7 +862,7 @@ function LoginPageContent() {
                             id="otp-email"
                             type="email"
                             autoComplete="username"
-                            placeholder="name@company.com"
+                            placeholder={AUTH.fieldPlaceholders.corporateEmail}
                             value={loginEmail}
                             onChange={(e) => setLoginEmail(e.target.value)}
                             className={fieldInput}
@@ -853,9 +877,10 @@ function LoginPageContent() {
                             type="tel"
                             inputMode="numeric"
                             autoComplete="tel"
-                            placeholder="e.g. 9811223344"
+                            maxLength={10}
+                            placeholder={AUTH.fieldPlaceholders.mobileNumber}
                             value={loginMobile}
-                            onChange={(e) => setLoginMobile(e.target.value)}
+                            onChange={(e) => setLoginMobile(sanitize10DigitMobile(e.target.value))}
                             className={fieldInput}
                             required
                           />
@@ -979,7 +1004,9 @@ function LoginPageContent() {
                       >
                         <div>
                           <label htmlFor="reg-name" className={fieldLabel}>
-                            {selectedRegRole === 'buyer' ? 'Full Name / Procurement Lead' : 'Authorized Representative Name'}
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.fullNameBuyer
+                              : AUTH.registrationLabels.fullNameVendor}
                           </label>
                           <div className="relative">
                             <Users className={iconClass} size={14} />
@@ -987,7 +1014,7 @@ function LoginPageContent() {
                               id="reg-name"
                               type="text"
                               autoComplete="name"
-                              placeholder={selectedRegRole === 'buyer' ? 'e.g. John Doe' : 'e.g. Jane Smith'}
+                              placeholder={AUTH.fieldPlaceholders.fullName}
                               value={regName}
                               onChange={(e) => setRegName(e.target.value)}
                               className={iconFieldInput}
@@ -999,7 +1026,10 @@ function LoginPageContent() {
 
                         <div>
                           <label htmlFor="reg-org" className={fieldLabel}>
-                            {selectedRegRole === 'buyer' ? 'Company Name / Legal Name' : 'Vendor Enterprise / Company Name'} <span className="text-red-500">*</span>
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.companyNameBuyer
+                              : AUTH.registrationLabels.companyNameVendor}{' '}
+                            <span className="text-red-500">*</span>
                           </label>
                           <div className="relative">
                             <Building2 className={iconClass} size={14} />
@@ -1007,11 +1037,7 @@ function LoginPageContent() {
                               id="reg-org"
                               type="text"
                               autoComplete="organization"
-                              placeholder={
-                                selectedRegRole === 'buyer'
-                                  ? 'e.g. Acme Enterprises'
-                                  : 'e.g. Apex Industrial Solutions Pvt Ltd'
-                              }
+                              placeholder={AUTH.fieldPlaceholders.legalCompanyName}
                               value={regOrgName}
                               onChange={(e) => setRegOrgName(e.target.value)}
                               className={iconFieldInput}
@@ -1023,22 +1049,45 @@ function LoginPageContent() {
 
                         <div>
                           <label htmlFor="reg-gstin" className={fieldLabel}>
-                            GSTIN / GST Number <span className="text-red-500">*</span>
+                            {AUTH.registrationLabels.gstNumber} <span className="text-red-500">*</span>
                           </label>
                           <div className="relative">
                             <FileText className={iconClass} size={14} />
                             <input
                               id="reg-gstin"
                               type="text"
-                              placeholder="e.g. 27AAAAA0000A1Z5"
+                              placeholder={AUTH.fieldPlaceholders.gstin}
                               value={regGstin}
-                              onChange={(e) => setRegGstin(e.target.value.toUpperCase())}
-                              className={`${iconFieldInput} font-mono uppercase`}
+                              onChange={(e) => {
+                                const val = e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 15);
+                                setRegGstin(val);
+                                if (val.length === 15) {
+                                  if (!GSTIN_PATTERN.test(val)) {
+                                    setRegGstinError(AUTH.gstinInvalid);
+                                  } else {
+                                    setRegGstinError(null);
+                                  }
+                                } else if (regGstinError) {
+                                  setRegGstinError(null);
+                                }
+                              }}
+                              onBlur={() => {
+                                const val = regGstin.trim().toUpperCase();
+                                if (val.length > 0 && !GSTIN_PATTERN.test(val)) {
+                                  setRegGstinError(AUTH.gstinInvalid);
+                                } else {
+                                  setRegGstinError(null);
+                                }
+                              }}
+                              className={`${iconFieldInput} font-mono uppercase ${regGstinError ? 'border-red-400 dark:border-red-700' : ''}`}
                               style={ICON_PAD}
                               maxLength={15}
                               required
                             />
                           </div>
+                          {regGstinError && (
+                            <p className="text-[11px] text-rose-500 font-medium mt-1">{regGstinError}</p>
+                          )}
                         </div>
 
                         {/* Pincode + City side by side, State full width */}
@@ -1046,7 +1095,7 @@ function LoginPageContent() {
                           <div>
                             <div className="flex items-center justify-between min-h-[20px]">
                               <label htmlFor="reg-pincode" className={fieldLabel}>
-                                Pincode <span className="text-red-500">*</span>
+                                {AUTH.registrationLabels.pincode} <span className="text-red-500">*</span>
                               </label>
                               {regPincodeValidating && (
                                 <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1 mb-1.5">
@@ -1068,7 +1117,7 @@ function LoginPageContent() {
                               id="reg-pincode"
                               type="text"
                               inputMode="numeric"
-                              placeholder="e.g. 411001"
+                              placeholder={AUTH.fieldPlaceholders.pincode}
                               value={regPincode}
                               onChange={(e) => setRegPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                               className={`${plainInput} font-mono ${regPincodeError ? 'border-red-400 dark:border-red-700' : ''}`}
@@ -1082,13 +1131,13 @@ function LoginPageContent() {
                           <div>
                             <div className="flex items-center min-h-[20px]">
                               <label htmlFor="reg-city" className={fieldLabel}>
-                                City <span className="text-red-500">*</span>
+                                {AUTH.registrationLabels.city} <span className="text-red-500">*</span>
                               </label>
                             </div>
                             <input
                               id="reg-city"
                               type="text"
-                              placeholder="e.g. Pune"
+                              placeholder={AUTH.fieldPlaceholders.city}
                               value={regCity}
                               onChange={(e) => setRegCity(e.target.value)}
                               className={plainInput}
@@ -1098,13 +1147,13 @@ function LoginPageContent() {
                           <div className="col-span-2">
                             <div className="flex items-center min-h-[20px]">
                               <label htmlFor="reg-state" className={fieldLabel}>
-                                State <span className="text-red-500">*</span>
+                                {AUTH.registrationLabels.state} <span className="text-red-500">*</span>
                               </label>
                             </div>
                             <input
                               id="reg-state"
                               type="text"
-                              placeholder="e.g. Maharashtra"
+                              placeholder={AUTH.fieldPlaceholders.state}
                               value={regState}
                               onChange={(e) => setRegState(e.target.value)}
                               className={plainInput}
@@ -1114,14 +1163,19 @@ function LoginPageContent() {
                         </div>
 
                         <div>
-                          <label htmlFor="reg-email" className={fieldLabel}>Corporate Email ID <span className="text-red-500">*</span></label>
+                          <label htmlFor="reg-email" className={fieldLabel}>
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.emailIdBuyer
+                              : AUTH.registrationLabels.emailIdVendor}{' '}
+                            <span className="text-red-500">*</span>
+                          </label>
                           <div className="relative">
                             <Mail className={iconClass} size={14} />
                             <input
                               id="reg-email"
                               type="email"
                               autoComplete="email"
-                              placeholder={selectedRegRole === 'buyer' ? 'buyer@company.com' : 'vendor@supplier.com'}
+                              placeholder={AUTH.fieldPlaceholders.corporateEmail}
                               value={regEmail}
                               onChange={(e) => setRegEmail(e.target.value)}
                               className={iconFieldInput}
@@ -1132,7 +1186,12 @@ function LoginPageContent() {
                         </div>
 
                         <div>
-                          <label htmlFor="reg-mobile" className={fieldLabel}>Mobile Number (WhatsApp Enabled) <span className="text-red-500">*</span></label>
+                          <label htmlFor="reg-mobile" className={fieldLabel}>
+                            {selectedRegRole === 'buyer'
+                              ? AUTH.registrationLabels.mobileNumberBuyer
+                              : AUTH.registrationLabels.mobileNumberVendor}{' '}
+                            <span className="text-red-500">*</span>
+                          </label>
                           <div className="relative">
                             <Phone className={iconClass} size={14} />
                             <input
@@ -1140,9 +1199,13 @@ function LoginPageContent() {
                               type="tel"
                               inputMode="numeric"
                               autoComplete="tel"
-                              placeholder="e.g. 9811223344"
+                              maxLength={10}
+                              placeholder={AUTH.fieldPlaceholders.mobileNumber}
                               value={regMobile}
-                              onChange={(e) => setRegMobile(e.target.value)}
+                              onChange={(e) => {
+                                const digits = sanitize10DigitMobile(e.target.value);
+                                setRegMobile(digits);
+                              }}
                               className={iconFieldInput}
                               style={ICON_PAD}
                               required
@@ -1156,7 +1219,7 @@ function LoginPageContent() {
                         <PasswordInput
                           id="reg-password"
                           label="Password"
-                          placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+                          placeholder={formatString(AUTH.fieldPlaceholders.newPassword, { minLength: MIN_PASSWORD_LENGTH })}
                           value={regPassword}
                           onChange={setRegPassword}
                           autoComplete="new-password"

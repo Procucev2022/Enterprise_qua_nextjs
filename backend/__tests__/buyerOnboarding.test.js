@@ -112,12 +112,12 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
       expect(result.rfq).toBeDefined();
 
-      // Verify buyer account was created with V0 configuration and placeholder phone
+      // Verify buyer account was created with V0 configuration and no phone on record (no placeholder number)
       const account = await storeService.getBuyerAccountByEmail(SENDER);
       expect(account).toBeDefined();
       expect(account.corporateEmail).toBe(SENDER);
       expect(account.sourcingMode).toBe('mode_0');
-      expect(account.phone || account.mobileNumber).toBe('+919999999999');
+      expect(account.phone || account.mobileNumber || null).toBeNull();
       expect(account.onboardingRequired).toBe(true);
       expect(account.phoneVerified).toBe(false);
 

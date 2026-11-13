@@ -3,8 +3,8 @@
 // CHECK INBOUND REQUISITION & QUOTATION EMAILS (DUAL INBOX)
 // ==============================================================================
 // Connects to both configured mailboxes:
-//   1. Buyer Requisitions Mailbox: rfq@procucev.com (rfqprocucev@gmail.com)
-//   2. Vendor Quotations Mailbox: srinu20252026@gmail.com
+//   1. Buyer requisitions mailbox (EMAIL_GATEWAY_USER / EMAIL_GATEWAY_ADDRESS)
+//   2. Vendor quotations mailbox (VENDOR_EMAIL_GATEWAY_USER / VENDOR_EMAIL_GATEWAY_ADDRESS)
 //
 // Fetches unread emails, evaluates buyer authorization or vendor quotation validity:
 //   - Authorized buyer -> extracts line items with Gemini AI & creates RFQ in 'Parsing'

@@ -262,6 +262,8 @@ describe('app/buyer/command-center.tsx', () => {
     // Click AI RFQ Create filter
     fireEvent.click(screen.getByText(/AI RFQ Create \(2\)/i));
     expect(screen.getByText('Centrifugal Slurry Pumps')).toBeInTheDocument();
+    expect(screen.queryByText('Titanium Valves')).not.toBeInTheDocument();
+    expect(screen.queryByText('Electrical Transformers')).not.toBeInTheDocument();
 
     // Click Manual RFQ filter
     fireEvent.click(screen.getByText(/Manual RFQ \(1\)/i));
@@ -270,6 +272,123 @@ describe('app/buyer/command-center.tsx', () => {
     // Click All Sources
     fireEvent.click(screen.getByText(/All Sources \(4\)/i));
     expect(screen.getByText('Centrifugal Slurry Pumps')).toBeInTheDocument();
+  });
+
+  it('strictly isolates AI Extraction RFQs and excludes Email RFQs and other sources when filtered', () => {
+    const mixedRfqs: RFQItem[] = [
+      {
+        id: 'rfq-ai-1',
+        rfqNumber: 'RFQ-AI-001',
+        title: 'Precision CNC Machined Parts',
+        category: 'Mechanical',
+        createdAt: '2026-09-01',
+        targetDeliveryDate: '2026-10-01',
+        status: 'In Evaluation',
+        sourcingMode: 'mode_2',
+        quotesCount: 3,
+        budget: 600000,
+        source: 'ai_extraction',
+        sourceFileName: 'BOQ_Requisition.pdf',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: true,
+      },
+      {
+        id: 'rfq-em-1',
+        rfqNumber: 'RFQ-EMAIL-001',
+        title: 'Gate Valves Requisition',
+        category: 'Piping',
+        createdAt: '2026-09-02',
+        targetDeliveryDate: '2026-10-05',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_1',
+        quotesCount: 1,
+        budget: 250000,
+        source: 'email_gateway',
+        sourceEmail: 'rfq-gateway@enterprise.com',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+      },
+      {
+        id: 'rfq-em-2',
+        rfqNumber: 'RFQ-EMAIL-002',
+        title: 'Flanges and Fittings',
+        category: 'Piping',
+        createdAt: '2026-09-03',
+        targetDeliveryDate: '2026-10-10',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        budget: 180000,
+        source: 'email_upload',
+        sourceFileName: 'email_attachment.eml',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+      },
+      {
+        id: 'rfq-man-1',
+        rfqNumber: 'RFQ-MAN-001',
+        title: 'Workshop Consumables',
+        category: 'Tools',
+        createdAt: '2026-09-04',
+        targetDeliveryDate: '2026-10-15',
+        status: 'PO Generated',
+        sourcingMode: 'mode_3',
+        quotesCount: 4,
+        budget: 120000,
+        source: 'manual_entry',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: mixedRfqs,
+      aiFeed: [],
+      currentMode: 'mode_2',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 10,
+      activeSubscription: 'version_2',
+      activeBuyerAccount: null,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    // Filter by AI RFQ Create / AI Extraction
+    const aiFilterBtn = screen.getByRole('button', { name: /AI RFQ Create/i });
+    fireEvent.click(aiFilterBtn);
+
+    // AI Extraction RFQ must be present
+    expect(screen.getByText('Precision CNC Machined Parts')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-AI-001')).toBeInTheDocument();
+
+    // All Email RFQs must be excluded
+    expect(screen.queryByText('Gate Valves Requisition')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-EMAIL-001')).not.toBeInTheDocument();
+    expect(screen.queryByText('Flanges and Fittings')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-EMAIL-002')).not.toBeInTheDocument();
+
+    // Manual RFQs must also be excluded
+    expect(screen.queryByText('Workshop Consumables')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-MAN-001')).not.toBeInTheDocument();
   });
 
   it('handles channel filter tabs for AI live feed', () => {
@@ -291,7 +410,7 @@ describe('app/buyer/command-center.tsx', () => {
     expect(screen.getByText(/SMS Chaser Dispatched/i)).toBeInTheDocument();
 
     // Email filter
-    fireEvent.click(screen.getByText(/Email \(24h\)/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Email$/i }));
     expect(screen.getByText(/24h Reminder Email Sent/i)).toBeInTheDocument();
 
     // System filter
@@ -577,7 +696,7 @@ describe('app/buyer/command-center.tsx', () => {
     // feedChannelFilter branches: whatsapp / sms / email / system / all.
     fireEvent.click(screen.getByRole('button', { name: /^WA$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^SMS$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Email \(24h\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Email$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^System$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^All \(/i }));
     expect(screen.getByText('Live Outreach')).toBeInTheDocument();
@@ -941,8 +1060,9 @@ describe('app/buyer/command-center.tsx', () => {
     );
 
     // Verify fallback file name and fallback origin
-    expect(screen.getByText(/File: Requisition_Email\.eml/i)).toBeInTheDocument();
-    expect(screen.getByText(/Origin: via Email Upload/i)).toBeInTheDocument();
+    expect(screen.getByText(/File: —/)).toBeInTheDocument();
+    expect(screen.queryByText(/Requisition_Email\.eml/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Origin: —/)).toBeInTheDocument();
 
     // Switch to system channel filter (covers ingestion, escalation, approval in line 204)
     fireEvent.click(screen.getByRole('button', { name: /System/i }));
@@ -1133,14 +1253,16 @@ describe('app/buyer/command-center.tsx', () => {
       />
     );
 
-    // Advance fake timer to cover setInterval tick
+    // Time passing must not create outreach events: the feed holds only what the server returned.
     act(() => {
       jest.advanceTimersByTime(11000);
     });
 
-    // Verify auto-generated supplier feed and vendors
-    expect(screen.getByText(/Autonomous Sourcing Engine Initialized: RFQ-SYNTH-001/i)).toBeInTheDocument();
-    expect(screen.getByText(/Autonomous Sourcing Engine Initialized: RFQ-SYNTH-002/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Autonomous Sourcing Engine Initialized/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/SMS Alert Delivered/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/WhatsApp Invitation Delivered/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Procucev Verified Supplier/i)).not.toBeInTheDocument();
+    expect(screen.getByText('No outreach events yet')).toBeInTheDocument();
 
     // Trigger modal interactions
     fireEvent.click(screen.getByText('Active Pipeline'));
@@ -1231,3 +1353,137 @@ describe('app/buyer/command-center.tsx', () => {
   });
 });
 
+
+describe('app/buyer/command-center.tsx outreach figures come only from server data', () => {
+  const baseApp = {
+    aiFeed: [],
+    currentMode: 'mode_1',
+    setSelectedRFQForMatrix: jest.fn(),
+    showToast: jest.fn(),
+    selectedRFQForDeepDive: null,
+    setSelectedRFQForDeepDive: jest.fn(),
+    deepDiveModalOpen: false,
+    setDeepDiveModalOpen: jest.fn(),
+    openRFQDeepDive: jest.fn(),
+    activeBuyerAccount: { id: 'acc-1', corporateEmail: 'buyer@procucev.com' },
+    setInitialSetupModalOpen: jest.fn(),
+    initialSetupCompleted: true,
+    isLoadingRFQs: false,
+  };
+
+  const renderCommandCenter = () =>
+    render(<CommandCenter onNavigateToWizard={jest.fn()} onNavigateToMatrix={jest.fn()} />);
+
+  it('shows a dash, not a count, when no RFQ carries delivery stats even though vendors are assigned', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      ...baseApp,
+      rfqs: [
+        {
+          id: 'r-no-stats',
+          rfqNumber: 'RFQ-NO-STATS',
+          title: 'No stats yet',
+          category: 'Services',
+          createdAt: '2026-08-29',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          quotesCount: 0,
+          source: 'web_portal',
+          extractedEntities: [],
+          assignedVendors: [
+            { id: 'v-1', name: 'Vendor One', email: 'one@vendor.test', phone: '' },
+            { id: 'v-2', name: 'Vendor Two', email: 'two@vendor.test', phone: '' },
+          ],
+          followUpData: null,
+        },
+      ],
+    });
+
+    renderCommandCenter();
+
+    const outreachCard = screen.getByTitle('Click to open vendor follow-up details');
+    expect(outreachCard.textContent).toContain('—');
+    expect(outreachCard.textContent ?? '').not.toMatch(/\d/);
+  });
+
+  it('sums only the server-reported message totals in the live outreach card', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      ...baseApp,
+      rfqs: [
+        {
+          id: 'r-stats',
+          rfqNumber: 'RFQ-STATS',
+          title: 'With stats',
+          category: 'Services',
+          createdAt: '2026-08-29',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          quotesCount: 0,
+          source: 'web_portal',
+          extractedEntities: [],
+          assignedVendors: [{ id: 'v-9', name: 'Vendor Nine', email: 'nine@vendor.test', phone: '' }],
+          followUpData: {
+            rfqNumber: 'RFQ-STATS',
+            autoChasingEnabled: true,
+            totalInvited: 9,
+            respondedCount: 0,
+            callStats: { total: 0, connected: 0, avgDuration: '0s' },
+            whatsappStats: { total: 2, delivered: 0, read: 0, replied: 0 },
+            smsStats: { total: 1, delivered: 0, clicked: 0 },
+            emailStats: { total: 4, sent24h: 0, opened: 0 },
+            vendors: [],
+          },
+        },
+      ],
+    });
+
+    renderCommandCenter();
+
+    const outreachCard = screen.getByTitle('Click to open vendor follow-up details');
+    expect(outreachCard).toHaveTextContent('7');
+    expect(outreachCard).not.toHaveTextContent('9');
+  });
+
+  it('shows only server feed items, no invented orchestrator or delivery events, and no on-schedule claim', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      ...baseApp,
+      aiFeed: [
+        {
+          id: 'feed-server-1',
+          type: 'whatsapp',
+          channel: 'whatsapp',
+          title: 'Server reported WhatsApp event',
+          message: 'Reported by the server feed.',
+          recipient: 'Vendor One',
+          timestamp: '2026-08-29 10:00',
+          timeAgo: 'Delivered',
+          rfqNumber: 'RFQ-SERVER',
+          buyerAccountId: 'acc-1',
+          status: 'delivered',
+        },
+      ],
+      rfqs: [
+        {
+          id: 'r-feed',
+          rfqNumber: 'RFQ-SERVER',
+          title: 'Feed check',
+          category: 'Services',
+          createdAt: '2026-08-01',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          quotesCount: 0,
+          source: 'web_portal',
+          extractedEntities: [],
+          assignedVendors: [{ id: 'v-3', name: 'Vendor Three', email: 'three@vendor.test', phone: '' }],
+          followUpData: null,
+        },
+      ],
+    });
+
+    renderCommandCenter();
+
+    expect(screen.getByText('Server reported WhatsApp event')).toBeInTheDocument();
+    expect(screen.queryByText(/Autonomous Sourcing Engine Initialized/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/On Schedule/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/24\/7 Active/i)).not.toBeInTheDocument();
+  });
+});

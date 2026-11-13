@@ -3,13 +3,13 @@
 // ENTERPRISE QUA - DAILY RFQ INFLOW & SOURCING REPORT DISPATCHER
 // ==============================================================================
 // Dispatches yesterday's daily RFQ inflow report (counts by sourcing mode and
-// ingestion channel) to configured recipients (default: veerababu.v@procucev.com in dev,
-// quateam@procucev.com,veerababu.v@procucev.com in production).
+// ingestion channel). Recipients come from --to, then the DAILY_RFQ_REPORT_EMAILS
+// environment variable (comma-separated), then the service's default list.
 //
 // Usage:
 //   node scripts/send-daily-rfq-report.js
 //   node scripts/send-daily-rfq-report.js --date 2026-11-03
-//   node scripts/send-daily-rfq-report.js --to veerababu.v@procucev.com,team@procucev.com
+//   node scripts/send-daily-rfq-report.js --to <email1>,<email2>
 //   node scripts/send-daily-rfq-report.js --dry-run
 // ==============================================================================
 

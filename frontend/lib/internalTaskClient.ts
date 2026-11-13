@@ -1,13 +1,9 @@
 import { authClient } from './authClient';
 import { logger } from './logger';
-import {
-  DEFAULT_INTERNAL_MEMBERS,
-  INTERNAL_TASK_CATEGORIES,
-  INTERNAL_TASK_CATEGORY_LABELS,
-  type InternalTeamMember,
-} from './constants';
+import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   InternalTask,
+  InternalTeamMember,
   TaskSummary,
   InternalTaskCategory,
   InternalTaskStatus,
@@ -18,6 +14,8 @@ import type {
 } from './types';
 
 export type { InternalTeamMember, InternalTask, TaskSummary, InternalTaskCategory, InternalTaskStatus, InternalTaskPriority, DemoStatus, CreditAccountType };
+
+const LOAD_RESOURCES = UI_STRINGS.dataLoad.resources;
 
 function getInternalTaskErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -31,6 +29,20 @@ function logInternalTaskTransportFailure(operation: string, error: unknown, fall
     ...(error instanceof Error ? { error } : {}),
   }, 'INTERNAL_TASK_CLIENT');
   return errorMessage;
+}
+
+function loadFailure(resource: string, status: number): string {
+  return formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource, status });
+}
+
+function unexpectedResponse(resource: string): string {
+  return formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource });
+}
+
+/** Logs a thrown request error and returns the message to show. The raw browser text is never shown. */
+function reportLoadException(operation: string, error: unknown, resource: string): string {
+  logInternalTaskTransportFailure(operation, error, resource);
+  return formatString(UI_STRINGS.dataLoad.networkFailed, { resource });
 }
 
 export interface TaskType {
@@ -70,6 +82,30 @@ export interface TaskFilterParams {
   offset?: number;
 }
 
+/** Result of loading task types. `error` is set when the list could not be loaded. */
+export interface TaskTypesResult {
+  taskTypes: TaskType[];
+  error?: string;
+}
+
+/** Result of loading task assignees. `error` is set when the list could not be loaded. */
+export interface TaskAssigneesResult {
+  assignees: InternalTeamMember[];
+  error?: string;
+}
+
+/** Result of loading the task summary. `summary` is null when it could not be loaded. */
+export interface TaskSummaryResult {
+  summary: TaskSummary | null;
+  error?: string;
+}
+
+/** Result of searching related records. `error` is set when the search failed. */
+export interface RelatedEntitiesResult {
+  entities: RelatedEntityOption[];
+  error?: string;
+}
+
 function authHeaders(): Record<string, string> {
   const token = authClient.getToken();
   return {
@@ -78,167 +114,16 @@ function authHeaders(): Record<string, string> {
   };
 }
 
-export const DEFAULT_TASK_TYPES: TaskType[] = [
-  {
-    id: 'itt_quotation_review',
-    name: 'Quotation Review',
-    code: 'quotation_review',
-    default_module: 'RFQ',
-    description: 'Review and approve technical quotes and commercial bids',
-  },
-  {
-    id: 'itt_buyer_onboarding',
-    name: 'Buyer Onboarding',
-    code: 'buyer_onboarding',
-    default_module: 'BUYER',
-    description: 'Assist buyer organizations with onboarding and profile verification',
-  },
-  {
-    id: 'itt_vendor_followup',
-    name: 'Vendor Follow-up',
-    code: 'vendor_followup',
-    default_module: 'VENDOR',
-    description: 'Communicate with vendors on RFQ bid submissions and pricing queries',
-  },
-  {
-    id: 'itt_credit_approval',
-    name: 'Credit Approval',
-    code: 'credit_approval',
-    default_module: 'CREDIT',
-    description: 'Evaluate credit extension requests for enterprise buyers',
-  },
-  {
-    id: 'itt_category_audit',
-    name: 'Category Audit',
-    code: 'category_audit',
-    default_module: 'CATEGORY',
-    description: 'Audit supplier catalogues, HSN mappings, and GST conformity',
-  },
-  {
-    id: 'itt_payment_verification',
-    name: 'Payment Verification',
-    code: 'payment_verification',
-    default_module: 'PAYMENT',
-    description: 'Verify payment proofs and reconcile outstanding invoices',
-  },
-  {
-    id: 'itt_account_governance',
-    name: 'Account Governance',
-    code: 'account_governance',
-    default_module: 'USER',
-    description: 'Conduct KYC reviews and enterprise buyer credential checks',
-  },
-  {
-    id: 'itt_general_ops',
-    name: 'General Operations',
-    code: 'general_ops',
-    default_module: 'GENERAL',
-    description: 'Routine internal category manager tasks and follow-ups',
-  },
-  {
-    id: 'itt_phone_call',
-    name: 'Phone Call',
-    code: 'phone_call',
-    default_module: 'BUYER',
-    description: 'Direct telephonic communication with client or vendor',
-  },
-  {
-    id: 'itt_sms',
-    name: 'SMS',
-    code: 'sms',
-    default_module: 'BUYER',
-    description: 'Direct SMS communication',
-  },
-  {
-    id: 'itt_whatsapp',
-    name: 'WhatsApp',
-    code: 'whatsapp',
-    default_module: 'BUYER',
-    description: 'WhatsApp communication with client or vendor',
-  },
-  {
-    id: 'itt_email',
-    name: 'Email',
-    code: 'email',
-    default_module: 'BUYER',
-    description: 'Direct email communication',
-  },
-  {
-    id: 'itt_followup_new',
-    name: 'New Follow-up',
-    code: 'followup_new',
-    default_module: 'BUYER',
-    description: 'Initiate new follow-up communication',
-  },
-  {
-    id: 'itt_followup_existing',
-    name: 'Existing Follow-up',
-    code: 'followup_existing',
-    default_module: 'BUYER',
-    description: 'Continue ongoing follow-up communication',
-  },
-  {
-    id: 'itt_demo_scheduling',
-    name: 'Demo Scheduling',
-    code: 'demo_scheduling',
-    default_module: 'BUYER',
-    description: 'Schedule product demonstrations for buyers or clients',
-  },
-  {
-    id: 'itt_add_credits',
-    name: 'Add Credits',
-    code: 'add_credits',
-    default_module: 'CREDIT',
-    description: 'Request credit allocation for buyer or seller account (requires approval)',
-  },
-  {
-    id: 'itt_delete_credits',
-    name: 'Delete Credits',
-    code: 'delete_credits',
-    default_module: 'CREDIT',
-    description: 'Request credit deduction for buyer or seller account (requires approval)',
-  },
-  {
-    id: 'itt_send_proposal',
-    name: 'Send Proposal',
-    code: 'send_proposal',
-    default_module: 'RFQ',
-    description: 'Send commercial proposal or RFQ response to buyer',
-  },
-  {
-    id: 'itt_corporate_email',
-    name: 'Send Corporate Email',
-    code: 'corporate_email',
-    default_module: 'BUYER',
-    description: 'Send corporate communication or business development email',
-  },
-  {
-    id: 'itt_onboarding',
-    name: 'Onboarding Process',
-    code: 'onboarding_process',
-    default_module: 'VENDOR',
-    description: 'Client and vendor onboarding milestones and compliance checks',
-  },
-  {
-    id: 'itt_internal_ops',
-    name: 'Internal Operations',
-    code: 'internal_ops',
-    default_module: 'GENERAL',
-    description: 'Internal operational activities and escalations',
-  },
-];
-
-export async function fetchTaskTypes(): Promise<TaskType[]> {
+export async function fetchTaskTypes(): Promise<TaskTypesResult> {
+  const resource = LOAD_RESOURCES.taskTypes;
   try {
     const res = await fetch('/api/internal-tasks/task-types', { headers: authHeaders() });
-    if (!res.ok) return DEFAULT_TASK_TYPES;
+    if (!res.ok) return { taskTypes: [], error: loadFailure(resource, res.status) };
     const data = await res.json();
-    if (Array.isArray(data.taskTypes) && data.taskTypes.length > 0) {
-      return data.taskTypes;
-    }
-    return DEFAULT_TASK_TYPES;
-  } catch {
-    return DEFAULT_TASK_TYPES;
+    if (!Array.isArray(data?.taskTypes)) return { taskTypes: [], error: unexpectedResponse(resource) };
+    return { taskTypes: data.taskTypes };
+  } catch (error: unknown) {
+    return { taskTypes: [], error: reportLoadException('Task types load', error, resource) };
   }
 }
 
@@ -265,7 +150,9 @@ export async function createNewTaskType(payload: {
 export async function fetchInternalTasks(filters: TaskFilterParams = {}): Promise<{
   tasks: InternalTask[];
   total: number;
+  error?: string;
 }> {
+  const resource = LOAD_RESOURCES.internalTasks;
   try {
     const params = new URLSearchParams();
     if (filters.search) params.set('search', filters.search);
@@ -286,44 +173,33 @@ export async function fetchInternalTasks(filters: TaskFilterParams = {}): Promis
 
     const url = `/api/internal-tasks?${params.toString()}`;
     const res = await fetch(url, { headers: authHeaders() });
-    if (!res.ok) return { tasks: [], total: 0 };
+    if (!res.ok) return { tasks: [], total: 0, error: loadFailure(resource, res.status) };
     const data = await res.json();
+    if (!Array.isArray(data?.tasks)) return { tasks: [], total: 0, error: unexpectedResponse(resource) };
     return {
-      tasks: Array.isArray(data.tasks) ? data.tasks : [],
-      total: typeof data.total === 'number' ? data.total : 0,
+      tasks: data.tasks,
+      total: typeof data.total === 'number' ? data.total : data.tasks.length,
     };
-  } catch {
-    return { tasks: [], total: 0 };
+  } catch (error: unknown) {
+    return { tasks: [], total: 0, error: reportLoadException('Internal tasks load', error, resource) };
   }
 }
 
-export async function fetchInternalAssignees(): Promise<InternalTeamMember[]> {
+export async function fetchInternalAssignees(): Promise<TaskAssigneesResult> {
+  const resource = LOAD_RESOURCES.assignees;
   try {
     const res = await fetch('/api/internal-tasks/assignees', { headers: authHeaders() });
-    if (!res.ok) return DEFAULT_INTERNAL_MEMBERS;
+    if (!res.ok) return { assignees: [], error: loadFailure(resource, res.status) };
     const data = await res.json();
-    if (Array.isArray(data.assignees) && data.assignees.length > 0) {
-      return data.assignees;
-    }
-    return DEFAULT_INTERNAL_MEMBERS;
-  } catch {
-    return DEFAULT_INTERNAL_MEMBERS;
+    if (!Array.isArray(data?.assignees)) return { assignees: [], error: unexpectedResponse(resource) };
+    return { assignees: data.assignees };
+  } catch (error: unknown) {
+    return { assignees: [], error: reportLoadException('Task assignees load', error, resource) };
   }
 }
 
-export async function fetchTaskSummary(params?: { assignedTo?: string; taskCategory?: string }): Promise<TaskSummary> {
-  const fallback: TaskSummary = {
-    total: 0,
-    newTasks: 0,
-    assigned: 0,
-    inProgress: 0,
-    pendingApproval: 0,
-    completed: 0,
-    rejected: 0,
-    cancelled: 0,
-    overdueCount: 0,
-    criticalCount: 0,
-  };
+export async function fetchTaskSummary(params?: { assignedTo?: string; taskCategory?: string }): Promise<TaskSummaryResult> {
+  const resource = LOAD_RESOURCES.taskSummary;
   try {
     const query = new URLSearchParams();
     if (params?.assignedTo && params.assignedTo !== 'all') {
@@ -335,11 +211,12 @@ export async function fetchTaskSummary(params?: { assignedTo?: string; taskCateg
     const queryString = query.toString();
     const url = `/api/internal-tasks/summary${queryString ? `?${queryString}` : ''}`;
     const res = await fetch(url, { headers: authHeaders() });
-    if (!res.ok) return fallback;
+    if (!res.ok) return { summary: null, error: loadFailure(resource, res.status) };
     const data = await res.json();
-    return data.summary || fallback;
-  } catch {
-    return fallback;
+    if (!data?.summary) return { summary: null, error: unexpectedResponse(resource) };
+    return { summary: data.summary };
+  } catch (error: unknown) {
+    return { summary: null, error: reportLoadException('Task summary load', error, resource) };
   }
 }
 
@@ -526,15 +403,17 @@ export async function checkTaskReminders(): Promise<{
   }
 }
 
-export async function searchRelatedEntities(type: TaskEntityType, query: string = ''): Promise<RelatedEntityOption[]> {
+export async function searchRelatedEntities(type: TaskEntityType, query: string = ''): Promise<RelatedEntitiesResult> {
+  const resource = LOAD_RESOURCES.relatedRecords;
   try {
     const params = new URLSearchParams({ type, q: query });
     const res = await fetch(`/api/internal-tasks/entities?${params.toString()}`, { headers: authHeaders() });
-    if (!res.ok) return [];
+    if (!res.ok) return { entities: [], error: loadFailure(resource, res.status) };
     const data = await res.json();
-    return Array.isArray(data.entities) ? data.entities : [];
-  } catch {
-    return [];
+    if (!Array.isArray(data?.entities)) return { entities: [], error: unexpectedResponse(resource) };
+    return { entities: data.entities };
+  } catch (error: unknown) {
+    return { entities: [], error: reportLoadException('Related records search', error, resource) };
   }
 }
 

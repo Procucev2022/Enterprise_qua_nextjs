@@ -4,6 +4,7 @@ const pool = require('../db/pool');
 const purchaseOrderQueries = require('../db/purchaseOrderQueries');
 const { createAuditEntry } = require('./auditService');
 const { logger } = require('./loggerService');
+const { SYSTEM_ACTOR_EMAIL } = require('../config/constants');
 
 function purchaseOrderResponse(rfq, values, shaSignature) {
   return {
@@ -41,7 +42,7 @@ function updateRFQCache(store, rfq) {
 
 function recordCommittedAudit(store, entry) {
   store.auditLogs.unshift(entry);
-  logger.audit(entry.action, entry.userEmail || 'system@procucev.ai', {
+  logger.audit(entry.action, entry.userEmail || SYSTEM_ACTOR_EMAIL, {
     rfqNumber: entry.rfqNumber,
     ipAddress: entry.ipAddress,
     shaSignature: entry.shaSignature,
@@ -113,7 +114,7 @@ async function approvePurchaseOrderDurably(store, rfqNumber, vendorId, vendorNam
   const issueDate = rfq.poIssueDate || new Date().toISOString().substring(0, 10);
   const actorEmail = approverEmail || (store.activeBuyerAccount
     ? store.activeBuyerAccount.corporateEmail
-    : 'system@procucev.ai');
+    : SYSTEM_ACTOR_EMAIL);
   const auditAction = `Formally approved & sealed Pre-Purchase Order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`;
   const auditEntry = createAuditEntry({
     userEmail: actorEmail,

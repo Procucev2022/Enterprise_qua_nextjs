@@ -4,7 +4,7 @@ import '@testing-library/jest-dom';
 import * as XLSX from 'xlsx';
 import QuotationForm from '@/app/vendor/quotation-form';
 import { authClient } from '@/lib/authClient';
-import { UNLIMITED_ACCESS_EMAILS } from '@/lib/constants';
+import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 import { submitRFQInquiry } from '@/lib/rfqClient';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -40,6 +40,25 @@ jest.mock('@/lib/rfqClient', () => ({
   ...jest.requireActual('@/lib/rfqClient'),
   submitRFQInquiry: jest.fn(),
 }));
+jest.mock('@/lib/subscriptionPaymentClient', () => ({
+  ...jest.requireActual('@/lib/subscriptionPaymentClient'),
+  fetchSubscriptionPricing: jest.fn(),
+}));
+
+/** Shape of GET /api/subscriptions/pricing; the 12-month GST-inclusive totals are what checkout charges. */
+const PRICING_RESPONSE = {
+  gstPercent: 18,
+  gstRate: 0.18,
+  buyer: {},
+  seller: {
+    connect: {
+      '12_months': { price: 8848.82, baseDurationPrice: 7499, gstAmount: 1349.82, totalWithGst: 8848.82 },
+    },
+    select: {
+      '12_months': { price: 17698.82, baseDurationPrice: 14999, gstAmount: 2699.82, totalWithGst: 17698.82 },
+    },
+  },
+};
 // Delegates to the real parser unless a test makes it throw.
 jest.mock('xlsx', () => {
   const actual = jest.requireActual('xlsx');
@@ -65,9 +84,11 @@ const originalToken = authClient.getToken();
 const VENDOR_EMAIL = 'vendor@test.com';
 const VENDOR_NAME = 'Test Vendor Co';
 const VENDOR_ID = 'v-mine';
-// Any address on the app's own unlimited-access allow-list.
-const UNLIMITED_EMAIL = Array.from(UNLIMITED_ACCESS_EMAILS)[0];
 const SUBSCRIPTION_COPY = UI_STRINGS.vendorSubscriptionModal;
+
+beforeEach(() => {
+  jest.mocked(fetchSubscriptionPricing).mockResolvedValue(PRICING_RESPONSE);
+});
 // The upgrade prompt's own heading also contains "Submit Quotation", so match exactly.
 const BID_FORM_TITLE = 'Submit Quotation';
 
@@ -376,12 +397,13 @@ describe('upgrade plan selection', () => {
     fireEvent.click(button);
 
     expect(mockUpdateVendorSubscription).toHaveBeenCalledWith('premium');
-    expect(mockShowToast).toHaveBeenCalledWith('Switched Plan', 'Switched to Premium tier.', 'success');
-    expect(screen.queryByText(SUBSCRIPTION_COPY.upgradeTitle)).not.toBeInTheDocument();
+    // The switch is confirmed only after the store reports the saved plan, so the toast follows the promise.
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('Switched Plan', 'Switched to Premium tier.', 'success'));
+    await waitFor(() => expect(screen.queryByText(SUBSCRIPTION_COPY.upgradeTitle)).not.toBeInTheDocument());
     expect(screen.queryByText('Secure Payment')).not.toBeInTheDocument();
   });
 
-  test('still confirms the Premium switch when the store exposes no subscription updater', async () => {
+  test('does not report a Premium switch as done when the store exposes no subscription updater', async () => {
     await renderForm({ ...lockedVendor(), updateVendorSubscription: undefined });
     await openUpgradeModal();
 
@@ -390,8 +412,8 @@ describe('upgrade plan selection', () => {
     fireEvent.click(button);
 
     expect(mockUpdateVendorSubscription).not.toHaveBeenCalled();
-    expect(mockShowToast).toHaveBeenCalledWith('Switched Plan', 'Switched to Premium tier.', 'success');
-    expect(screen.queryByText(SUBSCRIPTION_COPY.upgradeTitle)).not.toBeInTheDocument();
+    expect(mockShowToast).not.toHaveBeenCalledWith('Switched Plan', 'Switched to Premium tier.', 'success');
+    expect(screen.getByText(SUBSCRIPTION_COPY.upgradeTitle)).toBeInTheDocument();
   });
 
   test('ignores an upgrade button that carries no plan', async () => {
@@ -436,10 +458,11 @@ describe('upgrade plan selection', () => {
 // ─── Credit balance ───────────────────────────────────────────────────────────
 
 describe('quotation credit balance', () => {
-  test('defaults to 5 free credits when neither the vendor record, the vendor list nor the store reports a balance', async () => {
+  test('shows a loading label, not a made-up number, when the store has no balance', async () => {
     await renderForm({ vendorFreeCreditsRemaining: undefined });
 
-    expect(screen.getByText('5 Free Left')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.notAvailable)).toBeInTheDocument();
+    expect(screen.queryByText(/Free Left/)).not.toBeInTheDocument();
   });
 
   test('shows a subscriber their remaining plan credits instead of a plain Active Plan label', async () => {
@@ -448,10 +471,11 @@ describe('quotation credit balance', () => {
     expect(screen.getByText('89 Credits Left')).toBeInTheDocument();
   });
 
-  test('shows a placeholder for a subscriber whose credits have not loaded yet', async () => {
+  test('shows a loading label for a subscriber whose credits have not loaded yet', async () => {
     await renderForm({ vendorSubscription: 'connect', vendorFreeCreditsRemaining: null } as Partial<AppState>);
 
-    expect(screen.getByText('… Credits Left')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.notAvailable)).toBeInTheDocument();
+    expect(screen.queryByText(/Credits Left/)).not.toBeInTheDocument();
   });
 });
 
@@ -496,7 +520,7 @@ describe('submitted quote attribution', () => {
     expect(within(rowFor('RFQ-ID-1')).getByText('PO Generated')).toBeInTheDocument();
     expect(within(rowFor('RFQ-EMAIL-2')).getByText('₹2,500')).toBeInTheDocument();
     // A quote without a price is still this vendor's bid, shown without an amount.
-    expect(within(rowFor('RFQ-NAME-3')).getByText('Quote submitted')).toBeInTheDocument();
+    expect(within(rowFor('RFQ-NAME-3')).getByText('Quote Submitted')).toBeInTheDocument();
     expect(within(rowFor('RFQ-NAME-3')).getByText(/Portal Submission · -/)).toBeInTheDocument();
     expect(within(rowFor('RFQ-NOQUOTES-4')).getByText('No bid submitted')).toBeInTheDocument();
     expect(within(rowFor('RFQ-OTHER-5')).getByText('No bid submitted')).toBeInTheDocument();
@@ -632,14 +656,14 @@ describe('enquiry filtering', () => {
     });
   }
 
-  test('keeps the enquiries whose own category, RFQ record or line items match the selected category', async () => {
+  test('keeps the enquiries whose resolved category matches the selected category', async () => {
     await renderCategoryScenario();
     expectRows(everyCategoryRfq, []);
 
     fireEvent.change(categorySelect(), { target: { value: 'Electrical' } });
 
-    expectRows(['RFQ-CAT-2', 'RFQ-CAT-5'], ['RFQ-CAT-1', 'RFQ-CAT-3', 'RFQ-CAT-4', 'RFQ-CAT-6']);
-    expect(screen.getByText(/Showing/)).toHaveTextContent('Showing 2 of 6 enquiries');
+    expectRows(['RFQ-CAT-2'], ['RFQ-CAT-1', 'RFQ-CAT-3', 'RFQ-CAT-4', 'RFQ-CAT-5', 'RFQ-CAT-6']);
+    expect(screen.getByText(/Showing/)).toHaveTextContent('Showing 1 of 6 enquiries');
     expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
   });
 
@@ -648,11 +672,11 @@ describe('enquiry filtering', () => {
     fireEvent.change(categorySelect(), { target: { value: 'Electrical' } });
 
     fireEvent.click(screen.getByRole('button', { name: /^Hydraulics/ }));
-    expectRows(['RFQ-CAT-2', 'RFQ-CAT-3', 'RFQ-CAT-5'], ['RFQ-CAT-1', 'RFQ-CAT-4', 'RFQ-CAT-6']);
+    expectRows(['RFQ-CAT-2', 'RFQ-CAT-3'], ['RFQ-CAT-1', 'RFQ-CAT-4', 'RFQ-CAT-5', 'RFQ-CAT-6']);
     expect(screen.getByText('(Filtered by 2 categories)')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Hydraulics/ }));
-    expectRows(['RFQ-CAT-2', 'RFQ-CAT-5'], ['RFQ-CAT-3']);
+    expectRows(['RFQ-CAT-2'], ['RFQ-CAT-3']);
     expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
   });
 
@@ -814,15 +838,12 @@ describe('priced Excel import', () => {
 // ─── Access to the bid form ──────────────────────────────────────────────────
 
 describe('bid form access', () => {
-  test.each([
-    ['an unlimited-access account', { currentUserSession: { ...VENDOR_SESSION, email: UNLIMITED_EMAIL } }],
-    ['an unlimited subscription', { vendorSubscription: 'unlimited' as const }],
-  ])('lets %s open the bid form on an external RFQ with no free credits left', async (_label, access) => {
+  test('lets an unlimited subscription open the bid form on an external RFQ with no free credits left', async () => {
     await renderForm({
       vendorOpportunities: [opportunity()],
       vendorFreeCreditsRemaining: 0,
       vendorUnlockedRfqIds: ['RFQ-100'],
-      ...access,
+      vendorSubscription: 'unlimited' as const,
     });
 
     await openBidFormFor();
@@ -832,43 +853,16 @@ describe('bid form access', () => {
     expect(screen.queryByText(SUBSCRIPTION_COPY.upgradeTitle)).not.toBeInTheDocument();
   });
 
-  async function lapseSessionBeforeClicking(): Promise<void> {
-    authClient.setSession({ ...VENDOR_SESSION, email: UNLIMITED_EMAIL }, 'unlimited-token');
+  test('keeps an external RFQ locked when the free balance is exhausted, whatever the account email', async () => {
     await renderForm({
       vendorOpportunities: [opportunity()],
       vendorFreeCreditsRemaining: 0,
       vendorUnlockedRfqIds: ['RFQ-100'],
+      currentUserSession: { ...VENDOR_SESSION, email: 'anyone@example.test' },
     });
-    const submitQuote = await within(rowFor('RFQ-100')).findByRole('button', { name: /^Submit Quote$/ });
 
-    // The session expires between rendering the row and the click landing.
-    authClient.setSession(null, null);
-    fireEvent.click(submitQuote);
-  }
-
-  test('re-checks access at click time and offers the upgrade when the unlimited session has lapsed', async () => {
-    await lapseSessionBeforeClicking();
-
-    expect(mockShowToast).toHaveBeenCalledWith(
-      SUBSCRIPTION_COPY.subscriptionRequiredToastTitle,
-      SUBSCRIPTION_COPY.subscriptionRequiredToastDesc,
-      'warning'
-    );
-    expect(await screen.findByText(SUBSCRIPTION_COPY.upgradeTitle)).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: BID_FORM_TITLE })).not.toBeInTheDocument();
-  });
-
-  test('uses built-in copy for the subscription prompt when the dictionary entry is missing', async () => {
-    jest.replaceProperty(UI_STRINGS, 'vendorSubscriptionModal', undefined as unknown as typeof SUBSCRIPTION_COPY);
-
-    await lapseSessionBeforeClicking();
-
-    expect(mockShowToast).toHaveBeenCalledWith(
-      'Subscription Required',
-      'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
-      'warning'
-    );
-    expect(await screen.findByText('🔒 Upgrade Plan to Submit Quotations')).toBeInTheDocument();
+    expect(within(rowFor('RFQ-100')).queryByRole('button', { name: /^Submit Quote$/ })).not.toBeInTheDocument();
+    expect(within(rowFor('RFQ-100')).getByText('🔒 Premium Locked')).toBeInTheDocument();
   });
 });
 
@@ -906,7 +900,7 @@ describe('clarification requests', () => {
     await waitFor(() =>
       expect(mockShowToast).toHaveBeenCalledWith(
         'Clarification Sent',
-        'Your query has been dispatched to the procurement officer.',
+        'Your clarification was saved for the buyer.',
         'success'
       )
     );
@@ -915,10 +909,10 @@ describe('clarification requests', () => {
       vendorName: VENDOR_NAME,
       vendorEmail: VENDOR_EMAIL,
     });
+    // The server stamps the actor from the session, so the client sends only the action and the RFQ number.
     expect(mockAddAuditLog).toHaveBeenCalledWith(
       `Inquiry / Clarification submitted by ${VENDOR_NAME} on RFQ-100: "Can you deliver in batches?..."`,
-      'RFQ-100',
-      VENDOR_EMAIL
+      'RFQ-100'
     );
     expect(mockAdoptCreatedRFQ).toHaveBeenCalledWith(updatedRfq);
     expect(mockRefreshFromDB).toHaveBeenCalledTimes(1);
@@ -942,13 +936,12 @@ describe('clarification requests', () => {
     });
     expect(mockAddAuditLog).toHaveBeenCalledWith(
       `Inquiry / Clarification submitted by ${VENDOR_NAME} on RFQ-100: "Is a site visit possible?..."`,
-      'RFQ-100',
-      undefined
+      'RFQ-100'
     );
     expect(mockAdoptCreatedRFQ).not.toHaveBeenCalled();
   });
 
-  test('introduces the sender as a vendor partner when no name is known anywhere', async () => {
+  test('sends an empty vendor name, not an invented one, when no name is known anywhere', async () => {
     const box = await openClarification({ currentUserSession: { ...VENDOR_SESSION, email: '', name: '' } });
 
     fireEvent.change(box, { target: { value: 'What is the payment schedule?' } });
@@ -957,7 +950,7 @@ describe('clarification requests', () => {
     await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success'));
     expect(submitRFQInquiry).toHaveBeenCalledWith('opp-1', {
       message: 'What is the payment schedule?',
-      vendorName: 'Vendor Partner',
+      vendorName: '',
       vendorEmail: null,
     });
   });
@@ -982,7 +975,7 @@ describe('clarification requests', () => {
     fireEvent.click(sendButton());
 
     await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith('Inquiry Failed', 'Could not dispatch clarification.', 'warning')
+      expect(mockShowToast).toHaveBeenCalledWith('Inquiry Failed', 'Could not send your clarification.', 'warning')
     );
   });
 });
@@ -1029,6 +1022,7 @@ describe('deep-linked opportunity', () => {
     await screen.findByRole('heading', { name: BID_FORM_TITLE });
 
     fireEvent.change(screen.getByPlaceholderText('e.g. 25000'), { target: { value: '250' } });
+    fireEvent.change(screen.getByPlaceholderText('e.g. 14'), { target: { value: '7' } });
     fireEvent.click(submitQuotationButton());
 
     await waitFor(() => expect(callsTo('quote')).toHaveLength(1));
@@ -1055,6 +1049,9 @@ describe('quote submission', () => {
   const pdf = (name = 'spec.pdf', content = 'abc'): File => new File([content], name, { type: 'application/pdf' });
   const fillPrice = (value: string): boolean =>
     fireEvent.change(screen.getByPlaceholderText('e.g. 25000'), { target: { value } });
+  // Lead time is a required quote term, so every bid that is submitted states one.
+  const fillLeadTime = (days = '7'): boolean =>
+    fireEvent.change(screen.getByPlaceholderText('e.g. 14'), { target: { value: days } });
   const attachFiles = (...files: File[]): boolean => fireEvent.change(documentsInput(), { target: { files } });
 
   async function openSingleItemForm(overrides: Partial<AppState> = {}, props: Partial<FormProps> = {}): Promise<void> {
@@ -1092,7 +1089,7 @@ describe('quote submission', () => {
       fillPrice('1500');
       fireEvent.change(screen.getByPlaceholderText('e.g. 14'), { target: { value: '12' } });
       fireEvent.change(screen.getByPlaceholderText('e.g. 1'), { target: { value: '2' } });
-      fireEvent.change(screen.getByDisplayValue('45 Days Net'), { target: { value: '30 Days Net' } });
+      fireEvent.change(screen.getByPlaceholderText(/e\.g\. 45 Days Net/), { target: { value: '30 Days Net' } });
       fireEvent.change(screen.getByPlaceholderText(/Special notes/), { target: { value: 'Freight included' } });
       fireEvent.click(submitQuotationButton());
 
@@ -1109,8 +1106,7 @@ describe('quote submission', () => {
       });
       expect(mockAddAuditLog).toHaveBeenCalledWith(
         `${VENDOR_NAME} submitted a quotation for RFQ-100 (Unit Price: 1500)`,
-        'RFQ-100',
-        VENDOR_EMAIL
+        'RFQ-100'
       );
       expect(mockShowToast).toHaveBeenCalledWith('Quote Submitted', expect.stringContaining('RFQ-100'), 'success');
       expect(mockRefreshFromDB).toHaveBeenCalledTimes(1);
@@ -1125,13 +1121,13 @@ describe('quote submission', () => {
       await openSingleItemForm({ currentUserSession: { ...VENDOR_SESSION, name: '' } });
 
       fillPrice('10');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       await waitFor(() =>
         expect(mockAddAuditLog).toHaveBeenCalledWith(
           'Vendor submitted a quotation for RFQ-100 (Unit Price: 10)',
-          'RFQ-100',
-          VENDOR_EMAIL
+          'RFQ-100'
         )
       );
     });
@@ -1140,6 +1136,7 @@ describe('quote submission', () => {
       await openSingleItemForm();
 
       fillPrice('1e308');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('The entered rate produces an invalid quotation total.')).toBeInTheDocument();
@@ -1189,6 +1186,7 @@ describe('quote submission', () => {
 
       fireEvent.change(screen.getByLabelText('Rate for Pump'), { target: { value: '10' } });
       fireEvent.change(screen.getByLabelText('Rate for Valve'), { target: { value: '20' } });
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       await waitFor(() => expect(callsTo('quote')).toHaveLength(1));
@@ -1208,6 +1206,7 @@ describe('quote submission', () => {
       attachFiles(new File(['abc'], 'mystery', { type: '' }));
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('mystery has an unsupported file type.')).toBeInTheDocument();
@@ -1228,6 +1227,7 @@ describe('quote submission', () => {
       attachFiles(pdf('spec.pdf', 'abc'), pdf('sheet.pdf', 'xyz'));
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       await waitFor(() => expect(onSubmitSuccess).toHaveBeenCalledTimes(1));
@@ -1250,6 +1250,7 @@ describe('quote submission', () => {
       attachFiles(pdf());
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('File type not allowed')).toBeInTheDocument();
@@ -1266,6 +1267,7 @@ describe('quote submission', () => {
       attachFiles(pdf());
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('Could not upload spec.pdf.')).toBeInTheDocument();
@@ -1286,6 +1288,7 @@ describe('quote submission', () => {
       await openSingleItemForm({}, { onSubmitSuccess });
       attachFiles(pdf());
       fillPrice('100');
+      fillLeadTime();
 
       fireEvent.click(submitQuotationButton());
       expect(await screen.findByText('Temporary outage')).toBeInTheDocument();
@@ -1306,6 +1309,7 @@ describe('quote submission', () => {
       attachFiles(pdf());
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('Could not read spec.pdf.')).toBeInTheDocument();
@@ -1321,6 +1325,7 @@ describe('quote submission', () => {
       await openSingleItemForm();
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText(SUBSCRIPTION_COPY.creditsExhaustedToastDesc)).toBeInTheDocument();
@@ -1336,25 +1341,12 @@ describe('quote submission', () => {
       );
     });
 
-    test('uses built-in copy for the credits-exhausted prompt when the dictionary entry is missing', async () => {
-      jest.replaceProperty(UI_STRINGS, 'vendorSubscriptionModal', undefined as unknown as typeof SUBSCRIPTION_COPY);
-      stubFetch({ quote: () => ({ ok: false, status: 402, body: { success: false, upgradeRequired: true } }) });
-      await openSingleItemForm();
-
-      fillPrice('100');
-      fireEvent.click(submitQuotationButton());
-
-      const fallbackMessage =
-        'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.';
-      expect(await screen.findByText(fallbackMessage)).toBeInTheDocument();
-      expect(mockShowToast).toHaveBeenCalledWith('Quotation Credits Exhausted', fallbackMessage, 'warning');
-    });
-
     test('treats a 403 as exhausted credits and keeps the server message', async () => {
       stubFetch({ quote: () => ({ ok: false, status: 403, body: { success: false, error: 'Plan upgrade required' } }) });
       await openSingleItemForm();
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('Plan upgrade required')).toBeInTheDocument();
@@ -1371,6 +1363,7 @@ describe('quote submission', () => {
       await openSingleItemForm();
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('Failed to submit quotation.')).toBeInTheDocument();
@@ -1387,6 +1380,7 @@ describe('quote submission', () => {
       await openSingleItemForm();
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       expect(await screen.findByText('socket hang up')).toBeInTheDocument();
@@ -1402,6 +1396,7 @@ describe('quote submission', () => {
       await openSingleItemForm();
 
       fillPrice('100');
+      fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
       const fallbackMessage = 'Could not submit the quote. Please check your network and try again.';
@@ -1452,8 +1447,7 @@ describe('RFQ specification download', () => {
     expect(mockRefreshFromDB).toHaveBeenCalledTimes(1);
     expect(mockAddAuditLog).toHaveBeenCalledWith(
       `${VENDOR_NAME} downloaded RFQ specification for RFQ-100`,
-      'RFQ-100',
-      VENDOR_EMAIL
+      'RFQ-100'
     );
   });
 
@@ -1481,7 +1475,7 @@ describe('RFQ specification download', () => {
     await waitFor(() =>
       expect(mockShowToast).toHaveBeenCalledWith(
         'Free Credits Exhausted',
-        'You have used all 5 free RFQ download credits. Please upgrade your subscription to download this RFQ.',
+        SUBSCRIPTION_COPY.subscriptionRequiredToastDesc,
         'warning'
       )
     );

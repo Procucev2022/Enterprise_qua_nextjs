@@ -5,6 +5,9 @@ const {
   getLogoUrl,
 } = require('../src/services/emailService');
 
+const VENDOR_EMAIL_REQUIRED = 'The vendor has no email address on record. Add one before this email can be sent.';
+const RFQ_NUMBER_REQUIRED = 'An RFQ number is required to generate the RFQ invitation email.';
+
 describe('Email Template Generation Service', () => {
   test('generateStandardRFQEmail generates formatted email payload', () => {
     const rfq = {
@@ -17,16 +20,17 @@ describe('Email Template Generation Service', () => {
       ],
     };
     const vendor = {
-      name: 'Apex Industrial Dynamics',
-      contactPerson: 'Rajesh Nair',
-      email: 'rajesh@apex.in',
+      name: 'Test Industrial Co',
+      contactPerson: 'Test Contact',
+      email: 'contact@supplier.test',
     };
 
     const payload = generateStandardRFQEmail(rfq, vendor);
-    expect(payload.to).toBe('rajesh@apex.in');
+    expect(payload.to).toBe('contact@supplier.test');
     expect(payload.subject).toContain('RFQ-2026-0891');
     expect(payload.htmlBody).toContain('Impeller SS316');
     expect(payload.htmlBody).toContain('DIN Standard');
+    expect(payload).not.toHaveProperty('error');
   });
 
   test('generateStandardRFQEmail reads line items from the canonical extractedEntities field, with budget and attachments', () => {
@@ -49,9 +53,9 @@ describe('Email Template Generation Service', () => {
       ],
     };
     const vendor = {
-      name: 'Yagnik Vendor Supplies',
-      contactPerson: 'Yagnik C',
-      email: 'yagnik.c@ahduni.edu.in',
+      name: 'Test Vendor Supplies',
+      contactPerson: 'Test Vendor Contact',
+      email: 'vendor.two@supplier.test',
     };
 
     const payload = generateStandardRFQEmail(rfq, vendor);
@@ -66,45 +70,74 @@ describe('Email Template Generation Service', () => {
     expect(payload.htmlBody).not.toContain('legacy-should-not-render');
   });
 
-  test('generateStandardRFQEmail falls back to placeholders when line items, budget, attachments, vendor and deadline are absent', () => {
+  test('generateStandardRFQEmail withholds the recipient when the vendor has no email and shows "Not specified" for absent fields', () => {
     const rfq = {
       rfqNumber: 'RFQ-2026-0002',
       title: 'Untitled requirement',
     };
 
     const payload = generateStandardRFQEmail(rfq, null);
-    expect(payload.to).toBe('navinchaudhary.dev@gmail.com');
-    expect(payload.recipientName).toBe('Procurement Team');
-    expect(payload.vendorName).toBe('Preferred Supplier Partner');
-    expect(payload.htmlBody).toContain('To be confirmed');
-    expect(payload.htmlBody).toContain('See attached procurement specifications document.');
-    expect(payload.htmlBody).not.toContain('Indicative Budget');
+    expect(payload.to).toBeNull();
+    expect(payload.error).toBe(VENDOR_EMAIL_REQUIRED);
+    expect(payload.recipientName).toBe('Not specified');
+    expect(payload.vendorName).toBe('Not specified');
+    expect(payload.htmlBody).toContain('color: #dc2626; font-weight: bold;">Not specified</td>');
+    expect(payload.htmlBody).toContain('No line items are recorded for this RFQ.');
+    expect(payload.htmlBody).not.toContain('See attached procurement specifications document.');
+    expect(payload.htmlBody).toMatch(/Indicative Budget:<\/td>\s*<td style="padding: 8px 12px;">Not specified<\/td>/);
+    expect(payload.htmlBody).not.toContain('₹0');
     expect(payload.htmlBody).not.toContain('Supporting Documents');
+    expect(payload.htmlBody).not.toContain('Valued Buyer');
   });
 
-  test('generateStandardRFQEmail falls back to item/quantity/unit/description defaults when line items are sparse', () => {
+  test('generateStandardRFQEmail shows the budget as "Not specified" when it is zero, blank or non-numeric', () => {
+    const vendor = { name: 'Budget Vendor', contactPerson: 'Budget Contact', email: 'budget.vendor@supplier.test' };
+
+    [undefined, null, '', 0, 'not-a-number'].forEach((budget) => {
+      const payload = generateStandardRFQEmail({ rfqNumber: 'RFQ-BUDGET-0', budget }, vendor);
+      expect(payload.htmlBody).toMatch(/Indicative Budget:<\/td>\s*<td style="padding: 8px 12px;">Not specified<\/td>/);
+      expect(payload.htmlBody).not.toContain('₹0');
+    });
+  });
+
+  test('generateStandardRFQEmail formats a numeric string budget with Indian digit grouping', () => {
+    const payload = generateStandardRFQEmail(
+      { rfqNumber: 'RFQ-BUDGET-1', budget: '150000' },
+      { name: 'Budget Vendor', email: 'budget.vendor@supplier.test' }
+    );
+    expect(payload.htmlBody).toMatch(/Indicative Budget:<\/td>\s*<td style="padding: 8px 12px;">₹1,50,000<\/td>/);
+  });
+
+  test('generateStandardRFQEmail shows "Not specified" for missing line-item fields instead of invented defaults', () => {
     const rfq = {
+      rfqNumber: 'RFQ-SPARSE-1',
       title: 'Sparse RFQ',
       extractedEntities: [{}, { description: 'Fallback Description' }],
     };
 
     const payload = generateStandardRFQEmail(rfq, {});
-    expect(payload.htmlBody).toContain('1. Item');
+    expect(payload.to).toBeNull();
+    expect(payload.htmlBody).toContain('1. Not specified');
     expect(payload.htmlBody).toContain('2. Fallback Description');
-    expect(payload.htmlBody).toContain('1 Units');
-    expect(payload.htmlBody).toContain('Standard Enterprise Specification');
+    expect(payload.htmlBody).not.toContain('1 Units');
+    expect(payload.htmlBody).not.toContain('Standard Enterprise Specification');
   });
 
-  test('generateStandardRFQEmail falls back to attachment name and RFQ-2026 defaults', () => {
-    const rfq = {
-      title: 'No RFQ number',
-      attachments: [{ id: 'a1', name: 'legacy-name.pdf' }, { id: 'a2' }],
-    };
+  test('generateStandardRFQEmail throws without an RFQ number and shows "Not specified" for an unnamed attachment', () => {
+    expect(() => generateStandardRFQEmail({ title: 'No RFQ number' }, { name: 'Vendor Only' })).toThrow(RFQ_NUMBER_REQUIRED);
 
-    const payload = generateStandardRFQEmail(rfq, { name: 'Vendor Only' });
-    expect(payload.rfqNumber).toBe('RFQ-2026');
+    const payload = generateStandardRFQEmail(
+      {
+        rfqNumber: 'RFQ-NAME-1',
+        title: 'Named attachments',
+        attachments: [{ id: 'a1', name: 'legacy-name.pdf' }, { id: 'a2' }],
+      },
+      { name: 'Vendor Only', email: 'vendor-only@vendor.test' }
+    );
+    expect(payload.rfqNumber).toBe('RFQ-NAME-1');
+    expect(payload.to).toBe('vendor-only@vendor.test');
     expect(payload.htmlBody).toContain('legacy-name.pdf');
-    expect(payload.htmlBody).toContain('Attachment');
+    expect(payload.htmlBody).toContain('<li style="margin-bottom: 4px;">Not specified</li>');
   });
 
   test('generateVendorOnboardingEmail preview omits credentials and gives safe sign-in guidance', () => {
@@ -122,14 +155,21 @@ describe('Email Template Generation Service', () => {
     expect(payload.htmlBody).not.toContain('Temporary Password');
   });
 
-  test('generateVendorOnboardingEmail falls back to a default contactPerson without inventing credentials', () => {
+  test('generateVendorOnboardingEmail shows "Not specified" for a missing contact without inventing credentials', () => {
     const vendor = { name: 'No Contact Vendor', email: 'nocontact@vendor.com' };
 
-    const payload = generateVendorOnboardingEmail(vendor, true);
-    expect(payload.recipientName).toBe('Vendor Partner');
-    expect(payload.htmlBody).toContain('>Partner<');
+    const payload = generateVendorOnboardingEmail(vendor);
+    expect(payload.recipientName).toBe('Not specified');
+    expect(payload.htmlBody).toContain('>Not specified<');
     expect(payload).not.toHaveProperty('tempPassword');
     expect(payload.htmlBody).not.toContain('Procucev#2026!Vendor');
+  });
+
+  test('generateVendorOnboardingEmail withholds the recipient when the vendor has no email', () => {
+    const payload = generateVendorOnboardingEmail({ name: 'Email Missing Vendor' });
+    expect(payload.to).toBeNull();
+    expect(payload.error).toBe(VENDOR_EMAIL_REQUIRED);
+    expect(payload.htmlBody).toContain('<strong>Not specified</strong>');
   });
 
   test('generateStandardRFQEmail and generateVendorOnboardingEmail render real procucev logo and dynamic URLs', () => {
@@ -161,26 +201,18 @@ describe('Email Template Generation Service', () => {
     delete globalThis.__CF_ENV__;
   });
 
-  test('getPublicFrontendUrl rewrites srinivas-mukku.workers.dev in production environments', () => {
+  test('getPublicFrontendUrl returns the configured URL unchanged, with no domain-specific rewrite', () => {
     const origNodeEnv = process.env.NODE_ENV;
-    process.env.PUBLIC_FRONTEND_URL = 'https://srinivas-mukku.workers.dev/';
+    process.env.PUBLIC_FRONTEND_URL = 'https://configured-frontend.example.test/';
 
     process.env.NODE_ENV = 'production';
-    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+    expect(getPublicFrontendUrl()).toBe('https://configured-frontend.example.test');
 
     process.env.NODE_ENV = 'test';
     globalThis.__CF_ENV__ = { ENVIRONMENT: 'prod' };
-    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
-
-    globalThis.__CF_ENV__ = { ENVIRONMENT: 'production' };
-    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
-
-    globalThis.__CF_ENV__ = { NODE_ENV: 'production' };
-    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+    expect(getPublicFrontendUrl()).toBe('https://configured-frontend.example.test');
 
     delete globalThis.__CF_ENV__;
-    expect(getPublicFrontendUrl()).toBe('https://srinivas-mukku.workers.dev');
-
     delete process.env.PUBLIC_FRONTEND_URL;
     process.env.NODE_ENV = 'production';
     expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');

@@ -4,8 +4,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/lib/store';
-import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
-import { SOURCING_MODES } from '@/lib/constants';
+import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord, VendorModuleScore } from '@/lib/types';
+import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   X,
   FileCheck,
@@ -20,7 +21,6 @@ import {
   Copy,
   KeyRound,
   Lock,
-  UserCheck,
   Sliders,
   CreditCard,
   FileText,
@@ -113,6 +113,60 @@ function numberToIndianWords(num: number): string {
   return words ? `Rupees ${words} Only` : '';
 }
 
+/** Quoted amount for display. A quote with no recorded price shows the not-available placeholder, never zero. */
+function formatQuotedPrice(quote: QuoteComparison): string {
+  const amount = quote.totalPrice || quote.unitPrice;
+  return amount ? `₹${amount.toLocaleString()}` : UI_STRINGS.recordPlaceholders.notAvailable;
+}
+
+/** Rupee amount on the purchase order. An amount the quote does not record shows the not-available placeholder, never zero. */
+function formatPoAmount(amount: number | null): string {
+  return amount === null ? UI_STRINGS.recordPlaceholders.notAvailable : `₹${amount.toLocaleString('en-IN')}`;
+}
+
+/** Follow-up count for display. A count the server did not send shows the not-available placeholder, never zero. */
+function formatFollowUpCount(count: number | null | undefined): string {
+  return typeof count === 'number' && Number.isFinite(count) ? String(count) : UI_STRINGS.recordPlaceholders.notAvailable;
+}
+
+/** Module score for the evaluation report. A module with no weighted score shows the not-evaluated placeholder, never a substitute number. */
+function formatModuleScore(moduleScore: VendorModuleScore | undefined): string {
+  const weighted = moduleScore?.weightedScore;
+  if (typeof weighted !== 'number' || !Number.isFinite(weighted)) return UI_STRINGS.recordPlaceholders.notEvaluated;
+  const max = moduleScore?.maxScore;
+  return typeof max === 'number' && Number.isFinite(max)
+    ? formatString(UI_STRINGS.modals.evaluation.scoreWithMax, { score: weighted, maxScore: max })
+    : formatString(UI_STRINGS.modals.evaluation.scoreOnly, { score: weighted });
+}
+
+/** GST label for the subscription breakdown. The rate appears only when the pricing data supplies one. */
+function gstLabelFor(gstPercent: number | undefined): string {
+  if (typeof gstPercent !== 'number' || !Number.isFinite(gstPercent)) return UI_STRINGS.modals.subscriptionPayment.gstLabel;
+  return formatString(UI_STRINGS.modals.subscriptionPayment.gstLabelWithRate, { gstPercent });
+}
+
+/**
+ * Vendor quotation link for an RFQ, on the origin that serves this portal. Empty when there is no
+ * window (server render), so the link is left out rather than guessed.
+ */
+function buildVendorQuotationLink(rfqNumber: string): string {
+  if (typeof window === 'undefined') return '';
+  return `${window.location.origin}${VENDOR_QUOTATION_ROUTE}?rfq=${encodeURIComponent(rfqNumber)}`;
+}
+
+/** Urgent chaser text. The quotation link is included only when it can be built. */
+function buildUrgentReminderMessage(vendorName: string, rfqNumber: string): string {
+  const quotationLink = buildVendorQuotationLink(rfqNumber);
+  return quotationLink
+    ? formatString(UI_STRINGS.modals.chaser.urgentReminderWithLink, { vendorName, rfqNumber, quotationLink })
+    : formatString(UI_STRINGS.modals.chaser.urgentReminderWithoutLink, { vendorName, rfqNumber });
+}
+
+/** AI voice bot script. It names no deadline, because the buyer's RFQ deadline is not passed to this modal. */
+function buildCallScript(rfqNumber: string): string {
+  return formatString(UI_STRINGS.modals.chaser.callScript, { rfqNumber });
+}
+
 export function PurchaseOrderModal({
   isOpen,
   onClose,
@@ -140,10 +194,11 @@ export function PurchaseOrderModal({
   const { approvePO, showToast } = useApp();
   const [poSigned, setPoSigned] = useState(false);
   const [approving, setApproving] = useState(false);
-  const [approverNotes, setApproverNotes] = useState('Approved based on AI Evaluation Matrix >94% match score & lowest compliant price.');
+  // The approver writes the sign-off note. No default note is supplied, so none is sent unless the approver types one.
+  const [approverNotes, setApproverNotes] = useState('');
   const [approvedPo, setApprovedPo] = useState<{ poNumber: string; issueDate: string; shaSignature: string } | null>(null);
 
-  // Buyer Details Mapping (strictly real content, no mock fallbacks)
+  // Buyer Details Mapping (strictly real content, no substitute values)
   const buyerOrg = buyerAccount?.organizationName || (buyerAccount as any)?.name || rfq?.buyerAccountName || rfq?.buyerCompany || '';
   const buyerContactPerson = buyerAccount?.contactPerson || rfq?.buyerName || (rfq as any)?.buyerContactPerson || '';
   const buyerEmail = buyerAccount?.corporateEmail || (buyerAccount as any)?.email || rfq?.buyerEmail || rfq?.sourceEmail || '';
@@ -157,7 +212,7 @@ export function PurchaseOrderModal({
   const buyerAddress = addressParts.length > 0 ? addressParts.join(', ') : (rfq?.deliveryLocation || '');
   const buyerGstin = buyerAccount?.taxId || (buyerAccount as any)?.gstin || (rfq as any)?.buyerGstin || '';
 
-  // Vendor Details Mapping (strictly real content, no mock fallbacks)
+  // Vendor Details Mapping (strictly real content, no substitute values)
   const awardedVendorName = vendorName || quote?.vendorName || vendorRecord?.name || '';
   const awardedVendorContact = vendorRecord?.contactPerson || (quote as any)?.contactPerson || (quote as any)?.vendorContact || '';
   const awardedVendorEmail = vendorRecord?.email || (quote as any)?.vendorEmail || (quote as any)?.email || '';
@@ -174,16 +229,16 @@ export function PurchaseOrderModal({
   const awardedVendorGstin = vendorRecord?.gstin || vendorRecord?.taxId || (quote as any)?.gstin || '';
 
   // RFQ & Commercial Terms
-  const rfqTitle = rfq?.title || 'Procurement';
+  const rfqTitle = rfq?.title || UI_STRINGS.recordPlaceholders.notRecorded;
   const rfqCategory = rfq?.category || '';
-  const paymentTerms = quote?.paymentTerms || 'Net 30 Days';
+  const paymentTerms = quote?.paymentTerms || UI_STRINGS.recordPlaceholders.notRecorded;
   const warranty = quote?.warrantyYears ? `${quote.warrantyYears} Year(s) Manufacturer Warranty` : '';
   const deliveryLocation = rfq?.deliveryLocation || buyerAddress || '';
   const targetDeliveryDate = deliveryDate || rfq?.targetDeliveryDate || '';
   const effectiveLeadTime = leadTime || quote?.leadTimeDays || '';
 
-  // Helper to filter out placeholder / mock specification labels
-  const isMockSpec = (s: string) => {
+  // Helper to filter out placeholder specification labels that carry no real specification
+  const isPlaceholderSpec = (s: string) => {
     const lower = (s || '').trim().toLowerCase();
     return (
       !lower ||
@@ -193,19 +248,22 @@ export function PurchaseOrderModal({
     );
   };
 
-  // Items breakdown: support multi-item line quotes or single line fallback
+  // Items breakdown: support multi-item line quotes or single line fallback. A quantity, rate or total the
+  // record does not hold stays null, so the document shows it as not available instead of a substitute value.
   const itemsWithPricing = useMemo(() => {
     if (quote?.lineItemQuotes && quote.lineItemQuotes.length > 0) {
       return quote.lineItemQuotes.map((lq, idx) => {
         const rawSpecs = lineItems[idx]?.technicalSpecs || (lq as any).technicalSpecs || '';
-        const specs = isMockSpec(rawSpecs) ? '' : rawSpecs.trim();
+        const specs = isPlaceholderSpec(rawSpecs) ? '' : rawSpecs.trim();
+        const quantity = lq.quantity || lineItems[idx]?.quantity || null;
+        const lineRate = lq.unitPrice || null;
         return {
           id: lq.lineItemId || `item-${idx + 1}`,
-          description: lq.itemName || lineItems[idx]?.description || `Procurement Item #${idx + 1}`,
-          quantity: lq.quantity || lineItems[idx]?.quantity || 1,
-          unit: lineItems[idx]?.unit || lq.unit || 'Units',
-          unitPrice: lq.unitPrice || 0,
-          totalPrice: lq.totalPrice || ((lq.unitPrice || 0) * (lq.quantity || 1)),
+          description: lq.itemName || lineItems[idx]?.description || UI_STRINGS.recordPlaceholders.notRecorded,
+          quantity,
+          unit: lineItems[idx]?.unit || lq.unit || UI_STRINGS.recordPlaceholders.notRecorded,
+          unitPrice: lineRate,
+          totalPrice: lq.totalPrice || (lineRate !== null && quantity !== null ? lineRate * quantity : null),
           specs,
         };
       });
@@ -213,16 +271,20 @@ export function PurchaseOrderModal({
     if (lineItems.length > 0) {
       return lineItems.map((li, idx) => {
         const rawSpecs = li.technicalSpecs || '';
-        const specs = isMockSpec(rawSpecs) ? '' : rawSpecs.trim();
-        const price = li.unitPrice || (li.quantity ? Math.round((totalAmount || 0) / (li.quantity || 1)) : (unitPrice || totalAmount || 0));
-        const total = li.totalPrice || (price * (li.quantity || 1));
+        const specs = isPlaceholderSpec(rawSpecs) ? '' : rawSpecs.trim();
+        const quantity = li.quantity || null;
+        // Without a recorded rate, the rate is derived from the total when the quantity is known.
+        const derivedRate = quantity !== null
+          ? (totalAmount ? Math.round(totalAmount / quantity) : null)
+          : (unitPrice || totalAmount || null);
+        const lineRate = li.unitPrice || derivedRate;
         return {
           id: (li as any).id || `item-${idx + 1}`,
-          description: li.description || `Item #${idx + 1}`,
-          quantity: li.quantity || 1,
-          unit: li.unit || 'Units',
-          unitPrice: price,
-          totalPrice: total,
+          description: li.description || UI_STRINGS.recordPlaceholders.notRecorded,
+          quantity,
+          unit: li.unit || UI_STRINGS.recordPlaceholders.notRecorded,
+          unitPrice: lineRate,
+          totalPrice: li.totalPrice || (lineRate !== null && quantity !== null ? lineRate * quantity : null),
           specs,
         };
       });
@@ -230,25 +292,32 @@ export function PurchaseOrderModal({
     return [{
       id: 'item-1',
       description: rfqTitle,
-      quantity: 1,
-      unit: 'Lot',
-      unitPrice: unitPrice || totalAmount || 0,
-      totalPrice: totalAmount || unitPrice || 0,
+      quantity: null,
+      unit: UI_STRINGS.recordPlaceholders.notRecorded,
+      unitPrice: unitPrice || totalAmount || null,
+      totalPrice: totalAmount || unitPrice || null,
       specs: '',
     }];
   }, [quote, lineItems, totalAmount, unitPrice, rfqTitle]);
 
-  // Taxes and totals calculation
-  const subTotal = totalAmount || itemsWithPricing.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0;
-  const gstRate = (quote as any)?.taxRate || (quote?.taxes && subTotal > 0 ? Math.round((quote.taxes / subTotal) * 100) : 18);
-  const gstAmount = quote?.taxes && quote.taxes > 0 ? quote.taxes : Math.round(subTotal * (gstRate / 100));
-  const grandTotal = subTotal + gstAmount;
-  const grandTotalInWords = numberToIndianWords(grandTotal);
+  // Taxes and totals. The subtotal is the recorded total, or the sum of the line totals that are known.
+  // It stays null when neither exists, so it is never shown as zero.
+  const knownLineTotals = itemsWithPricing
+    .map((item) => item.totalPrice)
+    .filter((total): total is number => total !== null);
+  const subTotal: number | null = totalAmount || (knownLineTotals.length > 0 ? knownLineTotals.reduce((sum, total) => sum + total, 0) : null);
+  // GST is shown only when the quote records a tax amount. No rate is assumed, so the
+  // rate, the grand total and its wording stay null when no tax was recorded.
+  const gstAmount: number | null = quote?.taxes && quote.taxes > 0 ? quote.taxes : null;
+  const gstRate: number | null = gstAmount !== null && subTotal !== null && subTotal > 0 ? Math.round((gstAmount / subTotal) * 100) : null;
+  const grandTotal: number | null = gstAmount === null || subTotal === null ? null : subTotal + gstAmount;
+  const grandTotalInWords = grandTotal === null ? '' : numberToIndianWords(grandTotal);
 
   if (!isOpen) return null;
 
-  const previewPoNumber = `PO-2026-` + rfqNumber.replace('RFQ-2026-', '');
-  const poNumber = approvedPo?.poNumber || rfq?.poNumber || previewPoNumber;
+  // The PO number comes from the server only. Until the server issues one, the document says so.
+  const poNumber = approvedPo?.poNumber || rfq?.poNumber || '';
+  const displayPoNumber = poNumber || UI_STRINGS.modals.purchaseOrder.notIssuedYet;
   const issueDate = approvedPo?.issueDate || rfq?.poIssueDate || null;
 
   const handleApprove = async () => {
@@ -261,15 +330,17 @@ export function PurchaseOrderModal({
     setApproving(false);
     if (result.success) {
       setPoSigned(true);
-      const finalPoNum = result.poNumber || previewPoNumber;
+      const finalPoNum = result.poNumber || '';
       setApprovedPo({
         poNumber: finalPoNum,
-        issueDate: result.issueDate || new Date().toISOString().substring(0, 10),
+        issueDate: result.issueDate || '',
         shaSignature: result.shaSignature || '',
       });
       showToast(
         'Pre-Purchase Order Finalised',
-        `PPO ${finalPoNum} successfully created and awarded to ${vendorName}.`,
+        finalPoNum
+          ? formatString(UI_STRINGS.modals.purchaseOrder.finalisedToast, { poNumber: finalPoNum, vendorName })
+          : formatString(UI_STRINGS.modals.purchaseOrder.finalisedWithoutNumberToast, { vendorName }),
         'success'
       );
       setTimeout(() => {
@@ -294,7 +365,7 @@ export function PurchaseOrderModal({
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Pre-Purchase Order - ${poNumber}</title>
+  <title>Pre-Purchase Order - ${displayPoNumber}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 32px; color: #0f172a; line-height: 1.5; font-size: 13px; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0284c7; padding-bottom: 16px; margin-bottom: 24px; }
@@ -329,16 +400,16 @@ export function PurchaseOrderModal({
       <div class="po-badge">OFFICIAL PRE-PURCHASE ORDER</div>
     </div>
     <div style="text-align: right;">
-      <div style="font-size: 16px; font-weight: 800; color: #0f172a;">${poNumber}</div>
+      <div style="font-size: 16px; font-weight: 800; color: #0f172a;">${displayPoNumber}</div>
       <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Linked RFQ: <strong>${rfqNumber}</strong></div>
-      <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Issue Date: <strong>${issueDate || new Date().toISOString().substring(0, 10)}</strong></div>
+      <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Issue Date: <strong>${issueDate || UI_STRINGS.modals.purchaseOrder.notIssuedYet}</strong></div>
     </div>
   </div>
 
   <div class="grid-2">
     <div class="card">
       <div class="card-title">BUYER / ISSUING ENTITY</div>
-      <div class="card-text" style="font-weight: 700; font-size: 13px;">${buyerOrg || 'Purchasing Entity'}</div>
+      <div class="card-text" style="font-weight: 700; font-size: 13px;">${buyerOrg || UI_STRINGS.recordPlaceholders.notRecorded}</div>
       ${buyerContactPerson ? `<div class="card-text">Attn: ${buyerContactPerson}</div>` : ''}
       ${buyerEmail ? `<div class="card-text">Email: ${buyerEmail}</div>` : ''}
       ${buyerPhone ? `<div class="card-text">Phone: ${buyerPhone}</div>` : ''}
@@ -347,7 +418,7 @@ export function PurchaseOrderModal({
     </div>
     <div class="card">
       <div class="card-title">VENDOR / CONTRACTOR</div>
-      <div class="card-text" style="font-weight: 700; font-size: 13px;">${awardedVendorName || 'Vendor'}</div>
+      <div class="card-text" style="font-weight: 700; font-size: 13px;">${awardedVendorName || UI_STRINGS.recordPlaceholders.notRecorded}</div>
       ${awardedVendorContact ? `<div class="card-text">Contact: ${awardedVendorContact}</div>` : ''}
       ${awardedVendorEmail ? `<div class="card-text">Email: ${awardedVendorEmail}</div>` : ''}
       ${awardedVendorPhone ? `<div class="card-text">Phone: ${awardedVendorPhone}</div>` : ''}
@@ -375,10 +446,10 @@ export function PurchaseOrderModal({
             <strong>${item.description}</strong>
             ${item.specs ? `<div style="font-size: 10px; color: #64748b; margin-top: 2px;">Specs: ${item.specs}</div>` : ''}
           </td>
-          <td class="center font-mono">${item.quantity}</td>
+          <td class="center font-mono">${item.quantity ?? UI_STRINGS.recordPlaceholders.notRecorded}</td>
           <td class="center">${item.unit}</td>
-          <td class="right font-mono">₹${item.unitPrice.toLocaleString('en-IN')}</td>
-          <td class="right font-mono" style="font-weight: 700;">₹${item.totalPrice.toLocaleString('en-IN')}</td>
+          <td class="right font-mono">${formatPoAmount(item.unitPrice)}</td>
+          <td class="right font-mono" style="font-weight: 700;">${formatPoAmount(item.totalPrice)}</td>
         </tr>
       `).join('')}
     </tbody>
@@ -387,15 +458,15 @@ export function PurchaseOrderModal({
   <table class="totals-table">
     <tr>
       <td style="color: #64748b;">Subtotal (Base Value):</td>
-      <td class="right font-mono" style="font-weight: 600;">₹${subTotal.toLocaleString('en-IN')}</td>
+      <td class="right font-mono" style="font-weight: 600;">${formatPoAmount(subTotal)}</td>
     </tr>
     <tr>
-      <td style="color: #64748b;">GST / Taxes (${gstRate}%):</td>
-      <td class="right font-mono" style="font-weight: 600;">₹${gstAmount.toLocaleString('en-IN')}</td>
+      <td style="color: #64748b;">GST / Taxes (${gstRate !== null ? `${gstRate}%` : UI_STRINGS.recordPlaceholders.notAvailable}):</td>
+      <td class="right font-mono" style="font-weight: 600;">${gstAmount !== null ? `₹${gstAmount.toLocaleString('en-IN')}` : UI_STRINGS.recordPlaceholders.notAvailable}</td>
     </tr>
     <tr class="grand-total">
       <td>Grand Total (INR):</td>
-      <td class="right font-mono">₹${grandTotal.toLocaleString('en-IN')}</td>
+      <td class="right font-mono">${grandTotal !== null ? `₹${grandTotal.toLocaleString('en-IN')}` : UI_STRINGS.recordPlaceholders.notAvailable}</td>
     </tr>
     ${grandTotalInWords ? `
     <tr>
@@ -409,7 +480,7 @@ export function PurchaseOrderModal({
     <div style="font-weight: 700; color: #166534; margin-bottom: 6px;">COMMERCIAL TERMS & LOGISTICS CONDITIONS</div>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
       <div>• <strong>Payment Terms:</strong> ${paymentTerms}</div>
-      <div>• <strong>Delivery Lead Time:</strong> ${effectiveLeadTime ? `${effectiveLeadTime} Days from PO Acceptance` : 'As agreed'}</div>
+      <div>• <strong>Delivery Lead Time:</strong> ${effectiveLeadTime ? `${effectiveLeadTime} Days from PO Acceptance` : UI_STRINGS.recordPlaceholders.notRecorded}</div>
       ${deliveryLocation ? `<div>• <strong>Delivery Location:</strong> ${deliveryLocation}</div>` : ''}
       ${warranty ? `<div>• <strong>Warranty / Guarantee:</strong> ${warranty}</div>` : ''}
       ${targetDeliveryDate ? `<div>• <strong>Target Delivery Date:</strong> ${targetDeliveryDate}</div>` : ''}
@@ -434,14 +505,14 @@ export function PurchaseOrderModal({
       <div class="sig-line">
         <strong>Authorized Signatory — Buyer</strong><br />
         ${buyerContactPerson ? `${buyerContactPerson}<br />` : ''}
-        ${buyerOrg || 'Purchasing Entity'}
+        ${buyerOrg || UI_STRINGS.recordPlaceholders.notRecorded}
       </div>
     </div>
     <div>
       <div class="sig-line" style="text-align: right;">
         <strong>Accepted & Acknowledged — Vendor</strong><br />
         ${awardedVendorContact ? `${awardedVendorContact}<br />` : ''}
-        ${awardedVendorName || 'Vendor Entity'}
+        ${awardedVendorName || UI_STRINGS.recordPlaceholders.notRecorded}
       </div>
     </div>
   </div>
@@ -480,21 +551,23 @@ export function PurchaseOrderModal({
           <div className="flex justify-between items-start border-b border-slate-200 dark:border-gray-800 pb-3">
             <div>
               <span className="text-[10px] uppercase tracking-wider text-indigo-600 dark:text-indigo-400 font-bold">PROCUCEV ENTERPRISE BUYER</span>
-              <h4 className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">PRE-PURCHASE ORDER: {poNumber}</h4>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">PRE-PURCHASE ORDER: {displayPoNumber}</h4>
               <p className="text-[11px] text-slate-500 dark:text-gray-400">Linked RFQ: <span className="mono text-indigo-600 dark:text-indigo-300 font-bold">{rfqNumber}</span></p>
             </div>
             <div className="text-right">
-              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40 inline-flex items-center gap-1">
-                <ShieldCheck size={12} /> AI Verified & Compliant
-              </span>
-              <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-1">Issue Date: {issueDate || 'Sealed upon approval'}</p>
+              {approvedPo?.shaSignature ? (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40 inline-flex items-center gap-1">
+                  <ShieldCheck size={12} /> {UI_STRINGS.modals.purchaseOrder.sealedBadge}
+                </span>
+              ) : null}
+              <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-1">Issue Date: {issueDate || UI_STRINGS.modals.purchaseOrder.notIssuedYet}</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2 border-b border-slate-200 dark:border-gray-800/80">
             <div className="space-y-1">
               <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Issuing Buyer Entity:</p>
-              <p className="font-bold text-slate-900 dark:text-white text-xs">{buyerOrg || 'Purchasing Entity'}</p>
+              <p className="font-bold text-slate-900 dark:text-white text-xs">{buyerOrg || UI_STRINGS.recordPlaceholders.notRecorded}</p>
               {buyerContactPerson && <p className="text-[11px] text-slate-600 dark:text-gray-300">Attn: <strong>{buyerContactPerson}</strong></p>}
               {buyerEmail && <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {buyerEmail}</p>}
               {buyerPhone && <p className="text-[11px] text-slate-500 dark:text-gray-400">Phone: {buyerPhone}</p>}
@@ -503,7 +576,7 @@ export function PurchaseOrderModal({
             </div>
             <div className="space-y-1">
               <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Contract Awarded To:</p>
-              <p className="font-bold text-slate-900 dark:text-white text-xs">{awardedVendorName || 'Vendor'}</p>
+              <p className="font-bold text-slate-900 dark:text-white text-xs">{awardedVendorName || UI_STRINGS.recordPlaceholders.notRecorded}</p>
               {awardedVendorContact && <p className="text-[11px] text-slate-600 dark:text-gray-300">Contact: <strong>{awardedVendorContact}</strong></p>}
               {awardedVendorEmail && <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {awardedVendorEmail}</p>}
               {awardedVendorPhone && <p className="text-[11px] text-slate-500 dark:text-gray-400">Phone: {awardedVendorPhone}</p>}
@@ -552,10 +625,10 @@ export function PurchaseOrderModal({
                         <div className="font-semibold text-slate-800 dark:text-gray-100">{item.description}</div>
                         {item.specs ? <div className="text-[10px] text-slate-400">{item.specs}</div> : null}
                       </td>
-                      <td className="p-2 text-center mono">{item.quantity}</td>
+                      <td className="p-2 text-center mono">{item.quantity ?? UI_STRINGS.recordPlaceholders.notRecorded}</td>
                       <td className="p-2 text-center">{item.unit}</td>
-                      <td className="p-2 text-right mono">₹{item.unitPrice.toLocaleString('en-IN')}</td>
-                      <td className="p-2 text-right mono font-bold">₹{item.totalPrice.toLocaleString('en-IN')}</td>
+                      <td className="p-2 text-right mono">{formatPoAmount(item.unitPrice)}</td>
+                      <td className="p-2 text-right mono font-bold">{formatPoAmount(item.totalPrice)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -564,15 +637,15 @@ export function PurchaseOrderModal({
             <div className="flex flex-col items-end gap-1 mt-3 text-[11px] pr-2">
               <div className="flex justify-between w-64 text-slate-500 dark:text-gray-400">
                 <span>Subtotal (Base):</span>
-                <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">₹{subTotal.toLocaleString('en-IN')}</span>
+                <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">{formatPoAmount(subTotal)}</span>
               </div>
               <div className="flex justify-between w-64 text-slate-500 dark:text-gray-400">
-                <span>GST / Taxes ({gstRate}%):</span>
-                <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">+₹{gstAmount.toLocaleString('en-IN')}</span>
+                <span>GST / Taxes ({gstRate !== null ? `${gstRate}%` : UI_STRINGS.recordPlaceholders.notAvailable}):</span>
+                <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">{gstAmount !== null ? `+₹${gstAmount.toLocaleString('en-IN')}` : UI_STRINGS.recordPlaceholders.notAvailable}</span>
               </div>
               <div className="flex justify-between w-64 pt-1 border-t border-slate-200 dark:border-gray-800 font-bold text-sm text-indigo-700 dark:text-indigo-300">
                 <span>Grand Total:</span>
-                <span className="font-mono">₹{grandTotal.toLocaleString('en-IN')}</span>
+                <span className="font-mono">{grandTotal !== null ? `₹${grandTotal.toLocaleString('en-IN')}` : UI_STRINGS.recordPlaceholders.notAvailable}</span>
               </div>
               {grandTotalInWords && (
                 <div className="text-[10px] text-slate-500 dark:text-gray-400 italic text-right mt-0.5">
@@ -657,6 +730,7 @@ interface MultiChannelChaserModalProps {
   vendorName: string;
   vendorPhone?: string;
   initialChannel?: 'call' | 'whatsapp' | 'sms';
+  hidePhone?: boolean;
 }
 
 export function MultiChannelChaserModal({
@@ -666,17 +740,14 @@ export function MultiChannelChaserModal({
   vendorName,
   vendorPhone,
   initialChannel = 'whatsapp',
+  hidePhone = false,
 }: MultiChannelChaserModalProps) {
   const { triggerChannelChaser } = useApp();
   const [selectedChannel, setSelectedChannel] = useState<'call' | 'whatsapp' | 'sms'>(initialChannel);
   const [phone, setPhone] = useState(vendorPhone || '');
   const [template, setTemplate] = useState('urgent_reminder');
-  const [customMsg, setCustomMsg] = useState(
-    `Hello ${vendorName}, this is Procucev Enterprise QUA AI. We require your line-item quotation for ${rfqNumber} within 24 hours to include in the comparative matrix. Click here to submit instantly: https://portal.procucev.com/bid/${rfqNumber}`
-  );
-  const [callScript, setCallScript] = useState(
-    `"Hello, this is Procucev Autonomous Voice Bot calling on behalf of the Enterprise Buyer regarding ${rfqNumber}. We noticed your quote submission is pending. Can you confirm if you will submit by 4:00 PM today?"`
-  );
+  const [customMsg, setCustomMsg] = useState(() => buildUrgentReminderMessage(vendorName, rfqNumber));
+  const [callScript, setCallScript] = useState(() => buildCallScript(rfqNumber));
 
   useEffect(() => {
     setSelectedChannel(initialChannel);
@@ -686,12 +757,8 @@ export function MultiChannelChaserModal({
   useEffect(() => {
     if (isOpen) {
       setPhone(vendorPhone || '');
-      setCustomMsg(
-        `Hello ${vendorName}, this is Procucev Enterprise QUA AI. We require your line-item quotation for ${rfqNumber} within 24 hours to include in the comparative matrix. Click here to submit instantly: https://portal.procucev.com/bid/${rfqNumber}`
-      );
-      setCallScript(
-        `"Hello, this is Procucev Autonomous Voice Bot calling on behalf of the Enterprise Buyer regarding ${rfqNumber}. We noticed your quote submission is pending. Can you confirm if you will submit by 4:00 PM today?"`
-      );
+      setCustomMsg(buildUrgentReminderMessage(vendorName, rfqNumber));
+      setCallScript(buildCallScript(rfqNumber));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, vendorName, vendorPhone, rfqNumber]);
@@ -780,15 +847,24 @@ export function MultiChannelChaserModal({
         </div>
 
         <div className="space-y-3.5 my-3 text-xs">
-          <div>
-            <label className="block text-slate-700 dark:text-gray-300 font-semibold mb-1">
-              Target Vendor & Phone Number
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <input type="text" value={vendorName} readOnly className="opacity-80 font-medium" />
-              <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          {hidePhone ? (
+            <div>
+              <label className="block text-slate-700 dark:text-gray-300 font-semibold mb-1">
+                Target Vendor
+              </label>
+              <input type="text" value={vendorName} readOnly className="w-full opacity-80 font-medium" />
             </div>
-          </div>
+          ) : (
+            <div>
+              <label className="block text-slate-700 dark:text-gray-300 font-semibold mb-1">
+                Target Vendor & Phone Number
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <input type="text" value={vendorName} readOnly className="opacity-80 font-medium" />
+                <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              </div>
+            </div>
+          )}
 
           {selectedChannel === 'call' ? (
             <div>
@@ -817,17 +893,13 @@ export function MultiChannelChaserModal({
                   onChange={(e) => {
                     setTemplate(e.target.value);
                     if (e.target.value === 'urgent_reminder') {
-                      setCustomMsg(
-                        `Hello ${vendorName}, this is Procucev Enterprise QUA AI. We require your line-item quotation for ${rfqNumber} within 24 hours. Click to submit: https://portal.procucev.com/bid/${rfqNumber}`
-                      );
+                      setCustomMsg(buildUrgentReminderMessage(vendorName, rfqNumber));
                     } else {
-                      setCustomMsg(
-                        `Action Required: Procucev Buyer has prioritized ${rfqNumber}. Please upload your technical compliance sheet and unit prices immediately.`
-                      );
+                      setCustomMsg(formatString(UI_STRINGS.modals.chaser.technicalRequestTemplate, { rfqNumber }));
                     }
                   }}
                 >
-                  <option value="urgent_reminder">Urgent RFQ Deadline Reminder (24h Window)</option>
+                  <option value="urgent_reminder">{UI_STRINGS.modals.chaser.urgentTemplateLabel}</option>
                   <option value="technical_request">Technical Compliance & Specification Clarification</option>
                 </select>
               </div>
@@ -898,7 +970,6 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   const [activeChannelTab, setActiveChannelTab] = useState<'all' | 'call' | 'whatsapp' | 'sms'>('all');
   const [activeVendorModal, setActiveVendorModal] = useState<{
     vendorName: string;
-    phone: string;
     channel: 'call' | 'whatsapp' | 'sms';
   } | null>(null);
 
@@ -907,29 +978,30 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   const followUp = rfq.followUpData;
   const totalInvitedVendors = followUp?.totalInvited ?? (followUp?.vendors?.length || rfq.assignedVendors?.length || 0);
 
+  // A channel with no outreach record is not dispatched. No attempt count, escalation or time is invented for it.
+  const notDispatched = { status: 'not_dispatched' as const, lastAttempt: '' };
+
   // Normalize vendor telemetry records
   const rawVendors: VendorFollowUpRecord[] = (followUp?.vendors && followUp.vendors.length > 0)
     ? followUp.vendors
     : (rfq.assignedVendors || []).map((av, idx) => ({
         vendorId: av.id || `v-${idx + 1}`,
         vendorName: av.name,
-        contactPerson: av.contactPerson || 'Authorized Representative',
-        phone: av.phone || 'N/A',
+        contactPerson: av.contactPerson || '',
+        phone: av.phone || '',
         overallStatus: 'Pending' as const,
-        lastInteraction: 'Outreach queued',
-        attemptsCount: 0,
+        lastInteraction: '',
         bidStatus: 'Pending' as const,
-        call: { status: 'scheduled' as const, lastAttempt: 'Not yet dispatched' },
-        whatsapp: { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
-        sms: { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
-        email24h: { status: 'pending' as const, lastAttempt: '', is24hReminderSent: false },
+        call: notDispatched,
+        whatsapp: notDispatched,
+        sms: notDispatched,
       }));
 
   const vendors: VendorFollowUpRecord[] = rawVendors.map((v) => ({
     ...v,
-    call: v.call || { status: 'scheduled' as const, lastAttempt: 'Not yet dispatched' },
-    whatsapp: v.whatsapp || { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
-    sms: v.sms || { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
+    call: v.call || notDispatched,
+    whatsapp: v.whatsapp || notDispatched,
+    sms: v.sms || notDispatched,
   }));
 
   // Vendor type shown per row:
@@ -974,7 +1046,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
       case 'scheduled':
         return <span className="badge badge-purple text-[11px] px-2 py-0.5">📞 Callback Queued</span>;
       case 'not_dispatched':
-        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ Queued</span>;
+        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
       default:
         return <span className="badge badge-blue text-[11px] px-2 py-0.5">📞 {status}</span>;
     }
@@ -991,7 +1063,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
       case 'pending':
         return <span className="badge badge-purple text-[11px] px-2 py-0.5">💬 Queued</span>;
       case 'not_dispatched':
-        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ Queued</span>;
+        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
       default:
         return <span className="badge badge-blue text-[11px] px-2 py-0.5">💬 {status}</span>;
     }
@@ -1006,7 +1078,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
       case 'sent':
         return <span className="badge badge-amber text-[11px] px-2 py-0.5">📱 Sent</span>;
       case 'not_dispatched':
-        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ Queued</span>;
+        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
       default:
         return <span className="badge badge-purple text-[11px] px-2 py-0.5">📱 {status}</span>;
     }
@@ -1035,7 +1107,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                 <span className="badge badge-purple text-xs font-bold px-2.5 py-0.5">Multi-Channel</span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-                {rfq.title} • <span className="font-semibold text-slate-700 dark:text-gray-300">Target Delivery: {rfq.targetDeliveryDate || 'Standard'}</span> • <span className="text-indigo-600 dark:text-indigo-400 font-bold">{vendors.length} Vendors Empanelled</span>
+                {rfq.title} • <span className="font-semibold text-slate-700 dark:text-gray-300">Target Delivery: {rfq.targetDeliveryDate || UI_STRINGS.recordPlaceholders.notRecorded}</span> • <span className="text-indigo-600 dark:text-indigo-400 font-bold">{vendors.length} Vendors Empanelled</span>
               </p>
             </div>
           </div>
@@ -1063,7 +1135,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-purple-950 dark:text-purple-100 mono">
-                {followUp?.callStats?.connected ?? 0} / {followUp?.callStats?.total ?? 0}
+                {formatFollowUpCount(followUp?.callStats?.connected)} / {formatFollowUpCount(followUp?.callStats?.total)}
               </span>
               <span className="text-xs text-purple-700 dark:text-purple-300 font-semibold">Connected</span>
             </div>
@@ -1079,12 +1151,12 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                 <MessageSquare size={13} /> WHATSAPP BOT
               </span>
               <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
-                {followUp?.whatsappStats?.read ?? 0} Read
+                {formatFollowUpCount(followUp?.whatsappStats?.read)} Read
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-emerald-950 dark:text-emerald-100 mono">
-                {followUp?.whatsappStats?.replied ?? 0} / {followUp?.whatsappStats?.total ?? 0}
+                {formatFollowUpCount(followUp?.whatsappStats?.replied)} / {formatFollowUpCount(followUp?.whatsappStats?.total)}
               </span>
               <span className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold">Bids Submitted</span>
             </div>
@@ -1099,13 +1171,10 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
               <span className="flex items-center gap-1.5">
                 <span>📱</span> SMS ALERTS
               </span>
-              <span className="mono text-[10px] bg-sky-100 dark:bg-cyan-900/60 px-2 py-0.5 rounded font-black">
-                DLT Verified
-              </span>
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-sky-950 dark:text-cyan-100 mono">
-                {followUp?.smsStats?.delivered ?? 0} / {followUp?.smsStats?.total ?? 0}
+                {formatFollowUpCount(followUp?.smsStats?.delivered)} / {formatFollowUpCount(followUp?.smsStats?.total)}
               </span>
               <span className="text-xs text-sky-700 dark:text-cyan-300 font-semibold">Delivered</span>
             </div>
@@ -1126,7 +1195,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-amber-950 dark:text-amber-100 mono">
-                {followUp?.emailStats?.sent24h ?? 0} / {totalInvitedVendors}
+                {formatFollowUpCount(followUp?.emailStats?.sent24h)} / {totalInvitedVendors}
               </span>
               <span className="text-xs text-amber-700 dark:text-amber-300 font-semibold">Escalations Sent</span>
             </div>
@@ -1157,7 +1226,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📞</span> Calls ({followUp?.callStats?.total ?? 0})
+              <span>📞</span> Calls ({formatFollowUpCount(followUp?.callStats?.total)})
             </button>
             <button
               onClick={() => setActiveChannelTab('whatsapp')}
@@ -1167,7 +1236,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <MessageSquare size={13} /> WhatsApp ({followUp?.whatsappStats?.total ?? 0})
+              <MessageSquare size={13} /> WhatsApp ({formatFollowUpCount(followUp?.whatsappStats?.total)})
             </button>
             <button
               onClick={() => setActiveChannelTab('sms')}
@@ -1177,7 +1246,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📱</span> SMS ({followUp?.smsStats?.total ?? 0})
+              <span>📱</span> SMS ({formatFollowUpCount(followUp?.smsStats?.total)})
             </button>
           </div>
         </div>
@@ -1203,9 +1272,6 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       <span className="font-extrabold text-slate-900 dark:text-white text-sm flex items-center gap-1.5">
                         <Building2 size={15} className="text-slate-400" /> {vendor.vendorName}
                       </span>
-                      {vendor.phone && vendor.phone !== 'N/A' && (
-                        <span className="text-slate-500 dark:text-gray-400 text-xs mono">({vendor.phone})</span>
-                      )}
                       {(() => {
                         const vendorType = vendorTypeFor(vendor);
                         return (
@@ -1232,7 +1298,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1">
-                      Contact: <span className="text-slate-700 dark:text-gray-300 font-semibold">{vendor.contactPerson || 'Authorized Representative'}</span> • Last Interaction: <span className="font-medium text-slate-700 dark:text-gray-300">{vendor.lastInteraction || 'Pending outreach'}</span> {vendor.attemptsCount > 0 && `(Attempt #${vendor.attemptsCount})`}
+                      Last Interaction: <span className="font-medium text-slate-700 dark:text-gray-300">{vendor.lastInteraction || UI_STRINGS.recordPlaceholders.notRecorded}</span> {typeof vendor.attemptsCount === 'number' && vendor.attemptsCount > 0 && `(Attempt #${vendor.attemptsCount})`}
                     </p>
                   </div>
 
@@ -1240,7 +1306,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   <div className="flex items-center gap-2 flex-wrap shrink-0">
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'call' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'call' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-700/50 hover:bg-purple-100 dark:hover:bg-purple-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -1248,7 +1314,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                     </button>
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'whatsapp' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'whatsapp' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -1256,7 +1322,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                     </button>
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'sms' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'sms' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-sky-50 dark:bg-cyan-900/40 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-700/50 hover:bg-sky-100 dark:hover:bg-cyan-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -1276,7 +1342,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       {getCallBadge(vendor.call.status)}
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-gray-400 flex justify-between">
-                      <span>Status: {vendor.call.lastAttempt}</span>
+                      <span>Status: {vendor.call.lastAttempt || UI_STRINGS.recordPlaceholders.notRecorded}</span>
                       {vendor.call.duration && <span className="mono font-semibold">{vendor.call.duration}</span>}
                     </div>
                     {vendor.call.summary && (
@@ -1300,7 +1366,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       {getWhatsAppBadge(vendor.whatsapp.status)}
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-gray-400">
-                      Dispatched: {vendor.whatsapp.lastAttempt}
+                      Dispatched: {vendor.whatsapp.lastAttempt || UI_STRINGS.recordPlaceholders.notRecorded}
                     </div>
                     {vendor.whatsapp.messagePreview && (
                       <p className="text-[11px] text-slate-700 dark:text-gray-300 leading-snug">
@@ -1323,7 +1389,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       {getSMSBadge(vendor.sms.status)}
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-gray-400">
-                      Status Date: {vendor.sms.lastAttempt}
+                      Status Date: {vendor.sms.lastAttempt || UI_STRINGS.recordPlaceholders.notRecorded}
                     </div>
                     {vendor.sms.deliveryReport ? (
                       <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-mono block">
@@ -1346,12 +1412,18 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                         <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ Dispatched</span>
                       ) : vendor.bidStatus === 'Submitted' || vendor.overallStatus === 'Responded' ? (
                         <span className="badge badge-emerald text-[11px] px-2 py-0.5">✅ Bid Submitted</span>
-                      ) : (
+                      ) : vendor.email24h ? (
                         <span className="badge badge-purple text-[11px] px-2 py-0.5">⏳ Pending 24h</span>
+                      ) : (
+                        <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>
                       )}
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-gray-400">
-                      {vendor.email24h?.lastAttempt ? `Sent: ${vendor.email24h.lastAttempt}` : 'Follow-up escalation queue'}
+                      {vendor.email24h?.lastAttempt
+                        ? `Sent: ${vendor.email24h.lastAttempt}`
+                        : vendor.email24h
+                          ? UI_STRINGS.modals.followUp.escalationQueued
+                          : UI_STRINGS.recordPlaceholders.notDispatched}
                     </div>
                     <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-snug">
                       {vendor.email24h?.is24hReminderSent
@@ -1369,7 +1441,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
         <div className="flex items-center justify-between pt-3.5 mt-1 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
           <div className="flex items-center gap-2">
             <span className="live-dot" />
-            <span>Next Automated Follow-Up Wave: <strong className="text-slate-800 dark:text-gray-200">{followUp?.nextScheduledChaser || 'Today 03:00 PM'}</strong></span>
+            <span>Next Automated Follow-Up Wave: <strong className="text-slate-800 dark:text-gray-200">{followUp?.nextScheduledChaser || UI_STRINGS.recordPlaceholders.notRecorded}</strong></span>
           </div>
           <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">
             Close Vendor Follow-Up Details
@@ -1384,7 +1456,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
           onClose={() => setActiveVendorModal(null)}
           rfqNumber={rfq.rfqNumber}
           vendorName={activeVendorModal.vendorName}
-          vendorPhone={activeVendorModal.phone}
+          hidePhone={true}
           initialChannel={activeVendorModal.channel}
         />
       )}
@@ -1398,21 +1470,12 @@ interface SurveyModalProps {
   onClose: () => void;
 }
 
+/**
+ * Mode 3 survey entry point. No survey dispatch endpoint exists, so this dialog sends
+ * nothing and records no audit entry. It states that the survey is not connected.
+ */
 export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
-  const { showToast, addAuditLog } = useApp();
-  const [submitting, setSubmitting] = useState(false);
-
   if (!isOpen) return null;
-
-  const handleTriggerSurvey = () => {
-    setSubmitting(true);
-    setTimeout(() => {
-      addAuditLog('Executed Global Override: Triggered Mode 3 Vendor Capability Survey to 24 pool suppliers');
-      showToast('Mode 3 Survey Dispatched', 'AI evaluation survey sent to 24 suppliers. Scores will update autonomously upon response.', 'success');
-      setSubmitting(false);
-      onClose();
-    }, 1000);
-  };
 
   return (
     <div className="modal-overlay">
@@ -1433,31 +1496,12 @@ export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
         </div>
 
         <div className="space-y-3 my-4 text-xs">
-          <p className="text-slate-600 dark:text-gray-300">
-            This operational override dispatches an autonomous capability audit questionnaire to all prospective suppliers in the Procucev Network scoring &gt;80% match.
-          </p>
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500 dark:text-gray-400">Target Supplier Pool:</span>
-              <span className="font-semibold text-slate-900 dark:text-white">24 High-Match Vendors</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500 dark:text-gray-400">Audit Criteria:</span>
-              <span className="font-semibold text-purple-700 dark:text-purple-300">ISO 9001, ANSI, Delivery SLA, ESG</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500 dark:text-gray-400">Auto-Scoring Model:</span>
-              <span className="font-semibold text-indigo-700 dark:text-indigo-300">Llama 3 (8B Instruct) Multi-Factor</span>
-            </div>
-          </div>
+          <p className="text-slate-600 dark:text-gray-300">{UI_STRINGS.vendorSurvey.notConnected}</p>
         </div>
 
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
-          <button onClick={onClose} className="btn btn-ghost btn-sm">
-            Cancel
-          </button>
-          <button onClick={handleTriggerSurvey} disabled={submitting} className="btn btn-primary">
-            <Sparkles size={14} /> {submitting ? 'Dispatching...' : 'Execute Mode 3 Survey'}
+          <button onClick={onClose} className="btn btn-secondary btn-sm">
+            {UI_STRINGS.vendorSurvey.closeButton}
           </button>
         </div>
       </div>
@@ -1475,6 +1519,8 @@ interface SubscriptionPaymentModalProps {
   breakdown?: {
     basePrice: string;
     gstAmount: string;
+    /** GST rate in percent from the pricing response. Omitted, the label shows "GST" with no rate. */
+    gstPercent?: number;
   };
   /** Creates a real Zoho payment link for `planId` and resolves its redirect URL, or null on failure (a toast is already shown by the caller). */
   createPaymentLink: (planId: string) => Promise<string | null>;
@@ -1548,7 +1594,7 @@ export function SubscriptionPaymentModal({ isOpen, onClose, planId, planName, pr
                 <span className="font-semibold text-slate-700 dark:text-gray-200">{breakdown.basePrice}</span>
               </div>
               <div className="flex items-center justify-between text-slate-500 dark:text-gray-400">
-                <span>GST (18%)</span>
+                <span>{gstLabelFor(breakdown.gstPercent)}</span>
                 <span className="font-semibold text-slate-700 dark:text-gray-200">{breakdown.gstAmount}</span>
               </div>
             </div>
@@ -1566,85 +1612,6 @@ export function SubscriptionPaymentModal({ isOpen, onClose, planId, planName, pr
           </button>
           <button onClick={() => void handlePay()} disabled={processing} className="btn btn-primary">
             <CreditCard size={14} /> {processing ? 'Redirecting to secure payment…' : `Pay ${price}`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface RbacModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-}
-
-export function RbacModal({ isOpen, onClose }: RbacModalProps) {
-  const { showToast } = useApp();
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-500/40">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
-              <UserCheck size={18} />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">Azure Active Directory & RBAC Matrix</h3>
-              <p className="text-xs text-slate-500 dark:text-gray-400">Role-Based Access Control Policies & Service Principals</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="my-4 space-y-3 text-xs">
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-            <div className="grid grid-cols-3 gap-2 font-semibold text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800 pb-2 mb-2">
-              <span>Role Principle</span>
-              <span>Permissions</span>
-              <span>SSO MFA Policy</span>
-            </div>
-            <div className="space-y-2 text-slate-700 dark:text-gray-300">
-              <div className="grid grid-cols-3 gap-2 items-center">
-                <span className="font-bold text-indigo-700 dark:text-indigo-300">Enterprise Buyer</span>
-                <span>Create RFQ, Approve PO</span>
-                <span className="text-emerald-600 dark:text-emerald-400">Conditional Access</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 items-center">
-                <span className="font-bold text-sky-700 dark:text-cyan-300">Category Manager</span>
-                <span>Chaser Triggers, Overrides</span>
-                <span className="text-emerald-600 dark:text-emerald-400">FIDO2 / Authenticator</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 items-center">
-                <span className="font-bold text-emerald-700 dark:text-emerald-300">Vendor / Supplier</span>
-                <span>Bid Submission, File Upload</span>
-                <span className="text-emerald-600 dark:text-emerald-400">SMS OTP + Email Link</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 items-center">
-                <span className="font-bold text-purple-700 dark:text-purple-300">Platform Auditor</span>
-                <span>Read-Only Cryptographic Log</span>
-                <span className="text-emerald-600 dark:text-emerald-400">Hardware Key Required</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
-          <button onClick={onClose} className="btn btn-secondary btn-sm">
-            Close
-          </button>
-          <button
-            onClick={() => {
-              showToast('RBAC Policies Synchronized', 'Updated Azure Entra ID access matrix across all tenants.', 'success');
-              onClose();
-            }}
-            className="btn btn-primary"
-          >
-            <ShieldCheck size={14} /> Sync Azure AD Roles
           </button>
         </div>
       </div>
@@ -1686,7 +1653,7 @@ export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: Evalua
                 <p className="text-xs text-indigo-200/80 mt-0.5">{evalRecord.category} • Submitted: {evalRecord.submissionDate}</p>
               </div>
               <div className="text-right">
-                <div className="text-3xl font-black mono text-emerald-400">{evalRecord.overallScore}%</div>
+                <div className="text-3xl font-black mono text-emerald-400">{typeof evalRecord.overallScore === 'number' ? `${evalRecord.overallScore}%` : UI_STRINGS.recordPlaceholders.notEvaluated}</div>
                 <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-block mt-1">
                   {evalRecord.status}
                 </span>
@@ -1701,71 +1668,71 @@ export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: Evalua
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Commercial Terms (25%)</div>
-                  <div className="text-lg font-bold text-indigo-600 dark:text-indigo-400 mono mt-0.5">{evalRecord.moduleScores?.commercial?.weightedScore || 24} / 25 pts</div>
+                  <div className="text-lg font-bold text-indigo-600 dark:text-indigo-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.commercial)}</div>
                 </div>
                 <div className="p-2 rounded bg-indigo-50/70 dark:bg-indigo-950/40 text-[10px] text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-800">
-                  <strong>Remarks:</strong> {evalRecord.moduleScores?.commercial?.remarks || 'Net 30 terms; 12-month fixed pricing with 5% volume tier discount.'}
+                  <strong>Remarks:</strong> {evalRecord.moduleScores?.commercial?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Technical Specs (15%)</div>
-                  <div className="text-lg font-bold text-sky-600 dark:text-cyan-400 mono mt-0.5">{evalRecord.moduleScores?.technical?.weightedScore || 13.5} / 15 pts</div>
+                  <div className="text-lg font-bold text-sky-600 dark:text-cyan-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.technical)}</div>
                 </div>
                 <div className="p-2 rounded bg-sky-50/70 dark:bg-cyan-950/40 text-[10px] text-sky-900 dark:text-cyan-200 border border-sky-100 dark:border-cyan-800">
-                  <strong>Remarks:</strong> {evalRecord.moduleScores?.technical?.remarks || '100% spec match; robotic CNC lines & accredited R&D lab.'}
+                  <strong>Remarks:</strong> {evalRecord.moduleScores?.technical?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Quality & Warranty (20%)</div>
-                  <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mono mt-0.5">{evalRecord.moduleScores?.quality?.weightedScore || 18.4} / 20 pts</div>
+                  <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.quality)}</div>
                 </div>
                 <div className="p-2 rounded bg-emerald-50/70 dark:bg-emerald-950/40 text-[10px] text-emerald-900 dark:text-emerald-200 border border-emerald-100 dark:border-emerald-800">
-                  <strong>Remarks:</strong> {evalRecord.moduleScores?.quality?.remarks || 'ISO 9001:2015 verified; 350 PPM defect rate with 24m warranty & RFID.'}
+                  <strong>Remarks:</strong> {evalRecord.moduleScores?.quality?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Delivery OTIF (20%)</div>
-                  <div className="text-lg font-bold text-purple-600 dark:text-purple-400 mono mt-0.5">{evalRecord.moduleScores?.delivery?.weightedScore || 17.6} / 20 pts</div>
+                  <div className="text-lg font-bold text-purple-600 dark:text-purple-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.delivery)}</div>
                 </div>
                 <div className="p-2 rounded bg-purple-50/70 dark:bg-purple-950/40 text-[10px] text-purple-900 dark:text-purple-200 border border-purple-100 dark:border-purple-800">
-                  <strong>Remarks:</strong> {evalRecord.moduleScores?.delivery?.remarks || '96.4% OTIF delivery history; 10-day lead time & active BCP.'}
+                  <strong>Remarks:</strong> {evalRecord.moduleScores?.delivery?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Financial Rating (10%)</div>
-                  <div className="text-lg font-bold text-amber-600 dark:text-amber-400 mono mt-0.5">{evalRecord.moduleScores?.financial?.weightedScore || 8} / 10 pts</div>
+                  <div className="text-lg font-bold text-amber-600 dark:text-amber-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.financial)}</div>
                 </div>
                 <div className="p-2 rounded bg-amber-50/70 dark:bg-amber-950/40 text-[10px] text-amber-900 dark:text-amber-200 border border-amber-100 dark:border-amber-800">
-                  <strong>Remarks:</strong> {evalRecord.moduleScores?.financial?.remarks || 'Turnover 4.2x scope; CRISIL A+ rating with 1.6 current liquidity.'}
+                  <strong>Remarks:</strong> {evalRecord.moduleScores?.financial?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
               <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Governance & ESG (10%)</div>
-                  <div className="text-lg font-bold text-rose-600 dark:text-rose-400 mono mt-0.5">{evalRecord.moduleScores?.governance?.weightedScore || 9.4} / 10 pts</div>
+                  <div className="text-lg font-bold text-rose-600 dark:text-rose-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.governance)}</div>
                 </div>
                 <div className="p-2 rounded bg-rose-50/70 dark:bg-rose-950/40 text-[10px] text-rose-900 dark:text-rose-200 border border-rose-100 dark:border-rose-800">
-                  <strong>Remarks:</strong> {evalRecord.moduleScores?.governance?.remarks || '100% KYC verified; ISO 14001 & 45001 ESG certs with ISO 27001 GDPR.'}
+                  <strong>Remarks:</strong> {evalRecord.moduleScores?.governance?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
             </div>
 
             <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-2 text-xs">
-              <div className="font-bold text-slate-800 dark:text-gray-200">Verified Statutory PDFs & Certifications</div>
+              <div className="font-bold text-slate-800 dark:text-gray-200">{UI_STRINGS.modals.evaluation.documentsHeading}</div>
               <div className="space-y-1.5">
                 {(evalRecord.documents || []).map((doc: any) => (
                   <div key={doc.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-[11px]">
                     <span className="font-semibold text-slate-700 dark:text-gray-200">{doc.name}</span>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">✓ {doc.status}</span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">{doc.verified ? `✓ ${doc.status}` : doc.status}</span>
                   </div>
                 ))}
               </div>
@@ -1948,7 +1915,6 @@ export function ActivePipelineModal({
           >
             <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">Total Active Requisitions</div>
             <div className="text-2xl font-black text-slate-900 dark:text-white mono mt-1">{totalActiveRFQs}</div>
-            <div className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">100% On Schedule</div>
           </div>
 
           <div
@@ -2096,7 +2062,7 @@ export function ActivePipelineModal({
                       Category: <strong className="text-slate-800 dark:text-gray-100">{rfq.category}</strong>
                     </div>
                     <div>
-                      Target Delivery: <strong className="text-slate-800 dark:text-gray-100">{rfq.targetDeliveryDate || 'Standard'}</strong>
+                      Target Delivery: <strong className="text-slate-800 dark:text-gray-100">{rfq.targetDeliveryDate || UI_STRINGS.recordPlaceholders.notRecorded}</strong>
                     </div>
                     <div>
                       Estimated Budget: <strong className="text-slate-800 dark:text-gray-100">{rfq.budget > 0 ? `₹${rfq.budget.toLocaleString()}` : 'Unspecified'}</strong>
@@ -2116,34 +2082,25 @@ export function ActivePipelineModal({
                     );
                     if (!followUp && vCount === 0) return null;
 
-                    const isDispatched = rfq.status !== 'Parsing' && vCount > 0;
-                    const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : Date.now();
-                    const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
-                    const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
-                    const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
-                    const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
-
+                    // Read and delivered counts come only from recorded receipts. Elapsed time never counts as a read or a delivery.
                     const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-                    const rawWaRead = Math.max(
+                    const waRead = Math.max(
                       followUp?.whatsappStats?.read || 0,
                       followUp?.whatsappStats?.delivered || 0,
                       Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
                     );
-                    const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
 
                     const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-                    const rawSmsDelivered = Math.max(
+                    const smsDelivered = Math.max(
                       followUp?.smsStats?.delivered || 0,
                       Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
                     );
-                    const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
 
                     const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-                    const rawEmailDelivered = Math.max(
+                    const emailDelivered = Math.max(
                       followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
                       Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
                     );
-                    const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
                     const totalInvited = Math.max(
                       followUp?.totalInvited || 0,
                       vCount,
@@ -2457,7 +2414,7 @@ export function IntakeSourcesModal({
                     <span className="text-sm font-black mono text-indigo-600 dark:text-indigo-400">{rfq.rfqNumber}</span>
                     {(rfq.source === 'email_gateway' || rfq.source === 'email_upload') && (
                       <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1.5">
-                        Origin: {rfq.sourceEmail || rfq.sourceFileName || 'Autonomous Corporate via Email Upload'}
+                        Origin: {rfq.sourceEmail || rfq.sourceFileName || UI_STRINGS.recordPlaceholders.notRecorded}
                       </span>
                     )}
                     {rfq.source === 'manual_entry' && (
@@ -2467,7 +2424,7 @@ export function IntakeSourcesModal({
                     )}
                     {(rfq.source === 'web_portal' || rfq.source === 'ai_extraction' || (!rfq.source && rfq.source !== 'manual_entry')) && (
                       <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 flex items-center gap-1.5">
-                        Document: {rfq.sourceFileName || 'Uploaded BOQ Document'}
+                        Document: {rfq.sourceFileName || UI_STRINGS.recordPlaceholders.notRecorded}
                       </span>
                     )}
                     <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-200 dark:bg-gray-700 text-slate-800 dark:text-gray-200">
@@ -2482,7 +2439,7 @@ export function IntakeSourcesModal({
                       Category: <strong className="text-slate-800 dark:text-gray-100">{rfq.category}</strong>
                     </div>
                     <div>
-                      Extracted Items: <strong className="text-slate-800 dark:text-gray-100">{rfq.extractedEntities?.length || 1} items</strong>
+                      Extracted Items: <strong className="text-slate-800 dark:text-gray-100">{rfq.extractedEntities ? `${rfq.extractedEntities.length} items` : UI_STRINGS.recordPlaceholders.notRecorded}</strong>
                     </div>
                     <div>
                       Quotes Received: <strong className="text-slate-800 dark:text-gray-100">{rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0)}</strong>
@@ -2605,7 +2562,7 @@ export function SupplierQuotesModal({
       case 'Minor Exception':
         return <span className="badge badge-amber text-xs px-2.5 py-1">⚠ Minor Exception</span>;
       default:
-        return <span className="badge badge-blue text-xs px-2.5 py-1">⏳ {status || 'Pending Review'}</span>;
+        return <span className="badge badge-blue text-xs px-2.5 py-1">⏳ {status || UI_STRINGS.recordPlaceholders.notRecorded}</span>;
     }
   };
 
@@ -2658,7 +2615,7 @@ export function SupplierQuotesModal({
           <div className="p-3.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
             <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Top Match Score</div>
             <div className="text-2xl font-black text-emerald-900 dark:text-emerald-200 mono mt-1">
-              {bestScore > 0 ? `${bestScore}%` : 'N/A'}
+              {bestScore > 0 ? `${bestScore}%` : UI_STRINGS.recordPlaceholders.notAvailable}
             </div>
             <div className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">Highest AI parametric match</div>
           </div>
@@ -2720,7 +2677,7 @@ export function SupplierQuotesModal({
                       <Building2 size={14} className="text-slate-400" /> {quote.vendorName}
                     </span>
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-gray-700 text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-600">
-                      {quote.vendorCategory || 'Client List'}
+                      {quote.vendorCategory || UI_STRINGS.recordPlaceholders.notRecorded}
                     </span>
                     {quote.isBestPrice && (
                       <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300">
@@ -2736,28 +2693,28 @@ export function SupplierQuotesModal({
                     <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">Quoted Price</span>
                       <span className="text-sm font-black text-slate-900 dark:text-white mono">
-                        ₹{(quote.totalPrice || quote.unitPrice || 0).toLocaleString()}
+                        {formatQuotedPrice(quote)}
                       </span>
                     </div>
 
                     <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">Lead Time</span>
                       <span className="text-sm font-bold text-slate-800 dark:text-gray-200 mono">
-                        {quote.leadTimeDays ? `${quote.leadTimeDays} Days` : 'N/A'}
+                        {quote.leadTimeDays ? `${quote.leadTimeDays} Days` : UI_STRINGS.recordPlaceholders.notAvailable}
                       </span>
                     </div>
 
                     <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">AI Match Score</span>
                       <span className="text-sm font-black text-emerald-600 dark:text-emerald-400 mono">
-                        {quote.aiMatchScore !== undefined ? `${quote.aiMatchScore}%` : 'N/A'}
+                        {quote.aiMatchScore !== undefined ? `${quote.aiMatchScore}%` : UI_STRINGS.recordPlaceholders.notAvailable}
                       </span>
                     </div>
 
                     <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">Warranty & Terms</span>
                       <span className="text-xs text-slate-700 dark:text-gray-300 font-semibold truncate block">
-                        {quote.warrantyYears ? `${quote.warrantyYears} yr` : 'N/A'}{quote.paymentTerms ? ` • ${quote.paymentTerms}` : ''}
+                        {quote.warrantyYears ? `${quote.warrantyYears} yr` : UI_STRINGS.recordPlaceholders.notAvailable}{quote.paymentTerms ? ` • ${quote.paymentTerms}` : ''}
                       </span>
                     </div>
                   </div>

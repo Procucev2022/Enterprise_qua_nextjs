@@ -5,7 +5,30 @@
 
 const transactionalEmailTemplates = require('../services/transactionalEmailTemplates');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+const { TRANSACTIONAL_EMAIL_MESSAGES, formatMessage } = require('../config/constants');
 const { logger } = require('../services/loggerService');
+
+const PLACEHOLDER_PATTERN = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/**
+ * Returns the distinct {placeholder} names in a template string, in order of first appearance.
+ */
+function extractPlaceholderNames(template) {
+  const names = [];
+  for (const match of template.matchAll(PLACEHOLDER_PATTERN)) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
+/**
+ * Finds the catalog entry for a canonical template key. Returns undefined when there is none.
+ */
+function findCatalogEntry(canonicalKey) {
+  return transactionalEmailTemplates
+    .getAllTransactionalEmailTemplates()
+    .find((entry) => entry.templateId === canonicalKey);
+}
 
 /**
  * Lists metadata for all 13 Qua AI Transactional Email Templates.
@@ -26,14 +49,15 @@ async function listTemplates(req, res, next) {
 }
 
 /**
- * Gets details and default preview for a specific template.
+ * Returns catalog metadata for a specific template. Nothing is rendered, so no placeholder gets a made-up value.
  */
 async function getTemplateById(req, res, next) {
   try {
     const { id } = req.params;
     const canonicalKey = transactionalEmailTemplates.resolveTemplateKey(id);
+    const catalogEntry = findCatalogEntry(canonicalKey);
 
-    if (!canonicalKey) {
+    if (!catalogEntry) {
       logger.warn(`Template not found: ${id}`, { id }, 'TRANSACTIONAL_EMAIL_CONTROLLER');
       return res.status(404).json({
         success: false,
@@ -41,12 +65,20 @@ async function getTemplateById(req, res, next) {
       });
     }
 
-    const preview = transactionalEmailTemplates.renderTransactionalEmail(canonicalKey, {});
-    logger.info(`Fetched transactional email template details for ${id}`, { canonicalKey }, 'TRANSACTIONAL_EMAIL_CONTROLLER');
+    logger.info(`Fetched transactional email template metadata for ${id}`, { canonicalKey }, 'TRANSACTIONAL_EMAIL_CONTROLLER');
 
     return res.json({
       success: true,
-      data: preview,
+      data: {
+        templateId: catalogEntry.templateId,
+        templateNumber: catalogEntry.number,
+        name: catalogEntry.name,
+        who: catalogEntry.who,
+        trigger: catalogEntry.trigger,
+        // `subject` keeps its existing field name. Its value is the catalog subject template, not a rendered subject.
+        subject: catalogEntry.subjectPattern,
+        subjectPlaceholders: extractPlaceholderNames(catalogEntry.subjectPattern),
+      },
     });
   } catch (err) {
     logger.error(`Error retrieving template ${req.params.id}`, err, 'TRANSACTIONAL_EMAIL_CONTROLLER');
@@ -126,9 +158,15 @@ async function sendTemplate(req, res, next) {
       sent: result.sent,
     }, 'TRANSACTIONAL_EMAIL_CONTROLLER');
 
+    // success is true only when the email provider accepted the message. The message text
+    // says the same, so a skipped or failed send is never reported as processed.
+    const accepted = result.success === true;
     return res.json({
-      success: true,
-      message: `Transactional email ${canonicalKey} processed.`,
+      success: accepted,
+      message: formatMessage(
+        accepted ? TRANSACTIONAL_EMAIL_MESSAGES.ACCEPTED : TRANSACTIONAL_EMAIL_MESSAGES.NOT_SENT,
+        { templateId: canonicalKey, status: result.status || 'unknown' }
+      ),
       result,
     });
   } catch (err) {

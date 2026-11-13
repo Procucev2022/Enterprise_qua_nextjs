@@ -7,23 +7,128 @@ const { queryCache } = require('../src/db/queryCache');
 const { logger } = require('../src/services/loggerService');
 const accountDocumentQueries = require('../src/db/accountDocumentQueries');
 const accountDocumentController = require('../src/controllers/accountDocumentController');
+const internalTaskQueries = require('../src/db/internalTaskQueries');
+const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+const smsService = require('../src/services/smsService');
+
+// In-memory stand-in for the account_documents table. It answers the statement shapes that
+// accountDocumentQueries sends: INSERT, UPDATE ... RETURNING, and SELECT with account, active,
+// category and ILIKE search conditions. Other statements get an empty result, as an empty
+// database would return. One store lives for the whole file so tests can build on each other.
+function createAccountDocumentStore() {
+  const rows = [];
+
+  const insert = (params) => {
+    const [id, accountType, accountId, documentName, fileName, fileSize, mimeType, category, fileUrl, description, uploadedBy, isActive, createdAt, updatedAt] = params;
+    const row = {
+      id,
+      account_type: accountType,
+      account_id: accountId,
+      document_name: documentName,
+      file_name: fileName,
+      file_size: fileSize,
+      mime_type: mimeType,
+      category,
+      file_url: fileUrl,
+      description,
+      uploaded_by: uploadedBy,
+      is_active: isActive,
+      created_at: createdAt.toISOString(),
+      updated_at: updatedAt.toISOString(),
+    };
+    rows.push(row);
+    return { rows: [{ ...row }], rowCount: 1 };
+  };
+
+  const softDelete = (params) => {
+    const [id, accountType, accountId] = params;
+    const match = rows.find((row) => row.id === id
+      && row.account_type === accountType
+      && row.account_id === accountId
+      && row.is_active === 1);
+    if (!match) return { rows: [], rowCount: 0 };
+    match.is_active = 0;
+    return { rows: [{ id: match.id }], rowCount: 1 };
+  };
+
+  const select = (sql, params) => {
+    let matched = rows.slice();
+    for (const [, column, index] of sql.matchAll(/(account_type|account_id|category) = \$(\d+)/g)) {
+      const expected = params[Number(index) - 1];
+      matched = matched.filter((row) => row[column] === expected);
+    }
+    if (sql.includes('is_active = 1')) {
+      matched = matched.filter((row) => row.is_active === 1);
+    }
+    const search = sql.match(/ILIKE \$(\d+)/);
+    if (search) {
+      const term = String(params[Number(search[1]) - 1])
+        .replace(/^%|%$/g, '')
+        .replace(/\\([%_\\])/g, '$1')
+        .toLowerCase();
+      matched = matched.filter((row) => [row.document_name, row.file_name, row.description]
+        .some((field) => String(field || '').toLowerCase().includes(term)));
+    }
+    const direction = sql.includes('ORDER BY created_at ASC') ? 1 : -1;
+    matched.sort((a, b) => direction * a.created_at.localeCompare(b.created_at));
+    return { rows: matched.map((row) => ({ ...row })), rowCount: matched.length };
+  };
+
+  const query = async (sql, params = []) => {
+    const text = String(sql);
+    if (/^\s*INSERT INTO account_documents/.test(text)) return insert(params);
+    if (/^\s*UPDATE account_documents/.test(text)) return softDelete(params);
+    if (/FROM account_documents/.test(text)) return select(text, params);
+    return { rows: [], rowCount: 0 };
+  };
+
+  return { rows, query };
+}
+
+// Routes account document queries to the store for the current test. Jest restores the spies
+// after each test.
+const originalHydrationState = storeService.isHydratedFromDB;
+
+function useAccountDocumentStore(store) {
+  jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+  jest.spyOn(pool, 'query').mockImplementation(store.query);
+  // The in-memory fixtures are the local cache. Without this flag, the first lookup would
+  // hydrate from the empty store and replace them.
+  storeService.isHydratedFromDB = true;
+}
+
+// The row the persistence layer returns for an approval task. It copies the submitted fields.
+function persistedApprovalTask(taskData) {
+  return {
+    id: 'task-approval-1',
+    task_number: 'TSK-APPROVAL-1',
+    status: taskData.status,
+    approval_status: taskData.approvalStatus,
+    assigned_to_name: taskData.assignedToName,
+    credit_quantity: taskData.creditQuantity,
+  };
+}
 
 describe('Account Documents & Credit Workflows API', () => {
-  afterEach(() => { jest.restoreAllMocks(); });
+  afterEach(() => {
+    jest.restoreAllMocks();
+    storeService.isHydratedFromDB = originalHydrationState;
+  });
   let mockBuyer;
   let mockVendor;
   let createdBuyerDocId;
   let createdSellerDocId;
   let cmToken;
+  let accountStore;
 
   beforeAll(() => {
-    accountDocumentQueries.resetInMemoryStore();
+    accountStore = createAccountDocumentStore();
     cmToken = authService.generateSessionToken({
       id: 'cm-1',
       uuid: 'cm-1',
       email: 'cm@procucev.com',
       role: 'category_manager',
-      fullName: 'Category Manager',
+      name: 'Category Manager',
     });
 
     mockBuyer = storeService.addBuyerAccount({
@@ -31,6 +136,7 @@ describe('Account Documents & Credit Workflows API', () => {
       corporateEmail: 'buyer_test_doc@enterprise.com',
       contactPerson: 'Veera Babu',
       remainingFreeRFQs: 5,
+      creditBalance: 5,
     });
 
     mockVendor = storeService.addVendor({
@@ -43,6 +149,8 @@ describe('Account Documents & Credit Workflows API', () => {
   });
 
   describe('Buyer Documents API', () => {
+    beforeEach(() => useAccountDocumentStore(accountStore));
+
     it('GET /api/buyer-accounts/:id/documents returns 404 for nonexistent buyer', async () => {
       const res = await request(app)
         .get('/api/buyer-accounts/nonexistent-buyer-id/documents')
@@ -115,6 +223,31 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.success).toBe(false);
     });
 
+    it('DELETE returns 409 for a workflow document and keeps the document listed', async () => {
+      storeService.rfqs.push({
+        id: 'rfq-409-test',
+        buyerId: mockBuyer.id,
+        rfqNumber: 'RFQ-409-TEST',
+        attachments: [{ id: 'att-409', fileName: 'workflow-spec.pdf', mimeType: 'application/pdf' }],
+      });
+      try {
+        const docId = 'rfq_doc_rfq-409-test_att-409';
+        const res = await request(app)
+          .delete(`/api/buyer-accounts/${mockBuyer.id}/documents/${docId}`)
+          .set('Authorization', `Bearer ${cmToken}`);
+        expect(res.status).toBe(409);
+        expect(res.body).toMatchObject({ success: false, retryable: false });
+        expect(res.body.error).toContain('cannot be removed from the dossier');
+
+        const list = await request(app)
+          .get(`/api/buyer-accounts/${mockBuyer.id}/documents`)
+          .set('Authorization', `Bearer ${cmToken}`);
+        expect(list.body.documents.some((d) => d.id === docId)).toBe(true);
+      } finally {
+        storeService.rfqs = storeService.rfqs.filter((r) => r.id !== 'rfq-409-test');
+      }
+    });
+
     it('enforces role-based permissions on buyer document endpoints', async () => {
       const otherBuyerToken = authService.generateSessionToken({
         id: 'other-buyer-1',
@@ -166,6 +299,8 @@ describe('Account Documents & Credit Workflows API', () => {
   });
 
   describe('Seller Documents API', () => {
+    beforeEach(() => useAccountDocumentStore(accountStore));
+
     it('GET /api/vendors/:id/documents returns 404 for nonexistent vendor', async () => {
       const res = await request(app)
         .get('/api/vendors/nonexistent-vendor-id/documents')
@@ -531,7 +666,10 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.success).toBe(false);
     });
 
-    it('validates initiatorName must be Govardhan, Krishna, or Chandhan', async () => {
+    it('ignores an initiatorName sent in the body and records the signed-in user as the maker', async () => {
+      const createSpy = jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockImplementation(async (taskData) => persistedApprovalTask(taskData));
+
       const res = await request(app)
         .post(`/api/buyer-accounts/${mockBuyer.id}/request-credit-approval`)
         .set('Authorization', `Bearer ${cmToken}`)
@@ -541,11 +679,17 @@ describe('Account Documents & Credit Workflows API', () => {
           approverName: 'Srinu Sir',
           initiatorName: 'Unknown Initiator',
         });
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
+
+      expect(res.status).toBe(201);
+      const [taskData, actor] = createSpy.mock.calls[0];
+      expect(actor).toMatchObject({ name: 'Category Manager', email: 'cm@procucev.com' });
+      expect(taskData.notes).toContain('Initiated By: Category Manager');
+      expect(taskData.notes).not.toContain('Unknown Initiator');
     });
 
     it('submits credit request with Pending Approval status and creates internal task', async () => {
+      const createSpy = jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockImplementation(async (taskData) => persistedApprovalTask(taskData));
       const res = await request(app)
         .post(`/api/buyer-accounts/${mockBuyer.id}/request-credit-approval`)
         .set('Authorization', `Bearer ${cmToken}`)
@@ -562,6 +706,9 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task.approval_status).toBe('PENDING');
       expect(res.body.task.assigned_to_name).toBe('Sudheer Sir');
       expect(res.body.task.credit_quantity).toBe(15);
+      const [taskData, actor] = createSpy.mock.calls[0];
+      expect(taskData).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Sudheer Sir', creditQuantity: 15 });
+      expect(actor).toMatchObject({ name: 'Category Manager' });
     });
   });
 
@@ -597,6 +744,8 @@ describe('Account Documents & Credit Workflows API', () => {
     });
 
     it('submits seller quote credit request with Pending Approval status and creates internal task and approval record', async () => {
+      const createSpy = jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockImplementation(async (taskData) => persistedApprovalTask(taskData));
       const res = await request(app)
         .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
         .set('Authorization', `Bearer ${cmToken}`)
@@ -613,6 +762,7 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task.approval_status).toBe('PENDING');
       expect(res.body.task.assigned_to_name).toBe('Srinu Sir');
       expect(res.body.task.credit_quantity).toBe(5);
+      expect(createSpy.mock.calls[0][0]).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Srinu Sir', creditQuantity: 5 });
     });
 
     it('rejects non-category-manager/admin roles with 403', async () => {
@@ -629,6 +779,8 @@ describe('Account Documents & Credit Workflows API', () => {
     });
 
     it('handles vendor with missing name and email, and omitted reason and user without email', async () => {
+      jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockImplementation(async (taskData) => persistedApprovalTask(taskData));
       const minimalVendor = storeService.addVendor({
         contactPerson: 'Sparse Seller',
       });
@@ -636,8 +788,10 @@ describe('Account Documents & Credit Workflows API', () => {
       delete minimalVendor.email;
       delete minimalVendor.freeQuotationCredits;
 
+      // The session has a name but no email. An identified session is accepted.
       const userNoEmailToken = authService.generateSessionToken({
         id: 'cm-no-email',
+        name: 'Category Manager',
         role: 'category_manager',
       });
 
@@ -699,6 +853,7 @@ describe('Account Documents & Credit Workflows API', () => {
     });
 
     it('GET /api/vendors/:id/communications handles not found and success', async () => {
+      jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValue([]);
       const notFound = await request(app)
         .get('/api/vendors/non-existent-vendor-xyz/communications')
         .set('Authorization', `Bearer ${cmToken}`);
@@ -713,6 +868,17 @@ describe('Account Documents & Credit Workflows API', () => {
     });
 
     it('POST /api/vendors/:id/communications records email, SMS, and call communications', async () => {
+      // No channel provider accepts a message in the test environment, so each delivery is recorded as Failed.
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'comm-1', deliveryStatus: 'Pending' });
+      const updateSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus')
+        .mockResolvedValue({ id: 'comm-1', deliveryStatus: 'Failed' });
+      jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue({
+        success: false,
+        status: 'not_configured',
+        error: 'SMS provider is not configured.',
+      });
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'task-comm-1' });
+
       const notFound = await request(app)
         .post('/api/vendors/non-existent-vendor-xyz/communications')
         .set('Authorization', `Bearer ${cmToken}`)
@@ -742,6 +908,7 @@ describe('Account Documents & Credit Workflows API', () => {
           recipient: '9876543210',
         });
       expect(smsRes.status).toBe(201);
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ communicationId: 'comm-1', deliveryStatus: 'Failed' }));
 
       // CALL with follow-up
       const callRes = await request(app)
@@ -984,6 +1151,8 @@ describe('Account Documents & Credit Workflows API', () => {
   });
 
   describe('accountDocumentQueries database & helper unit coverage', () => {
+    beforeEach(() => useAccountDocumentStore(accountStore));
+
     it('handles matchesDocumentType across all extensions and mimes', () => {
       expect(accountDocumentQueries.matchesDocumentType({ mimeType: 'application/pdf', fileName: 'test.pdf' }, 'pdf')).toBe(true);
       expect(accountDocumentQueries.matchesDocumentType({ mimeType: 'image/png', fileName: 'test.png' }, 'image')).toBe(true);
@@ -993,7 +1162,7 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(accountDocumentQueries.matchesDocumentType({ mimeType: 'text/plain', fileName: 'test.txt' }, 'all')).toBe(true);
     });
 
-    it('handles mapRow with null, missing fields, and custom values', () => {
+    it('handles mapRow with null, missing fields, and custom values', async () => {
       expect(accountDocumentQueries.mapRow(null)).toBeNull();
       const mappedDb = accountDocumentQueries.mapRow({
         id: 'doc-row-1',
@@ -1013,9 +1182,11 @@ describe('Account Documents & Credit Workflows API', () => {
       });
       expect(mappedDb.id).toBe('doc-row-1');
       expect(mappedDb.documentName).toBe('Doc One');
-      expect(mappedDb.mimeType).toBe('application/pdf');
-      expect(mappedDb.category).toBe('Other');
-      expect(mappedDb.uploadedBy).toBe('Category Manager');
+      // Empty strings are not recorded values, so they map to null rather than a default.
+      expect(mappedDb.mimeType).toBeNull();
+      expect(mappedDb.category).toBeNull();
+      expect(mappedDb.uploadedBy).toBeNull();
+      expect(mappedDb.createdAt).toBeNull();
 
       const mappedMem = accountDocumentQueries.mapRow({
         id: 'doc-row-2',
@@ -1034,7 +1205,7 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(mappedMem.isActive).toBe(false);
 
       // deleteAccountDocument null check
-      expect(accountDocumentQueries.deleteAccountDocument(null)).resolves.toBe(false);
+      await expect(accountDocumentQueries.deleteAccountDocument(null)).resolves.toBe(false);
     });
 
     it('tests pool.hasStorage() simulation branches', async () => {
@@ -1095,8 +1266,9 @@ describe('Account Documents & Credit Workflows API', () => {
           accountId: 'buyer-db-1',
           documentName: 'DB Document',
           fileName: 'db.pdf',
+          category: 'RFQ',
           isActive: false,
-        });
+        }, { name: 'Category Manager' });
         expect(created.id).toBe('db_doc_101');
 
         const listed = await accountDocumentQueries.listAccountDocuments({
@@ -1109,35 +1281,30 @@ describe('Account Documents & Credit Workflows API', () => {
         const deleted = await accountDocumentQueries.deleteAccountDocument('db_doc_101', 'buyer', 'buyer-db-1');
         expect(deleted).toBe(true);
 
-        // Delete workflow doc
-        const workflowDeleted = await accountDocumentQueries.deleteAccountDocument('rfq_doc_test_1', 'buyer', 'buyer-db-1');
-        expect(workflowDeleted).toBe(true);
+        // Workflow documents cannot be deleted. The request is refused, not acknowledged.
+        await expect(accountDocumentQueries.deleteAccountDocument('rfq_doc_test_1', 'buyer', 'buyer-db-1'))
+          .rejects.toMatchObject({ code: 'WORKFLOW_DOCUMENT_NOT_DELETABLE' });
 
-        // Ensure there is an in-memory document matching buyer-db-1 so filter predicate runs
-        pool.hasStorage = () => false;
-        const memDoc = await accountDocumentQueries.createAccountDocument({
-          accountType: 'buyer',
-          accountId: 'buyer-db-1',
-          documentName: 'Mem Doc Before Throw',
-          fileName: 'mem.pdf',
-        });
-        pool.hasStorage = () => true;
-
-        // Simulate pool query throw in list, create, delete
+        // A statement failure in list, create and delete surfaces as PERSISTENCE_UNAVAILABLE.
         pool.query = async () => { throw new Error('DB connection fail'); };
-        const listCatch = await accountDocumentQueries.listAccountDocuments({ accountType: 'buyer', accountId: 'buyer-db-1' });
-        expect(Array.isArray(listCatch)).toBe(true);
-        expect(listCatch.length).toBeGreaterThan(0);
+        await expect(accountDocumentQueries.listAccountDocuments({ accountType: 'buyer', accountId: 'buyer-db-1' }))
+          .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+        await expect(accountDocumentQueries.createAccountDocument({
+          accountType: 'buyer', accountId: 'buyer-catch-1', documentName: 'Catch Doc', fileName: 'catch.pdf', category: 'Other',
+        }, { name: 'Category Manager' })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+        await expect(accountDocumentQueries.deleteAccountDocument('db_doc_101', 'buyer', 'buyer-db-1'))
+          .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
 
-        const createCatch = await accountDocumentQueries.createAccountDocument({ accountType: 'buyer', accountId: 'buyer-catch-1', documentName: 'Catch Doc', fileName: 'catch.pdf' });
-        expect(createCatch).toBeDefined();
+        // A delete that matches no row returns false, not an error.
+        pool.query = async () => ({ rows: [] });
+        const delNoRow = await accountDocumentQueries.deleteAccountDocument('any-id', 'buyer', 'buyer-catch-1');
+        expect(delNoRow).toBe(false);
 
-        // Del catch with matching in-memory doc to test catch block memory removal
-        const delCatch = await accountDocumentQueries.deleteAccountDocument(memDoc.id, 'buyer', 'buyer-db-1');
-        expect(delCatch).toBe(true);
-
-        const delCatchNonExistent = await accountDocumentQueries.deleteAccountDocument('any-id', 'buyer', 'buyer-catch-1');
-        expect(delCatchNonExistent).toBe(false);
+        // Without a configured database nothing is read.
+        pool.hasStorage = () => false;
+        await expect(accountDocumentQueries.listAccountDocuments({ accountType: 'buyer', accountId: 'buyer-db-1' }))
+          .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+        pool.hasStorage = () => true;
       } finally {
         pool.hasStorage = origHasStorage;
         pool.query = origQuery;
@@ -1149,8 +1316,7 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(accountDocumentQueries.escapeLikeWildcards(123)).toBe('');
       expect(accountDocumentQueries.escapeLikeWildcards('test%_foo\\bar')).toBe('test\\%\\_foo\\\\bar');
 
-      const emptyList = await accountDocumentQueries.listAccountDocuments({});
-      expect(emptyList).toEqual([]);
+      await expect(accountDocumentQueries.listAccountDocuments({})).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
 
       // Setup RFQ with attachments for buyer and quotes for seller
       if (!Array.isArray(storeService.rfqs)) {
@@ -1224,26 +1390,21 @@ describe('Account Documents & Credit Workflows API', () => {
         accountId: mockVendor.id,
       });
       expect(recheckSellerDocs.some(d => d.category === 'Company Profile')).toBe(true);
-      expect(recheckSellerDocs.some(d => d.category === 'Registration')).toBe(true);
+      // A document whose name has no category keyword stays unclassified rather than labelled.
+      expect(recheckSellerDocs.find(d => d.documentName === 'certificate_of_incorporation.pdf').category).toBeNull();
 
-      // Re-listing with suppressed doc
+      // Evaluation and quotation documents come from source records, so a delete is refused
+      // and the document stays listed.
       const evalDocToDel = recheckSellerDocs.find(d => d.id.includes('eval_doc'));
-      await accountDocumentQueries.deleteAccountDocument(evalDocToDel.id, 'seller', mockVendor.id);
-      const afterEvalDel = await accountDocumentQueries.listAccountDocuments({
+      await expect(accountDocumentQueries.deleteAccountDocument(evalDocToDel.id, 'seller', mockVendor.id))
+        .rejects.toMatchObject({ code: 'WORKFLOW_DOCUMENT_NOT_DELETABLE' });
+      await expect(accountDocumentQueries.deleteAccountDocument(quoteDoc.id, 'seller', mockVendor.id))
+        .rejects.toMatchObject({ code: 'WORKFLOW_DOCUMENT_NOT_DELETABLE' });
+      const afterRefusedDel = await accountDocumentQueries.listAccountDocuments({
         accountType: 'seller',
         accountId: mockVendor.id,
       });
-      expect(afterEvalDel.some(d => d.id === evalDocToDel.id)).toBe(false);
-
-      // Try suppressing the same doc again
-      await accountDocumentQueries.deleteAccountDocument(evalDocToDel.id, 'seller', mockVendor.id);
-
-      // Suppress quote doc and re-list seller docs
-      await accountDocumentQueries.deleteAccountDocument(quoteDoc.id, 'seller', mockVendor.id);
-      await accountDocumentQueries.listAccountDocuments({
-        accountType: 'seller',
-        accountId: mockVendor.id,
-      });
+      expect(afterRefusedDel.some(d => d.id === evalDocToDel.id)).toBe(true);
 
       // Search matching nothing (all 4 negative conditions)
       const noMatch = await accountDocumentQueries.listAccountDocuments({
@@ -1259,13 +1420,15 @@ describe('Account Documents & Credit Workflows API', () => {
         accountId: mockBuyer.id,
         documentName: 'Sort Test Doc 1',
         fileName: 'sort1.pdf',
-      });
+        category: 'Other',
+      }, { name: 'Category Manager' });
       await accountDocumentQueries.createAccountDocument({
         accountType: 'buyer',
         accountId: mockBuyer.id,
         documentName: 'Sort Test Doc 2',
         fileName: 'sort2.pdf',
-      });
+        category: 'Other',
+      }, { name: 'Category Manager' });
       const sortedAsc = await accountDocumentQueries.listAccountDocuments({
         accountType: 'buyer',
         accountId: mockBuyer.id,
@@ -1281,13 +1444,14 @@ describe('Account Documents & Credit Workflows API', () => {
       });
       expect(ascList.length).toBeGreaterThan(0);
 
-      // Test suppression of workflow docs on delete
-      await accountDocumentQueries.deleteAccountDocument(rfqDoc.id, 'buyer', mockBuyer.id);
-      const afterSuppressed = await accountDocumentQueries.listAccountDocuments({
+      // RFQ attachments are workflow documents. A delete is refused and the attachment stays listed.
+      await expect(accountDocumentQueries.deleteAccountDocument(rfqDoc.id, 'buyer', mockBuyer.id))
+        .rejects.toMatchObject({ code: 'WORKFLOW_DOCUMENT_NOT_DELETABLE' });
+      const afterRefusedRfqDel = await accountDocumentQueries.listAccountDocuments({
         accountType: 'buyer',
         accountId: mockBuyer.id,
       });
-      expect(afterSuppressed.some(d => d.id === rfqDoc.id)).toBe(false);
+      expect(afterRefusedRfqDel.some(d => d.id === rfqDoc.id)).toBe(true);
 
       // Test matchesDocumentType with various extensions & empty inputs
       expect(accountDocumentQueries.matchesDocumentType({}, '')).toBe(true);
@@ -1303,6 +1467,7 @@ describe('Account Documents & Credit Workflows API', () => {
         accountId: mockBuyer.id,
         documentName: 'Desc Search Test',
         fileName: 'desc_search.pdf',
+        category: 'Other',
         description: 'Specific unique keyword in description',
       }, 'Govardhan');
       expect(docStringActor.uploadedBy).toBe('Govardhan');
@@ -1312,6 +1477,7 @@ describe('Account Documents & Credit Workflows API', () => {
         accountId: mockBuyer.id,
         documentName: 'Doc Full Name',
         fileName: 'doc_fn.pdf',
+        category: 'Other',
       }, { fullName: 'Srinu Sir' });
       expect(docFullName.uploadedBy).toBe('Srinu Sir');
 
@@ -1320,6 +1486,7 @@ describe('Account Documents & Credit Workflows API', () => {
         accountId: mockBuyer.id,
         documentName: 'Author Search Test',
         fileName: 'author_search.pdf',
+        category: 'Other',
         description: 'Some desc',
       }, { name: 'Chandhan' });
       expect(docObjActor.uploadedBy).toBe('Chandhan');
@@ -1329,16 +1496,18 @@ describe('Account Documents & Credit Workflows API', () => {
         accountId: mockBuyer.id,
         documentName: 'Email Actor Test',
         fileName: 'email_actor.pdf',
+        category: 'Other',
       }, { email: 'krishna@procucev.com' });
       expect(docEmailActor.uploadedBy).toBe('krishna@procucev.com');
 
-      const docEmptyObjActor = await accountDocumentQueries.createAccountDocument({
+      // An actor with no name or email is refused. No uploader name is substituted.
+      await expect(accountDocumentQueries.createAccountDocument({
         accountType: 'buyer',
         accountId: mockBuyer.id,
         documentName: 'Empty Obj Actor',
         fileName: 'empty_obj.pdf',
-      }, {});
-      expect(docEmptyObjActor.uploadedBy).toBe('Category Manager');
+        category: 'Other',
+      }, {})).rejects.toMatchObject({ code: 'ACTOR_REQUIRED' });
 
       // Test all branches of matchesDocumentType
       expect(accountDocumentQueries.matchesDocumentType({ fileName: 'noext', mimeType: 'application/pdf' }, 'pdf')).toBe(true);
@@ -1376,11 +1545,11 @@ describe('Account Documents & Credit Workflows API', () => {
       });
       const nameDoc = buyerFallbackDocs.find(d => d.id === 'rfq_doc_rfq-fallback-1_att-name-only');
       expect(nameDoc).toBeDefined();
-      expect(nameDoc.uploadedBy).toBe('Buyer Operations');
+      expect(nameDoc.uploadedBy).toBeNull();
 
       const bareDoc = buyerFallbackDocs.find(d => d.id === 'rfq_doc_rfq-fallback-1_att-bare');
       expect(bareDoc).toBeDefined();
-      expect(bareDoc.fileName).toBe('RFQ_spec.pdf');
+      expect(bareDoc.fileName).toBeNull();
 
       const sellerFallbackDocs = await accountDocumentQueries.listAccountDocuments({
         accountType: 'seller',
@@ -1388,14 +1557,11 @@ describe('Account Documents & Credit Workflows API', () => {
       });
       const anonQuoteDoc = sellerFallbackDocs.find(d => d.id === 'quote_doc_rfq-fallback-1_' + mockVendor.id);
       expect(anonQuoteDoc).toBeDefined();
-      expect(anonQuoteDoc.uploadedBy).toBe('Supplier Representative');
+      expect(anonQuoteDoc.uploadedBy).toBeNull();
 
-      // Test default parameter branches
-      const emptyParamsList = await accountDocumentQueries.listAccountDocuments();
-      expect(emptyParamsList).toEqual([]);
-
-      const emptyParamsCreate = await accountDocumentQueries.createAccountDocument();
-      expect(emptyParamsCreate.documentName).toBe('Untitled Document');
+      // Calls with no account type and id are refused.
+      await expect(accountDocumentQueries.listAccountDocuments()).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+      await expect(accountDocumentQueries.createAccountDocument()).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
 
       // Test delete with empty accountType/accountId
       await accountDocumentQueries.deleteAccountDocument('any-id');
@@ -1407,14 +1573,14 @@ describe('Account Documents & Credit Workflows API', () => {
         documentName: 'Duplicate Test',
         fileName: 'duplicate.pdf',
         category: 'Other',
-      });
+      }, { name: 'Category Manager' });
       await accountDocumentQueries.createAccountDocument({
         accountType: 'buyer',
         accountId: mockBuyer.id,
         documentName: 'Duplicate Test 2',
         fileName: 'duplicate.pdf',
         category: 'Other',
-      });
+      }, { name: 'Category Manager' });
       const dupDocs = await accountDocumentQueries.listAccountDocuments({
         accountType: 'buyer',
         accountId: mockBuyer.id,
@@ -1470,7 +1636,14 @@ describe('Account Documents & Credit Workflows API', () => {
       const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       try {
-        pool.hasStorage = () => false;
+        // The persisted document must survive the workflow failure.
+        await accountDocumentQueries.createAccountDocument({
+          accountType: 'buyer',
+          accountId: 'buyer-workflow-error',
+          documentName: 'Partial Buyer Doc',
+          fileName: 'partial-buyer.pdf',
+          category: 'Other',
+        }, { name: 'Category Manager' });
         storeService.rfqs = new Proxy([], {
           get(target, property, receiver) {
             if (property === 'filter') throw buyerError;
@@ -1482,18 +1655,25 @@ describe('Account Documents & Credit Workflows API', () => {
           accountType: 'buyer',
           accountId: 'buyer-workflow-error',
         });
-        expect(buyerDocuments).toEqual([]);
+        expect(buyerDocuments.map((d) => d.documentName)).toEqual(['Partial Buyer Doc']);
         expect(errorLogSpy).toHaveBeenCalledWith(
-          'Buyer RFQ workflow documents could not be aggregated for the account dossier',
+          'Workflow documents could not be aggregated for the account dossier',
           expect.objectContaining({
             error: buyerError,
-            operation: 'aggregate-buyer-rfq-documents',
+            operation: 'aggregate-workflow-documents',
             accountType: 'buyer',
             accountIdPresent: true,
           }),
           'ACCOUNT_DOCUMENT_QUERIES'
         );
 
+        await accountDocumentQueries.createAccountDocument({
+          accountType: 'seller',
+          accountId: 'seller-workflow-error',
+          documentName: 'Partial Seller Doc',
+          fileName: 'partial-seller.pdf',
+          category: 'Other',
+        }, { name: 'Category Manager' });
         storeService.evaluations = new Proxy([], {
           get(target, property, receiver) {
             if (property === 'find') throw sellerError;
@@ -1505,12 +1685,12 @@ describe('Account Documents & Credit Workflows API', () => {
           accountId: 'seller-workflow-error',
         });
 
-        expect(sellerDocuments).toEqual([]);
+        expect(sellerDocuments.map((d) => d.documentName)).toEqual(['Partial Seller Doc']);
         expect(errorLogSpy).toHaveBeenCalledWith(
-          'Seller evaluation and quotation workflow documents could not be aggregated for the account dossier',
+          'Workflow documents could not be aggregated for the account dossier',
           expect.objectContaining({
             error: sellerError,
-            operation: 'aggregate-seller-workflow-documents',
+            operation: 'aggregate-workflow-documents',
             accountType: 'seller',
             accountIdPresent: true,
           }),
@@ -1525,16 +1705,87 @@ describe('Account Documents & Credit Workflows API', () => {
   });
 
   describe('accountDocumentController edge cases & error handler branches', () => {
-    it('extractActor extracts headers when req.user is absent', () => {
-      const actor1 = accountDocumentController.extractActor({
-        headers: { 'x-user-name': 'Test User', 'x-user-email': 'test@example.com' }
-      });
-      expect(actor1.name).toBe('Test User');
-      expect(actor1.email).toBe('test@example.com');
+    beforeEach(() => useAccountDocumentStore(accountStore));
 
-      const actor2 = accountDocumentController.extractActor({ headers: {} });
-      expect(actor2.name).toBe('Category Manager');
-      expect(actor2.email).toBe('admin@procucev.com');
+    it('extractActor takes identity only from req.user and never from x-user-name or x-user-email headers', () => {
+      const spoofedHeaders = { 'x-user-name': 'Spoofed Name', 'x-user-email': 'spoofed@procucev.com' };
+
+      // No session: no actor, even when identity headers are present.
+      expect(accountDocumentController.extractActor({ headers: spoofedHeaders })).toBeNull();
+      expect(accountDocumentController.extractActor({ headers: {} })).toBeNull();
+
+      // With a session: the session identity is used and the headers are ignored.
+      const actor = accountDocumentController.extractActor({
+        headers: spoofedHeaders,
+        user: { email: 'cm@procucev.com', name: 'Category Manager', role: 'category_manager' },
+      });
+      expect(actor).toMatchObject({ name: 'Category Manager', email: 'cm@procucev.com' });
+    });
+
+    it('rejects an upload with no session with 401 even when identity headers are sent', async () => {
+      const res = await request(app)
+        .post(`/api/buyer-accounts/${mockBuyer.id}/documents`)
+        .set('x-user-name', 'Spoofed Name')
+        .set('x-user-email', 'spoofed@procucev.com')
+        .send({ documentName: 'Doc', category: 'Other', fileName: 'f.pdf' });
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('the controller returns 401 for a request with no req.user before it looks anything up', async () => {
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const findSpy = jest.spyOn(storeService, 'getVendorById');
+
+      await accountDocumentController.uploadSellerDocument({
+        params: { id: mockVendor.id },
+        headers: { 'x-user-name': 'Spoofed Name' },
+        body: { documentName: 'Doc', category: 'Other', fileName: 'f.pdf' },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(findSpy).not.toHaveBeenCalled();
+    });
+
+    it('records the session name as uploadedBy, not an x-user-name header', async () => {
+      const res = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/documents`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .set('x-user-name', 'Spoofed Name')
+        .send({ documentName: 'Header Identity Check', fileName: 'identity.pdf', category: 'Other' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.document.uploadedBy).toBe('Category Manager');
+    });
+
+    it('rejects an upload from a session that has a subject but no name or email with 401', async () => {
+      const subjectOnlyToken = authService.generateSessionToken({ id: 'cm-subject-only', role: 'category_manager' });
+      const res = await request(app)
+        .post(`/api/buyer-accounts/${mockBuyer.id}/documents`)
+        .set('Authorization', `Bearer ${subjectOnlyToken}`)
+        .send({ documentName: 'Subject Only Doc', category: 'Other', fileName: 'subject.pdf' });
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('returns 400 when the document name is only whitespace', async () => {
+      const res = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/documents`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({ documentName: '   ', category: 'Other', fileName: 'blank.pdf' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('finds the buyer account by session email when the id is unknown and no database is configured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const buyer = await accountDocumentController.findBuyerSafe('unknown-buyer-id', {
+        role: 'buyer',
+        email: mockBuyer.corporateEmail,
+      });
+      expect(buyer.id).toBe(mockBuyer.id);
     });
 
     it('handles not found and invalid payloads for buyer and seller operations', async () => {
@@ -1643,21 +1894,30 @@ describe('Account Documents & Credit Workflows API', () => {
         const dbBuyer2 = await accountDocumentController.findBuyerSafe('buyer-db-only-2');
         expect(dbBuyer2.id).toBe('buyer-db-only-2');
         pool.query = async () => { throw new Error('Postgres fail'); };
-        const dbBuyerCrash = await accountDocumentController.findBuyerSafe('buyer-db-crash');
-        expect(dbBuyerCrash).toBeUndefined();
+        // A failed lookup is an unavailable store, never a "buyer not found" answer.
+        await expect(accountDocumentController.findBuyerSafe('buyer-db-crash'))
+          .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
         await expect(accountDocumentController.findBuyerSafe('non-existent', {
           role: 'buyer', email: mockBuyer.corporateEmail,
         })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
         const memVendor = await accountDocumentController.findVendorSafe(mockVendor.id);
         expect(memVendor.id).toBe(mockVendor.id);
+        // A lookup that the database answers with no row is "not found", not an error.
+        pool.query = async () => ({ rows: [] });
         const nullVendor = await accountDocumentController.findVendorSafe('missing-vendor');
-        expect(nullVendor).toBeNull();
+        expect(nullVendor).toBeFalsy();
+        // A lookup that fails is an unavailable store, never a "seller not found" answer.
+        pool.query = async () => { throw new Error('Postgres fail'); };
+        await expect(accountDocumentController.findVendorSafe('missing-vendor'))
+          .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
       } finally {
         pool.hasStorage = origHasStorage;
         pool.query = origQuery;
       }
     });
-  describe('getAllAccountDocuments and getInMemoryDocuments', () => {
+  describe('getAllAccountDocuments', () => {
+    beforeEach(() => useAccountDocumentStore(accountStore));
+
     it('retrieves all account documents with various filters', async () => {
       await accountDocumentQueries.createAccountDocument({
         documentName: 'Buyer GST Certificate',
@@ -1667,7 +1927,7 @@ describe('Account Documents & Credit Workflows API', () => {
         accountType: 'buyer',
         accountId: 'BUY-999',
         isActive: true,
-      });
+      }, { name: 'Category Manager' });
 
       await accountDocumentQueries.createAccountDocument({
         documentName: 'Seller PAN Card',
@@ -1677,7 +1937,7 @@ describe('Account Documents & Credit Workflows API', () => {
         accountType: 'seller',
         accountId: 'SEL-999',
         isActive: false,
-      });
+      }, { name: 'Category Manager' });
 
       const all = await accountDocumentQueries.getAllAccountDocuments();
       expect(all.length).toBeGreaterThan(0);
@@ -1703,8 +1963,6 @@ describe('Account Documents & Credit Workflows API', () => {
       const searched = await accountDocumentQueries.getAllAccountDocuments({ search: 'Certificate' });
       expect(searched.length).toBeGreaterThan(0);
 
-      const inMem = accountDocumentQueries.getInMemoryDocuments();
-      expect(Array.isArray(inMem)).toBe(true);
     });
 
     it('retrieves documents using PostgreSQL pool when storage is enabled and handles error fallback', async () => {
@@ -1749,8 +2007,8 @@ describe('Account Documents & Credit Workflows API', () => {
         expect(pgDocs.length).toBe(1);
 
         pool.query = jest.fn().mockRejectedValue(new Error('PG query failure'));
-        const fallbackDocs = await accountDocumentQueries.getAllAccountDocuments();
-        expect(Array.isArray(fallbackDocs)).toBe(true);
+        await expect(accountDocumentQueries.getAllAccountDocuments())
+          .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
       } finally {
         pool.hasStorage = origHasStorage;
         pool.query = origQuery;

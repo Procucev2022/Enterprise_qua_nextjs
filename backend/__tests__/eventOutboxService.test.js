@@ -523,6 +523,49 @@ describe('background event retry outbox', () => {
     expect(sendSpy).toHaveBeenCalledWith({ subject: 'Rating update' }, 'rating-revision');
   });
 
+  test('dispatches a rating revision for a never-rated vendor whose previous rating and score are null', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const revision = {
+      id: 'rev-rating-first',
+      vendorName: 'First Rated Vendor',
+      buyerCompany: 'Buyer Co',
+      buyerName: 'Buyer Contact',
+      previousRating: null,
+      newRating: 3.5,
+      previousScore: null,
+      newCompositeScore: 70,
+      remarks: '',
+      qualityScore: 70,
+      costScore: 70,
+      deliveryScore: 70,
+    };
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'vendor-rating-email-null',
+      event_type: EVENT_OUTBOX_TYPES.VENDOR_RATING_REVISION_EMAIL,
+      raw: { vendorId: 'vendor-rating-null', revisionId: revision.id, recipientEmail: 'first@vendor.test' },
+      attempts: 1,
+      lease_token: 'lease-rating-null',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue({
+      id: 'vendor-rating-null',
+      name: 'First Rated Vendor',
+      contactPerson: 'First Contact',
+      ratingRevisionHistory: [revision],
+    });
+    const buildSpy = jest.spyOn(mailerService, 'buildRatingRevisionEmail').mockReturnValue({ subject: 'Rating update' });
+    const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1, dead: 0 });
+    expect(buildSpy).toHaveBeenCalledWith(expect.objectContaining({
+      previousRating: null,
+      newRating: 3.5,
+      previousScore: null,
+      newScore: 70,
+    }));
+    expect(sendSpy).toHaveBeenCalledWith({ subject: 'Rating update' }, 'rating-revision');
+  });
+
   test('dispatches encrypted vendor onboarding credentials and saves sent status', async () => {
     const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
     process.env.AES_ENCRYPTION_KEY = 'b'.repeat(64);
@@ -531,7 +574,7 @@ describe('background event retry outbox', () => {
       name: 'Dispatch Vendor Co',
       contactPerson: 'Mira',
       email: 'dispatch-vendor@example.test',
-      phone: '+919999999999',
+      phone: '+919000000001',
       onboardingEmailStatus: 'pending',
     };
     const encryptedTempPassword = cryptoService.encrypt('Temporary123!', {
@@ -1125,9 +1168,10 @@ describe('background event retry outbox', () => {
         { item_name: 'Pump', item_spec: 'SS316', qty: 3, uom: 'Each' },
         { item_name: 'Valve', item_spec: 'DIN', qty: 2, uom: 'Piece' },
         { item_name: 'Seal', item_spec: 'NBR', qty: 4, uom: 'Set' },
-        { item_name: 'Line Item', item_spec: 'Housing', qty: 1, uom: 'Nos' },
-        { item_name: 'Line Item', item_spec: 'Replacement part', qty: 1, uom: 'Nos' },
-        { item_name: 'Line Item', item_spec: 'Standard Specification', qty: 1, uom: 'Nos' },
+        // Stored line items only: no placeholder name, specification, quantity or unit is invented.
+        { item_spec: 'Housing' },
+        { item_spec: 'Replacement part' },
+        {},
       ],
     });
   });

@@ -5,8 +5,6 @@ import type {
   SellerDirectoryColumnKey,
   BuyerDirectoryColumnKey,
   SourcingModeDetail,
-  SystemConfig,
-  AzureServiceHealth,
   SidebarNavItem,
   RoleWorkspaceMeta,
   UserRole,
@@ -269,7 +267,7 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
  */
 export function entitledSourcingModes(
   subscriptionPlan?: string | null,
-  remainingFreeRFQs?: number,
+  remainingFreeRFQs?: number | null,
   unlimitedRfqAccess?: boolean
 ): SourcingMode[] {
   if (unlimitedRfqAccess) {
@@ -280,52 +278,12 @@ export function entitledSourcingModes(
   if (plan === 'unlimited') {
     return [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3];
   }
-  if (plan === 'free_trial' && remainingFreeRFQs !== undefined && remainingFreeRFQs <= 0) {
+  // A null count is a balance the server has not reported. It has always been read as no credits left.
+  if (plan === 'free_trial' && remainingFreeRFQs !== undefined && (remainingFreeRFQs === null || remainingFreeRFQs <= 0)) {
     return ['mode_0'];
   }
   return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
 }
-
-export const BUYER_SUBSCRIPTION_PLANS = [
-  {
-    id: 'buyer_starter',
-    name: 'Starter Enterprise',
-    rfqLimit: 50,
-    pricePerMonth: 4999,
-    features: ['Up to 50 active RFQs', 'Standard AI Chaser', 'Single Buyer Console'],
-  },
-  {
-    id: 'buyer_growth',
-    name: 'Growth Enterprise',
-    rfqLimit: 250,
-    pricePerMonth: 14999,
-    features: ['Up to 250 active RFQs', 'Multi-channel Voice & WhatsApp', 'Category Governance'],
-  },
-  {
-    id: 'buyer_custom',
-    name: 'Unlimited Enterprise',
-    rfqLimit: 99999,
-    pricePerMonth: 49999,
-    features: ['Unlimited RFQs', 'Dedicated Azure HSM Instance', 'Custom ERP Integrations'],
-  },
-];
-
-export const VENDOR_SUBSCRIPTION_PLANS = [
-  {
-    id: 'vendor_standard',
-    name: 'Verified Supplier',
-    pricePerMonth: 1999,
-    bidLimit: 30,
-    features: ['30 Quote Submissions / Month', 'Direct Telemetry Feedback'],
-  },
-  {
-    id: 'vendor_premium',
-    name: 'Preferred Partner',
-    pricePerMonth: 5999,
-    bidLimit: 99999,
-    features: ['Unlimited Quote Submissions', 'Top-tier AI Matching Priority', 'Dedicated Account Manager'],
-  },
-];
 
 /** RFQ downloads included per paid vendor plan per 3-month period (mirrors backend VENDOR_PLAN_RFQ_QUOTA). */
 export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, select: 100 };
@@ -334,71 +292,115 @@ export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, sele
 export const VENDOR_FREE_CREDITS_LIMIT = 5;
 
 /**
- * A vendor's displayable credit balance: plan quota less downloads used for a
- * Connect/Select subscriber, otherwise their free-tier balance (the default
- * VENDOR_FREE_CREDITS_LIMIT until the vendor's record stores a balance).
- * Reading the free-tier field alone rendered every subscriber as "0 Credits".
+ * The six qualification pillars a supplier is scored on. Names and weights match the vendor qualification form
+ * (app/vendor/qualification-form.tsx). `moduleKey` names the matching field of VendorEvaluationRecord.moduleScores.
+ * `accent` holds the colour classes each pillar uses on the buyer evaluation summary.
+ */
+export const VENDOR_EVALUATION_PILLARS = [
+  {
+    id: 'M1',
+    name: 'Commercial Terms',
+    weight: 25,
+    moduleKey: 'commercial',
+    accent: {
+      badge: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300',
+      score: 'text-indigo-600 dark:text-indigo-400',
+      bar: 'bg-indigo-600',
+      remarksBox: 'bg-indigo-50/70 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 text-indigo-900 dark:text-indigo-200',
+      remarksTitle: 'text-indigo-700 dark:text-indigo-300',
+    },
+  },
+  {
+    id: 'M2',
+    name: 'Technical Capabilities',
+    weight: 15,
+    moduleKey: 'technical',
+    accent: {
+      badge: 'bg-sky-100 dark:bg-cyan-950 text-sky-700 dark:text-cyan-300',
+      score: 'text-sky-600 dark:text-cyan-400',
+      bar: 'bg-sky-600',
+      remarksBox: 'bg-sky-50/70 dark:bg-cyan-950/50 border border-sky-100 dark:border-cyan-800/60 text-sky-900 dark:text-cyan-200',
+      remarksTitle: 'text-sky-700 dark:text-cyan-300',
+    },
+  },
+  {
+    id: 'M3',
+    name: 'Quality & Warranty',
+    weight: 20,
+    moduleKey: 'quality',
+    accent: {
+      badge: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300',
+      score: 'text-emerald-600 dark:text-emerald-400',
+      bar: 'bg-emerald-600',
+      remarksBox: 'bg-emerald-50/70 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/60 text-emerald-900 dark:text-emerald-200',
+      remarksTitle: 'text-emerald-700 dark:text-emerald-300',
+    },
+  },
+  {
+    id: 'M4',
+    name: 'Operational Delivery',
+    weight: 20,
+    moduleKey: 'delivery',
+    accent: {
+      badge: 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300',
+      score: 'text-purple-600 dark:text-purple-400',
+      bar: 'bg-purple-600',
+      remarksBox: 'bg-purple-50/70 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-800/60 text-purple-900 dark:text-purple-200',
+      remarksTitle: 'text-purple-700 dark:text-purple-300',
+    },
+  },
+  {
+    id: 'M5',
+    name: 'Financial Stability',
+    weight: 10,
+    moduleKey: 'financial',
+    accent: {
+      badge: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300',
+      score: 'text-amber-600 dark:text-amber-400',
+      bar: 'bg-amber-600',
+      remarksBox: 'bg-amber-50/70 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-800/60 text-amber-900 dark:text-amber-200',
+      remarksTitle: 'text-amber-700 dark:text-amber-300',
+    },
+  },
+  {
+    id: 'M6',
+    name: 'Governance & ESG',
+    weight: 10,
+    moduleKey: 'governance',
+    accent: {
+      badge: 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300',
+      score: 'text-rose-600 dark:text-rose-400',
+      bar: 'bg-rose-600',
+      remarksBox: 'bg-rose-50/70 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-800/60 text-rose-900 dark:text-rose-200',
+      remarksTitle: 'text-rose-700 dark:text-rose-300',
+    },
+  },
+] as const;
+
+/** Overall score at or above which a supplier passes the buyer gate. Shown on the evaluation summary. */
+export const VENDOR_EVALUATION_GATE_SCORE = 80;
+
+/** Attachment rows listed on the buyer evaluation summary before the rest are counted in a note. */
+export const VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT = 12;
+
+/**
+ * A vendor's displayable credit balance, or null when the record does not hold the number needed to compute it.
+ * A Connect/Select subscriber's balance is the plan quota less downloads used, so it needs `rfqDownloadsUsed`.
+ * Otherwise the balance is the stored free-tier count. No default is substituted for a missing count.
  */
 export function getVendorCreditBalance(vendor: {
   subscriptionPlan?: string;
   rfqDownloadsUsed?: number;
   freeQuotationCredits?: number;
-}): number {
+}): number | null {
   const quota = vendor.subscriptionPlan ? VENDOR_PLAN_RFQ_QUOTA[vendor.subscriptionPlan] : undefined;
-  if (quota !== undefined) return Math.max(0, quota - (Number(vendor.rfqDownloadsUsed) || 0));
-  if (vendor.freeQuotationCredits == null) return VENDOR_FREE_CREDITS_LIMIT;
-  return Math.max(0, Number(vendor.freeQuotationCredits) || 0);
+  if (quota !== undefined) {
+    if (typeof vendor.rfqDownloadsUsed !== 'number' || !Number.isFinite(vendor.rfqDownloadsUsed)) return null;
+    return Math.max(0, quota - vendor.rfqDownloadsUsed);
+  }
+  if (typeof vendor.freeQuotationCredits !== 'number' || !Number.isFinite(vendor.freeQuotationCredits)) return null;
+  return Math.max(0, vendor.freeQuotationCredits);
 }
-
-export const INITIAL_SYSTEM_CONFIG: SystemConfig = {
-  ollamaModel: 'Llama 3 (8B Instruct)',
-  ollamaActive: true,
-  ocrExtractionThreshold: 85,
-  whatsappAutoChaser: true,
-  voiceCallAutoChaser: true,
-  smsAutoChaser: true,
-  escalationIntervalHours: 24,
-  azureDbBackupFrequency: 'Daily',
-  rbacEnforced: true,
-};
-
-export const INITIAL_AZURE_HEALTH: AzureServiceHealth[] = [
-  {
-    service: 'Azure PostgreSQL Flexible Server (Neon Pooler)',
-    status: 'ONLINE',
-    latency: '18ms',
-    uptime: '99.99%',
-    details: 'Read/Write Active, SSL Require, Automated HA Clustering',
-  },
-  {
-    service: 'Azure OpenAI (Doc Intelligence OCR)',
-    status: 'HEALTHY',
-    latency: '42ms',
-    uptime: '99.95%',
-    details: 'Deployment: gpt-4o-procure-v2, TPS: 140/sec',
-  },
-  {
-    service: 'Azure Cosmos DB (Chasing State Engine)',
-    status: 'ONLINE',
-    latency: '12ms',
-    uptime: '99.999%',
-    details: 'Multi-Region Replication, Automatic Partitioning',
-  },
-  {
-    service: 'Azure Communication Services (WhatsApp / Voice Gateway)',
-    status: 'ONLINE',
-    latency: '65ms',
-    uptime: '99.9%',
-    details: 'Enterprise WhatsApp Business API & AI Voice SIP Trunking Active',
-  },
-  {
-    service: 'Azure Key Vault & HSM Security (kv-procucev-prod)',
-    status: 'HEALTHY',
-    latency: '8ms',
-    uptime: '100%',
-    details: 'FIPS 140-2 Level 3 Hardware Security Module Active',
-  },
-];
 
 export const AES_CONFIG = {
   ALGORITHM: 'AES-GCM',
@@ -767,6 +769,9 @@ export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
 /** Path of the sign-in screen. */
 export const LOGIN_ROUTE = '/login';
 
+/** Vendor quotation form. Chaser messages link to it with the RFQ number in the `rfq` query parameter. */
+export const VENDOR_QUOTATION_ROUTE = '/vendor/quotation-form';
+
 /**
  * Email OTP shape, mirroring IDENTITY_OTP_CONFIG on the backend. Both trace back
  * to the shared `otp_store` table the Java p2pservices app writes, whose `otp`
@@ -774,6 +779,13 @@ export const LOGIN_ROUTE = '/login';
  */
 export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 15;
+
+/**
+ * Placeholder mobile number that some auto-created buyer records carry. No one can
+ * receive a code on it, so the buyer onboarding screen refuses it for OTP dispatch
+ * and for submission.
+ */
+export const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 
 // PASSWORD_MIN_LENGTH is defined in ./validationSchemas and re-exported at the
 // bottom of this file. It lives there because the change-password schema needs it
@@ -829,19 +841,6 @@ export const ORGANIZATION_TYPE_OPTIONS: OrganizationType[] = [
   'Partnership',
   'Sole Proprietorship',
 ];
-
-/**
- * Fallback used when an RFQ reaches dispatch without a target delivery date.
- *
- * A row the buyer adds by hand starts entirely blank — no quantity, unit,
- * category or date — because pre-filled values read as answers the buyer never
- * gave. This offset only backfills the RFQ header when no line item carries a
- * date, and mirrors DELIVERY_DATE_OFFSET_DAYS in RFQ_INGESTION_CONFIG on the
- * backend so a keyed RFQ and an ingested one land on the same default.
- */
-export const MANUAL_LINE_ITEM_DEFAULTS = {
-  TARGET_DATE_OFFSET_DAYS: 5,
-} as const;
 
 /**
  * Single currency the platform trades in. Amounts are grouped the Indian way
@@ -1108,6 +1107,15 @@ export const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
 export const PRESENCE_HEARTBEAT_INTERVAL_MS = 4 * 60 * 1000;
 export const PRESENCE_POLL_INTERVAL_MS = 30 * 1000;
 
+/** Admin infrastructure screen: how often the database status is re-read (ms). */
+export const DB_STATUS_POLL_INTERVAL_MS = 15 * 1000;
+/** Read-only database status endpoint (GET). */
+export const DB_STATUS_ENDPOINT = '/api/db/status';
+/** Support chat endpoint (POST). It answers only when a support service is connected. */
+export const SUPPORT_CHAT_ENDPOINT = '/api/support-chat';
+/** How long the support chat widget shows the copied confirmation (ms). */
+export const SUPPORT_CHAT_COPY_CONFIRMATION_MS = 2 * 1000;
+
 /** RFQ vendor assignment limits per category (configurable via env) */
 export const VENDOR_ASSIGNMENT_LIMITS = {
   get MAX_CLIENT_PER_CATEGORY(): number {
@@ -1137,24 +1145,13 @@ export {
   PASSWORD_MIN_LENGTH,
 } from './validationSchemas';
 
-export const UNLIMITED_ACCESS_EMAILS = new Set([
-  'sudheer.kangala@procucev.com',
-  'procucevvendor@gmail.com',
-]);
-
-export function hasUnlimitedAccess(emailOrSession?: { email?: string } | string | null): boolean {
-  if (!emailOrSession) return false;
-  const email = (typeof emailOrSession === 'string' ? emailOrSession : emailOrSession.email || '').trim().toLowerCase();
-  return UNLIMITED_ACCESS_EMAILS.has(email);
-}
-
 export const QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES = {
   EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED: {
     id: 'EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED',
     number: 1,
     name: 'RFQ created from email, account auto-created',
     who: 'Unregistered buyer',
-    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.',
+    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID, creates the RFQ, then sends this email.',
     subject: 'Congratulations, your RFQ {rfq_id} is live on Qua AI',
   },
   EMAIL_2_RFQ_CREATED: {
@@ -1262,7 +1259,6 @@ export const QUA_AI_EMAIL_SUPPORT = {
   COMPANY_NAME: 'Procucev Enterprise Solutions',
 } as const;
 
-export const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
 export const VENDOR_DIRECTORY_AUTH_STORAGE_KEY = 'procucev_vendor_directory_auth';
 
 export const VENDOR_DIRECTORY_AUTH_CONFIG = {
@@ -1274,6 +1270,48 @@ export const VENDOR_DIRECTORY_AUTH_CONFIG = {
 
 
 export const MAX_INVITE_VENDORS = 20;
+
+/**
+ * Notices the store shows when a server call fails or confirms an action. Each sentence states only what the
+ * server did or did not confirm. The placeholders are filled by formatString.
+ */
+export const STORE_MESSAGES = {
+  aiFeedLoadFailed: 'The AI activity feed could not be loaded from the server. The events shown are the last ones that loaded.',
+  buyerAccountCreateFailedTitle: 'Buyer Account Not Created',
+  buyerAccountCreateFailed: 'The server did not confirm the buyer account, so nothing was added. Try again.',
+  buyerAccountUnreachable: 'The buyer account could not be saved because the server could not be reached. Check your connection and try again.',
+  alignFailedTitle: 'Session Not Switched',
+  alignFailed: 'The server did not switch the active buyer account. The previous account is still active.',
+  alignUnreachable: 'The account switch could not be sent because the server could not be reached. The previous account is still active.',
+  alignedMessage: 'The session is now aligned to {name}.',
+  historicalUnreachable: 'Could not reach the server. Check your network connection and the server status.',
+  ratingRevisionSavedTitle: 'Rating Revision Submitted & Email Dispatched',
+  ratingRevisionSavedMessage: 'Revised performance rating ({newRating} ★, {newCompositeScore}%) saved and notification email dispatched to {vendorName}.',
+  vendorUpdateFailedTitle: 'Vendor Not Updated',
+  vendorUpdateFailed: 'The server did not save these vendor changes. The directory keeps the last saved values.',
+  vendorUnreachable: 'The request could not reach the server. Nothing was changed. Check your connection and try again.',
+  vendorDeleteFailedTitle: 'Vendor Not Removed',
+  vendorDeleteFailed: 'The server did not confirm the removal, so the vendor is still listed. Refresh the list and try again.',
+  vendorsRemovedMessage: '{count} supplier record(s) were deleted on the server.',
+  auditSaveFailedTitle: 'Audit Entry Not Saved',
+  auditSaveFailed: 'The server did not store this audit entry, so it is missing from the audit trail.',
+  feedSaveFailedTitle: 'Activity Not Recorded',
+  feedSaveFailed: 'The server did not store this activity event, so it is not in the activity feed.',
+  emailNoRecipientTitle: 'No Recipient Selected',
+  emailNoRecipient: 'Choose a vendor before opening the RFQ email. The email needs a recipient.',
+  poNetworkFailed: 'Network error while approving the pre-purchase order.',
+  chaserNotSentTitle: 'Chaser Not Sent',
+  chaserUnreachable: 'The chaser could not be sent because the server could not be reached. Nothing was sent.',
+  chaserRequestFailed: 'The server did not accept the chaser request. Nothing was sent.',
+  chaserNoneSent: 'No chaser message was accepted by a messaging provider. Check the RFQ follow-up log for each vendor and channel.',
+  chaserSentTitle: 'Chasers Sent',
+  chaserSentMessage: '{sent} of {total} chaser messages for {rfqNumber} were accepted by a messaging provider ({channels}).',
+  chaserVendorNotConnected: 'Single-vendor chasers are not connected to the server, so nothing was sent. Use the batch chaser for this RFQ.',
+  rfqCreatedTitle: 'RFQ Saved',
+  rfqCreatedMessage: '{rfqNumber} is saved. The server assigned {count} vendor(s).',
+  rfqCreatedFeedTitle: 'RFQ Created: {rfqNumber}',
+  rfqCreatedFeedMessage: 'The server assigned {count} vendor(s) to this RFQ.',
+} as const;
 
 export const INDIAN_STATES_AND_CITIES: Record<string, string[]> = {
   "Andhra Pradesh": ["Visakhapatnam", "Vijayawada", "Guntur", "Tirupati", "Nellore", "Kurnool", "Kakinada", "Rajahmundry", "Kadapa", "Anantapur", "Eluru", "Ongole", "Chittoor", "Srikakulam", "Vizianagaram", "Machilipatnam", "Tenali", "Narasaraopet", "Chilakaluripet", "Bapatla", "Chirala", "Kavali", "Gudur", "Sullurpeta", "Naidupeta", "Venkatagiri", "Puttur", "Nagari", "Madanapalle", "Punganur", "Palamaner", "Pileru", "Rayachoti", "Proddatur", "Jammalamadugu", "Pulivendula", "Mydukur", "Nandyal", "Adoni", "Yemmiganur", "Dhone", "Atmakur", "Allagadda", "Banaganapalle", "Markapur", "Kanigiri", "Giddalur", "Podili", "Kandukur", "Addanki", "Parchur", "Repalle", "Ponnur", "Mangalagiri", "Tadepalli", "Sattenapalle", "Vinukonda", "Piduguralla", "Macherla", "Gurazala", "Amaravati", "Ibrahimpatnam", "Nuzvid", "Gudivada", "Pedana", "Vuyyuru", "Jaggayyapeta", "Nandigama", "Tiruvuru", "Kaikaluru", "Bhimavaram", "Tadepalligudem", "Tanuku", "Palakollu", "Narasapuram", "Nidadavole", "Kovvur", "Jangareddygudem", "Akividu", "Attili", "Amalapuram", "Mandapeta", "Ramachandrapuram", "Peddapuram", "Samalkot", "Pithapuram", "Tuni", "Yeleswaram", "Anakapalle", "Narsipatnam", "Yelamanchili", "Bheemunipatnam", "Pendurthi", "Parvathipuram", "Bobbili", "Salur", "Palasa", "Ichchapuram", "Tekkali", "Amadalavalasa", "Rajam", "Hindupur", "Dharmavaram", "Tadipatri", "Gooty", "Guntakal", "Rayadurg", "Kalyandurg", "Penukonda", "Puttaparthi", "Kadiri", "Palakonda"],
@@ -1417,22 +1455,6 @@ export const DEFAULT_SELLER_DIRECTORY_COLUMNS: SellerDirectoryColumnConfig[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 
-
-export interface InternalTeamMember {
-  id: string;
-  name: string;
-  role: string;
-  email: string;
-  project?: string;
-}
-
-export const DEFAULT_INTERNAL_MEMBERS: InternalTeamMember[] = [
-  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
-  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
-  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
-  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
-  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
-];
 
 export const COMMUNICATION_CHANNELS = [
   { value: 'CALL', label: 'Call Log' },

@@ -3,10 +3,11 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { createRFQ, extractLineItemsFromDocument } from '@/lib/rfqClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { fetchEmailGatewayStatus } from '@/lib/emailGatewayClient';
+import { UI_STRINGS, extractionReasonMessage } from '@/lib/uiStrings';
 import { resolveBuyerSourcingMode, rfqVersionLabel } from '@/lib/constants';
 import { logger } from '@/lib/logger';
-import type { ExtractedEntity, RFQItem } from '@/lib/types';
+import type { RFQItem } from '@/lib/types';
 import {
   Mail,
   RefreshCw,
@@ -22,19 +23,36 @@ interface EmailGatewayPanelProps {
 export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelProps) {
   const { showToast, activeBuyerAccount, adoptCreatedRFQ } = useApp();
 
-  // Email composer state - defaults empty for subject and body as requested
-  const [emailSender, setEmailSender] = useState<string>('project.procurement@lt-heavy.com');
-  const [emailGatewayTo, setEmailGatewayTo] = useState<string>('RFQ@procucev.com');
+  // Sender starts as the buyer's corporate email on the active account, or blank when there is none.
+  const [emailSender, setEmailSender] = useState<string>(activeBuyerAccount?.corporateEmail ?? '');
+  // Intake address buyers send requisitions to. It comes from the gateway status, never from a constant.
+  const [gatewayAddress, setGatewayAddress] = useState<string | null>(null);
+  const [isGatewayLoading, setIsGatewayLoading] = useState(true);
+  const [gatewayStatusError, setGatewayStatusError] = useState<string | null>(null);
   const [emailSubject, setEmailSubject] = useState<string>('');
   const [emailBody, setEmailBody] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Sync active buyer account email when available
+  // Keep the sender in step with the active buyer account.
   useEffect(() => {
-    if (activeBuyerAccount?.corporateEmail) {
-      setEmailSender(activeBuyerAccount.corporateEmail);
-    }
-  }, [activeBuyerAccount]);
+    setEmailSender(activeBuyerAccount?.corporateEmail ?? '');
+  }, [activeBuyerAccount?.corporateEmail]);
+
+  // Read the intake address once. A failed read is shown beside the field.
+  useEffect(() => {
+    let isActive = true;
+    const loadGatewayStatus = async () => {
+      const result = await fetchEmailGatewayStatus();
+      if (!isActive) return;
+      setGatewayAddress(result.success && result.data ? result.data.gatewayAddress : null);
+      setGatewayStatusError(result.success ? null : result.error || GATEWAY.statusUnavailable);
+      setIsGatewayLoading(false);
+    };
+    loadGatewayStatus();
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   const handleSubmitRequisition = async () => {
     if (!emailSubject.trim()) {
@@ -55,48 +73,30 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
         mimeType: 'text/plain',
       });
 
-      let items: ExtractedEntity[] = [];
-      let category = 'Engineering Spares - Mechanical';
-      let budget = 2500000;
-      let targetDeliveryDate = '2026-09-18';
-
-      if (extractRes.success && extractRes.data && extractRes.data.extractedEntities && extractRes.data.extractedEntities.length > 0) {
-        items = extractRes.data.extractedEntities;
-        category = extractRes.data.category || category;
-        budget = extractRes.data.estimatedBudget || budget;
-        targetDeliveryDate = extractRes.data.targetDeliveryDate || targetDeliveryDate;
-      } else {
-        // Structured fallback from requirement text
-        items = [
-          {
-            id: `item-${Date.now()}-1`,
-            itemName: emailSubject.replace(/^URGENT:\s*/i, '') || 'Custom Requisition Requirement',
-            technicalSpecs: emailBody.slice(0, 160).replace(/\n/g, ' '),
-            quantity: 12,
-            unit: 'Units',
-            category: category,
-            majorCategory: category,
-            minorCategory: 'General Industrial Equipment',
-            targetDate: targetDeliveryDate,
-            confidence: 0.95,
-          },
-        ];
+      // No extracted line items means no RFQ. Nothing is filled in with placeholder items.
+      if (!extractRes.success || !extractRes.data || extractRes.data.extractedEntities.length === 0) {
+        logger.warn('Requisition yielded no line items; no RFQ was created', { reason: extractRes.reason }, 'EMAIL_GATEWAY');
+        showToast('Ingestion Failed', extractionReasonMessage(extractRes.reason, extractRes.error), 'warning');
+        return;
       }
 
+      const draft = extractRes.data;
       const saveRes = await createRFQ({
-        title: emailSubject || 'Inbound Email Requisition',
-        category,
+        title: emailSubject,
+        category: draft.category,
         sourcingMode: resolveBuyerSourcingMode(activeBuyerAccount),
         status: 'Parsing',
         source: 'email_gateway',
         sourceFileName: 'inbound-email.eml',
         sourceEmail: emailSender,
-        targetGatewayEmail: emailGatewayTo,
-        budget,
-        targetDeliveryDate,
-        deliveryLocation: 'Enterprise Logistics Hub (Navi Mumbai CIF Site)',
-        deliveryPincode: '400707',
-        extractedEntities: items,
+        targetGatewayEmail: gatewayAddress ?? undefined,
+        // Zero is how an RFQ records that the requisition stated no budget.
+        budget: draft.estimatedBudget ?? 0,
+        targetDeliveryDate: draft.targetDeliveryDate,
+        // Destination comes from the buyer account. The server rejects an RFQ that has none.
+        deliveryLocation: activeBuyerAccount?.primaryPlantLocation ?? '',
+        deliveryPincode: activeBuyerAccount?.pincode || activeBuyerAccount?.zip_code || '',
+        extractedEntities: draft.extractedEntities,
         attachments: [],
       });
 
@@ -148,7 +148,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
       </div>
 
       <div className="text-[11px] text-slate-500 dark:text-gray-400 bg-slate-100/70 dark:bg-gray-900/60 p-2.5 rounded-lg border border-slate-200 dark:border-gray-800">
-        Requisitions sent to the RFQ email ID (<span className="font-mono text-slate-700 dark:text-slate-300">RFQ@procucev.com</span>) are assigned to <strong className="text-slate-700 dark:text-slate-200">V0 (Mode 0)</strong> by default. If your account holds an active subscription to V1, V2, or V3, the RFQ is automatically routed to that respective version.
+        Requisitions sent to the intake address below are assigned to <strong className="text-slate-700 dark:text-slate-200">V0 (Mode 0)</strong> by default. If your account holds an active subscription to V1, V2, or V3, the RFQ is automatically routed to that respective version.
       </div>
 
       {/* Requisition Composer Form */}
@@ -162,7 +162,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
               type="text"
               value={emailSender}
               onChange={(e) => setEmailSender(e.target.value)}
-              placeholder="project.procurement@lt-heavy.com"
+              placeholder="name@company.com"
               className="w-full text-xs font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
@@ -172,10 +172,14 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
             </label>
             <input
               type="text"
-              value={emailGatewayTo}
+              value={gatewayAddress ?? ''}
               readOnly
+              placeholder={isGatewayLoading ? GATEWAY.checkingLabel : GATEWAY.notConfiguredLabel}
               className="w-full text-xs font-mono px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-950/80 text-slate-600 dark:text-gray-400 cursor-not-allowed"
             />
+            {gatewayStatusError && (
+              <p className="mt-1 text-[10px] text-rose-600 dark:text-rose-400">{gatewayStatusError}</p>
+            )}
           </div>
         </div>
 
@@ -227,5 +231,3 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
     </div>
   );
 }
-
-

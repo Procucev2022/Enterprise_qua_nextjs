@@ -1,8 +1,11 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import SpendDashboard from '@/app/category-manager/spend-dashboard';
+import SpendDashboard, { calculateTurnaround } from '@/app/category-manager/spend-dashboard';
 import { useApp } from '@/lib/store';
 import type { AuditLogEntry, RFQItem } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
+
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -44,7 +47,9 @@ describe('SpendDashboard metrics', () => {
     expect(raisedCard).not.toBeNull();
     expect(within(raisedCard as HTMLElement).getByText('2')).toBeInTheDocument();
     expect(screen.getByText('Avg 0.0 downloads per RFQ')).toBeInTheDocument();
-    expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0);
+    // No invitations exist, so the response rate and mode efficiency are dashes rather than 0.0%.
+    expect(screen.queryByText('0.0%')).not.toBeInTheDocument();
+    expect(screen.getAllByText(EMPTY_VALUE).length).toBeGreaterThan(0);
   });
 
   test('calculates populated metrics and invokes the available navigation actions', () => {
@@ -109,8 +114,86 @@ describe('SpendDashboard metrics', () => {
     expect(raisedCard).not.toBeNull();
     expect(vendorCard).not.toBeNull();
     expect(within(raisedCard as HTMLElement).getByText('0')).toBeInTheDocument();
-    expect(screen.getByText('Avg 0.0 downloads per RFQ')).toBeInTheDocument();
+    expect(screen.getByText(`Avg ${EMPTY_VALUE} downloads per RFQ`)).toBeInTheDocument();
     expect((raisedCard as HTMLButtonElement).disabled).toBe(true);
     expect((vendorCard as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test('shows the recorded per-channel attempts and a dash for a channel with no attempts', () => {
+    const createdAt = new Date(Date.now() - 60_000).toISOString();
+    const rfqs = [
+      {
+        id: 'rfq-channels',
+        rfqNumber: 'RFQ-CHANNELS',
+        title: 'Channel RFQ',
+        sourcingMode: 'MODE 2' as RFQItem['sourcingMode'],
+        createdAt,
+        assignedVendors: [],
+        followUpData: {
+          totalInvited: 4,
+          respondedCount: 1,
+          whatsappStats: { total: 4, delivered: 0, read: 0, replied: 1 },
+          callStats: { total: 0, connected: 0, avgDuration: '' },
+          smsStats: { total: 5, delivered: 0, clicked: 0 },
+          emailStats: { total: 2, sent24h: 0, opened: 2 },
+        },
+      },
+    ] as unknown as RFQItem[];
+    mockUseApp.mockReturnValue({ rfqs, auditLogs: [] as AuditLogEntry[] } as ReturnType<typeof useApp>);
+
+    render(<SpendDashboard onBackToKanban={jest.fn()} />);
+
+    const whatsappRow = screen.getByText('WhatsApp replies').closest('div')?.parentElement as HTMLElement;
+    expect(within(whatsappRow).getByText('25.0%')).toBeInTheDocument();
+    expect(within(whatsappRow).getByText('1 of 4 recorded attempts')).toBeInTheDocument();
+
+    const emailRow = screen.getByText('Email opens').closest('div')?.parentElement as HTMLElement;
+    expect(within(emailRow).getByText('100.0%')).toBeInTheDocument();
+
+    const smsRow = screen.getByText('SMS link clicks').closest('div')?.parentElement as HTMLElement;
+    expect(within(smsRow).getByText('0.0%')).toBeInTheDocument();
+    expect(within(smsRow).getByText('0 of 5 recorded attempts')).toBeInTheDocument();
+
+    const callRow = screen.getByText('Voice call connections').closest('div')?.parentElement as HTMLElement;
+    expect(within(callRow).getByText(EMPTY_VALUE)).toBeInTheDocument();
+    expect(within(callRow).getByText('No attempts recorded for this channel')).toBeInTheDocument();
+  });
+
+  test('computes turnaround only from valid RFQ and quote timestamps', () => {
+    const now = Date.now();
+    const day = 86_400_000;
+    const createdTwoDaysAgo = new Date(now - 2 * day).toISOString();
+    const rfqs = [
+      {
+        id: 'rfq-timed',
+        rfqNumber: 'RFQ-TIMED',
+        title: 'Timed RFQ',
+        sourcingMode: 'MODE 3' as RFQItem['sourcingMode'],
+        createdAt: createdTwoDaysAgo,
+        assignedVendors: [],
+        quotes: [
+          { vendorId: 'v-1', submittedAt: new Date(now - day).toISOString() },
+          { vendorId: 'v-2' },
+          { vendorId: 'v-3', submittedAt: 'not-a-date' },
+          { vendorId: 'v-4', submittedAt: createdTwoDaysAgo },
+        ],
+      },
+      {
+        id: 'rfq-untimed',
+        rfqNumber: 'RFQ-UNTIMED',
+        title: 'Untimed RFQ',
+        sourcingMode: 'MODE 3' as RFQItem['sourcingMode'],
+        createdAt: '',
+        assignedVendors: [],
+        quotes: [{ vendorId: 'v-5', submittedAt: new Date(now).toISOString() }],
+      },
+    ] as unknown as RFQItem[];
+    mockUseApp.mockReturnValue({ rfqs, auditLogs: [] as AuditLogEntry[] } as ReturnType<typeof useApp>);
+
+    render(<SpendDashboard onBackToKanban={jest.fn()} />);
+
+    expect(screen.getByText('1.0 Days')).toBeInTheDocument();
+    expect(calculateTurnaround([])).toBe(EMPTY_VALUE);
+    expect(calculateTurnaround(rfqs.slice(1))).toBe(EMPTY_VALUE);
   });
 });

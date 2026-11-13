@@ -5,7 +5,7 @@ jest.mock('@/lib/rfqClient', () => ({ fetchRFQById: jest.fn(), uploadRFQAttachme
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import * as storeModule from '@/lib/store';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchRFQById } from '@/lib/rfqClient';
 
 const mockFetchRFQById = fetchRFQById as jest.MockedFunction<typeof fetchRFQById>;
@@ -145,7 +145,6 @@ jest.mock('@/app/vendor/billing-history', () => stub('vendor-billing-history'));
 jest.mock('@/app/admin/infra-control', () => stub('infra-control', ['onNavigateToAuditLog']));
 jest.mock('@/app/admin/audit-log', () => stub('audit-log', ['onBackToInfra']));
 
-/* eslint-disable @typescript-eslint/no-var-requires */
 const BuyerDashboardPage = require('@/app/buyer/dashboard/page').default;
 const BuyerCommandCenterRedirectPage = require('@/app/buyer/command-center/page').default;
 const BuyerIngestionWizardPage = require('@/app/buyer/ingestion-wizard/page').default;
@@ -179,7 +178,6 @@ const VendorBillingHistoryPage = require('@/app/vendor/billing-history/page').de
 
 const AdminInfraControlPage = require('@/app/admin/infra-control/page').default;
 const AdminAuditLogPage = require('@/app/admin/audit-log/page').default;
-/* eslint-enable @typescript-eslint/no-var-requires */
 
 const RFQ = { id: 'rfq-1', rfqNumber: 'RFQ-1' } as RFQItem;
 const OPPORTUNITY = { id: 'opp-1', rfqNumber: 'RFQ-1' } as VendorOpportunity;
@@ -633,11 +631,21 @@ describe('Role screen routes', () => {
       expect(screen.getByTestId('quotation-form')).toBeInTheDocument();
     });
 
-    it('quotation form explains when there is nothing to quote on', () => {
-      mockStore({ selectedVendorOpportunity: null, vendorOpportunities: [] });
+    it('quotation form explains when the RFQ in the link is not in the enquiry list', () => {
+      mockSearchParams.set('rfq', 'RFQ-2026-99999');
+      mockStore({ selectedVendorOpportunity: null, vendorOpportunities: [], rfqs: [RFQ] });
       render(<VendorQuotationFormPage />);
       expect(screen.queryByTestId('quotation-form')).not.toBeInTheDocument();
-      expect(screen.getByText(/No open opportunity is available/i)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorWorkspace.rfqNotInEnquiriesTitle)).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.vendorWorkspace.rfqNotInEnquiriesMessage, { rfqNumber: 'RFQ-2026-99999' })
+        )
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorWorkspace.viewAllEnquiriesAction }));
+      expect(mockPush).toHaveBeenCalledWith('/vendor/quotation-form');
+      mockSearchParams.delete('rfq');
     });
 
     it('qualification form returns to the feed on back and on success', () => {

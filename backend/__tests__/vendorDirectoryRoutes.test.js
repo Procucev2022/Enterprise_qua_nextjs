@@ -206,7 +206,7 @@ describe('Protected Vendor Directory Routes (/api/vendors/public*)', () => {
     test('returns 404 since /directory-auth is retired', async () => {
       const res = await request(app)
         .post('/api/vendors/directory-auth')
-        .send({ passcode: 'Procucev@Vendors2026' });
+        .send({ passcode: 'retired-passkey-probe' });
 
       expect(res.status).toBe(404);
     });

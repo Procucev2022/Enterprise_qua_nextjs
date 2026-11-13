@@ -24,11 +24,22 @@ describe('Backend Validation Schemas Unit Tests', () => {
     }).errors.idempotencyKey).toMatch(/UUID/);
   });
 
+  test('takes the approver list from APPROVER_CONFIG and does not validate an initiator name', () => {
+    const { CREDIT_APPROVAL_APPROVERS } = require('../src/config/constants');
+    const schema = VALIDATION_SCHEMAS.buyerCreditApprovalRequest;
+    expect(schema.approverName.enum).toEqual(CREDIT_APPROVAL_APPROVERS);
+    expect(VALIDATION_SCHEMAS.approvalAction.approverName.enum).toEqual(CREDIT_APPROVAL_APPROVERS);
+    expect(schema.initiatorName).toBeUndefined();
+
+    const unlisted = validatePayload(schema, { amount: 5, approverName: 'Unlisted Approver' });
+    expect(unlisted.isValid).toBe(false);
+    expect(unlisted.errors.approverName).toMatch(/must be one of: Srinu Sir, Sudheer Sir/);
+  });
+
   test('validates optional credit approval request idempotency UUIDs', () => {
     const request = {
       amount: 5,
       approverName: 'Srinu Sir',
-      initiatorName: 'Govardhan',
     };
     expect(validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, request).isValid).toBe(true);
     expect(validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, {
@@ -572,3 +583,74 @@ describe('Backend Validation Schemas Unit Tests', () => {
 
 
 
+
+describe('Ticket and batch chaser schema contract', () => {
+  const { BATCH_CHASER_CHANNELS } = require('../src/config/constants');
+
+  const completeTicket = {
+    subject: 'Supplier delivery delay',
+    customerName: 'Tata Steel Ltd',
+    customerEmail: 'buyer@example.test',
+    customerPhone: '+15555550100',
+    assignedToName: 'Test Assignee',
+  };
+
+  test('accepts a ticket that names the customer and the assignee', () => {
+    expect(validatePayload(VALIDATION_SCHEMAS.ticketCreate, completeTicket).isValid).toBe(true);
+  });
+
+  test.each([
+    ['customerName', 'Customer name is required'],
+    ['customerEmail', 'Customer email is required'],
+    ['customerPhone', 'Customer phone is required'],
+    ['assignedToName', 'Assigned to name is required'],
+  ])('requires %s and the message names the missing field', (field, expectedMessage) => {
+    const result = validatePayload(VALIDATION_SCHEMAS.ticketCreate, { ...completeTicket, [field]: '' });
+    expect(result.isValid).toBe(false);
+    expect(result.errors[field]).toContain(expectedMessage);
+  });
+
+  test('rejects a customer email and a customer phone that are not in a valid format', () => {
+    const result = validatePayload(VALIDATION_SCHEMAS.ticketCreate, {
+      ...completeTicket,
+      customerEmail: 'not-an-email',
+      customerPhone: 'call me now',
+    });
+    expect(result.errors.customerEmail).toContain('valid email address');
+    expect(result.errors.customerPhone).toContain('valid phone number');
+  });
+
+  describe('batchChaserChannels', () => {
+    const schema = VALIDATION_SCHEMAS.batchChaserChannels;
+
+    test('accepts one to three distinct channels from the supported list', () => {
+      expect(BATCH_CHASER_CHANNELS).toEqual(['call', 'whatsapp', 'sms']);
+      for (const channels of [['call'], ['sms', 'whatsapp'], ['whatsapp', 'sms', 'call']]) {
+        expect(validatePayload(schema, { channels }).isValid).toBe(true);
+      }
+    });
+
+    test('requires the channels field and at least one channel', () => {
+      expect(validatePayload(schema, {}).errors.channels).toContain('Choose at least one chaser channel');
+      expect(validatePayload(schema, { channels: [] }).errors.channels).toContain('Choose at least one chaser channel');
+    });
+
+    test('names an unsupported channel such as email, which batch chasers do not use', () => {
+      const result = validatePayload(schema, { channels: ['sms', 'email'] });
+      expect(result.isValid).toBe(false);
+      expect(result.errors.channels).toContain('"email" is not supported');
+    });
+
+    test('rejects a channel listed twice', () => {
+      expect(validatePayload(schema, { channels: ['sms', 'sms'] }).errors.channels).toContain('chosen only once');
+    });
+
+    test('rejects more than three channels', () => {
+      expect(validatePayload(schema, { channels: ['call', 'sms', 'whatsapp', 'sms'] }).errors.channels).toContain('no more than 3');
+    });
+
+    test('rejects a value that is not a list', () => {
+      expect(validatePayload(schema, { channels: 'sms' }).errors.channels).toBe('channels must be an array.');
+    });
+  });
+});

@@ -301,6 +301,8 @@ export async function classifyLineItems(
               confidence: entity.confidence ?? 0,
             });
           }
+        } else if (!firstError) {
+          firstError = body.error || UI_STRINGS.rfqExtraction.classifyFailed;
         }
       }
     } catch {
@@ -315,7 +317,9 @@ export async function classifyLineItems(
     });
   }
 
-  if (allClassified.length === 0 && firstError) {
+  // A failed batch leaves its items unclassified. Returning the items that did classify as a
+  // success would let the caller read the missing items as complete, so any batch failure is an error.
+  if (firstError) {
     return { success: false, error: firstError };
   }
 
@@ -729,8 +733,9 @@ export async function fetchAllVendors(
  * A category manager invites specific vendors to an RFQ.
  *
  * Backed by `POST /api/rfqs/:id/invite-vendors`, gated to category_manager/
- * admin. Newly-invited vendors get a real in-app notification, a real email,
- * and simulated multi-channel chaser outreach.
+ * admin. The server sends each newly-invited vendor an in-app notification and
+ * an email. `invitedCount` is the number the server reports as invited, and is
+ * never inferred on the client.
  */
 export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Promise<RFQInviteVendorsResult> {
   const token = authClient.getToken();
@@ -774,7 +779,10 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
     };
   }
 
-  return { success: true, rfq: body.data, invitedCount: body.invitedCount || 0 };
+  if (typeof body.invitedCount !== 'number') {
+    return { success: false, reason: 'SERVER', error: UI_STRINGS.dataLoad.inviteCountMissing };
+  }
+  return { success: true, rfq: body.data, invitedCount: body.invitedCount };
 }
 
 /**
@@ -1023,6 +1031,7 @@ export async function requestVendorCategoryUpdateEmail(
 ): Promise<{
   success: boolean;
   deliveryStatus?: 'sent' | 'queued';
+  status?: 'sent' | 'queued' | 'failed';
   idempotencyKey?: string;
   message?: string;
   error?: string;
@@ -1043,19 +1052,23 @@ export async function requestVendorCategoryUpdateEmail(
     });
 
     const body = await res.json();
-    if (!res.ok || !body.success) {
-      return {
-        success: false,
-        idempotencyKey,
-        error: body.error || 'Failed to dispatch category update email.',
-      };
-    }
+    // Success needs the server's own delivery state: 'sent', or 'queued' for a retry.
+    // A reply that omits it is not reported as sent.
     const deliveryStatus = body.deliveryStatus === 'sent' || body.deliveryStatus === 'queued'
       ? body.deliveryStatus
       : undefined;
+    if (!res.ok || body.success !== true || !deliveryStatus) {
+      return {
+        success: false,
+        status: 'failed',
+        idempotencyKey,
+        error: body.error || (res.ok ? UI_STRINGS.dataLoad.categoryUpdateNotConfirmed : 'Failed to dispatch category update email.'),
+      };
+    }
     return {
       success: true,
-      ...(deliveryStatus ? { deliveryStatus } : {}),
+      deliveryStatus,
+      status: deliveryStatus,
       idempotencyKey,
       message: body.message,
     };
@@ -1063,6 +1076,7 @@ export async function requestVendorCategoryUpdateEmail(
     logRfqTransportFailure('Vendor category update request failed', err);
     return {
       success: false,
+      status: 'failed',
       ...(idempotencyKey ? { idempotencyKey } : {}),
       error: getRfqTransportErrorMessage(err, 'Network error requesting category update.'),
     };
@@ -1112,7 +1126,7 @@ export async function fetchVendorRfqCredits(vendorId?: string): Promise<{
  */
 export async function downloadAndUnlockRFQ(rfqIdOrNumber: string): Promise<{
   success: boolean;
-  data?: any;
+  data?: unknown;
   unlocked?: boolean;
   alreadyUnlocked?: boolean;
   freeCreditsRemaining?: number;

@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { CURRENCY, RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
 import type { AuditLogEntry, BuyerAccount, RFQItem } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -381,7 +382,7 @@ describe('BuyersDirectory dossier profile', () => {
     );
   });
 
-  test('uses placeholders throughout the profile for a buyer that has only the mandatory details', () => {
+  test('shows a dash, not an invented value, for every profile field the buyer record does not supply', () => {
     mockStore({
       buyerAccounts: [
         makeBuyer({ id: 'sparse-1', organizationName: 'Sparse Profile Co', corporateEmail: 'sparse@profile.example', sourcingMode: 'unmapped_mode' }),
@@ -391,25 +392,25 @@ describe('BuyersDirectory dossier profile', () => {
 
     openDossier('Sparse Profile Co');
 
-    expect(screen.getByText(/Registered:/)).toHaveTextContent(/Registered:\s*Verified Enterprise/);
+    expect(screen.getByText(/Registered:/)).toHaveTextContent(`Registered: ${UI_STRINGS.dataLoad.emptyCell}`);
     expect(screen.queryByText(/ID: sparse-1/)).not.toBeInTheDocument();
     const contact = within(parentOf('Corporate Contact'));
-    expect(contact.getByText('Procurement Executive')).toBeInTheDocument();
     expect(contact.getByText('sparse@profile.example')).toBeInTheDocument();
-    expect(contact.getByText('+91 Not provided')).toBeInTheDocument();
-    expect(contact.getByText('India')).toBeInTheDocument();
-    expect(screen.getByText('Sourcing Mode:').parentElement).toHaveTextContent('Sourcing Mode: Mode 0');
-    expect(screen.getByText('Subscription Tier:').parentElement).toHaveTextContent('Subscription Tier: Enterprise Trial');
-    expect(screen.getByText('Status:').parentElement).toHaveTextContent('Status: ACTIVE');
-    expect(screen.getByText('Last Synced:').parentElement).toHaveTextContent('Last Synced: Real-time');
-    expect(valueBelow('Available Quota')).toBe('5');
+    // Contact person, phone and location are not recorded, so each one shows a dash.
+    expect(contact.getAllByText(UI_STRINGS.dataLoad.emptyCell)).toHaveLength(3);
+    expect(screen.getByText('Sourcing Mode:').parentElement).toHaveTextContent(`Sourcing Mode: ${UI_STRINGS.dataLoad.emptyCell}`);
+    expect(screen.getByText('Subscription Tier:').parentElement).toHaveTextContent(`Subscription Tier: ${UI_STRINGS.dataLoad.emptyCell}`);
+    expect(screen.getByText('Status:').parentElement).toHaveTextContent(`Status: ${UI_STRINGS.dataLoad.emptyCell}`);
+    expect(screen.getByText('Last Synced:').parentElement).toHaveTextContent(`Last Synced: ${UI_STRINGS.dataLoad.emptyCell}`);
+    expect(valueBelow('Available Quota')).toBe(UI_STRINGS.dataLoad.emptyCell);
+    // No category is invented for a buyer whose record lists none.
     ['General Procurement', 'Raw Materials', 'Spares'].forEach((category) => {
-      expect(screen.getByText(category)).toBeInTheDocument();
+      expect(screen.queryByText(category)).not.toBeInTheDocument();
     });
   });
 
   test.each<[string, Fields, string]>([
-    ['a city and no plant location', { city: 'Nashik' }, 'Nashik, India'],
+    ['a city and no plant location', { city: 'Nashik' }, `Nashik, ${UI_STRINGS.dataLoad.emptyCell}`],
     ['a plant location and no city', { primaryPlantLocation: 'Bawal Industrial Area' }, 'Bawal Industrial Area'],
     ['both a city and a plant location', { city: 'Pune', primaryPlantLocation: 'Chakan MIDC' }, 'Pune, Chakan MIDC'],
   ])('writes the contact address for %s', (_case, locationFields, expectedAddress) => {

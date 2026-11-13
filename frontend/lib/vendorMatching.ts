@@ -9,6 +9,7 @@ import type { VendorEntry } from './types';
 import { isProcucevVendor } from '../app/buyer/vendor-summary';
 import { VENDOR_ASSIGNMENT_LIMITS } from './constants';
 import { findMajorForMinor } from './categoryTaxonomy';
+import { UI_STRINGS } from './uiStrings';
 
 export interface CategoryMatchResult {
   isMatch: boolean;
@@ -89,7 +90,7 @@ export function matchVendorAgainstSignals(
   signals: string[]
 ): CategoryMatchResult {
   if (!vendor || !signals || signals.length === 0) {
-    return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: vendor?.majorCategory || 'General Industrial' };
+    return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: vendor?.majorCategory || '' };
   }
 
   const vendorMajor = vendor.majorCategory ? normalizeCategory(vendor.majorCategory) : '';
@@ -105,7 +106,7 @@ export function matchVendorAgainstSignals(
 
   const hasAnyCategory = Boolean(vendorMajor || vendorMinors.length > 0 || vendorSelected.length > 0 || vendorMapped.length > 0);
   if (!hasAnyCategory) {
-    return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: 'General Industrial' };
+    return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: '' };
   }
 
   const matched = new Set<string>();
@@ -186,18 +187,18 @@ export function matchVendorAgainstSignals(
     isMatch,
     matchScore: isMatch ? highestScore : 0,
     matchedCategories: matchedList,
-    matchedMajor: vendor.majorCategory || matchedList[0] || 'General Industrial',
+    matchedMajor: vendor.majorCategory || matchedList[0] || '',
   };
 }
 
-/** A Procucev vendor ranked by the V3 360° evaluation (category + location). */
+/** A Procucev vendor ranked by the V3 360Â° evaluation (category + location). */
 export interface RankedProcucevVendor {
   vendor: VendorEntry;
-  /** Combined 0–100 score used for ordering. */
+  /** Combined 0â€“100 score used for ordering. */
   overallScore: number;
-  /** The category-relevance component (0–100). */
+  /** The category-relevance component (0â€“100). */
   categoryScore: number;
-  /** The delivery-location component (0–100). */
+  /** The delivery-location component (0â€“100). */
   locationScore: number;
   matchedCategories: string[];
   /** Human label describing why the vendor ranked where it did. */
@@ -209,12 +210,12 @@ export interface RankedProcucevVendor {
 /**
  * Score how well a vendor's location serves a delivery destination.
  *
- * A deterministic, data-only heuristic — no external geocoding — so it is
+ * A deterministic, data-only heuristic â€” no external geocoding â€” so it is
  * stable in tests and offline:
- *   • Same 6-digit PIN prefix (first 3 digits = same postal district): 100
- *   • Same first PIN digit (same broad postal region/zone): 70
- *   • City or state name appears in the vendor's location string: 85 / 60
- *   • Nothing matched / no data: 40 (neutral — never zero, so a strong
+ *   â€¢ Same 6-digit PIN prefix (first 3 digits = same postal district): 100
+ *   â€¢ Same first PIN digit (same broad postal region/zone): 70
+ *   â€¢ City or state name appears in the vendor's location string: 85 / 60
+ *   â€¢ Nothing matched / no data: 40 (neutral â€” never zero, so a strong
  *     category match is not wiped out by missing location data)
  */
 export function scoreVendorLocation(
@@ -247,16 +248,16 @@ export function scoreVendorLocation(
     return { score: 60, reason: 'Regional overlap' };
   }
 
-  return { score: 40, reason: 'Nationwide supplier' };
+  return { score: 40, reason: UI_STRINGS.vendorRanking.locationNotConfirmed };
 }
 
 /**
- * Rank Procucev network vendors for a V3 (Autonomous) RFQ by a 360° evaluation
+ * Rank Procucev network vendors for a V3 (Autonomous) RFQ by a 360Â° evaluation
  * that blends category relevance with delivery-location proximity (and rating
  * as a final tie-break), returning at most `limit` vendors.
  *
  * Weighting: category relevance is the primary driver (70%), delivery location
- * secondary (30%) — a geographically close supplier that cannot supply the
+ * secondary (30%) â€” a geographically close supplier that cannot supply the
  * category is useless, but between two capable suppliers the closer one wins.
  */
 export function rankProcucevVendorsForV3(
@@ -272,12 +273,14 @@ export function rankProcucevVendorsForV3(
   const ranked: RankedProcucevVendor[] = [];
   const normMinors = preferredMinors.map(normalizeCategory).filter(Boolean);
 
+  // With no category signals there is nothing to match, so no supplier is ranked and no
+  // category percentage is shown. The score is never invented for an empty signal list.
+  if (signals.length === 0) return [];
+
   for (const vendor of procucevPool) {
     const match = matchVendorAgainstSignals(vendor, signals);
-    // With no category signals yet, fall back to a neutral baseline so the
-    // panel still shows the network's top-rated suppliers rather than nothing.
-    const categoryScore = signals.length === 0 ? 60 : match.matchScore;
-    if (signals.length > 0 && categoryScore <= 0) continue;
+    const categoryScore = match.matchScore;
+    if (categoryScore <= 0) continue;
 
     const vendorMinors = Array.isArray(vendor.minorCategories)
       ? vendor.minorCategories.map(normalizeCategory).filter(Boolean)
@@ -293,7 +296,6 @@ export function rankProcucevVendorsForV3(
 
     const matchedMinorCategory = vendor.minorCategories?.find((m) => normMinors.includes(normalizeCategory(m)))
       || vendor.minorCategories?.[0]
-      || preferredMinors[0]
       || null;
 
     ranked.push({

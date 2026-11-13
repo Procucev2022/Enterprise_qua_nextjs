@@ -31,13 +31,14 @@ const fixtures = require('./fixtures/sampleRequisitionEmail');
 const taxonomyFixture = require('./fixtures/categoryTaxonomy');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
-const SENDER = 'project.procurement@lt-heavy.com';
-const MESSAGE_ID = '<REQ-2026-0914.project.procurement@lt-heavy.com>';
+// The sender and Message-ID come from the shared requisition fixture, so these expectations track it.
+const SENDER = fixtures.PLAIN_REQUISITION_EML.match(/^From:[^<]*<([^>]+)>/m)[1];
+const MESSAGE_ID = `<${fixtures.PLAIN_REQUISITION_EML.match(/^Message-ID: <([^>]+)>/m)[1]}>`;
 
 function buyerAccount(overrides = {}) {
   return {
     id: 'buyer-acc-101',
-    organizationName: 'L&T Heavy Engineering',
+    organizationName: 'Test Heavy Engineering',
     corporateEmail: SENDER,
     city: 'Bangalore',
     state: 'Karnataka',
@@ -130,7 +131,7 @@ describe('temporary extraction failures are retried, not dropped', () => {
     const err = await emailGatewayService.processMessage(raw(), config()).catch((e) => e);
     await err.onGiveUp();
     expect(notice).toHaveBeenCalledWith(
-      expect.objectContaining({ to: SENDER, reason: 'PROCESSING_FAILED', buyerName: 'L&T Heavy Engineering' })
+      expect.objectContaining({ to: SENDER, reason: 'PROCESSING_FAILED', buyerName: 'Test Heavy Engineering' })
     );
   });
 
@@ -730,7 +731,7 @@ describe('mailerService RFQ-not-created notice', () => {
     for (const reason of ['NO_LINE_ITEMS', 'CREDITS_EXHAUSTED', 'PROCESSING_FAILED']) {
       const built = mailerService.buildRfqNotCreatedEmail({ to: SENDER, reason });
       expect(built.text).toContain(RFQ_NOT_CREATED_NOTIFICATION.REASONS[reason]);
-      expect(built.text).toContain('Hi Valued Buyer');
+      expect(built.text).toContain('Hi there,');
     }
   });
 
@@ -740,8 +741,9 @@ describe('mailerService RFQ-not-created notice', () => {
   });
 
   test('is sent as an auto-reply, and refuses a missing recipient', async () => {
-    await expect(mailerService.sendRfqNotCreatedEmail({})).resolves.toEqual({ sent: false, reason: 'missing recipient email' });
-    await expect(mailerService.sendRfqNotCreatedEmail()).resolves.toEqual({ sent: false, reason: 'missing recipient email' });
+    const skipped = { sent: false, success: false, status: 'skipped', reason: 'missing recipient email' };
+    await expect(mailerService.sendRfqNotCreatedEmail({})).resolves.toEqual(skipped);
+    await expect(mailerService.sendRfqNotCreatedEmail()).resolves.toEqual(skipped);
   });
 });
 
@@ -813,7 +815,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
         fromAddress: SENDER,
         rfqNumber: 'RFQ-Q',
         subject: 'Pumps',
-        detail: JSON.stringify({ buyerName: 'L&T Heavy Engineering', rfqTitle: 'Pumps' }),
+        detail: JSON.stringify({ buyerName: 'Test Heavy Engineering', rfqTitle: 'Pumps' }),
       })
     );
     expect(emailGatewayQueries.releaseClaimedAcknowledgement).toHaveBeenCalledWith(
@@ -1060,7 +1062,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
         to: SENDER,
         recipientName: 'Credential Buyer',
         tempPassword: password,
-        contactPhone: '',
+        contactPhone: null,
       });
       expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
       expect(emailGatewayQueries.completeClaimedAcknowledgement).toHaveBeenCalledWith(

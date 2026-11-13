@@ -745,8 +745,9 @@ describe('storeService comprehensive branch boost tests', () => {
       const waSpy = jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true, messageId: 'wa-123' });
       const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-123' });
 
-      const res = storeService.triggerBatchChaser('rfq-outreach-1', ['whatsapp', 'sms']);
+      const res = await storeService.triggerBatchChaser('rfq-outreach-1', ['whatsapp', 'sms']);
       expect(res.success).toBe(true);
+      expect(res.sentCount).toBe(2);
       expect(waSpy).toHaveBeenCalled();
       expect(smsSpy).toHaveBeenCalled();
     });
@@ -1035,9 +1036,13 @@ describe('storeService comprehensive branch boost tests', () => {
       jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: false, error: 'Network timeout' });
       jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: false });
 
-      const res = storeService.triggerBatchChaser('rfq-fail-chase', ['whatsapp', 'sms']);
-      expect(res.success).toBe(true);
-      await new Promise((resolve) => setImmediate(resolve));
+      const { CHASER_OUTREACH_MESSAGES } = require('../src/config/constants');
+      const res = await storeService.triggerBatchChaser('rfq-fail-chase', ['whatsapp', 'sms']);
+      // A rejected send is a failure whether or not the provider gave a reason.
+      expect(res.success).toBe(false);
+      expect(res.sentCount).toBe(0);
+      expect(res.results.find((r) => r.channel === 'whatsapp').error).toBe('Network timeout');
+      expect(res.results.find((r) => r.channel === 'sms').error).toBe(CHASER_OUTREACH_MESSAGES.PROVIDER_NOT_ACCEPTED);
     });
   });
 
@@ -1206,22 +1211,37 @@ describe('storeService comprehensive branch boost tests', () => {
     });
 
     test('reviseVendorRating mailer success and catch blocks', async () => {
+      // A vendor with a recorded rating and score gets the revision email. The email
+      // template needs both previous values, so an unrated vendor would not.
       const vendor = {
         id: 'v-revise-1',
         email: 'revise@vendor.com',
         rating: 4.0,
+        score: 80,
       };
       storeService.vendors = [vendor];
 
       // Success
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
-      storeService.reviseVendorRating('v-revise-1', 4.5, 'buyer@corp.com', 'Performance improved');
+      storeService.reviseVendorRating('v-revise-1', {
+        qualityScore: 90,
+        costScore: 85,
+        deliveryScore: 88,
+        buyerEmail: 'buyer@corp.com',
+        remarks: 'Performance improved',
+      });
       await new Promise((resolve) => setImmediate(resolve));
       expect(sendSpy).toHaveBeenCalled();
 
-      // Catch error
+      // Catch error: a failing send is logged and does not throw into the caller.
       sendSpy.mockRejectedValue(new Error('Async mailer failure'));
-      storeService.reviseVendorRating('v-revise-1', 4.8, 'buyer@corp.com', 'High score');
+      storeService.reviseVendorRating('v-revise-1', {
+        qualityScore: 70,
+        costScore: 75,
+        deliveryScore: 72,
+        buyerEmail: 'buyer@corp.com',
+        remarks: 'High score',
+      });
       await new Promise((resolve) => setImmediate(resolve));
     });
 
@@ -2537,6 +2557,116 @@ describe('storeService comprehensive branch boost tests', () => {
         submittedAt: new Date().toISOString(),
       });
       expect(quoteRes).toBeDefined();
+    });
+  });
+
+  describe('requestVendorEvaluation and related branch coverage', () => {
+    test('requestVendorEvaluation with default options, empty status, no contactPerson, and no email', () => {
+      const vendorNoEmail = {
+        id: 'v-eval-no-email',
+        name: 'No Email Vendor',
+        email: '',
+      };
+      storeService.vendors = [vendorNoEmail];
+
+      const res = storeService.requestVendorEvaluation('v-eval-no-email');
+      expect(res).toBeDefined();
+      expect(res.evaluationRequested).toBe(true);
+      expect(res.evaluationRequestedBy).toBe('A buyer on Procucev');
+      expect(res.status).toBe('PENDING EVALUATION');
+    });
+
+    test('requestVendorEvaluation handles mailer error gracefully', () => {
+      const vendorWithEmail = {
+        id: 'v-eval-err',
+        name: 'Error Vendor',
+        email: 'err@vendor.test',
+        contactPerson: 'Contact A',
+        status: 'CONDITIONAL / UNDER REVIEW',
+      };
+      storeService.vendors = [vendorWithEmail];
+
+      jest.spyOn(mailerService, 'sendVendorEvaluationRequestEmail').mockImplementationOnce(() => {
+        throw new Error('Mailer dispatch failure');
+      });
+
+      const res = storeService.requestVendorEvaluation('v-eval-err', {
+        buyerCompany: 'Test Buyer',
+        buyerName: 'Lead',
+        buyerEmail: 'lead@test.com',
+        notes: 'Urgent response requested',
+      });
+      expect(res).toBeDefined();
+      expect(res.status).toBe('CONDITIONAL / UNDER REVIEW');
+    });
+
+    test('requestVendorEvaluationDurably with DB fallback and without email', async () => {
+      storeService.vendors = [];
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const fallbackVendor = {
+        id: 'v-fallback-durable',
+        name: 'Fallback Vendor',
+        email: '',
+      };
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(fallbackVendor);
+      jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updater) => {
+        return { ...fallbackVendor, ...updater(fallbackVendor) };
+      });
+
+      const res = await storeService.requestVendorEvaluationDurably('v-fallback-durable');
+      expect(res).toBeDefined();
+      expect(res.evaluationRequested).toBe(true);
+      expect(res.status).toBe('PENDING EVALUATION');
+    });
+
+    test('requestVendorEvaluationDurably returns null when vendor is null even after DB fallback', async () => {
+      storeService.vendors = [];
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+
+      const res = await storeService.requestVendorEvaluationDurably('v-nonexistent-db');
+      expect(res).toBeNull();
+    });
+
+    test('requestVendorEvaluationDurably handles mailer error gracefully', async () => {
+      const vendorWithEmail = {
+        id: 'v-eval-durable-err',
+        name: 'Durable Error Vendor',
+        email: 'err@durable.test',
+        status: 'PREFERRED',
+      };
+      storeService.vendors = [vendorWithEmail];
+      jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updater) => {
+        return { ...vendorWithEmail, ...updater(vendorWithEmail) };
+      });
+      jest.spyOn(mailerService, 'sendVendorEvaluationRequestEmail').mockImplementationOnce(() => {
+        throw new Error('Durable mailer dispatch failure');
+      });
+
+      const res = await storeService.requestVendorEvaluationDurably('v-eval-durable-err', {
+        buyerCompany: 'Durable Buyer',
+      });
+      expect(res).toBeDefined();
+      expect(res.status).toBe('PREFERRED');
+    });
+
+    test('_sendVendorRatingRevisionEmail handles build error and empty remarks', () => {
+      const vendor = {
+        id: 'v-rev-email',
+        name: 'Revision Vendor',
+        email: 'rev@vendor.test',
+      };
+      jest.spyOn(mailerService, 'buildRatingRevisionEmail').mockImplementationOnce(() => {
+        throw new Error('Build error');
+      });
+
+      expect(() => {
+        storeService._sendVendorRatingRevisionEmail(
+          vendor,
+          { qualityScore: 80, costScore: 80, deliveryScore: 80, remarks: '' },
+          { newCompositeScore: 80, revisionRecord: {} }
+        );
+      }).not.toThrow();
     });
   });
 });

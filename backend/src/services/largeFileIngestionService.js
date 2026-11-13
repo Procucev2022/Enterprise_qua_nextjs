@@ -287,17 +287,36 @@ function normalizeEmail(raw) {
 }
 
 /**
- * A single phone number in one standard shape: digits and a leading `+`
- * only, so "+91 98000-00000", "919800000000" and "98000 00000" all collapse
- * to the same value instead of being treated as separate contacts.
+ * A single phone number in one standard shape: country code (+91) followed by
+ * exactly 10 numeric digits without duplication, accepting numbers provided
+ * with +91 or without it.
  */
 function normalizePhone(raw) {
-  const value = String(raw || '').trim();
-  if (value === '') return '';
-  const hasPlus = value.trim().startsWith('+');
-  const digits = value.replace(/[^0-9]/g, '');
-  if (digits === '') return '';
-  return hasPlus ? `+${digits}` : digits;
+  if (raw === null || raw === undefined) return '';
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return '';
+  if (/[a-zA-Z]/.test(trimmed)) return null;
+
+  let remainder = trimmed;
+  // Repeatedly strip duplicate or multiple leading country code indicators
+  while (/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/.test(remainder)) {
+    remainder = remainder.replace(/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/, '').trim();
+  }
+
+  let digits = remainder.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  if (digits.length === 10 && /^\d{10}$/.test(digits)) {
+    return `+91${digits}`;
+  }
+
+  const allDigits = trimmed.replace(/\D/g, '');
+  if (allDigits === '') return '';
+  return trimmed.startsWith('+') ? `+${allDigits}` : allDigits;
 }
 
 /** Map row values array to object using header indices */
@@ -383,15 +402,55 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
   const valid = [];
   const invalid = [];
 
+  // Track existing vendor codes to prevent collisions and generate sequential codes
+  const usedCodes = new Set();
+  for (const row of batch) {
+    if (row.vendorCode && String(row.vendorCode).trim()) {
+      usedCodes.add(String(row.vendorCode).trim().toLowerCase());
+    }
+  }
+
+  let nextSeq = 1;
+  const getNextSequentialCode = () => {
+    while (usedCodes.has(String(nextSeq).toLowerCase())) {
+      nextSeq++;
+    }
+    const code = String(nextSeq);
+    usedCodes.add(code.toLowerCase());
+    nextSeq++;
+    return code;
+  };
+
   for (const row of batch) {
     const companyName = row.companyName || row.company_name || row.vendorName || row.name || '';
     if (!companyName || String(companyName).trim() === '') {
       invalid.push({ row, reason: 'Company Name is required' });
       continue;
     }
+    const rawPhone = row.phone !== undefined && row.phone !== null ? String(row.phone).trim() : '';
+    let validatedPhone = null;
+    if (rawPhone) {
+      if (/[a-zA-Z]/.test(rawPhone)) {
+        invalid.push({ row, reason: 'Mobile number cannot contain alphanumeric characters' });
+        continue;
+      }
+      const norm = normalizePhone(rawPhone);
+      if (!norm || !norm.startsWith('+91') || norm.slice(3).length !== 10) {
+        invalid.push({ row, reason: 'Mobile number must be exactly 10 numeric digits after country code' });
+        continue;
+      }
+      validatedPhone = norm;
+    }
+
+    const vendorCode = (row.vendorCode && String(row.vendorCode).trim())
+      ? String(row.vendorCode).trim()
+      : getNextSequentialCode();
+
     valid.push({
       ...row,
+      vendorCode,
       companyName: String(companyName).trim(),
+      phone: validatedPhone || (row.phone ? String(row.phone).trim() : null),
     });
   }
 

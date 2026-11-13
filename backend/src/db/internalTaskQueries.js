@@ -8,7 +8,80 @@ const pool = require('./pool');
 const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
+const { IDENTITY_ROLE_MAP } = require('../config/constants');
+
+const INTERNAL_TASK_ERRORS = Object.freeze({
+  ACTOR_REQUIRED: 'A signed-in user is required for this task action.',
+  FIELD_REQUIRED: 'Task {field} is required. Select a value before saving.',
+  BALANCE_NOT_RECORDED: 'The current credit balance of this account is not recorded, so the credit change was not applied. Check the account record and retry.',
+  ACCOUNT_NOT_FOUND: 'The credit account for this task was not found, so the credit change was not applied.',
+});
+
+const INTERNAL_STAFF_ROLE_KEYS = Object.freeze(
+  Object.keys(IDENTITY_ROLE_MAP).filter((roleKey) => ['category_manager', 'admin'].includes(IDENTITY_ROLE_MAP[roleKey]))
+);
+
+function storageUnavailableError(operation, cause = null) {
+  logger.error('Internal task storage is unavailable', { operation, error: cause }, 'INTERNAL_TASKS');
+  const error = new Error('Internal task storage is temporarily unavailable. No operation completed. Please retry shortly.');
+  error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.statusCode = 503;
+  error.cause = cause;
+  return error;
+}
+
+function assertStorage(operation) {
+  if (!pool.hasStorage()) throw storageUnavailableError(operation);
+}
+
+/**
+ * Returns the acting user's identity from the authenticated session. Throws a 401
+ * error when the actor identifies no user.
+ */
+function resolveActor(actor) {
+  const uuid = actor?.uuid || actor?.id || null;
+  const name = actor?.fullName || actor?.name || actor?.email || null;
+  if (!uuid && !name) {
+    const error = new Error(INTERNAL_TASK_ERRORS.ACTOR_REQUIRED);
+    error.code = 'ACTOR_REQUIRED';
+    error.statusCode = 401;
+    throw error;
+  }
+  return { uuid, name, email: actor?.email || null };
+}
+
+function requireTaskField(value, field) {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) {
+    const error = new Error(INTERNAL_TASK_ERRORS.FIELD_REQUIRED.replace('{field}', field));
+    error.code = 'VALIDATION_FAILED';
+    error.statusCode = 400;
+    throw error;
+  }
+  return value;
+}
+
+function requireRecordedBalance(value, task, accountId) {
+  const balance = value === undefined || value === null || value === '' ? NaN : Number(value);
+  if (!Number.isFinite(balance)) {
+    logger.error('Credit account has no recorded balance', { taskId: task.id, accountId }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+    const error = new Error(INTERNAL_TASK_ERRORS.BALANCE_NOT_RECORDED);
+    error.code = 'CREDIT_BALANCE_NOT_RECORDED';
+    error.statusCode = 409;
+    throw error;
+  }
+  return balance;
+}
+
+function requireCreditAccount(row, task, accountId) {
+  if (!row) {
+    const error = new Error(INTERNAL_TASK_ERRORS.ACCOUNT_NOT_FOUND);
+    error.code = 'CREDIT_ACCOUNT_NOT_FOUND';
+    error.statusCode = 404;
+    logger.error('Credit account for task was not found', { taskId: task.id, accountId }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+    throw error;
+  }
+  return row;
+}
 
 function createCreditRequestFingerprint(data, actor, approvalData) {
   const fingerprintInput = {
@@ -82,157 +155,11 @@ function escapeLikeWildcards(str) {
   return str.replace(/([%_\\])/g, '\\$1');
 }
 
-const DEFAULT_TASK_TYPES = [
-  // Communication Tasks
-  {
-    id: 'itt_comm_phone',
-    name: 'Phone Call',
-    code: 'comm_phone',
-    default_module: 'COMMUNICATION',
-    description: 'Direct phone call log, discussion notes, and follow-up',
-    is_active: 1,
-  },
-  {
-    id: 'itt_comm_sms',
-    name: 'SMS',
-    code: 'comm_sms',
-    default_module: 'COMMUNICATION',
-    description: 'Dispatch SMS notifications or transactional alerts',
-    is_active: 1,
-  },
-  {
-    id: 'itt_comm_whatsapp',
-    name: 'WhatsApp',
-    code: 'comm_whatsapp',
-    default_module: 'COMMUNICATION',
-    description: 'Send direct WhatsApp message or template communication',
-    is_active: 1,
-  },
-  {
-    id: 'itt_comm_email',
-    name: 'Email',
-    code: 'comm_email',
-    default_module: 'COMMUNICATION',
-    description: 'Official corporate email and message dispatch',
-    is_active: 1,
-  },
-  {
-    id: 'itt_comm_followup_new',
-    name: 'New Follow-up',
-    code: 'comm_followup_new',
-    default_module: 'COMMUNICATION',
-    description: 'First-time follow-up activity with buyer or supplier',
-    is_active: 1,
-  },
-  {
-    id: 'itt_comm_followup_existing',
-    name: 'Existing Follow-up',
-    code: 'comm_followup_existing',
-    default_module: 'COMMUNICATION',
-    description: 'Recurring or secondary follow-up discussion',
-    is_active: 1,
-  },
-  // Demo Scheduling
-  {
-    id: 'itt_demo_scheduling',
-    name: 'Schedule Demo',
-    code: 'demo_scheduling',
-    default_module: 'DEMO_SCHEDULING',
-    description: 'Schedule product demonstration with client and assign executive',
-    is_active: 1,
-  },
-  // Credit Management
-  {
-    id: 'itt_credit_add',
-    name: 'Add Credits',
-    code: 'credit_add',
-    default_module: 'CREDIT_MANAGEMENT',
-    description: 'Request allocation of procurement credits to buyer or seller',
-    is_active: 1,
-  },
-  {
-    id: 'itt_credit_deduct',
-    name: 'Delete Credits',
-    code: 'credit_deduct',
-    default_module: 'CREDIT_MANAGEMENT',
-    description: 'Request deduction or removal of credits with audit justification',
-    is_active: 1,
-  },
-  // Business Development Tasks
-  {
-    id: 'itt_bd_proposal',
-    name: 'Send Proposal',
-    code: 'bd_proposal',
-    default_module: 'BUSINESS_DEVELOPMENT',
-    description: 'Prepare, dispatch, and track business commercial proposal',
-    is_active: 1,
-  },
-  {
-    id: 'itt_bd_corporate_email',
-    name: 'Send Corporate Email',
-    code: 'bd_corporate_email',
-    default_module: 'BUSINESS_DEVELOPMENT',
-    description: 'Dispatch high-priority corporate email and track response',
-    is_active: 1,
-  },
-  // Internal Operations
-  {
-    id: 'itt_internal_ops',
-    name: 'Operational Task',
-    code: 'internal_ops',
-    default_module: 'INTERNAL_OPERATIONS',
-    description: 'General internal operations and custom workflow assignment',
-    is_active: 1,
-  },
-  // Onboarding Process
-  {
-    id: 'itt_client_onboarding',
-    name: 'Client Onboarding',
-    code: 'client_onboarding',
-    default_module: 'ONBOARDING',
-    description: 'Track client onboarding milestones and document collection',
-    is_active: 1,
-  },
-  // Legacy module compatibility
-  {
-    id: 'itt_quotation_review',
-    name: 'Quotation Review',
-    code: 'quotation_review',
-    default_module: 'RFQ',
-    description: 'Review and approve technical quotes and commercial bids',
-    is_active: 1,
-  },
-  {
-    id: 'itt_buyer_onboarding',
-    name: 'Buyer Onboarding',
-    code: 'buyer_onboarding',
-    default_module: 'BUYER',
-    description: 'Assist buyer organizations with onboarding and profile verification',
-    is_active: 1,
-  },
-  {
-    id: 'itt_vendor_followup',
-    name: 'Vendor Follow-up',
-    code: 'vendor_followup',
-    default_module: 'VENDOR',
-    description: 'Follow-up with sellers on active tenders, pricing, or compliance',
-    is_active: 1,
-  },
-  {
-    id: 'itt_credit_approval',
-    name: 'Credit Approval',
-    code: 'credit_approval',
-    default_module: 'CREDIT',
-    description: 'Review and grant credits for RFQ generation or download allowance',
-    is_active: 1,
-  },
-];
-
 /**
  * Fetch all dynamic task types.
  */
 async function getTaskTypes() {
-  if (!pool.hasStorage()) return DEFAULT_TASK_TYPES;
+  assertStorage('list-task-types');
   try {
     const sql = 'SELECT * FROM internal_task_types WHERE is_active = 1 OR is_active = true ORDER BY name ASC';
     const result = await pool.query(sql, [], {
@@ -240,12 +167,9 @@ async function getTaskTypes() {
       d1Text: 'SELECT * FROM internal_task_types WHERE is_active = 1 ORDER BY name ASC',
       useCache: true,
     });
-    if (result && Array.isArray(result.rows) && result.rows.length > 0) {
-      return result.rows;
-    }
-    return DEFAULT_TASK_TYPES;
-  } catch {
-    return DEFAULT_TASK_TYPES;
+    return Array.isArray(result?.rows) ? result.rows : [];
+  } catch (error) {
+    throw storageUnavailableError('list-task-types', error);
   }
 }
 
@@ -255,9 +179,7 @@ async function getTaskTypes() {
 async function createTaskType({ name, code, defaultModule = 'GENERAL', description = '' }) {
   const id = `itt_${(code || name).toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 40)}_${Date.now().toString(36)}`;
   const cleanCode = (code || name).toLowerCase().replace(/[^a-z0-9_]/g, '_');
-  if (!pool.hasStorage()) {
-    return { id, name, code: cleanCode, default_module: defaultModule, description };
-  }
+  assertStorage('create-task-type');
   const sql = `
     INSERT INTO internal_task_types (id, name, code, default_module, description)
     VALUES ($1, $2, $3, $4, $5)
@@ -282,17 +204,17 @@ function hydrateTaskRow(row) {
   const raw = parseJsonSafe(row.raw, {});
   return {
     ...row,
-    task_category: row.task_category || raw.taskCategory || raw.task_category || 'INTERNAL_OPERATIONS',
-    task_type: row.task_type || raw.taskType || raw.task_type || row.task_type_name || 'General',
-    due_time: row.due_time || raw.dueTime || '',
-    completed_by_user_id: row.completed_by_user_id || raw.completedByUserId || '',
-    completed_by_name: row.completed_by_name || raw.completedByName || '',
-    completion_remarks: row.completion_remarks || raw.completionRemarks || '',
+    task_category: row.task_category || raw.taskCategory || raw.task_category || null,
+    task_type: row.task_type || raw.taskType || raw.task_type || row.task_type_name || null,
+    due_time: row.due_time || raw.dueTime || null,
+    completed_by_user_id: row.completed_by_user_id || raw.completedByUserId || null,
+    completed_by_name: row.completed_by_name || raw.completedByName || null,
+    completion_remarks: row.completion_remarks || raw.completionRemarks || null,
     approval_status: row.approval_status !== undefined ? row.approval_status : (raw.approvalStatus || null),
-    approver_id: row.approver_id || raw.approverId || '',
-    approver_name: row.approver_name || raw.approverName || '',
+    approver_id: row.approver_id || raw.approverId || null,
+    approver_name: row.approver_name || raw.approverName || null,
     approved_at: row.approved_at || raw.approvedAt || null,
-    approval_remarks: row.approval_remarks || raw.approvalRemarks || '',
+    approval_remarks: row.approval_remarks || raw.approvalRemarks || null,
     demo_date: row.demo_date || raw.demoDate || null,
     demo_time: row.demo_time || raw.demoTime || null,
     demo_status: row.demo_status || raw.demoStatus || null,
@@ -301,8 +223,8 @@ function hydrateTaskRow(row) {
     credit_account_name: row.credit_account_name || raw.creditAccountName || null,
     credit_quantity: row.credit_quantity !== undefined && row.credit_quantity !== null
       ? Number(row.credit_quantity)
-      : (raw.creditQuantity !== undefined ? Number(raw.creditQuantity) : 0),
-    credit_reason: row.credit_reason || raw.creditReason || '',
+      : (raw.creditQuantity !== undefined && raw.creditQuantity !== null ? Number(raw.creditQuantity) : null),
+    credit_reason: row.credit_reason || raw.creditReason || null,
     attachments: parseJsonSafe(row.attachments, []),
     current_account_credits: row.current_account_credits ?? raw.current_account_credits ?? null,
     onboarding_stage: raw.onboarding_stage ?? null,
@@ -310,8 +232,8 @@ function hydrateTaskRow(row) {
     proposal_url: raw.proposal_url ?? null,
     proposal_status: raw.proposal_status ?? null,
     call_outcome: raw.call_outcome ?? null,
-    recipient_phone: raw.recipient_phone ?? '',
-    recipient_email: raw.recipient_email ?? '',
+    recipient_phone: raw.recipient_phone ?? null,
+    recipient_email: raw.recipient_email ?? null,
     raw,
   };
 }
@@ -334,7 +256,7 @@ async function getInternalTasks({
   limit = 50,
   offset = 0,
 } = {}) {
-  if (!pool.hasStorage()) return { rows: [], total: 0 };
+  assertStorage('list-internal-tasks');
   const conditions = [];
   const params = [];
   let paramIdx = 1;
@@ -446,23 +368,7 @@ async function getInternalTasks({
  * Summary metrics of internal tasks.
  */
 async function getInternalTaskSummary({ assignedTo = '', taskCategory = '' } = {}) {
-  if (!pool.hasStorage()) {
-    return {
-      total: 0,
-      newTasks: 0,
-      assigned: 0,
-      inProgress: 0,
-      pendingApproval: 0,
-      completed: 0,
-      rejected: 0,
-      cancelled: 0,
-      overdueCount: 0,
-      criticalCount: 0,
-      pending: 0,
-      blocked: 0,
-      escalated: 0,
-    };
-  }
+  assertStorage('get-internal-task-summary');
   const conditions = [];
   const params = [];
   let pIdx = 1;
@@ -529,7 +435,7 @@ async function getInternalTaskSummary({ assignedTo = '', taskCategory = '' } = {
  * Get internal task by ID with its activity timeline.
  */
 async function getInternalTaskById(id) {
-  if (!pool.hasStorage()) return null;
+  assertStorage('get-internal-task-by-id');
   const taskSql = `
     SELECT
       t.*,
@@ -608,6 +514,8 @@ async function getInternalTaskById(id) {
  * Create a new internal task.
  */
 async function createInternalTask(data = {}, actor = {}, options = {}) {
+  assertStorage('create-internal-task');
+  const resolvedActor = resolveActor(actor);
   const idempotencyKey = options.approvalData ? (options.idempotencyKey || options.approvalData.idempotencyKey || '') : '';
   const idempotencyFingerprint = idempotencyKey
     ? createCreditRequestFingerprint(data, actor, options.approvalData)
@@ -617,13 +525,13 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
     : `tsk_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
   const taskNumber = idempotencyKey
     ? `TASK-${crypto.createHash('sha256').update(String(idempotencyKey).toLowerCase()).digest('hex').slice(0, 16).toUpperCase()}`
-    : `TASK-${Date.now().toString().slice(-5)}`;
+    : `TASK-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
   const title = (data.title || '').trim();
   const description = (data.description || '').trim();
-  const taskCategory = data.taskCategory || data.task_category || 'INTERNAL_OPERATIONS';
-  const taskType = data.taskType || data.task_type || 'General';
+  const taskCategory = requireTaskField(data.taskCategory || data.task_category, 'category');
+  const taskType = requireTaskField(data.taskType || data.task_type, 'type');
   const taskTypeId = data.taskTypeId || null;
-  const priority = data.priority || 'Medium';
+  const priority = requireTaskField(data.priority, 'priority');
 
   // For Credit Management tasks or explicit approval requests, default status to Pending Approval
   let status = data.status || 'Pending';
@@ -636,8 +544,8 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
   const assignedToUserId = data.assignedToUserId || null;
   const assignedToName = data.assignedToName || '';
   const assignedTeam = data.assignedTeam || '';
-  const createdByUserId = actor.uuid || actor.id || null;
-  const createdByName = actor.fullName || actor.name || actor.email || 'Admin';
+  const createdByUserId = resolvedActor.uuid;
+  const createdByName = resolvedActor.name;
   const dueDate = data.dueDate || null;
   const dueTime = data.dueTime || data.due_time || null;
   const relatedEntityType = (data.relatedEntityType || 'GENERAL').toUpperCase();
@@ -646,7 +554,7 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
   const notes = data.notes || '';
   const demoDate = data.demoDate || data.demo_date || null;
   const demoTime = data.demoTime || data.demo_time || null;
-  const demoStatus = data.demoStatus || data.demo_status || (taskCategory === 'DEMO_SCHEDULING' ? 'Scheduled' : null);
+  const demoStatus = data.demoStatus || data.demo_status || null;
   const creditAccountType = data.creditAccountType || data.credit_account_type || null;
   const creditAccountId = data.creditAccountId || data.credit_account_id || null;
   const creditAccountName = data.creditAccountName || data.credit_account_name || null;
@@ -668,6 +576,7 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
     creditAccountName,
     creditQuantity,
     creditReason,
+    created_by_email: resolvedActor.email,
     ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
   };
   const raw = JSON.stringify(rawObj);
@@ -706,30 +615,6 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
     raw: rawObj,
   };
 
-  if (!pool.hasStorage()) {
-    if (options.approvalData) {
-      const approvalQueries = require('./approvalQueries');
-      const approvalId = idempotencyKey ? createIdempotentRecordId('appr', idempotencyKey) : undefined;
-      const existingApproval = approvalId
-        ? approvalQueries.memoryApprovals.find((item) => item.id === approvalId)
-        : null;
-      if (existingApproval) {
-        if (existingApproval.raw?.idempotency_fingerprint === idempotencyFingerprint) return task;
-        throw createIdempotencyConflict();
-      }
-      await approvalQueries.createApproval({
-        ...options.approvalData,
-        ...(approvalId ? { id: approvalId } : {}),
-        internal_task_id: id,
-        raw: {
-          ...(options.approvalData.raw || {}),
-          internal_task_id: id,
-          ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
-        },
-      }, actor);
-    }
-    return task;
-  }
 
   const insertSql = `
     INSERT INTO internal_tasks (
@@ -879,7 +764,6 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
       throw unavailable;
     }
 
-    approvalQueries.rememberApproval(approval.item);
     try {
       pool.queryCache.invalidate('internal_tasks');
       pool.queryCache.invalidate('internal_task_activities');
@@ -923,7 +807,8 @@ async function createInternalTaskWithApproval(taskData, actor = {}, approvalData
  * Update an existing internal task.
  */
 async function updateInternalTask(id, updates = {}, actor = {}) {
-  if (!pool.hasStorage()) return null;
+  assertStorage('update-internal-task');
+  const resolvedActor = resolveActor(actor);
   const existing = await getInternalTaskById(id);
   if (!existing) return null;
 
@@ -1027,8 +912,8 @@ async function updateInternalTask(id, updates = {}, actor = {}) {
   );
 
   // Log activity if status changed
-  const actorId = actor.uuid || actor.id || null;
-  const actorName = actor.fullName || actor.name || actor.email || 'Admin';
+  const actorId = resolvedActor.uuid;
+  const actorName = resolvedActor.name;
 
   if (status !== existing.status) {
     const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
@@ -1069,7 +954,7 @@ async function updateInternalTask(id, updates = {}, actor = {}) {
         'DEMO_STATUS_UPDATED',
         actorId,
         actorName,
-        existing.demo_status || 'Scheduled',
+        existing.demo_status || null,
         demoStatus,
         updates.rescheduleReason || `Demo status updated to ${demoStatus} (${demoDate || ''} ${demoTime || ''})`,
       ],
@@ -1408,12 +1293,13 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
  * synchronizing in-memory service caches only after all DB transactions commit.
  */
 async function approveCreditTask(id, actor = {}, remarks = '') {
-  if (!pool.hasStorage()) return null;
+  assertStorage('approve-credit-task');
+  const resolvedActor = resolveActor(actor);
   const task = await getInternalTaskById(id);
   if (!task) return null;
 
-  const actorId = actor.uuid || actor.id || 'admin';
-  const actorName = actor.fullName || actor.name || actor.email || 'Admin Approver';
+  const actorId = resolvedActor.uuid;
+  const actorName = resolvedActor.name;
   const approvalRemarks = remarks ? String(remarks).trim() : 'Credit request approved.';
 
   const isDeduct =
@@ -1467,27 +1353,14 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       }
 
       if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
-        let prevBal = 0;
-        let targetBuyerId = accountId;
         const dbBuyerRes = await client.query(
           'SELECT id, raw FROM buyer_accounts WHERE id = $1 FOR UPDATE',
           [accountId]
         );
-        if (dbBuyerRes && dbBuyerRes.rows && dbBuyerRes.rows[0]) {
-          const bRow = dbBuyerRes.rows[0];
-          targetBuyerId = bRow.id;
-          const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
-          prevBal = Number(bRaw.creditBalance ?? bRow.available_credits ?? 0);
-        } else {
-          const buyers = (storeService.getBuyerAccounts && storeService.getBuyerAccounts()) || [];
-          const buyer = buyers.find(
-            (b) => b.id === accountId || b.corporateEmail === accountId || b.organizationName === task.credit_account_name
-          );
-          if (buyer) {
-            targetBuyerId = buyer.id;
-            prevBal = Number(buyer.creditBalance) || 0;
-          }
-        }
+        const bRow = requireCreditAccount(dbBuyerRes?.rows?.[0], task, accountId);
+        const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
+        const targetBuyerId = bRow.id;
+        const prevBal = requireRecordedBalance(bRaw.creditBalance ?? bRaw.available_credits, task, accountId);
         const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
         const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
         await client.query(bSql, [updatedBal, targetBuyerId]);
@@ -1512,24 +1385,14 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
         }
         updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
       } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
-        let prevBal = 0;
-        let targetVendorId = accountId;
         const dbVendorRes = await client.query(
           'SELECT id, raw FROM vendors WHERE id = $1 FOR UPDATE',
           [accountId]
         );
-        if (dbVendorRes && dbVendorRes.rows && dbVendorRes.rows[0]) {
-          const vRow = dbVendorRes.rows[0];
-          targetVendorId = vRow.id;
-          const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
-          prevBal = Number(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRow.credits ?? VENDOR_FREE_CREDITS_LIMIT);
-        } else {
-          const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
-          if (vendor) {
-            targetVendorId = vendor.id;
-            prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? VENDOR_FREE_CREDITS_LIMIT);
-          }
-        }
+        const vRow = requireCreditAccount(dbVendorRes?.rows?.[0], task, accountId);
+        const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
+        const targetVendorId = vRow.id;
+        const prevBal = requireRecordedBalance(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRaw.credits, task, accountId);
         const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
         const vSql = `UPDATE vendors SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), '{freeRfqDownloadCredits}', to_jsonb($1::numeric)), '{credits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
         await client.query(vSql, [updatedBal, targetVendorId]);
@@ -1622,12 +1485,13 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
  * Reject a Credit Add/Delete task. Does not modify credit balances.
  */
 async function rejectCreditTask(id, actor = {}, remarks = '') {
-  if (!pool.hasStorage()) return null;
+  assertStorage('reject-credit-task');
+  const resolvedActor = resolveActor(actor);
   const task = await getInternalTaskById(id);
   if (!task) return null;
 
-  const actorId = actor.uuid || actor.id || 'admin';
-  const actorName = actor.fullName || actor.name || actor.email || 'Admin Approver';
+  const actorId = resolvedActor.uuid;
+  const actorName = resolvedActor.name;
   const rejectionRemarks = remarks ? String(remarks).trim() : 'Credit request rejected.';
 
   const updateSql = `
@@ -1671,13 +1535,14 @@ async function rejectCreditTask(id, actor = {}, remarks = '') {
  * Add a comment or progress remark to a task's activity log.
  */
 async function addTaskActivity(taskId, { comment = '', actionType = 'COMMENT' } = {}, actor = {}) {
-  if (!pool.hasStorage()) return null;
+  assertStorage('add-task-activity');
+  const resolvedActor = resolveActor(actor);
   const task = await getInternalTaskById(taskId);
   if (!task) return null;
 
   const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
-  const actorId = actor.uuid || actor.id || null;
-  const actorName = actor.fullName || actor.name || actor.email || 'Employee';
+  const actorId = resolvedActor.uuid;
+  const actorName = resolvedActor.name;
   const actSql = `
     INSERT INTO internal_task_activities (
       id, task_id, action_type, actor_id, actor_name, comment
@@ -1704,7 +1569,7 @@ async function addTaskActivity(taskId, { comment = '', actionType = 'COMMENT' } 
  * Fetch overdue and upcoming deadline tasks.
  */
 async function getOverdueAndUpcomingTasks() {
-  if (!pool.hasStorage()) return [];
+  assertStorage('get-overdue-internal-tasks');
   const deadlineCutoff = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const sql = `
     SELECT * FROM internal_tasks
@@ -1722,7 +1587,7 @@ async function getOverdueAndUpcomingTasks() {
  * Delete task by ID.
  */
 async function deleteInternalTask(id) {
-  if (!pool.hasStorage()) return true;
+  assertStorage('delete-internal-task');
   const sql = 'DELETE FROM internal_tasks WHERE id = $1';
   await pool.query(sql, [id], { d1: true, d1Text: sql });
   return true;
@@ -1732,7 +1597,7 @@ async function deleteInternalTask(id) {
  * Search real related entities by entity type.
  */
 async function searchRelatedEntities(entityType, query = '') {
-  if (!pool.hasStorage()) return [];
+  assertStorage('search-related-entities');
   const type = (entityType || '').toUpperCase();
   const q = `%${escapeLikeWildcards((query || '').trim())}%`;
 
@@ -1847,52 +1712,85 @@ async function searchRelatedEntities(entityType, query = '') {
 /**
  * Fetch available internal team members and assignees.
  */
-async function getInternalAssignees() {
-  const { DEFAULT_INTERNAL_MEMBERS } = require('../config/constants');
-  const assigneesMap = new Map();
-  (DEFAULT_INTERNAL_MEMBERS || []).forEach((m) => {
-    assigneesMap.set(m.name.toLowerCase(), { ...m });
-  });
+/**
+ * Every internal task with its hydrated fields. The scorecard uses this to see the
+ * complete set of tasks rather than one page.
+ */
+async function listAllInternalTasks() {
+  assertStorage('list-all-internal-tasks');
+  let rows;
+  try {
+    const sql = `
+      SELECT t.*, tt.name as task_type_name, tt.code as task_type_code
+      FROM internal_tasks t
+      LEFT JOIN internal_task_types tt ON t.task_type_id = tt.id
+      ORDER BY t.created_at DESC
+    `;
+    const result = await pool.query(sql, [], { d1: true, d1Text: sql });
+    rows = result?.rows || [];
+  } catch (error) {
+    throw storageUnavailableError('list-all-internal-tasks', error);
+  }
+  return rows.map(hydrateTaskRow);
+}
 
-  if (pool.hasStorage()) {
-    try {
-      const taskRes = await pool.query(
-        "SELECT DISTINCT assigned_to_user_id, assigned_to_name FROM internal_tasks WHERE assigned_to_name IS NOT NULL AND assigned_to_name != '' AND assigned_to_name != 'Unassigned'",
-        [],
-        {
-          d1: true,
-          d1Text: "SELECT DISTINCT assigned_to_user_id, assigned_to_name FROM internal_tasks WHERE assigned_to_name IS NOT NULL AND assigned_to_name != '' AND assigned_to_name != 'Unassigned'",
-        }
-      );
-      if (taskRes && Array.isArray(taskRes.rows)) {
-        taskRes.rows.forEach((r) => {
-          if (r.assigned_to_name && !assigneesMap.has(r.assigned_to_name.toLowerCase())) {
-            assigneesMap.set(r.assigned_to_name.toLowerCase(), {
-              id: r.assigned_to_user_id || `user-${Date.now().toString(36)}`,
-              name: r.assigned_to_name,
-              role: 'Team Member',
-              email: '',
-            });
-          }
-        });
-      }
-    } catch (error) {
-      // Keep the configured fallback available while making the database fault
-      // visible; otherwise an unavailable assignee table looks like valid data.
-      logger.warn(
-        'Internal assignee lookup failed; using configured defaults',
-        { error, fallbackCount: assigneesMap.size },
-        'INTERNAL_TASKS'
-      );
-    }
+/**
+ * Internal staff who can be assigned tasks. Staff come from the identity tables
+ * (users whose role maps to a category manager or admin role) and from the assignee
+ * names already recorded on tasks. Nothing is returned from a fixed list.
+ */
+async function getInternalAssignees() {
+  assertStorage('list-internal-assignees');
+  let staffRows;
+  let taskRows;
+  try {
+    const placeholders = INTERNAL_STAFF_ROLE_KEYS.map((_, index) => `$${index + 1}`).join(', ');
+    const staffSql = `SELECT u.uuid AS id,
+        COALESCE(u.full_name, u.first_name, u.username) AS name,
+        COALESCE(u.email, u.username) AS email,
+        r.role_name AS "roleName"
+      FROM "user" u
+      INNER JOIN role r ON r.uuid = u.role_uuid
+      WHERE LOWER(REPLACE(COALESCE(r.role_name, ''), ' ', '')) IN (${placeholders})`;
+    const staffResult = await pool.query(staffSql, [...INTERNAL_STAFF_ROLE_KEYS], { d1: true, d1Text: staffSql });
+    staffRows = staffResult?.rows || [];
+
+    const taskSql = "SELECT DISTINCT assigned_to_user_id, assigned_to_name FROM internal_tasks WHERE assigned_to_name IS NOT NULL AND assigned_to_name != '' AND assigned_to_name != 'Unassigned'";
+    const taskResult = await pool.query(taskSql, [], { d1: true, d1Text: taskSql });
+    taskRows = taskResult?.rows || [];
+  } catch (error) {
+    throw storageUnavailableError('list-internal-assignees', error);
   }
 
-  return Array.from(assigneesMap.values());
+  const assignees = new Map();
+  staffRows.forEach((row) => {
+    if (!row.name) return;
+    assignees.set(String(row.name).toLowerCase(), {
+      id: row.id,
+      name: row.name,
+      role: row.roleName || null,
+      email: row.email || null,
+      project: null,
+    });
+  });
+  taskRows.forEach((row) => {
+    if (!row.assigned_to_name) return;
+    const key = String(row.assigned_to_name).toLowerCase();
+    if (assignees.has(key)) return;
+    assignees.set(key, {
+      id: row.assigned_to_user_id || null,
+      name: row.assigned_to_name,
+      role: null,
+      email: null,
+      project: null,
+    });
+  });
+  return Array.from(assignees.values());
 }
 
 module.exports = {
   getInternalAssignees,
-  DEFAULT_TASK_TYPES,
+  listAllInternalTasks,
   getTaskTypes,
   createTaskType,
   getInternalTasks,

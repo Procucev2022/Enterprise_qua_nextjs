@@ -521,31 +521,31 @@ describe('InviteVendorsModal — All Vendors tab', () => {
       expect(screen.getByText(/Please fill in all required fields/i)).toBeInTheDocument();
 
       // Fill in fields
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Apex Industrial Supplies Pvt Ltd/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.companyNamePlaceholder), {
         target: { value: 'New Test Vendor' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Rajesh Kumar/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactPersonPlaceholder), {
         target: { value: 'Amit Sharma' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. \+91 98765 43210/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactNumberPlaceholder), {
         target: { value: '+91 98765 99999' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Valves & Pipes/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.minorCategoryPlaceholder), {
         target: { value: 'Special Pipes' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Mumbai/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.cityPlaceholder), {
         target: { value: 'Mumbai' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Maharashtra/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.statePlaceholder), {
         target: { value: 'Maharashtra' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. 400001/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.pincodePlaceholder), {
         target: { value: '400001' },
       });
       const categorySelect = screen.getByTestId('add-vendor-modal').querySelector('select')!;
       fireEvent.change(categorySelect, { target: { value: categorySelect.options[0]?.value || 'General' } });
 
-      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.emailPlaceholder), {
         target: { value: 'invalid-email' },
       });
 
@@ -554,7 +554,7 @@ describe('InviteVendorsModal — All Vendors tab', () => {
       expect(screen.getByText(/Please enter a valid email address/i)).toBeInTheDocument();
 
       // Valid email
-      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.emailPlaceholder), {
         target: { value: 'valid@testvendor.com' },
       });
 
@@ -566,16 +566,16 @@ describe('InviteVendorsModal — All Vendors tab', () => {
       // Re-open modal
       fireEvent.click(screen.getByTestId('add-new-vendor-button'));
       const reopenedForm = screen.getByTestId('add-vendor-modal').querySelector('form')!;
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Apex Industrial Supplies Pvt Ltd/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.companyNamePlaceholder), {
         target: { value: 'New Test Vendor' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Rajesh Kumar/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactPersonPlaceholder), {
         target: { value: 'Amit Sharma' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. \+91 98765 43210/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactNumberPlaceholder), {
         target: { value: '+91 98765 99999' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.emailPlaceholder), {
         target: { value: 'valid@testvendor.com' },
       });
 

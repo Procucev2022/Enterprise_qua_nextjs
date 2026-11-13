@@ -2,6 +2,7 @@ const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
+const { BUYER_FREE_TRIAL_RFQ_CREDITS } = require('../config/constants');
 
 function parseRaw(value) {
   if (typeof value === 'string') {
@@ -38,7 +39,7 @@ function updatedPayer(payer, link) {
     ...payer,
     subscriptionPlan: link.planId,
     ...(link.payerType === 'buyer' && link.billingDuration ? { billingDuration: link.billingDuration } : {}),
-    ...(link.payerType === 'buyer' && link.planId === 'free_trial' ? { remainingFreeRFQs: 5 } : {}),
+    ...(link.payerType === 'buyer' && link.planId === 'free_trial' ? { remainingFreeRFQs: BUYER_FREE_TRIAL_RFQ_CREDITS } : {}),
     ...(link.payerType !== 'buyer' ? { rfqDownloadsUsed: 0 } : {}),
   };
 }
@@ -97,7 +98,8 @@ function buyerUpdateStatement(link, payer) {
     params.push(link.billingDuration);
   }
   if (link.planId === 'free_trial') {
-    assignments.push("'$.remainingFreeRFQs'", '5');
+    assignments.push("'$.remainingFreeRFQs'", `$${params.length + 1}`);
+    params.push(BUYER_FREE_TRIAL_RFQ_CREDITS);
   }
   const jsonSet = `json_set(raw, ${assignments.join(', ')})`;
   return {

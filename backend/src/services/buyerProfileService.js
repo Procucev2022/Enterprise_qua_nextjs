@@ -137,8 +137,8 @@ async function getProfile(sessionUser) {
         patch.gstNumber = profile.gstNumber;
         needsDbUpdate = true;
       }
-      if (!profile.panNumber && (buyerAcc.pan || buyerAcc.panNumber || (profile.gstNumber && profile.gstNumber.length === 15))) {
-        profile.panNumber = (buyerAcc.pan || buyerAcc.panNumber || (profile.gstNumber && profile.gstNumber.length === 15 ? profile.gstNumber.slice(2, 12) : '')).toUpperCase();
+      if (!profile.panNumber && (buyerAcc.pan || buyerAcc.panNumber)) {
+        profile.panNumber = (buyerAcc.pan || buyerAcc.panNumber).toUpperCase();
         if (profile.panNumber) {
           patch.panNumber = profile.panNumber;
           needsDbUpdate = true;
@@ -159,21 +159,6 @@ async function getProfile(sessionUser) {
           });
         } catch (err) {
           logger.warn('Failed to auto-heal buyer profile address in DB', { error: err.message }, LOG_CATEGORY);
-        }
-      }
-    } else if (!profile.panNumber && profile.gstNumber && profile.gstNumber.length === 15) {
-      profile.panNumber = profile.gstNumber.slice(2, 12).toUpperCase();
-      if (profile.organizationId) {
-        try {
-          await buyerProfileQueries.updateProfile({
-            organizationId: profile.organizationId,
-            userId,
-            patch: { panNumber: profile.panNumber },
-            categories: profile.categories,
-            actor: email,
-          });
-        } catch (err) {
-          logger.warn('Failed to auto-heal buyer profile PAN in DB', { error: err.message }, LOG_CATEGORY);
         }
       }
     }

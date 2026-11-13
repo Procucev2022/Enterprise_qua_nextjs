@@ -4,8 +4,6 @@ import React, { useMemo } from 'react';
 import { X } from 'lucide-react';
 import type { PublicVendorFilterState } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import { INDIAN_STATES } from '@/lib/validationSchemas';
-import { MAJOR_CATEGORIES } from './vendorUtils';
 
 const S = UI_STRINGS.publicVendorDirectory;
 
@@ -46,6 +44,8 @@ interface VendorFilterSidebarProps {
   onClearFilters: () => void;
   categories?: string[];
   states?: string[];
+  /** Set when the filter options could not be loaded. The lists are then empty, and this explains why. */
+  optionsError?: string | null;
   isMobile?: boolean;
   onCloseMobile?: () => void;
 }
@@ -57,6 +57,7 @@ export default function VendorFilterSidebar({
   onClearFilters,
   categories,
   states,
+  optionsError = null,
   isMobile = false,
   onCloseMobile,
 }: VendorFilterSidebarProps) {
@@ -65,8 +66,9 @@ export default function VendorFilterSidebar({
   const stateId = `vendor-filter-state${idSuffix}`;
   const ratingId = `vendor-filter-rating${idSuffix}`;
 
+  // Options come only from the directory's own filter response. Nothing is invented while it is empty.
   const categoryList = useMemo(() => {
-    const base = categories && categories.length > 0 ? categories : MAJOR_CATEGORIES.slice(1);
+    const base = categories ?? [];
     if (filter.category && filter.category !== 'all' && !base.includes(filter.category)) {
       return [filter.category, ...base];
     }
@@ -74,7 +76,7 @@ export default function VendorFilterSidebar({
   }, [categories, filter.category]);
 
   const stateList = useMemo(() => {
-    const base = states && states.length > 0 ? states : INDIAN_STATES;
+    const base = states ?? [];
     if (filter.state && filter.state !== 'all' && !base.includes(filter.state)) {
       return [filter.state, ...base];
     }
@@ -112,6 +114,12 @@ export default function VendorFilterSidebar({
           </button>
         )}
       </div>
+
+      {optionsError && (
+        <p role="alert" className="mb-4 text-xs font-semibold text-amber-700 dark:text-amber-400">
+          {optionsError}
+        </p>
+      )}
 
       {/* Category Filter */}
       <FilterSection id={categoryId} label="Category">

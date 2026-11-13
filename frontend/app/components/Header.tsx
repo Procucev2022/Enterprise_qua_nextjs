@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useApp, clearSessionCache } from '@/lib/store';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, hasUnlimitedAccess } from '@/lib/constants';
+import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
@@ -152,7 +152,8 @@ export default function Header() {
       localStorage.removeItem('procucev_session_expires_at');
       localStorage.removeItem('procucev_session_role');
     }
-    addAuditLog('User logged out of session', undefined, sessionEmail || undefined);
+    // The server stamps the actor from the signed-in session, so no email is sent.
+    addAuditLog('User logged out of session');
     setIsLoggedIn(false);
     setCurrentUserSession(null);
     setCurrentRole('buyer');
@@ -168,7 +169,7 @@ export default function Header() {
       localStorage.removeItem('procucev_session_expires_at');
       localStorage.removeItem('procucev_session_role');
     }
-    addAuditLog('Session expired - automatic logout', undefined, sessionEmail || undefined);
+    addAuditLog('Session expired - automatic logout');
     setIsLoggedIn(false);
     setCurrentUserSession(null);
     setCurrentRole('buyer');
@@ -177,6 +178,9 @@ export default function Header() {
     router.replace(LOGIN_ROUTE);
   }, [addAuditLog, router, sessionEmail, setCurrentRole, setCurrentUserSession, setIsLoggedIn, showToast]);
 
+  // Resets the local countdown that drives the automatic sign-out. No server call
+  // exists for this, so the handler makes no "extended" claim: the timer itself shows
+  // the new remaining time.
   const handleExtendSession = useCallback(() => {
     if (typeof window !== 'undefined') {
       const newExpiresAt = Date.now() + SESSION_DURATION_SECONDS * 1000;
@@ -184,9 +188,7 @@ export default function Header() {
       localStorage.setItem('procucev_session_role', currentRole);
     }
     setSessionSecondsLeft(SESSION_DURATION_SECONDS);
-    const durationLabel = isBuyerOrVendorRole ? '5 minutes' : currentRole === 'category_manager' ? '3 hours' : '30 minutes';
-    showToast('Session Extended', `Your session has been extended by ${durationLabel}.`, 'info');
-  }, [SESSION_DURATION_SECONDS, currentRole, isBuyerOrVendorRole, showToast]);
+  }, [SESSION_DURATION_SECONDS, currentRole]);
 
   // Inactivity activity tracker: resets the 5-minute inactivity countdown on any user interaction for Buyer & Vendor
   useEffect(() => {
@@ -346,17 +348,15 @@ export default function Header() {
               {(!activeSubscription || activeSubscription === 'free_trial') ? (
                 <div
                   className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-50/80 dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-xs"
-                  title={`Sourcing Credits: Total 5, Used ${Math.max(0, 5 - (remainingFreeRFQs ?? 5))}, Remaining ${remainingFreeRFQs ?? 5}`}
+                  title={
+                    remainingFreeRFQs == null
+                      ? `Sourcing Credits: ${UI_STRINGS.headerNav.creditBalanceUnknown}`
+                      : `Sourcing Credits: ${remainingFreeRFQs} remaining`
+                  }
                 >
                   <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300">Sourcing Credits:</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 dark:bg-blue-950/80 text-blue-900 dark:text-blue-200 border border-blue-200 dark:border-blue-800">
-                    Total: 5
-                  </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 dark:bg-amber-950/80 text-amber-900 dark:text-amber-200 border border-amber-200 dark:border-amber-800">
-                    Used: {Math.max(0, 5 - (remainingFreeRFQs ?? 5))}
-                  </span>
                   <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800">
-                    Remaining: {remainingFreeRFQs ?? 5}
+                    Remaining: {remainingFreeRFQs ?? UI_STRINGS.headerNav.creditBalanceUnknown}
                   </span>
                 </div>
               ) : (

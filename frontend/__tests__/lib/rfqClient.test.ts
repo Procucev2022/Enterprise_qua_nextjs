@@ -1365,12 +1365,13 @@ describe('rfqClient RFQ persistence', () => {
       expect(JSON.parse(init.body as string)).toEqual({ vendorIds: ['v-1', 'v-2'] });
     });
 
-    test('defaults invitedCount to 0 when the server omits it', async () => {
+    test('reports an error instead of inventing invitedCount when the server omits it', async () => {
       global.fetch = reply(200, { success: true, data: RFQ });
 
       const res = await inviteVendorsToRFQ('rfq-1', ['v-1']);
 
-      expect(res.success && res.invitedCount).toBe(0);
+      expect(res.success).toBe(false);
+      expect(res.success === false && res.error).toBe(UI_STRINGS.dataLoad.inviteCountMissing);
     });
 
     test('attaches the session token and JSON content type', async () => {
@@ -2356,8 +2357,55 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
       });
 
       const res = await classifyLineItems(items);
-      expect(res.success).toBe(true);
-      expect(res.data?.extractedEntities).toHaveLength(50);
+      // The 10 items in the failed batch are unclassified, so the call must not report success
+      // with only the first 50 rows.
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 }));
+      expect(res.data).toBeUndefined();
+    });
+
+    test('reports an error when a later batch replies 200 with success false', async () => {
+      const items = Array.from({ length: 60 }, (_, i) => ({
+        id: `item-${i + 1}`,
+        itemName: `Item ${i + 1}`,
+        quantity: 1,
+        unit: 'nos',
+        targetDate: '',
+        technicalSpecs: '',
+        category: '',
+        majorCategory: '',
+        minorCategory: '',
+        confidence: 0,
+      }));
+
+      let callCount = 0;
+      global.fetch = jest.fn().mockImplementation((_, opts) => {
+        callCount++;
+        if (callCount === 1) {
+          const body = JSON.parse(opts.body);
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                extractedEntities: body.lineItems.map((li: { id: string; itemName: string }) => ({
+                  id: li.id,
+                  itemName: li.itemName,
+                })),
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: false, error: 'Batch rejected.' }),
+        });
+      });
+
+      const res = await classifyLineItems(items);
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Batch rejected.');
     });
 
     test('handles total network failure in multi-batch mode', async () => {

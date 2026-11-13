@@ -10,6 +10,7 @@ import {
   getExportTicketsUrl,
 } from '@/lib/ticketClient';
 import { authClient } from '@/lib/authClient';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 describe('ticketClient', () => {
   const originalFetch = global.fetch;
@@ -94,31 +95,24 @@ describe('ticketClient', () => {
       });
 
       const result = await fetchTicketSummary();
-      expect(result).toEqual(mockSummary);
+      expect(result).toEqual({ summary: mockSummary });
     });
 
-    it('returns fallback summary on failure', async () => {
+    it('returns a null summary and an error on failure, never zero counts', async () => {
       global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 400 });
       const result = await fetchTicketSummary();
       expect(result).toEqual({
-        total: 0,
-        pending: 0,
-        inProgress: 0,
-        escalated: 0,
-        completed: 0,
-        criticalCount: 0,
+        summary: null,
+        error: formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource: UI_STRINGS.dataLoad.resources.ticketSummary, status: 400 }),
       });
 
       global.fetch = jest.fn().mockRejectedValue(new Error('Summary error'));
       const result2 = await fetchTicketSummary();
       expect(result2).toEqual({
-        total: 0,
-        pending: 0,
-        inProgress: 0,
-        escalated: 0,
-        completed: 0,
-        criticalCount: 0,
+        summary: null,
+        error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.ticketSummary }),
       });
+      expect(result2.summary).toBeNull();
     });
   });
 

@@ -2593,25 +2593,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
   });
 });
 
-describe('D1 vendor search index readiness', () => {
-  function installD1QueryMocks({ ftsTable = true, migrationApplied = true, failProbe = false } = {}) {
+describe('D1 streamlined vendor search queries', () => {
+  function installD1QueryMocks() {
     const binding = {};
     jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
     jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     const query = jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
-      if (sql.includes('sqlite_master')) {
-        if (failProbe) throw new Error('D1 schema metadata unavailable');
-        return {
-          rows: [
-            { name: 'schema_migrations' },
-            ...(ftsTable ? [{ name: 'vendors_search_fts' }] : []),
-          ],
-        };
-      }
-      if (sql.includes('FROM schema_migrations')) {
-        return { rows: migrationApplied ? [{ version: '0001_vendor_search_trigram_index' }] : [] };
-      }
       if (sql.includes('COUNT(*)')) return { rows: [{ total: 0 }] };
       return { rows: [] };
     });
@@ -2627,49 +2615,30 @@ describe('D1 vendor search index readiness', () => {
     jest.restoreAllMocks();
   });
 
-  test('narrows long D1 vendor searches through the trigram index after migration', async () => {
+  test('narrows D1 vendor searches through direct column and JSON expressions without FTS virtual table', async () => {
     const query = installD1QueryMocks();
 
     await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'stainless steel' });
 
     const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
     expect(d1Queries).toHaveLength(2);
-    expect(d1Queries.every((sql) => sql.includes('vendors_search_fts'))).toBe(true);
-    expect(d1Queries[0]).toContain('vendors.rowid IN');
-  });
-
-  test('uses the legacy D1 search path when the index or backfill is missing', async () => {
-    const query = installD1QueryMocks({ ftsTable: false, migrationApplied: false });
-
-    await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'stainless steel' });
-
-    const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
-    expect(d1Queries).toHaveLength(2);
     expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
-    expect(query.mock.calls.filter(([sql]) => sql.includes('FROM schema_migrations'))).toHaveLength(0);
+    expect(d1Queries[0]).toContain("lower(json_extract(raw,'$.name')) LIKE lower($1)");
   });
 
-  test('uses the legacy D1 search path and logs when schema probing fails', async () => {
-    const query = installD1QueryMocks({ failProbe: true });
-
-    await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'industrial valve' });
-
-    const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
-    expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
-  });
-
-  test('probes once per D1 binding and handles substring email searches', async () => {
+  test('handles substring email searches directly without FTS probing', async () => {
     const query = installD1QueryMocks();
 
     await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'sales@example.com' });
     await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'support@example.com' });
 
-    expect(query.mock.calls.filter(([sql]) => sql.includes('sqlite_master'))).toHaveLength(1);
+    expect(query.mock.calls.filter(([sql]) => sql.includes('sqlite_master'))).toHaveLength(0);
     const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
-    expect(d1Queries.some((sql) => sql.includes('lower(email) LIKE lower($1)') && sql.includes('vendors_search_fts'))).toBe(true);
+    expect(d1Queries.some((sql) => sql.includes('lower(email) LIKE lower($1)'))).toBe(true);
+    expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
   });
 
-  test('does not probe or add trigram filters for short search tokens', async () => {
+  test('does not probe sqlite_master or add trigram filters for short search tokens', async () => {
     const query = installD1QueryMocks();
 
     await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'IT' });
@@ -2678,40 +2647,40 @@ describe('D1 vendor search index readiness', () => {
     expect(query.mock.calls.every(([, , options]) => !options?.d1Text?.includes('vendors_search_fts'))).toBe(true);
   });
 
-  test('narrows public D1 directory searches while preserving their exact filters', async () => {
+  test('narrows public D1 directory searches while preserving their exact filters without FTS', async () => {
     const query = installD1QueryMocks();
 
     await domainQueries.getPublicVendorsPageFromDB({ limit: 10, offset: 0, search: 'Havells India' });
 
     const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
     expect(d1Queries).toHaveLength(2);
-    expect(d1Queries.every((sql) => sql.includes('vendors_search_fts'))).toBe(true);
+    expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
     expect(d1Queries[0]).toContain("lower(json_extract(raw,'$.buyerId')) IS NULL");
     expect(d1Queries[0]).toContain('lower(json_extract(raw,\'$.name\')) LIKE lower($1)');
   });
 
-  test('uses the trigram candidate for long category-count searches and keeps exact predicates', async () => {
+  test('executes category-count searches directly and keeps exact predicates without FTS', async () => {
     const query = installD1QueryMocks();
 
     await domainQueries.countPublicVendorsMatchingCategories(['industrial equipment']);
 
     const d1Query = query.mock.calls.map(([, , options]) => options?.d1Text).find(Boolean);
-    expect(d1Query).toContain('vendors_search_fts');
+    expect(d1Query).not.toContain('vendors_search_fts');
     expect(d1Query).toContain("lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $1");
     expect(d1Query).toContain("lower(json_extract(raw,'$.buyerId')) IS NULL");
   });
 
-  test('uses the trigram candidate for row-returning public category matching', async () => {
+  test('executes row-returning public category matching without FTS table', async () => {
     const query = installD1QueryMocks();
 
     await domainQueries.getPublicVendorsMatchingCategories(['hydraulic systems'], 20);
 
     const d1Query = query.mock.calls.map(([, , options]) => options?.d1Text).find(Boolean);
-    expect(d1Query).toContain('vendors_search_fts');
+    expect(d1Query).not.toContain('vendors_search_fts');
     expect(d1Query).toContain('ORDER BY created_at DESC LIMIT $2');
   });
 
-  test('keeps short category signals on the compatibility path', async () => {
+  test('keeps short category signals on the standard path without FTS', async () => {
     const query = installD1QueryMocks();
 
     await domainQueries.countPublicVendorsMatchingCategories(['IT']);
@@ -2719,5 +2688,118 @@ describe('D1 vendor search index readiness', () => {
     expect(query.mock.calls.some(([sql]) => sql.includes('sqlite_master'))).toBe(false);
     const d1Query = query.mock.calls.map(([, , options]) => options?.d1Text).find(Boolean);
     expect(d1Query).not.toContain('vendors_search_fts');
+  });
+});
+
+describe('additional domainQueries branch coverage', () => {
+  beforeEach(() => {
+    if (pool.queryCache) pool.queryCache.clear();
+  });
+
+  afterEach(() => {
+    if (pool.queryCache) pool.queryCache.clear();
+    jest.restoreAllMocks();
+  });
+
+  test('getVendorSnapshotByEmailFromDB handles absent storage, empty email, and missing/present row', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    expect(await domainQueries.getVendorSnapshotByEmailFromDB('test@example.com')).toBeNull();
+
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    expect(await domainQueries.getVendorSnapshotByEmailFromDB('')).toBeNull();
+    expect(await domainQueries.getVendorSnapshotByEmailFromDB(null)).toBeNull();
+
+    jest.spyOn(pool, 'query').mockResolvedValueOnce({ rows: [] });
+    expect(await domainQueries.getVendorSnapshotByEmailFromDB('missing@example.com')).toBeNull();
+
+    jest.spyOn(pool, 'query').mockResolvedValueOnce({
+      rows: [{ id: 'v-1', raw: JSON.stringify({ id: 'v-1', email: 'test@example.com' }) }],
+    });
+    const snapshot = await domainQueries.getVendorSnapshotByEmailFromDB('test@example.com');
+    expect(snapshot).toEqual({
+      id: 'v-1',
+      vendor: { id: 'v-1', email: 'test@example.com' },
+      raw: JSON.stringify({ id: 'v-1', email: 'test@example.com' }),
+    });
+  });
+
+  test('getPublicVendorFiltersFromDB handles storage absence, DB error, and row filtering', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    const noStorageResult = await domainQueries.getPublicVendorFiltersFromDB();
+    expect(noStorageResult.categories).toEqual([]);
+    expect(noStorageResult.states.length).toBeGreaterThan(0);
+
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('DB failure'));
+    const errorResult = await domainQueries.getPublicVendorFiltersFromDB();
+    expect(errorResult.categories).toEqual([]);
+
+    jest.spyOn(pool, 'query').mockResolvedValueOnce({
+      rows: [
+        { category: 'Mechanical' },
+        { category: 'Electrical' },
+        { category: 'uncategorized' },
+        { category: 'x' }, // too short
+        { category: 'Civil (No Past POs)' },
+      ],
+    });
+    const successResult = await domainQueries.getPublicVendorFiltersFromDB();
+    expect(successResult.categories).toEqual(['Mechanical', 'Electrical']);
+  });
+
+  test('getBuyerCreditTransactionsFromDB handles storage, limit, and query parameters', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    expect(await domainQueries.getBuyerCreditTransactionsFromDB('b-1')).toEqual([]);
+
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    expect(await domainQueries.getBuyerCreditTransactionsFromDB('')).toEqual([]);
+
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ id: 'tx-1' }] });
+    const withLimit = await domainQueries.getBuyerCreditTransactionsFromDB('b-1', 25);
+    expect(withLimit).toEqual([{ id: 'tx-1' }]);
+    expect(querySpy).toHaveBeenCalledWith(
+      expect.stringContaining('LIMIT $2'),
+      ['b-1', 25],
+      expect.any(Object)
+    );
+
+    const noLimit = await domainQueries.getBuyerCreditTransactionsFromDB('b-1', null);
+    expect(noLimit).toEqual([{ id: 'tx-1' }]);
+    expect(querySpy).toHaveBeenCalledWith(
+      expect.stringContaining('LIMIT 1000'),
+      ['b-1'],
+      expect.any(Object)
+    );
+  });
+
+  test('upsertCatalogueProductInDB logs and rethrows when transaction client fails', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const origPool = pool.pool;
+    pool.pool = { connect: () => {} };
+    jest.spyOn(pool, 'withTransaction').mockRejectedValue(new Error('lock deadlock'));
+    try {
+      await expect(
+        domainQueries.upsertCatalogueProductInDB(
+          { id: 'p-1', vendorId: 'v-1', sku: 'SKU-1', name: 'Pump' }
+        )
+      ).rejects.toThrow('lock deadlock');
+    } finally {
+      pool.pool = origPool;
+    }
+  });
+
+  test('getVendorsPageFromDB uses last cached count when count query fails', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const querySpy = jest.spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [{ total: 42 }] }) // initial count
+      .mockResolvedValueOnce({ rows: [] }) // data query
+      .mockRejectedValueOnce(new Error('Count query timeout')) // second count query fails
+      .mockResolvedValueOnce({ rows: [] }); // data query
+
+    const first = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 });
+    expect(first.total).toBe(42);
+
+    const second = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 });
+    expect(second.total).toBe(42);
   });
 });

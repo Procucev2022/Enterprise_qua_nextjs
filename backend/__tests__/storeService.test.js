@@ -25,9 +25,10 @@ describe('Store Service & Business Operations', () => {
     expect(storeService.getRFQs()).toEqual([]);
     expect(storeService.getAuditLogs()).toEqual([]);
     expect(await storeService.getBootstrapData()).not.toHaveProperty('rfqs');
-    // System config and the infrastructure list are static defaults, not records.
-    expect(storeService.getAzureHealth().length).toBeGreaterThan(0);
-    expect(storeService.getSystemConfig()).toBeTruthy();
+    // The infrastructure list holds only the database row, which reads CHECKING until
+    // the first probe. System config is read-only and lists values the backend uses.
+    expect(storeService.getAzureHealth()).toEqual([expect.objectContaining({ status: 'CHECKING' })]);
+    expect(storeService.getSystemConfig()).toEqual({ aiModel: expect.any(String), aiTemperature: expect.any(Number) });
   });
 
   describe('Buyer Accounts Management', () => {
@@ -159,6 +160,30 @@ describe('Store Service & Business Operations', () => {
 
       const nullRevise = storeService.reviseVendorRating('nonexistent', { qualityScore: 90, costScore: 90, deliveryScore: 90 });
       expect(nullRevise).toBeNull();
+    });
+
+    test('requestVendorEvaluation sends request and updates status', async () => {
+      const res = storeService.requestVendorEvaluation(testVendorId, {
+        buyerCompany: 'Test Buyer Corp',
+        buyerName: 'Buyer Lead',
+        buyerEmail: 'lead@buyer.test',
+        notes: 'Please submit evaluation form',
+      });
+      expect(res).toBeDefined();
+      expect(res.evaluationRequested).toBe(true);
+      expect(res.evaluationRequestedBy).toBe('Test Buyer Corp');
+
+      const nullReq = storeService.requestVendorEvaluation('nonexistent', {});
+      expect(nullReq).toBeNull();
+
+      const durableRes = await storeService.requestVendorEvaluationDurably(testVendorId, {
+        buyerCompany: 'Durable Buyer Corp',
+      });
+      expect(durableRes).toBeDefined();
+      expect(durableRes.evaluationRequested).toBe(true);
+
+      const nullDurable = await storeService.requestVendorEvaluationDurably('nonexistent', {});
+      expect(nullDurable).toBeNull();
     });
 
     // addVendor no longer auto-fires onboarding provisioning itself (see
@@ -497,7 +522,7 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
-    test('addVendor with no email never attempts an onboarding invite', async () => {
+    test('addVendor with no email never attempts an onboarding invite and records it as skipped, not sent', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
@@ -505,7 +530,7 @@ describe('Store Service & Business Operations', () => {
         const v = storeService.addVendor({ name: 'No Email Co', majorCategory: 'Fasteners' });
         await new Promise((resolve) => setImmediate(resolve));
 
-        expect(v.onboardingEmailStatus).toBe('sent');
+        expect(v.onboardingEmailStatus).toBe('skipped');
         expect(identitySpy).not.toHaveBeenCalled();
         expect(sendSpy).not.toHaveBeenCalled();
       } finally {
@@ -687,6 +712,59 @@ describe('Store Service & Business Operations', () => {
       expect(duplicateCount).toBe(1);
       expect(results.find((r) => r.rowNumber === 1).status).toBe('imported');
       expect(results.find((r) => r.rowNumber === 2)).toMatchObject({ status: 'duplicate', reason: expect.stringContaining('within the uploaded file') });
+    });
+
+    test('all four selected vendors upload successfully in buyer flow even when pre-existing or in network', async () => {
+      // Vendor 1 & 2 are pre-existing network/directory vendors
+      const v1 = storeService.addVendor({ name: 'Existing Network Vendor 1', email: 'v1-exist@example.com', majorCategory: 'Mechanical', source: 'procucev_network' });
+      const v2 = storeService.addVendor({ name: 'Existing Network Vendor 2', email: 'v2-exist@example.com', majorCategory: 'Electrical', source: 'procucev_network' });
+
+      // Buyer uploads 4 vendors with complete details (v1, v2 pre-existing, v3, v4 brand new)
+      const buyerId = 'buyer-upload-org-123';
+      const addedByBuyerCompany = 'Apex Enterprises';
+
+      const uploadRows = [
+        row({ rowNumber: 1, email: v1.email, name: 'Existing Network Vendor 1 Updated', buyerId, addedByBuyerCompany }),
+        row({ rowNumber: 2, email: v2.email, name: 'Existing Network Vendor 2 Updated', buyerId, addedByBuyerCompany }),
+        row({ rowNumber: 3, email: 'v3-new@example.com', name: 'Brand New Vendor 3', buyerId, addedByBuyerCompany }),
+        row({ rowNumber: 4, email: 'v4-new@example.com', name: 'Brand New Vendor 4', buyerId, addedByBuyerCompany }),
+      ];
+
+      const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors(uploadRows);
+
+      expect(importedCount).toBe(4);
+      expect(duplicateCount).toBe(0);
+      expect(results).toHaveLength(4);
+      expect(results.every((r) => r.status === 'imported')).toBe(true);
+
+      const allVendors = await storeService.getVendors(buyerId);
+      const importedV1 = allVendors.find((v) => v.email === v1.email);
+      expect(importedV1).toBeDefined();
+      expect(importedV1.buyerId).toBe(buyerId);
+      expect(importedV1.addedByBuyerCompany).toBe(addedByBuyerCompany);
+    });
+
+    test('reports clear error message and failed status when vendor is private to another buyer organization', async () => {
+      const otherBuyerId = 'other-buyer-999';
+      const existingOther = storeService.addVendor({
+        name: 'Other Buyer Vendor',
+        email: 'other-buyer-vendor@example.com',
+        majorCategory: 'Civil Works',
+        buyerId: otherBuyerId,
+        buyerAccountId: otherBuyerId,
+        addedByBuyerCompany: 'Other Corp',
+      });
+
+      const currentBuyerId = 'current-buyer-111';
+      const { results, importedCount } = await storeService.bulkAddVendors([
+        row({ rowNumber: 1, email: existingOther.email, name: 'Attempted Claim', buyerId: currentBuyerId }),
+      ]);
+
+      expect(importedCount).toBe(0);
+      expect(results[0].status).toBe('failed');
+      expect(results[0].reason).toContain('already registered to another buyer organization');
+      expect(results[0].errors).toBeDefined();
+      expect(results[0].errors[0]).toContain('already registered to another buyer organization');
     });
 
     test('an empty batch imports nothing without touching the store', async () => {
@@ -2862,7 +2940,7 @@ describe('Store Service & Business Operations', () => {
       expect(inviteEmailSpy).toHaveBeenCalledWith(ownVendor.email, expect.any(Object));
     });
 
-    test('invites a vendor: grants access, fires the fake chaser feed, a real notification, a real email, and an audit entry', async () => {
+    test('invites a vendor: grants access, a real notification, a real email, and an audit entry, with no simulated chaser feed', async () => {
       const vendor = storeService.addVendor({ name: 'Invite Flow Vendor', email: 'inviteflow@ex.com', majorCategory: 'Invite-Flow-Cat' });
       const rfq = storeService.createRFQ({ title: 'Invite Flow RFQ', category: 'Invite-Flow-Cat' , sourcingMode: 'mode_3' });
       const feedBefore = storeService.getAIFeed().length;
@@ -2872,7 +2950,9 @@ describe('Store Service & Business Operations', () => {
 
       expect(result.invitedCount).toBe(1);
       expect(storeService.vendorCoversRFQ(vendor, result.updatedRFQ)).toBe(true);
-      expect(storeService.getAIFeed().length).toBeGreaterThan(feedBefore); // fake chaser feed
+      // Invitations write no feed entry unless a provider result arrives; the simulated
+      // chaser entries that used to appear here are gone.
+      expect(storeService.getAIFeed().length).toBe(feedBefore);
       expect(storeService.getAuditLogs().length).toBeGreaterThan(auditBefore);
       expect(storeService.getAuditLogs()[0].action).toContain('Invited 1 vendor(s)');
       const notifs = storeService.getNotificationsFor('vendor', vendor.id);
@@ -3723,10 +3803,13 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getEvaluations()[0].vendorName).toBe('Tata Steel Tubes');
     });
 
-    test('updateSystemConfig updates and returns config', () => {
-      const updated = storeService.updateSystemConfig({ escalationIntervalHours: 48 });
-      expect(updated.escalationIntervalHours).toBe(48);
-      expect(storeService.getSystemConfig().escalationIntervalHours).toBe(48);
+    test('system config is read-only: no setter exists and the values come from the backend config', () => {
+      const { GEMINI_CONFIG } = require('../src/config/constants');
+      expect(storeService.updateSystemConfig).toBeUndefined();
+      expect(storeService.getSystemConfig()).toEqual({
+        aiModel: GEMINI_CONFIG.PRIMARY_MODEL,
+        aiTemperature: GEMINI_CONFIG.TEMPERATURE,
+      });
     });
   });
 });
@@ -4475,3 +4558,253 @@ describe('demo RFQ seeding', () => {
   });
 });
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Honest store state: no invented counts, ratings, outcomes or health rows
+// ══════════════════════════════════════════════════════════════════════════════
+describe('Honest store state (no invented counts, ratings, outcomes or health rows)', () => {
+  const {
+    CHASER_OUTCOME_STATUS,
+    INFRASTRUCTURE_HEALTH,
+    SUPPORT_CHAT_STATUS,
+  } = require('../src/config/constants');
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a bulk-imported vendor carries no rating, score, plan or credit balance', () => {
+    const vendor = storeService._buildBulkVendor(
+      { name: 'Bulk Supplier', phone: '9111111111', email: 'bulk-supplier@chaser-target.test' },
+      0
+    );
+
+    expect(vendor.rating).toBeNull();
+    expect(vendor.score).toBeNull();
+    expect(vendor).not.toHaveProperty('subscriptionPlan');
+    expect(vendor).not.toHaveProperty('freeQuotationCredits');
+    expect(vendor.evaluated).toBe(false);
+  });
+
+  test('an added vendor records no rating when none is given, and keeps a real rating of zero', () => {
+    const unrated = storeService.addVendor({
+      name: 'Unrated Supplier',
+      email: 'unrated-supplier@chaser-target.test',
+      majorCategory: 'Honest-Rating-Cat',
+    });
+    expect(unrated.rating).toBeNull();
+    expect(unrated.score).toBeNull();
+
+    const zeroRated = storeService.addVendor({
+      name: 'Zero Supplier',
+      email: 'zero-supplier@chaser-target.test',
+      majorCategory: 'Honest-Rating-Cat',
+      rating: 0,
+      score: 0,
+    });
+    expect(zeroRated.rating).toBe(0);
+    expect(zeroRated.score).toBe(0);
+  });
+
+  test('a vendor without an email is marked onboarding skipped, never sent', () => {
+    const noEmail = storeService.addVendor({
+      name: 'No Email Supplier',
+      phone: '9222222222',
+      majorCategory: 'Honest-Rating-Cat',
+    });
+
+    expect(noEmail.onboardingEmailStatus).toBe(CHASER_OUTCOME_STATUS.SKIPPED);
+  });
+
+  test('RFQ follow-up counts stay at zero until a real send is recorded, however old the RFQ is', () => {
+    const vendorA = storeService.addVendor({
+      name: 'Aged Supplier A',
+      email: 'aged-a@chaser-target.test',
+      phone: '9333333331',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
+    const vendorB = storeService.addVendor({
+      name: 'Aged Supplier B',
+      email: 'aged-b@chaser-target.test',
+      phone: '9333333332',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
+    const rfq = storeService.createRFQ({
+      title: 'Aged RFQ',
+      category: 'Engineering Spares - Mechanical',
+      assignedVendors: [vendorA, vendorB],
+    });
+    const stored = storeService.rfqs.find((r) => r.id === rfq.id);
+    stored.createdAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+
+    const view = storeService.getRFQById(rfq.id);
+
+    expect(view.followUpData.whatsappStats.delivered).toBe(0);
+    expect(view.followUpData.smsStats.delivered).toBe(0);
+    expect(view.followUpData.emailStats.delivered).toBe(0);
+    expect(view.followUpData.callStats).toEqual({ total: 0, connected: 0, avgDuration: null });
+    expect(view.followUpData.vendors.length).toBeGreaterThan(0);
+    for (const record of view.followUpData.vendors) {
+      expect(record.emailSent).toBe(false);
+      expect(record.sms).toEqual({ status: 'pending' });
+      expect(record.whatsapp).toEqual({ status: 'pending' });
+    }
+  });
+
+  test('a recorded delivered count is kept by the reconcile pass, not overwritten', () => {
+    const vendor = storeService.addVendor({
+      name: 'Recorded Supplier',
+      email: 'recorded-supplier@chaser-target.test',
+      phone: '9444444444',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
+    const rfq = storeService.createRFQ({
+      title: 'Recorded RFQ',
+      category: 'Engineering Spares - Mechanical',
+      assignedVendors: [vendor],
+    });
+    const stored = storeService.rfqs.find((r) => r.id === rfq.id);
+    stored.followUpData.whatsappStats.delivered = 1;
+
+    expect(storeService.getRFQById(rfq.id).followUpData.whatsappStats.delivered).toBe(1);
+  });
+
+  test('a feed entry takes its status from the send result once the send settles', async () => {
+    const failed = storeService._sendWithFeedOutcome(
+      Promise.resolve({ success: false, error: 'Mailbox unavailable' }),
+      'Failed to email RFQ invite (feed outcome test)',
+      {},
+      { channel: 'email', vendor: { name: 'Feed Outcome Vendor' }, rfqNumber: 'RFQ-FEED-FAILED', buyerAccountId: null }
+    );
+    await failed;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const failedEntry = storeService.getAIFeed().find((item) => item.rfqNumber === 'RFQ-FEED-FAILED');
+    expect(failedEntry).toMatchObject({
+      type: 'email',
+      status: 'failed',
+      title: 'Email invitation not sent to Feed Outcome Vendor',
+    });
+    expect(failedEntry.channelDetails.error).toBe('Mailbox unavailable');
+
+    await storeService._sendWithFeedOutcome(
+      Promise.resolve({ sent: true }),
+      'Failed to email RFQ invite (feed outcome test)',
+      {},
+      { channel: 'email', vendor: { name: 'Feed Outcome Vendor' }, rfqNumber: 'RFQ-FEED-SENT', buyerAccountId: null }
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const sentEntry = storeService.getAIFeed().find((item) => item.rfqNumber === 'RFQ-FEED-SENT');
+    expect(sentEntry).toMatchObject({ status: 'sent', title: 'Email invitation sent to Feed Outcome Vendor' });
+  });
+
+  test('the support chat answers every message with not_configured and creates no ticket', () => {
+    const auditBefore = storeService.getAuditLogs().length;
+
+    const reply = storeService.handleSupportChat('I want to speak to a human agent');
+
+    expect(reply).toMatchObject({
+      success: false,
+      status: SUPPORT_CHAT_STATUS.NOT_CONFIGURED,
+      reply: null,
+      isEscalated: false,
+      ticketId: null,
+    });
+    expect(storeService.getAuditLogs().length).toBe(auditBefore);
+  });
+
+  test('the database health row reads CHECKING before a probe, then reports the live probe result', async () => {
+    expect(storeService.getAzureHealth()).toEqual([expect.objectContaining({ status: 'CHECKING' })]);
+    jest.spyOn(domainPool, 'checkDatabaseHealth').mockResolvedValueOnce({
+      isConfigured: true,
+      isConnected: true,
+      latencyMs: 12,
+      providerLabel: 'Cloudflare D1',
+      database: 'procucev',
+      poolStatus: 'Connected',
+      userCount: 3,
+      vendorCount: 4,
+      rfqCount: 5,
+    });
+
+    await storeService.refreshInfrastructureHealth();
+
+    expect(storeService.getAzureHealth()).toEqual([{
+      service: 'Cloudflare D1 — procucev',
+      status: 'ONLINE',
+      latency: '12ms',
+      uptime: INFRASTRUCTURE_HEALTH.EMPTY_VALUE,
+      details: 'Connected. 3 active account(s), 4 vendor(s), 5 RFQ(s).',
+    }]);
+  });
+
+  test('an unreachable or unconfigured database is reported as such, with no latency claimed', async () => {
+    jest.spyOn(domainPool, 'checkDatabaseHealth').mockResolvedValueOnce({
+      isConfigured: true,
+      isConnected: false,
+      errorMessage: 'connection refused',
+    });
+    await storeService.refreshInfrastructureHealth();
+    expect(storeService.getAzureHealth()).toEqual([expect.objectContaining({
+      status: 'UNREACHABLE',
+      latency: INFRASTRUCTURE_HEALTH.EMPTY_VALUE,
+      details: 'connection refused',
+    })]);
+
+    jest.spyOn(domainPool, 'checkDatabaseHealth').mockResolvedValueOnce({
+      isConfigured: false,
+      isConnected: false,
+      provider: 'not_configured',
+    });
+    await storeService.refreshInfrastructureHealth();
+    expect(storeService.getAzureHealth()).toEqual([expect.objectContaining({
+      status: 'NOT_CONFIGURED',
+      service: 'Cloudflare D1 Database',
+      details: INFRASTRUCTURE_HEALTH.MESSAGES.CONNECTION_FAILED,
+    })]);
+  });
+
+  test('a hydration with no database configured marks the row NOT_CONFIGURED without probing', async () => {
+    jest.spyOn(domainPool, 'hasStorage').mockReturnValueOnce(false);
+    const probe = jest.spyOn(domainPool, 'checkDatabaseHealth');
+
+    const result = await storeService.hydrateFromDB();
+
+    expect(result).toMatchObject({ hydrated: false, source: 'not_configured' });
+    expect(probe).not.toHaveBeenCalled();
+    expect(storeService.getAzureHealth()[0]).toMatchObject({ status: 'NOT_CONFIGURED' });
+  });
+
+  test('a hydration that cannot read the database marks the row UNREACHABLE and surfaces the error', async () => {
+    jest.spyOn(domainPool, 'hasStorage').mockReturnValueOnce(true);
+    jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValueOnce(new Error('D1 unreachable'));
+
+    const result = await storeService.hydrateFromDB();
+
+    expect(result).toMatchObject({ hydrated: false, source: 'unavailable', error: 'D1 unreachable' });
+    expect(storeService.getAzureHealth()[0]).toMatchObject({ status: 'UNREACHABLE', details: 'D1 unreachable' });
+  });
+
+  test('a first rating for an unrated vendor records null previous values and bases the score on the buyer audit', () => {
+    const vendor = storeService.addVendor({
+      name: 'Never Rated Supplier',
+      email: 'never-rated@chaser-target.test',
+      majorCategory: 'Rating-Revision-Cat',
+    });
+
+    const { revisionRecord, updatedVendor } = storeService.reviseVendorRating(vendor.id, {
+      qualityScore: 80,
+      costScore: 60,
+      deliveryScore: 70,
+      buyerEmail: 'buyer@chaser-target.test',
+    });
+
+    expect(revisionRecord.previousRating).toBeNull();
+    expect(revisionRecord.previousScore).toBeNull();
+    expect(revisionRecord.newCompositeScore).toBe(70);
+    expect(revisionRecord.newRating).toBe(3.5);
+    expect(updatedVendor).toMatchObject({ score: 70, rating: 3.5 });
+    expect(storeService.getAuditLogs()[0].action).toContain('not rated -> 3.5 (Score: 70)');
+  });
+});

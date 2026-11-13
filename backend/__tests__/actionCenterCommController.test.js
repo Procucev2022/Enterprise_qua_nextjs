@@ -1,6 +1,7 @@
 const actionCenterCommController = require('../src/controllers/actionCenterCommController');
 const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
 const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+const { SYSTEM_ACTOR_EMAIL } = require('../src/config/constants');
 
 describe('actionCenterCommController', () => {
   let req;
@@ -14,7 +15,8 @@ describe('actionCenterCommController', () => {
       headers: {
         'x-webhook-secret': 'procucev-dlt-webhook-secret',
       },
-      user: null,
+      // Dispatch requires an authenticated session; each test that needs none sets req.user = null.
+      user: { id: 'u-1', fullName: 'Test Lead', email: 'cm.test@procucev.com' },
     };
     res = {
       status: jest.fn().mockReturnThis(),
@@ -79,7 +81,7 @@ describe('actionCenterCommController', () => {
     });
 
     it('returns 200 on successful dispatch with authenticated user', async () => {
-      req.user = { id: 'u-1', fullName: 'Navin Lead', email: 'navin@procucev.com' };
+      req.user = { id: 'u-1', fullName: 'Test Lead', email: 'cm.test@procucev.com' };
       req.body = {
         entityType: 'ticket',
         entityId: 'tkt-200',
@@ -228,7 +230,7 @@ describe('actionCenterCommController', () => {
       dispatchSpy.mockRestore();
     });
 
-    it('covers resolveActor with empty user object fallback to Category Manager', async () => {
+    it('rejects a session that carries no identity with 401 and never dispatches', async () => {
       req.user = {};
       req.body = {
         entityType: 'internal_task',
@@ -238,29 +240,22 @@ describe('actionCenterCommController', () => {
         message: 'Resolving actor empty test',
       };
 
-      const dispatchSpy = jest
-        .spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication')
-        .mockResolvedValueOnce({
-          success: true,
-          communication: { id: 'comm-empty' },
-        });
+      const dispatchSpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication');
 
       await actionCenterCommController.dispatchCommunication(req, res);
 
-      expect(dispatchSpy).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          id: null,
-          name: 'Category Manager',
-          email: null,
-        })
-      );
-      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'An authenticated session is required to dispatch an Action Center communication.',
+      });
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(actionCenterCommController.resolveActor({ user: {} })).toEqual({ id: null, name: null, email: null });
 
       dispatchSpy.mockRestore();
     });
 
-    it('covers resolveActor with null user falling back to Category Manager', async () => {
+    it('rejects a request without a session with 401 and never dispatches', async () => {
       req.user = null;
       req.body = {
         entityType: 'internal_task',
@@ -270,22 +265,12 @@ describe('actionCenterCommController', () => {
         message: 'Resolving actor null test',
       };
 
-      const dispatchSpy = jest
-        .spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication')
-        .mockResolvedValueOnce({
-          success: true,
-          communication: { id: 'comm-hdr' },
-        });
+      const dispatchSpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication');
 
       await actionCenterCommController.dispatchCommunication(req, res);
 
-      expect(dispatchSpy).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          name: 'Category Manager',
-          email: null,
-        })
-      );
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(dispatchSpy).not.toHaveBeenCalled();
 
       dispatchSpy.mockRestore();
     });
@@ -528,7 +513,7 @@ describe('actionCenterCommController', () => {
         acknowledgementStatus: 'Delivered',
         deliveryStatus: 'Delivered',
         notes: 'Carrier delivered',
-        updatedBy: 'Category Manager',
+        updatedBy: SYSTEM_ACTOR_EMAIL,
       });
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith(
@@ -556,7 +541,7 @@ describe('actionCenterCommController', () => {
         communicationId: 'comm-defaults',
         acknowledgementStatus: 'Acknowledged',
         notes: 'Webhook acknowledgement status: Acknowledged',
-        updatedBy: 'Category Manager',
+        updatedBy: SYSTEM_ACTOR_EMAIL,
       });
       expect(res.status).toHaveBeenCalledWith(200);
 
@@ -579,7 +564,7 @@ describe('actionCenterCommController', () => {
         communicationId: 'comm-delivery-only',
         deliveryStatus: 'DELIVRD',
         notes: 'Webhook delivery status: DELIVRD',
-        updatedBy: 'Category Manager',
+        updatedBy: SYSTEM_ACTOR_EMAIL,
       });
       expect(res.status).toHaveBeenCalledWith(200);
 
@@ -602,7 +587,7 @@ describe('actionCenterCommController', () => {
         communicationId: 'gateway-msg-88',
         deliveryStatus: 'Delivered',
         notes: 'Webhook delivery status: Delivered',
-        updatedBy: 'Category Manager',
+        updatedBy: SYSTEM_ACTOR_EMAIL,
       });
       expect(res.status).toHaveBeenCalledWith(200);
 
@@ -695,7 +680,7 @@ describe('actionCenterCommController', () => {
 
   describe('dispatchCommunication channel handling', () => {
     it('normalizes lowercase channel and dispatches successfully', async () => {
-      req.user = { id: 'u-1', fullName: 'Navin Lead', email: 'navin@procucev.com' };
+      req.user = { id: 'u-1', fullName: 'Test Lead', email: 'cm.test@procucev.com' };
       req.body = {
         entityType: 'ticket',
         entityId: 'tkt-200',

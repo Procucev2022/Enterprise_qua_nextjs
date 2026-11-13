@@ -2,22 +2,26 @@
 
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
-import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
-import { BUYER_PRICING, PLAN_LABEL, BillingDuration } from '@/app/buyer/subscription-center';
-import { SOURCING_MODES, RFQ_MODE_LABELS, RFQ_MODES } from '@/lib/constants';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
+import { PLAN_LABEL } from '@/app/buyer/subscription-center';
+import {
+  getBuyerGstPercent,
+  getBuyerPlanPrice,
+  getTwelveMonthSavingPercent,
+  type BillingDuration,
+  type BuyerPlanId,
+} from '@/app/buyer/buyerPlanPricing';
 import type { SourcingMode } from '@/lib/types';
 import {
   AlertCircle,
   Sparkles,
   ShieldCheck,
   CreditCard,
-  CheckCircle2,
   X,
   Zap,
   Building2,
   QrCode,
   ArrowRight,
-  Lock,
 } from 'lucide-react';
 
 export interface RfqUpgradePlanModalProps {
@@ -28,7 +32,7 @@ export interface RfqUpgradePlanModalProps {
   onSwitchToMode0?: () => void;
 }
 
-const MODE_PLAN_MAP: Record<string, { planId: 'version_1' | 'version_2' | 'version_3'; name: string; modeTitle: string }> = {
+const MODE_PLAN_MAP: Record<string, { planId: BuyerPlanId; name: string; modeTitle: string }> = {
   mode_1: {
     planId: 'version_1',
     name: 'Silver Plan (Private Vendor Network)',
@@ -53,40 +57,26 @@ export default function RfqUpgradePlanModal({
   remainingCredits = 0,
   onSwitchToMode0,
 }: RfqUpgradePlanModalProps) {
-  const { createBuyerPaymentLink, showToast } = useApp();
+  const { createBuyerPaymentLink } = useApp();
   const [billingDuration, setBillingDuration] = useState<BillingDuration>('12_months');
-  const [pricing, setPricing] = useState(BUYER_PRICING);
+  // Prices come only from the server. Until the pricing request answers, and when
+  // it fails, no amount is shown and the payment button stays disabled.
+  const [pricingConfig, setPricingConfig] = useState<SubscriptionPricingResponse | null>(null);
+  const [pricingStatus, setPricingStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Sync pricing from backend if available
   useEffect(() => {
     let isMounted = true;
     void fetchSubscriptionPricing().then((config) => {
-      if (!isMounted || !config?.buyer) return;
-      const formatINR = (val: number) => `₹${Math.round(val).toLocaleString('en-IN')}`;
-      const formatINRDecimal = (val: number) =>
-        `₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-      const newPricing: typeof BUYER_PRICING = JSON.parse(JSON.stringify(BUYER_PRICING));
-      (['6_months', '12_months'] as const).forEach((dur) => {
-        (['version_1', 'version_2', 'version_3'] as const).forEach((planKey) => {
-          const planData = config.buyer[planKey]?.[dur];
-          if (planData) {
-            const months = dur === '6_months' ? 6 : 12;
-            newPricing[dur][planKey] = {
-              ...newPricing[dur][planKey],
-              price: formatINR(planData.price),
-              amount: planData.price,
-              baseDurationLabel: `${formatINR(planData.baseDurationPrice)} (${formatINR(planData.price)} × ${months} months)`,
-              gstAmount: formatINRDecimal(planData.gstAmount),
-              totalPriceWithGst: formatINRDecimal(planData.totalWithGst),
-              totalAmountWithGst: planData.totalWithGst,
-            };
-          }
-        });
-      });
-      setPricing(newPricing);
+      if (!isMounted) return;
+      if (config?.buyer) {
+        setPricingConfig(config);
+        setPricingStatus('ready');
+      } else {
+        setPricingConfig(null);
+        setPricingStatus('unavailable');
+      }
     });
     return () => {
       isMounted = false;
@@ -97,12 +87,16 @@ export default function RfqUpgradePlanModal({
 
   const modeInfo = MODE_PLAN_MAP[targetMode] || MODE_PLAN_MAP.mode_1;
   const currentPlanId = modeInfo.planId;
-  const selectedPlanPricing = pricing[billingDuration][currentPlanId];
+  const selectedPlanPricing = getBuyerPlanPrice(pricingConfig, currentPlanId, billingDuration);
+  const savingPercent = getTwelveMonthSavingPercent(pricingConfig, currentPlanId);
+  const gstPercent = getBuyerGstPercent(pricingConfig);
+  const unpricedLabel = pricingStatus === 'loading' ? 'Loading price…' : 'Price unavailable';
 
   // Derive mode display string
   const modeKey = targetMode === 'mode_1' ? 'Mode 1' : targetMode === 'mode_2' ? 'Mode 2' : targetMode === 'mode_3' ? 'Mode 3' : targetMode;
 
   const handleProceedToPayment = async () => {
+    if (!selectedPlanPricing) return;
     setIsRedirecting(true);
     setError(null);
     try {
@@ -113,9 +107,9 @@ export default function RfqUpgradePlanModal({
         return;
       }
       window.location.href = paymentUrl;
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsRedirecting(false);
-      setError(err?.message || 'Payment initiation failed. Please try again.');
+      setError(err instanceof Error && err.message ? err.message : 'Payment initiation failed. Please try again.');
     }
   };
 
@@ -177,6 +171,12 @@ export default function RfqUpgradePlanModal({
             </div>
           </div>
 
+          {pricingStatus === 'unavailable' && (
+            <p role="alert" className="text-xs text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-xl border border-rose-200 dark:border-rose-800">
+              Plan prices could not be loaded from the server, so checkout is unavailable. Close this dialog and try again.
+            </p>
+          )}
+
           {/* Billing Duration Switcher */}
           <div className="flex items-center justify-between p-1.5 rounded-2xl bg-slate-100 dark:bg-gray-800 border border-slate-200 dark:border-gray-700">
             <button
@@ -189,9 +189,11 @@ export default function RfqUpgradePlanModal({
               }`}
             >
               <span>12 Months Plan</span>
-              <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
-                BEST VALUE (Save 20%)
-              </span>
+              {savingPercent !== null && (
+                <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
+                  Save {savingPercent}%
+                </span>
+              )}
             </button>
             <button
               type="button"
@@ -218,27 +220,30 @@ export default function RfqUpgradePlanModal({
                 </h4>
               </div>
               <div className="text-right">
-                <span className="text-xs line-through text-slate-400">{selectedPlanPricing.originalPrice}</span>
-                <div className="text-base font-black text-slate-900 dark:text-white">
-                  {selectedPlanPricing.price}{' '}
-                  <span className="text-[10px] font-normal text-slate-500 dark:text-gray-400">/ month</span>
-                </div>
+                {selectedPlanPricing ? (
+                  <div className="text-base font-black text-slate-900 dark:text-white">
+                    {selectedPlanPricing.price}{' '}
+                    <span className="text-[10px] font-normal text-slate-500 dark:text-gray-400">/ month</span>
+                  </div>
+                ) : (
+                  <span className="text-xs font-bold text-rose-700 dark:text-rose-300">{unpricedLabel}</span>
+                )}
               </div>
             </div>
 
             <div className="space-y-1.5 text-xs text-slate-600 dark:text-gray-300">
               <div className="flex justify-between items-center">
                 <span>Base Subscription ({billingDuration === '12_months' ? '12 Months' : '6 Months'})</span>
-                <span className="font-semibold text-slate-900 dark:text-white">{selectedPlanPricing.baseDurationLabel}</span>
+                <span className="font-semibold text-slate-900 dark:text-white">{selectedPlanPricing?.baseDurationLabel ?? '—'}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span>Applicable GST (18%)</span>
-                <span className="font-semibold text-slate-900 dark:text-white">{selectedPlanPricing.gstAmount}</span>
+                <span>Applicable GST{gstPercent !== null ? ` (${gstPercent}%)` : ''}</span>
+                <span className="font-semibold text-slate-900 dark:text-white">{selectedPlanPricing?.gstAmount ?? '—'}</span>
               </div>
               <div className="pt-2 border-t border-slate-200 dark:border-gray-700 flex justify-between items-center">
                 <span className="font-bold text-slate-900 dark:text-white">Total Amount to Upgrade</span>
                 <span className="text-lg font-black text-indigo-600 dark:text-indigo-400">
-                  {selectedPlanPricing.totalPriceWithGst}
+                  {selectedPlanPricing?.totalPriceWithGst ?? '—'}
                 </span>
               </div>
             </div>
@@ -338,14 +343,16 @@ export default function RfqUpgradePlanModal({
           <button
             type="button"
             onClick={() => void handleProceedToPayment()}
-            disabled={isRedirecting}
-            className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2"
+            disabled={isRedirecting || !selectedPlanPricing}
+            className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <CreditCard size={15} />
             <span>
               {isRedirecting
                 ? 'Connecting to Zoho Secure Checkout…'
-                : `Proceed to Pay ${selectedPlanPricing.totalPriceWithGst}`}
+                : selectedPlanPricing
+                  ? `Proceed to Pay ${selectedPlanPricing.totalPriceWithGst}`
+                  : unpricedLabel}
             </span>
             <ArrowRight size={14} />
           </button>

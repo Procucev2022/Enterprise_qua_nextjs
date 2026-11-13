@@ -86,6 +86,7 @@ export interface QuoteComparison {
   submissionMethod?: 'email' | 'portal' | 'web_portal';
   submittedAt?: string;
   taxes?: number;
+  taxRate?: number;
   deliveryCharges?: number;
   deliveryDate?: string;
   lineItemQuotes?: LineItemQuote[];
@@ -110,7 +111,7 @@ export interface RFQQuoteAttachment {
 export type FollowUpChannel = 'call' | 'whatsapp' | 'sms';
 
 export interface VendorChannelCall {
-  status: 'completed' | 'connected' | 'in_progress' | 'voicemail' | 'failed' | 'scheduled';
+  status: 'completed' | 'connected' | 'in_progress' | 'voicemail' | 'failed' | 'scheduled' | 'not_dispatched';
   lastAttempt: string;
   duration?: string;
   summary?: string;
@@ -119,14 +120,14 @@ export interface VendorChannelCall {
 }
 
 export interface VendorChannelWhatsApp {
-  status: 'read' | 'delivered' | 'replied' | 'pending' | 'failed';
+  status: 'read' | 'delivered' | 'replied' | 'pending' | 'failed' | 'not_dispatched';
   lastAttempt: string;
   messagePreview?: string;
   linkClicked?: boolean;
 }
 
 export interface VendorChannelSMS {
-  status: 'delivered' | 'sent' | 'clicked' | 'failed' | 'pending';
+  status: 'delivered' | 'sent' | 'clicked' | 'failed' | 'pending' | 'not_dispatched';
   lastAttempt: string;
   deliveryReport?: string;
 }
@@ -151,7 +152,8 @@ export interface VendorFollowUpRecord {
   emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
   lastInteraction: string;
-  attemptsCount: number;
+  /** Undefined when the server holds no outreach record for the vendor. It is never a substitute zero. */
+  attemptsCount?: number;
   bidStatus: 'Submitted' | 'In Progress' | 'Pending' | 'Declined';
 }
 
@@ -232,7 +234,8 @@ export interface ManualRFQForm {
   lineItems: ManualRFQLineItem[];
   /** Stored server-side and downloadable. Never sent for AI extraction. */
   attachments: RFQAttachment[];
-  sourcingMode: SourcingMode;
+  /** `null` until the buyer chooses a sourcing mode. No mode is preselected. */
+  sourcingMode: SourcingMode | null;
 }
 
 /**
@@ -605,6 +608,11 @@ export interface RFQInquiry {
 export interface RFQAssignedVendor {
   id?: string;
   name: string;
+  /** Ownership fields copied from the vendor record. isBuyerUploaded (vendor-summary) reads them. */
+  source?: string | null;
+  buyerId?: string | null;
+  buyerAccountId?: string | null;
+  addedByBuyerCompany?: string | null;
   email?: string | null;
   contactPerson?: string | null;
   phone?: string | null;
@@ -783,22 +791,16 @@ export interface AuditVerificationReport {
 
 export interface AzureServiceHealth {
   service: string;
-  status: 'ONLINE' | 'HEALTHY' | 'DEGRADED';
+  status: 'CHECKING' | 'ONLINE' | 'UNREACHABLE' | 'NOT_CONFIGURED';
   latency: string;
   uptime: string;
   details: string;
 }
 
+/** Read-only settings the server reports (GET /api/system-config). The server stores no editable setting. */
 export interface SystemConfig {
-  ollamaModel: 'Llama 3 (8B Instruct)' | 'Llama 3.1 (70B Quantized)' | 'Mistral NeMo 12B';
-  ollamaActive: boolean;
-  ocrExtractionThreshold: number;
-  whatsappAutoChaser: boolean;
-  voiceCallAutoChaser?: boolean;
-  smsAutoChaser?: boolean;
-  escalationIntervalHours: number;
-  azureDbBackupFrequency: 'Hourly' | 'Daily' | 'Continuous';
-  rbacEnforced: boolean;
+  aiModel: string;
+  aiTemperature: number;
 }
 
 export interface VendorModuleScore {
@@ -830,6 +832,55 @@ export interface QuestionEvaluationItem {
   remarks: string;
 }
 
+/** Pillar code on a supplier evaluation: M1 to M6, as on QuestionEvaluationItem.pillarId. */
+export type VendorEvaluationPillarId = QuestionEvaluationItem['pillarId'];
+
+/** One qualification pillar as the buyer evaluation summary shows it. A null value means the evaluation holds none. */
+export interface VendorEvaluationPillarView {
+  pillarId: VendorEvaluationPillarId;
+  name: string;
+  weight: number;
+  weightedScore: number | null;
+  remarks: string | null;
+}
+
+/** The supplier evaluation the buyer summary screen renders. Each null field is shown as not recorded. */
+export interface VendorEvaluationSummaryView {
+  isBuyerUploaded: boolean;
+  vendorId: string | null;
+  vendorName: string | null;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  category: string | null;
+  submissionDate: string | null;
+  status: VendorEvaluationRecord['status'] | null;
+  overallScore: number | null;
+  systemAction: string | null;
+  pillars: VendorEvaluationPillarView[];
+  questions: QuestionEvaluationItem[];
+  documents: VendorEvaluationDocument[];
+}
+
+/** One supplier in the buyer summary's supplier picker. Null fields are not on record for that supplier. */
+export interface VendorEvaluationSelectOption {
+  id: string;
+  name: string | null;
+  category: string | null;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  isBuyerUploaded: boolean;
+  overallScore: number | null;
+}
+
+/** Props of the buyer evaluation summary screen. */
+export interface VendorEvaluationSummaryProps {
+  evaluationRecord?: VendorEvaluationRecord | null;
+  vendorEvaluation?: VendorEvaluationRecord | null;
+  onBack?: () => void;
+}
+
 export interface VendorEvaluationRecord {
   id: string;
   vendorId: string;
@@ -855,6 +906,16 @@ export interface VendorEvaluationRecord {
   capaNotes?: string;
   systemAction: string;
   responses?: Record<string, string | number>;
+}
+
+/** Outcome of asking the server for a vendor evaluation. */
+export interface VendorEvaluationRequestResult {
+  success: boolean;
+  message?: string;
+  /** True when a saved evaluation already existed, so no request was sent to the vendor. */
+  evaluationExists?: boolean;
+  /** The saved evaluation to display in place of a new request. */
+  evaluation?: VendorEvaluationRecord;
 }
 
 export interface MajorMinorCategory {
@@ -961,6 +1022,8 @@ export interface BuyerProfileSaveResult extends BuyerProfileResult {
 export interface CategoryTaxonomyResult {
   success: boolean;
   data: MajorMinorCategory[];
+  minorCategories?: string[];
+  totalMinors?: number;
   error?: string;
 }
 
@@ -1016,7 +1079,11 @@ export interface VendorEntry {
   status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
   score?: number | null;
   evaluated?: boolean;
+  evaluationRequested?: boolean;
+  evaluationRequestedAt?: string;
+  evaluationRequestedBy?: string;
   hasRecord?: boolean;
+  storeRecord?: VendorEvaluationRecord | null;
   matchReason?: string;
   proximity?: string;
   proximityMatch?: boolean;
@@ -1235,6 +1302,9 @@ export interface PurchaseOrderLineItemRecord {
   unitPrice: number;
   totalSpend: number;
   department?: string;
+  category?: string;
+  minorCategory?: string;
+  categoryStatus?: 'MAPPED' | 'UNMAPPED';
 }
 
 export interface HistoricalPurchaseVendorRecord {
@@ -1901,26 +1971,49 @@ export interface BuyerAccount {
   historicalVendorsCount?: number;
 }
 
+/** Database connection health, read from the top level of GET /api/db/status. */
 export interface DBHealthStatus {
-  connected: boolean;
-  isConnected?: boolean;
-  isConfigured?: boolean;
+  isConfigured: boolean;
+  isConnected: boolean;
+  provider?: string;
   providerLabel?: string;
+  poolStatus?: string;
+  database?: string;
   latencyMs?: number;
-  poolStatus?: {
-    totalCount?: number;
-    idleCount: number;
-    waitingCount: number;
-  };
-  tablesCount?: number;
-  totalRecords?: {
+  userCount?: number;
+  vendorCount?: number;
+  rfqCount?: number;
+  errorMessage?: string;
+  timestamp?: string;
+  /** Records this server process holds in memory. It is a cache, not a separate count of the database. */
+  loadedRecords?: {
+    isLoadedFromDatabase?: boolean;
     buyerAccounts?: number;
     vendors?: number;
     rfqs?: number;
-    evaluations?: number;
-    auditLogs?: number;
   };
-  uptime?: string;
+}
+
+/** Body of GET /api/db/status on success, or the error body when the request fails. */
+export interface DBStatusResponse extends DBHealthStatus {
+  success?: boolean;
+  error?: string;
+}
+
+/** One line in the support chat widget. `notice` is text from the app itself, not from support. */
+export interface SupportChatMessage {
+  id: string;
+  sender: 'user' | 'support' | 'notice';
+  text: string;
+  timestamp: string;
+}
+
+/** Body of POST /api/support-chat. `reply` is set only when the support service answered. */
+export interface SupportChatResponse {
+  success: boolean;
+  status?: string;
+  reply?: string | null;
+  error?: string;
 }
 
 export interface EncryptedPayload {
@@ -2189,17 +2282,25 @@ export interface RFQPortfolioSummary {
   followUps: RFQPortfolioFollowUps;
 }
 
+/** Result of one OTP channel as the server reports it. Only "sent" means a provider accepted the message. */
+export type OtpChannelStatus = 'sent' | 'pending' | 'failed';
+
+/** Per-channel outcome of an OTP request. */
+export interface OtpDeliveryReport {
+  email?: OtpChannelStatus;
+  sms?: OtpChannelStatus;
+}
+
 export interface AuthResponse {
   success: boolean;
   message?: string;
   token?: string;
   user?: UserSession;
   error?: string;
-  demoCode?: string;
-  demoEmailCode?: string;
-  demoMobileCode?: string;
   expiresInSeconds?: number;
   passwordChangeRequired?: boolean;
+  /** Present on a successful OTP request: the email and SMS channel outcomes. */
+  delivery?: OtpDeliveryReport;
 }
 
 export interface LoginCredentials {

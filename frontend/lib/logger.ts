@@ -19,6 +19,21 @@ export interface FrontendLogEntry {
   stackTrace?: string;
 }
 
+let logEntrySequence = 0;
+
+/**
+ * Identifier for one log entry. Uses the platform's cryptographic UUID when the runtime provides it. Otherwise it
+ * falls back to a per-session sequence number, which is unique within this page session and is never random.
+ */
+export function nextLogEntryId(now: number): string {
+  const cryptoApi = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    return `flog-${cryptoApi.randomUUID()}`;
+  }
+  logEntrySequence += 1;
+  return `flog-${now}-${logEntrySequence}`;
+}
+
 export class ClientLogger {
   public buffer: FrontendLogEntry[] = [];
   public maxBufferSize: number = 200;
@@ -41,7 +56,7 @@ export class ClientLogger {
     category: string = 'UI_ACTION'
   ): FrontendLogEntry {
     const timestamp = this.formatTimestamp();
-    const id = `flog-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const id = nextLogEntryId(Date.now());
     const url = typeof window !== 'undefined' && window.location ? window.location.pathname : '/app';
 
     const stackTrace = metadata.error instanceof Error ? metadata.error.stack : undefined;
@@ -178,7 +193,7 @@ export class ClientLogger {
     this.lastRemoteSyncFailureAt = now;
 
     const entry: FrontendLogEntry = {
-      id: `flog-${now}-${Math.random().toString(36).substring(2, 7)}`,
+      id: nextLogEntryId(now),
       timestamp: this.formatTimestamp(),
       level: 'ERROR',
       category: 'LOG_SYNC',
