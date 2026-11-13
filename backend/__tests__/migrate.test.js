@@ -361,6 +361,7 @@ describe('PostgreSQL migration runner', () => {
         '0028_drop_system_error_logs',
         '0029_drop_all_remaining_log_tables',
         '0030_drop_vendors_search_fts',
+        '0031_public_vendor_listing_index',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

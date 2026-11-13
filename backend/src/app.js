@@ -23,6 +23,8 @@ const requestLogger = require('./middleware/logger');
 const errorHandler = require('./middleware/errorHandler');
 const storeService = require('./services/storeService');
 const pool = require('./db/pool');
+const d1Bridge = require('./db/d1Bridge');
+const { createStoreHydrationGate } = require('./middleware/storeHydrationGate');
 const { logger } = require('./services/loggerService');
 const { GRAPHQL_CONFIG, STORE_HYDRATION_CONFIG } = require('./config/constants');
 
@@ -65,39 +67,15 @@ function shouldSkipStoreHydration(requestPath = '/') {
 // subset of domain routes. Do not pay the multi-table hydration cost for
 // database-only APIs, health checks, or external integrations. Failed hydration
 // is a retryable outage for legacy routes; never continue with stale seed state.
-let hydrationPromise = null;
-app.use((req, res, next) => {
-  if (storeService.isHydratedFromDB || !pool.hasStorage() || shouldSkipStoreHydration(req.path)) return next();
-  if (!hydrationPromise) {
-    hydrationPromise = storeService.hydrateFromDB()
-      .then((result) => {
-        if (result && result.hydrated) return result;
-        const error = new Error(result?.error || STORE_HYDRATION_CONFIG.UNAVAILABLE_MESSAGE);
-        error.code = 'STORE_HYDRATION_UNAVAILABLE';
-        throw error;
-      })
-      .catch((error) => {
-        logger.error('Lazy on-request hydration failed; rejecting store-backed request', {
-          error,
-          requestId: req.requestId || req.id || null,
-          method: req.method,
-          path: req.path,
-        }, 'APP');
-        throw error;
-      })
-      .finally(() => {
-        hydrationPromise = null;
-      });
-  }
-  hydrationPromise.then(() => next()).catch(() => {
-    if (res.headersSent) return next();
-    return res.status(503).json({
-      success: false,
-      retryable: true,
-      error: STORE_HYDRATION_CONFIG.UNAVAILABLE_MESSAGE,
-    });
-  });
-});
+// The gate also stops a failing load from repeating on every request, and it
+// keeps frontend log ingestion off the store path (see middleware/storeHydrationGate.js).
+app.use(createStoreHydrationGate({
+  storeService,
+  hasStorage: () => pool.hasStorage(),
+  isOverloaded: d1Bridge.isD1Overloaded,
+  shouldSkipPath: shouldSkipStoreHydration,
+  logger,
+}));
 
 // API Health & Root Endpoints
 app.get('/health', (req, res) => {
