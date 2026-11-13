@@ -395,7 +395,19 @@ const GRAPHQL_CONFIG = Object.freeze({
   ERROR_QUERY_LIMIT: 'GraphQL request exceeds the configured query complexity limit.',
   ERROR_INVALID_VARIABLES: 'GraphQL variables must be a valid JSON object.',
 });
+// Cloudflare D1 rejects work once a database exceeds its resource budget for a 10 second
+// window ("D1 DB is overloaded"). The app treats that as a short overload: it pauses new
+// store loads and tells clients to retry after RETRY_AFTER_SECONDS.
+const D1_OVERLOAD_CONFIG = Object.freeze({
+  RETRY_AFTER_SECONDS: 15,
+  MESSAGE: 'The database is busy handling other requests. Please retry in a few seconds.',
+});
 const STORE_HYDRATION_CONFIG = Object.freeze({
+  // Frontend log ingestion never reads the store, so it must not wait for a load.
+  LOG_INGESTION_PATHS: Object.freeze(['/api/logs', '/api/logs/client-error']),
+  // After a failed load, store-backed requests fail fast for this long instead of starting another load.
+  FAILURE_BACKOFF_MS: 5000,
+  FAILURE_RETRY_AFTER_SECONDS: 5,
   SKIP_PATHS: Object.freeze([
     '/',
     '/health',
@@ -3517,6 +3529,7 @@ module.exports = {
   DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
+  D1_OVERLOAD_CONFIG,
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   QUALIFICATION_PILLARS,
