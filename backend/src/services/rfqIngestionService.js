@@ -738,8 +738,9 @@ async function buildRFQDraft(payload = {}, options = {}) {
   // Items with no major of their own take it; items whose own classification
   // conflicts with it are kept as classified but flagged for review.
   // A declared minor (the model may return either level) resolves to its own major.
+  const declaredStatedPair = resolveStatedCategory(payload.category);
   const declaredMajor =
-    canonicalMajor(payload.majorCategory || payload.category) ||
+canonicalMajor(payload.majorCategory || payload.category) ||
     taxonomyPairForMinor(payload.minorCategory || payload.category)?.major ||
     '';
   const declaredMinor =
@@ -755,7 +756,7 @@ async function buildRFQDraft(payload = {}, options = {}) {
         entity.categoryMismatch = true;
       }
       if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
-        entity.minorCategory = (declaredMinor && isMinorUnderMajor(entity.majorCategory, declaredMinor))
+entity.minorCategory = (declaredMinor && isMinorUnderMajor(entity.majorCategory, declaredMinor))
           ? declaredMinor
           : defaultMinorForMajor(entity.majorCategory);
         entity.category = entity.minorCategory;
@@ -795,7 +796,7 @@ async function buildRFQDraft(payload = {}, options = {}) {
         entity.majorCategory = headerCategory;
       }
       if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
-        entity.minorCategory = (declaredMinor && isMinorUnderMajor(entity.majorCategory, declaredMinor))
+entity.minorCategory = (declaredMinor && isMinorUnderMajor(entity.majorCategory, declaredMinor))
           ? declaredMinor
           : defaultMinorForMajor(entity.majorCategory);
         entity.category = entity.minorCategory;

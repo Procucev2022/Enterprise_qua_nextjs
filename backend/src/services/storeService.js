@@ -104,6 +104,61 @@ function resolveCanonicalCategory(cat) {
   return trimmed;
 }
 
+function extractCategories(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val.map((s) => String(s || '').trim()).filter(Boolean);
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          return parsed.map((s) => String(s || '').trim()).filter(Boolean);
+        }
+      } catch {
+        // fall through
+      }
+    }
+    return trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+const SEEDED_INQUIRIES = [
+  {
+    id: 'ent-inq-1792066342226-1vkew',
+    companyName: 'Procucev  Navin Buyer',
+    email: 'navin.procucev@gmail.com',
+    mobile: '+919157154504',
+    buyerAccountId: '4fdcc92c-8421-4ab5-8258-0134375a3c86',
+    notes: '',
+    status: 'NEW',
+    createdAt: '2026-10-15T12:12:22.226Z',
+    updatedAt: '2026-10-15T12:12:22.226Z',
+  },
+];
+
+function loadPersistedInquiries() {
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(INQUIRIES_PERSISTENCE_FILE)) {
+      const data = fs.readFileSync(INQUIRIES_PERSISTENCE_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (_) { }
+  return [...SEEDED_INQUIRIES];
+}
+
+function savePersistedInquiries(list) {
+  try {
+    const fs = require('fs');
+    const dir = path.dirname(INQUIRIES_PERSISTENCE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(INQUIRIES_PERSISTENCE_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (_) { }
+}
+
 function normalizeRFQForRead(rfq) {
   const normalized = { ...rfq };
   delete normalized.vendorInvitationTargets;
@@ -4246,16 +4301,18 @@ class StoreService {
       const mismatched = [];
 
       for (const v of newRFQ.assignedVendors) {
-        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        const full = (v.id ? this.getVendorById(v.id, 'all') : null);
+        const resolved = full ? { ...v, ...full } : v;
         const hasCategory = Boolean(
           resolved.majorCategory ||
-          (Array.isArray(resolved.minorCategories) && resolved.minorCategories.length > 0) ||
-          (Array.isArray(resolved.vendorSelectedCategories) && resolved.vendorSelectedCategories.length > 0) ||
-          (Array.isArray(resolved.clientMappedCategories) && resolved.clientMappedCategories.length > 0)
+          extractCategories(resolved.minorCategories).length > 0 ||
+          extractCategories(resolved.vendorSelectedCategories).length > 0 ||
+          extractCategories(resolved.clientMappedCategories).length > 0 ||
+          extractCategories(resolved.categories).length > 0
         );
         const isMatch = !hasCategory || rfqCategorySignals.some((sig) => this.vendorCoversCategory(resolved, sig));
         if (isMatch) {
-          shortlisted.push(v);
+          shortlisted.push(resolved);
         } else {
           mismatched.push(resolved);
         }
@@ -4272,7 +4329,7 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
-        newRFQ.assignedVendors = selected.length > 0 ? selected : shortlisted.slice(0, maxClientPerCat);
+newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? selected : shortlisted;
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -6402,9 +6459,10 @@ class StoreService {
 
     const pools = [
       vendor.majorCategory,
-      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
-      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
-      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+      ...extractCategories(vendor.minorCategories),
+      ...extractCategories(vendor.vendorSelectedCategories),
+      ...extractCategories(vendor.clientMappedCategories),
+      ...extractCategories(vendor.categories),
     ];
 
     return pools.some((c) => {
@@ -6581,9 +6639,11 @@ class StoreService {
     }
 
     const pools = [
-      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
-      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
-      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+      ...extractCategories(vendor.minorCategories),
+      ...extractCategories(vendor.vendorSelectedCategories),
+      ...extractCategories(vendor.clientMappedCategories),
+      ...extractCategories(vendor.categories),
+      ...extractCategories(vendor.category),
     ];
 
     return pools.some((c) => {
@@ -6785,7 +6845,8 @@ class StoreService {
       if (minorCategory) {
         // Step 1: Minor category matching strictly
         const minorCandidates = candidatePool.filter((candidate) => {
-          const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
+          const full = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null);
+          const v = full ? { ...candidate, ...full } : candidate;
           return this.vendorCoversMinorCategory(v, minorCategory);
         });
 
@@ -6827,12 +6888,14 @@ class StoreService {
       } else if (majorCategory) {
         // Pure major category matching (used only when no minor category is present)
         const majorCandidates = candidatePool.filter((candidate) => {
-          const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
+          const full = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null);
+          const v = full ? { ...candidate, ...full } : candidate;
           const hasCategory = Boolean(
             v.majorCategory ||
-            (Array.isArray(v.minorCategories) && v.minorCategories.length > 0) ||
-            (Array.isArray(v.vendorSelectedCategories) && v.vendorSelectedCategories.length > 0) ||
-            (Array.isArray(v.clientMappedCategories) && v.clientMappedCategories.length > 0)
+            extractCategories(v.minorCategories).length > 0 ||
+            extractCategories(v.vendorSelectedCategories).length > 0 ||
+            extractCategories(v.clientMappedCategories).length > 0 ||
+            extractCategories(v.categories).length > 0
           );
           return !hasCategory || this.vendorCoversCategory(v, majorCategory);
         });
@@ -7318,8 +7381,7 @@ class StoreService {
       pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
       location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
-
-    let clientCandidates = [];
+let clientCandidates = [];
     if (isV1 || isV2) {
       let clientDbMatches = [];
       if (pool.hasStorage()) {

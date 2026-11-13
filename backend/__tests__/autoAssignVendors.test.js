@@ -396,5 +396,26 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       const packSignals = storeService._rfqCategorySignals(rfqPacking);
       expect(packSignals).toContain('Packing Material');
     });
+
+    test('vendorCoversCategory and vendorCoversMinorCategory handle array, JSON string, comma string, and invalid inputs', () => {
+      const vJson = { minorCategories: '["Pumps", "Motors"]' };
+      expect(storeService.vendorCoversCategory(vJson, 'Pumps')).toBe(true);
+      expect(storeService.vendorCoversMinorCategory(vJson, 'Pumps')).toBe(true);
+
+      const vCsv = { vendorSelectedCategories: 'Valves, Pipes, Fittings', category: 'Hardware, Tools' };
+      expect(storeService.vendorCoversCategory(vCsv, 'Valves')).toBe(true);
+      expect(storeService.vendorCoversMinorCategory(vCsv, 'Hardware')).toBe(true);
+
+      const vInvalidJson = { clientMappedCategories: '[broken-json' };
+      expect(storeService.vendorCoversCategory(vInvalidJson, '[broken-json')).toBe(true);
+
+      const vArray = { categories: ['Safety', 'PPE'] };
+      expect(storeService.vendorCoversCategory(vArray, 'Safety')).toBe(true);
+      expect(storeService.vendorCoversMinorCategory(vArray, 'Safety')).toBe(true);
+
+      const vEmpty = { minorCategories: null, vendorSelectedCategories: 123, category: undefined };
+      expect(storeService.vendorCoversCategory(vEmpty, 'Pumps')).toBe(false);
+      expect(storeService.vendorCoversMinorCategory(vEmpty, 'Pumps')).toBe(false);
+    });
   });
 });

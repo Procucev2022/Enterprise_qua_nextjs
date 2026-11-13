@@ -129,8 +129,9 @@ type ConfirmationVendor = string | {
   id?: string;
   name?: string;
   source?: string | null;
-  addedByBuyerCompany?: string | null;
+  addedByBuyerCompany?: boolean | string | null;
   vendorCategory?: string;
+  [key: string]: any;
 };
 
 interface ConfirmationRFQ {
@@ -1171,6 +1172,7 @@ export default function IngestionWizard({
         /** Non-identifying fields the details view may show for a Procucev vendor. */
         majorCategory?: string | null;
         minorCategories?: string[] | null;
+        source?: string | null;
         location?: string | null;
         matchScore?: number | null;
       };
@@ -1308,21 +1310,18 @@ export default function IngestionWizard({
       // Top Procucev panel. Reconcile the confirmation count so it never
       // under-reports the suppliers actually dispatched: take the larger of the
       // server count and the buyer's selection.
-      let confirmation = result.rfq;
-      if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
-        const serverCount =
-          typeof result.rfq?.procucevVendorCount === 'number' ? result.rfq.procucevVendorCount : 0;
-        confirmation = {
-          ...result.rfq,
-          procucevVendorCount: Math.max(serverCount, selectedProcucevV3Ids.length),
-          // Carry the exact dispatched list (tagged Client List / Procucev
-          // Network) so the modal's private-vs-Procucev split is authoritative
-          // and does not depend on how the server echoes assignedVendors.
-          assignedVendors:
-            Array.isArray(result.rfq?.assignedVendors) && result.rfq.assignedVendors.length >= (mode1AssignedVendors || []).length
-              ? result.rfq.assignedVendors
-              : mode1AssignedVendors || result.rfq?.assignedVendors,
-        };
+      const combinedAssignedVendors =
+        Array.isArray(result.rfq?.assignedVendors) && result.rfq.assignedVendors.length >= (mode1AssignedVendors || []).length
+          ? result.rfq.assignedVendors
+          : (mode1AssignedVendors || result.rfq?.assignedVendors || []);
+
+      const confirmation = result.rfq ? { ...result.rfq, assignedVendors: combinedAssignedVendors } : null;
+      if (confirmation) {
+        if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
+          const serverCount =
+            typeof confirmation.procucevVendorCount === 'number' ? confirmation.procucevVendorCount : 0;
+          confirmation.procucevVendorCount = Math.max(serverCount, selectedProcucevV3Ids.length);
+        }
       }
       setConfirmationRfq(confirmation);
       setSubmitAttempted(false);
