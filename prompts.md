@@ -5775,3 +5775,9 @@ Please lock the Statutory Details section from editing. Fetch the mandatory GST 
 some vendor dummy pan data also coming sir.
 ```
 ---
+### Prompt 205
+**Timestamp**: 2026-11-14T04:41:45+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. Two screenshots were attached: the Revise Supplier Performance Rating modal, and the Evaluation Request Failed message for vendor v-hist-1791613849048-0.)
+```text
+After clicking Request Vendor Evaluation, the request is showing an error and the popup is not closing. Please fix the API issue and ensure the popup closes automatically after successful submission and the page refreshes with the updated status.
+```
+---

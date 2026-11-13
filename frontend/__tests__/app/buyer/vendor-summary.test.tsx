@@ -1907,6 +1907,57 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-1');
     });
 
+    it('closes the Revise Rating popup once the evaluation request is sent', async () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByText(/Revise Rating/i)[0]);
+      expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Request Vendor Evaluation/i }));
+
+      await waitFor(() => expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument());
+      expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-1');
+    });
+
+    it('keeps the Revise Rating popup open when the evaluation request does not go out', async () => {
+      mockRequestVendorEvaluation.mockResolvedValueOnce({ success: false, message: 'Vendor Not Found' });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByText(/Revise Rating/i)[0]);
+      fireEvent.click(screen.getByRole('button', { name: /Request Vendor Evaluation/i }));
+
+      await waitFor(() => expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-1'));
+      await waitFor(() => expect(screen.getByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeDisabled());
+      expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
+    });
+
+    it('shows the requested date on the supplier row once the evaluation request has been sent', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        ...(useApp as jest.Mock)(),
+        buyerVendors: mockBuyerVendors.map((v) =>
+          v.id === 'v-1' ? { ...v, evaluationRequested: true, evaluationRequestedAt: '2026-11-14T10:00:00.000Z' } : v
+        ),
+      });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      expect(screen.getAllByText(new RegExp(UI_STRINGS.vendorEvaluationRequest.requestedLabel)).length).toBeGreaterThanOrEqual(1);
+    });
+
     it('closes the rating revision modal via Cancel button', () => {
       render(
         <VendorSummary
@@ -2798,7 +2849,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Evaluation Request Dispatched to Vendor')).toBeInTheDocument();
     });
 
-    it('dispatches evaluation request successfully from Revise Rating modal and shows badge', async () => {
+    it('dispatches evaluation request successfully and closes the Revise Rating modal', async () => {
       mockRequestVendorEvaluation.mockResolvedValueOnce({ success: true });
       render(
         <VendorSummary
@@ -2813,8 +2864,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(reqEvalBtn);
 
       await waitFor(() => {
-        expect(screen.getByText('Evaluation Request Dispatched to Vendor')).toBeInTheDocument();
+        expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument();
       });
+      expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-1');
     });
 
     it('handles vendor evaluation request returning success false or failure without error message', async () => {

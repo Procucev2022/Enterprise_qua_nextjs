@@ -12,6 +12,7 @@ const zohoReconciliationService = require('../services/zohoReconciliationService
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
+const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
 const {
   EMAIL_REGEX,
   VALIDATION_SCHEMAS,
@@ -840,25 +841,17 @@ async function requestEvaluation(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid evaluation request.', errors: bodyValidation.errors });
     }
 
-    let buyerId = null;
-    let buyerCompany = req.user.orgName || req.user.name || 'Buyer';
-    let buyerName = req.user.name || '';
-    let buyerEmail = req.user.email || '';
+    // A buyer may request an evaluation only from a supplier on that buyer's roster. The roster and this check read the
+    // same buyer identifiers, and a supplier that is stored but not in the in-memory list is read from storage.
+    const buyerAccount = req.user.role === 'buyer' ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
+    const buyerScope = req.user.role === 'buyer' ? buyerScopeIdsFor(req.user, buyerAccount) : 'all';
+    const buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
+    const buyerName = buyerAccount?.contactPerson || req.user.name || '';
+    const buyerEmail = req.user.email || '';
 
-    if (req.user.role === 'buyer') {
-      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
-      if (buyerAccount) {
-        buyerId = buyerAccount.id;
-        buyerCompany = buyerAccount.organizationName || buyerCompany;
-        buyerName = buyerAccount.contactPerson || buyerName;
-      } else {
-        buyerId = req.user.sub || req.user.email;
-      }
-    }
-
-    const vendor = storeService.getVendorById(id, buyerId || 'all');
+    const vendor = await storeService.getVendorByIdWithDBFallback(id, buyerScope, { fresh: true });
     if (!vendor) {
-      logger.warn(`Vendor not found for evaluation request: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      logger.warn(`Vendor not found for evaluation request: ${id}`, { id, role: req.user.role }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
 
@@ -887,7 +880,7 @@ async function requestEvaluation(req, res, next) {
       buyerName,
       buyerEmail,
       notes: bodyValidation.sanitizedData.notes || '',
-    }, buyerId);
+    }, buyerScope);
 
     return res.status(200).json({
       success: true,

@@ -3180,9 +3180,11 @@ sellerDirectory: {
     requestFailedFallback: 'Failed to send evaluation request. Please try again.',
     unreachableFallback: 'Could not reach the server. Please try again.',
     vendorNotFoundTitle: 'Vendor Not Found',
-    vendorNotFoundBody: 'Could not locate the requested vendor in your directory.',
+    vendorNotFoundBody: 'Could not locate the requested vendor in your directory. Refresh the supplier list and try again.',
     existingTitle: 'Saved Evaluation Found',
     existingBody: 'A saved evaluation for {vendorName} already exists. It is shown now, and no new evaluation request was sent.',
+    requestedLabel: 'Evaluation requested',
+    requestedOnLabel: 'Evaluation requested {date}',
   },
 
   addVendorModal: {

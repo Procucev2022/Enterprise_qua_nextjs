@@ -44,7 +44,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, usablePan } from '@/lib/validationSchemas';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
 interface VendorSummaryProps {
@@ -182,7 +182,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
   const isSubmittingRevisionRef = useRef(false);
   const [isRequestingEvaluation, setIsRequestingEvaluation] = useState(false);
-  const [evaluationRequestDispatched, setEvaluationRequestDispatched] = useState(false);
 
   // CRUD Form State
   const [formName, setFormName] = useState('');
@@ -694,7 +693,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setCostScore(vendor.latestRatingRevision?.costScore ?? '');
     setDeliveryScore(vendor.latestRatingRevision?.deliveryScore ?? '');
     setRemarks(vendor.latestRatingRevision?.remarks ?? '');
-    setEvaluationRequestDispatched(Boolean(vendor.evaluationRequested));
+  };
+
+  // Closes the rating and profile popups that an evaluation request was sent from.
+  const closeEvaluationRequestPopups = () => {
+    setSelectedVendorForRevision(null);
+    setRemarks('');
+    setViewModalOpen(false);
+    setSelectedVendorForCrud(null);
   };
 
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
@@ -705,16 +711,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     try {
       // The store asks the server to look for a saved evaluation before it sends any request.
       const res = await requestVendorEvaluation(targetVendor.id);
-      if (res.success && res.evaluationExists && res.evaluation) {
-        // A saved evaluation was returned. Open it. No request was sent, so the dispatched badge stays off.
-        setSelectedVendorForRevision(null);
-        setViewModalOpen(false);
+      // A request that did not go out keeps the popup open. The store has already said why.
+      if (!res.success) return;
+      if (res.evaluationExists && res.evaluation) {
+        // A saved evaluation was returned, so no request was sent. Open it.
+        closeEvaluationRequestPopups();
         onViewEvaluation(res.evaluation);
         return;
       }
-      if (res.success) {
-        setEvaluationRequestDispatched(true);
-      }
+      // The request was sent. The popup closes, and the supplier row shows the requested state from the server.
+      closeEvaluationRequestPopups();
     } catch (err: any) {
       logger.log('ERROR', 'Failed to request vendor evaluation', { error: err }, 'VENDOR_SUMMARY');
       showToast(
@@ -1147,6 +1153,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               ? 'BUYER ROSTER (NO EVAL)'
               : vendor.status}
           </span>
+          {vendor.evaluationRequested && (
+            <span className="mt-1 block text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+              {vendor.evaluationRequestedAt
+                ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
+                    date: new Date(vendor.evaluationRequestedAt).toLocaleDateString(),
+                  })
+                : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+            </span>
+          )}
         </td>
 
         {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
@@ -2753,7 +2768,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       </button>
                     </div>
 
-                    {(evaluationRequestDispatched || vendor.evaluationRequested) && (
+                    {vendor.evaluationRequested && (
                       <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-700 dark:text-emerald-300 font-medium">
                         <Check size={12} className="text-emerald-600 dark:text-emerald-400" />
                         <span>{UI_STRINGS.vendorEvaluationRequest.requestDispatchedBadge}</span>

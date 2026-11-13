@@ -1943,6 +1943,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
+        // The server does not hold this supplier for the signed-in buyer. That needs a different message from a send that failed.
+        if (res.status === 404) {
+          showToast(UI_STRINGS.vendorEvaluationRequest.vendorNotFoundTitle, UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody, 'warning');
+          return { success: false, message: UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody };
+        }
         const errMessage = data?.error || UI_STRINGS.vendorEvaluationRequest.requestFailedFallback;
         showToast(UI_STRINGS.vendorEvaluationRequest.requestFailedTitle, errMessage, 'warning');
         return { success: false, message: errMessage };
@@ -1968,18 +1973,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return { success: true, message: data.message, evaluationExists: true, evaluation: savedEvaluation };
       }
 
+      // The server's record of the request is the source for the time, the buyer and the status shown on the row.
+      const sent = data.data && typeof data.data === 'object' ? data.data : {};
+      const requestedAt = typeof sent.evaluationRequestedAt === 'string' ? sent.evaluationRequestedAt : new Date().toISOString();
+      const requestedBy = typeof sent.evaluationRequestedBy === 'string' ? sent.evaluationRequestedBy : activeBuyerAccount?.organizationName || 'Buyer';
       setBuyerVendors((prev) =>
-        prev.map((v) => {
-          if (v.id === vendorId || v.name === targetVendor.name) {
-            return {
-              ...v,
-              evaluationRequested: true,
-              evaluationRequestedAt: new Date().toISOString(),
-              evaluationRequestedBy: activeBuyerAccount?.organizationName || 'Buyer',
-            };
-          }
-          return v;
-        })
+        prev.map((v) =>
+          v.id === vendorId
+            ? {
+                ...v,
+                evaluationRequested: true,
+                evaluationRequestedAt: requestedAt,
+                evaluationRequestedBy: requestedBy,
+                status: typeof sent.status === 'string' ? sent.status : v.status,
+              }
+            : v
+        )
       );
 
       void addFeedItem(
