@@ -240,6 +240,17 @@ function isRetryableD1Error(err) {
   return RETRYABLE_D1_ERROR_PATTERNS.some((pattern) => pattern.test(msg));
 }
 
+// Narrower than isRetryableD1Error: only the platform's own overload message. The generic
+// patterns (for example "rate limit") can come from other providers and must not change an
+// HTTP response into a database-busy response.
+const D1_OVERLOAD_ERROR_PATTERN = /D1 DB is overloaded|too many resources consumed/i;
+
+function isD1OverloadError(err) {
+  if (!err) return false;
+  const msg = err.message || String(err);
+  return D1_OVERLOAD_ERROR_PATTERN.test(msg);
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let _d1OverloadUntil = 0;
@@ -397,6 +408,7 @@ module.exports = {
   batchD1,
   getWaitUntil,
   isRetryableD1Error,
+  isD1OverloadError,
   isD1Overloaded,
   markD1Overloaded,
   resetD1OverloadState,

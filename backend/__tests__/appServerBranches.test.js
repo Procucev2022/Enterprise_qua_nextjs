@@ -6,6 +6,7 @@ const pool = require('../src/db/pool');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const { logger } = require('../src/services/loggerService');
+const { STORE_HYDRATION_CONFIG } = require('../src/config/constants');
 
 describe('App & Server Dedicated Branch Boost Suite', () => {
   afterEach(() => {
@@ -82,7 +83,7 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB');
 
       const hydrationLayer = app._router.stack.find(
-        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.toString().includes('hydrationPromise')
+        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.name === 'storeHydrationGate'
       );
       const defaultPathNext = jest.fn();
       hydrationLayer.handle({}, {}, defaultPathNext);
@@ -104,21 +105,31 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValueOnce({
         hydrated: false,
         error: 'Lazy hydration network drop',
-      }).mockResolvedValueOnce({ hydrated: false });
+      }).mockResolvedValueOnce({ hydrated: true, source: 'postgres' });
       const logErrorSpy = jest.spyOn(logger, 'error');
 
       const res = await request(app).get('/api/rfqs');
       expect(res.statusCode).toBe(503);
       expect(res.body.retryable).toBe(true);
+      expect(res.headers['retry-after']).toBe(String(STORE_HYDRATION_CONFIG.FAILURE_RETRY_AFTER_SECONDS));
       expect(logErrorSpy).toHaveBeenCalledWith(
         'Lazy on-request hydration failed; rejecting store-backed request',
         expect.objectContaining({ error: expect.any(Error), path: '/api/rfqs' }),
         'APP'
       );
 
-      const fallbackRes = await request(app).get('/api/rfqs');
-      expect(fallbackRes.statusCode).toBe(503);
-      expect(logErrorSpy.mock.calls[1][1].error.message).toMatch(/temporarily unavailable/i);
+      // Inside the failure backoff window the request fails fast and no second load starts.
+      const backedOffRes = await request(app).get('/api/rfqs');
+      expect(backedOffRes.statusCode).toBe(503);
+      expect(backedOffRes.body.error).toMatch(/temporarily unavailable/i);
+      expect(storeService.hydrateFromDB).toHaveBeenCalledTimes(1);
+      expect(logErrorSpy).toHaveBeenCalledTimes(1);
+
+      // After the backoff expires, the next request loads the store again.
+      const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + STORE_HYDRATION_CONFIG.FAILURE_BACKOFF_MS + 1);
+      await request(app).get('/api/rfqs');
+      expect(storeService.hydrateFromDB).toHaveBeenCalledTimes(2);
+      dateSpy.mockRestore();
 
       storeService.isHydratedFromDB = origHydrated;
     });
@@ -135,7 +146,7 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB').mockImplementation(() => deferredPromise);
 
       const hydrationLayer = app._router.stack.find(
-        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.toString().includes('hydrationPromise')
+        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.name === 'storeHydrationGate'
       );
       expect(hydrationLayer).toBeDefined();
       const middleware = hydrationLayer.handle;
@@ -147,7 +158,7 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       middleware({ path: '/api/rfqs' }, {}, next1);
       expect(hydrateSpy).toHaveBeenCalledTimes(1);
 
-      // Concurrent second request hits (!hydrationPromise) === false and reuses in-flight promise
+      // A concurrent second request joins the in-flight load instead of starting another
       middleware({ path: '/api/rfqs' }, {}, next2);
       expect(hydrateSpy).toHaveBeenCalledTimes(1);
 
@@ -167,7 +178,7 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue({ hydrated: false });
       const hydrationLayer = app._router.stack.find(
-        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.toString().includes('hydrationPromise')
+        (layer) => layer.handle && layer.handle.length === 3 && layer.handle.name === 'storeHydrationGate'
       );
       const res = { headersSent: true, status: jest.fn().mockReturnThis(), json: jest.fn() };
       const next = jest.fn();

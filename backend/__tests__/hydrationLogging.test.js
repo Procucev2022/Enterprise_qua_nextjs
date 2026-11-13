@@ -18,10 +18,11 @@ describe('store hydration failure logging', () => {
     });
     const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
     const hydrationLayer = app._router.stack.find(
-      (layer) => layer.handle && layer.handle.length === 3 && layer.handle.toString().includes('hydrationPromise')
+      (layer) => layer.handle && layer.handle.length === 3 && layer.handle.name === 'storeHydrationGate'
     );
     const response = {
       headersSent: false,
+      setHeader: jest.fn(),
       status: jest.fn().mockReturnThis(),
       json: jest.fn(),
     };
