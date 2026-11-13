@@ -113,6 +113,52 @@ describe('LoginPage', () => {
     typeInto(/^Password$/i, 'Pass@1234');
   };
 
+  describe('registration form labels', () => {
+    const openVendorRegistration = () => {
+      openRegister();
+      fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
+    };
+
+    /** The label element for a registration input, asterisk included. */
+    const labelFor = (id: string): HTMLElement => {
+      const label = document.querySelector(`label[for="${id}"]`);
+      if (!label) throw new Error(`No label is bound to ${id}`);
+      return label as HTMLElement;
+    };
+
+    it('marks Full Name as mandatory on the buyer form', () => {
+      render(<LoginPage />);
+      openRegister();
+
+      expect(labelFor('reg-name')).toHaveTextContent(AUTH.registrationLabels.fullNameBuyer);
+      expect(labelFor('reg-name').querySelector('span.text-red-500')).toHaveTextContent('*');
+      expect(screen.getByLabelText(/Full Name/i)).toBeRequired();
+    });
+
+    it('marks the vendor representative name as mandatory on the vendor form', () => {
+      render(<LoginPage />);
+      openVendorRegistration();
+
+      expect(labelFor('reg-name')).toHaveTextContent(AUTH.registrationLabels.fullNameVendor);
+      expect(labelFor('reg-name').querySelector('span.text-red-500')).toHaveTextContent('*');
+    });
+
+    it('labels the vendor company field with the vendor enterprise name only', () => {
+      render(<LoginPage />);
+      openVendorRegistration();
+
+      expect(labelFor('reg-org')).toHaveTextContent(AUTH.registrationLabels.companyNameVendor);
+      expect(labelFor('reg-org').textContent).not.toMatch(/company name/i);
+    });
+
+    it('keeps the Company Name label on the buyer form', () => {
+      render(<LoginPage />);
+      openRegister();
+
+      expect(labelFor('reg-org')).toHaveTextContent(AUTH.registrationLabels.companyNameBuyer);
+    });
+  });
+
   describe('no demo credentials are exposed', () => {
     it('renders empty email and password fields', () => {
       render(<LoginPage />);

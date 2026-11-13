@@ -1417,7 +1417,7 @@ sellerDirectory: {
       fullNameBuyer: 'Full Name',
       fullNameVendor: 'Authorized Representative Name',
       companyNameBuyer: 'Company Name',
-      companyNameVendor: 'Vendor Enterprise / Company Name',
+      companyNameVendor: 'Vendor Enterprise',
       gstNumber: 'GST Number',
       pincode: 'Pincode',
       city: 'City',

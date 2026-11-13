@@ -5684,3 +5684,13 @@ Keep pushing the changes directly in the "test-v3" branch for now. as soon as an
 
 create account is not working
 ```
+### Prompt 194
+**Timestamp**: 2026-11-13T13:12:48+05:30
+```text
+Keep pushing the changes directly in the "test-v3" branch for now. as soon as any change done.
+
+"*" mark for full name is madatory in image 1. Please add this.
+
+remove the "company name" already vendor enterprise is there. so it is duplicate in second image
+```
+---

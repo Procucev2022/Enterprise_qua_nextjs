@@ -1006,7 +1006,8 @@ function LoginPageContent() {
                           <label htmlFor="reg-name" className={fieldLabel}>
                             {selectedRegRole === 'buyer'
                               ? AUTH.registrationLabels.fullNameBuyer
-                              : AUTH.registrationLabels.fullNameVendor}
+                              : AUTH.registrationLabels.fullNameVendor}{' '}
+                            <span className="text-red-500">*</span>
                           </label>
                           <div className="relative">
                             <Users className={iconClass} size={14} />
