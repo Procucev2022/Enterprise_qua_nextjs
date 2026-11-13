@@ -137,9 +137,14 @@ describe('Public Vendor Directory (/vendors)', () => {
 
     const { container } = render(<PublicVendorDirectoryPage />);
 
+    // The filter options load from the directory response, so wait for them before choosing one.
+    await waitFor(() => {
+      expect(container.querySelector('#vendor-filter-category option[value="Engineering Spares - Electrical"]')).not.toBeNull();
+    });
+
     // Change category
     const categorySelect = container.querySelector('#vendor-filter-category') as HTMLSelectElement;
-    fireEvent.change(categorySelect, { target: { value: 'Electrical' } });
+    fireEvent.change(categorySelect, { target: { value: 'Engineering Spares - Electrical' } });
 
     // Change state
     const stateSelect = container.querySelector('#vendor-filter-state') as HTMLSelectElement;
@@ -160,7 +165,7 @@ describe('Public Vendor Directory (/vendors)', () => {
     await waitFor(() => {
       expect(fetchPublicVendors).toHaveBeenCalledWith(
         expect.objectContaining({
-          category: 'Electrical',
+          category: 'Engineering Spares - Electrical',
           state: 'Gujarat',
           minRating: 4,
           verifiedOnly: true,
@@ -582,6 +587,8 @@ describe('Public Vendor Directory (/vendors)', () => {
         hasActiveFilters={true}
         onUpdateFilter={onUpdate}
         onClearFilters={onClear}
+        categories={['Mechanical', 'Civil & Construction']}
+        states={['Maharashtra', 'Karnataka']}
         isMobile={true}
         onCloseMobile={onClose}
       />
@@ -764,9 +771,28 @@ describe('Public Vendor Directory (/vendors)', () => {
     });
   });
 
-  test('gracefully falls back when fetchPublicVendorFilters rejects or fails', async () => {
+  test('keeps the vendor list and shows the filter-options error when fetchPublicVendorFilters rejects', async () => {
     (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);
     (fetchPublicVendorFilters as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+
+    const { container } = render(<PublicVendorDirectoryPage />);
+
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Bharat Heavy Engineering Works')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.vendorWorkspace.publicDirectory.filterOptionsUnavailable);
+    });
+    // Only the "All" option remains, so no category or state is invented in place of the failed request.
+    expect(container.querySelectorAll('#vendor-filter-category option')).toHaveLength(1);
+    expect(container.querySelectorAll('#vendor-filter-state option')).toHaveLength(1);
+  });
+
+  test('shows the filter-options error when the filter request returns success false', async () => {
+    (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);
+    (fetchPublicVendorFilters as jest.Mock).mockResolvedValueOnce({ success: false, categories: [], states: [] });
 
     render(<PublicVendorDirectoryPage />);
 
@@ -775,8 +801,23 @@ describe('Public Vendor Directory (/vendors)', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Bharat Heavy Engineering Works')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.vendorWorkspace.publicDirectory.filterOptionsUnavailable);
     });
+  });
+
+  test('shows no total count while a vendor search has failed', async () => {
+    (fetchPublicVendors as jest.Mock).mockResolvedValue({ success: false, error: 'Directory unavailable', data: [], pagination: { page: 1, pageSize: 24, total: 0, totalPages: 1 } });
+
+    render(<PublicVendorDirectoryPage />);
+
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Directory unavailable')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/suppliers found/)).not.toBeInTheDocument();
   });
 
   test('renders VendorDirectoryLoginGate when client is unauthenticated', async () => {

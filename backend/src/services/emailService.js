@@ -2,6 +2,13 @@
  * Enterprise Email Template & Notification Engine
  */
 
+// Labels and messages stay in this module until they move to backend/src/config/constants.js.
+const EMAIL_MESSAGES = Object.freeze({
+  NOT_SPECIFIED: 'Not specified',
+  RFQ_NUMBER_REQUIRED: 'An RFQ number is required to generate the RFQ invitation email.',
+  VENDOR_EMAIL_REQUIRED: 'The vendor has no email address on record. Add one before this email can be sent.',
+});
+
 /**
  * Resolves the public frontend URL across all deployment environments
  * (Cloudflare Workers, Vercel, Node, Docker). Configurable via
@@ -14,16 +21,7 @@ function getPublicFrontendUrl() {
     process.env.FRONTEND_URL ||
     (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.PUBLIC_FRONTEND_URL);
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
-    const trimmed = envVal.trim().replace(/\/+$/, '');
-    if (trimmed.includes('srinivas-mukku.workers.dev')) {
-      const isProd =
-        process.env.NODE_ENV === 'production' ||
-        (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && (globalThis.__CF_ENV__.NODE_ENV === 'production' || globalThis.__CF_ENV__.ENVIRONMENT === 'prod' || globalThis.__CF_ENV__.ENVIRONMENT === 'production'));
-      if (isProd) {
-        return 'https://equa.procucev.com';
-      }
-    }
-    return trimmed;
+    return envVal.trim().replace(/\/+$/, '');
   }
   if (process.env.NODE_ENV === 'production' || (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.NODE_ENV === 'production')) {
     return 'https://equa.procucev.com';
@@ -44,16 +42,30 @@ function getLogoUrl() {
   return `${base}/procucev-logo.png`;
 }
 
+/**
+ * Builds the RFQ invitation email for one vendor.
+ * Throws when the RFQ number is missing. When the vendor has no email, `to` is null
+ * and `error` explains why: the caller must not send the message.
+ */
 function generateStandardRFQEmail(rfq, vendor) {
+  if (!rfq || !rfq.rfqNumber) {
+    throw new Error(EMAIL_MESSAGES.RFQ_NUMBER_REQUIRED);
+  }
+
   const frontendUrl = getPublicFrontendUrl();
   const logoUrl = getLogoUrl();
-  const vendorName = vendor ? vendor.name : 'Preferred Supplier Partner';
-  const contactPerson = vendor ? vendor.contactPerson : 'Procurement Team';
-  const vendorEmail = (vendor && vendor.email) || 'navinchaudhary.dev@gmail.com';
-  const rfqNumber = rfq.rfqNumber || 'RFQ-2026';
-  const deadline = rfq.deadline || 'To be confirmed';
-  const category = rfq.category || 'Industrial Equipment & Spares';
-  const budget = Number(rfq.budget) || 0;
+  const vendorName = (vendor && vendor.name) || EMAIL_MESSAGES.NOT_SPECIFIED;
+  const contactPerson = (vendor && vendor.contactPerson) || EMAIL_MESSAGES.NOT_SPECIFIED;
+  const vendorEmail = (vendor && vendor.email) || null;
+  const rfqNumber = rfq.rfqNumber;
+  const title = rfq.title || EMAIL_MESSAGES.NOT_SPECIFIED;
+  const deadlineText = rfq.deadline ? `${rfq.deadline} (23:59 IST)` : EMAIL_MESSAGES.NOT_SPECIFIED;
+  const category = rfq.category || EMAIL_MESSAGES.NOT_SPECIFIED;
+  const budgetAmount = Number(rfq.budget);
+  const budgetText =
+    Number.isFinite(budgetAmount) && budgetAmount > 0
+      ? `₹${budgetAmount.toLocaleString('en-IN')}`
+      : EMAIL_MESSAGES.NOT_SPECIFIED;
   const attachments = Array.isArray(rfq.attachments) ? rfq.attachments : [];
   const bidLink = `${frontendUrl}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
 
@@ -62,10 +74,12 @@ function generateStandardRFQEmail(rfq, vendor) {
       const specParts = [item.technicalSpecs, item.minorCategory].filter(Boolean);
       const confidence =
         typeof item.confidence === 'number' ? ` (AI confidence: ${Math.round(item.confidence * 100)}%)` : '';
-      const specs = (specParts.join(' — ') || 'Standard Enterprise Specification') + confidence;
+      const specs = (specParts.join(' — ') || EMAIL_MESSAGES.NOT_SPECIFIED) + confidence;
+      const quantity = item.quantity != null && item.quantity !== '' ? String(item.quantity) : EMAIL_MESSAGES.NOT_SPECIFIED;
+      const quantityWithUnit = item.unit ? `${quantity} ${item.unit}` : quantity;
       return `<tr>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 500;">${idx + 1}. ${item.itemName || item.description || 'Item'}</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${item.quantity || 1} ${item.unit || 'Units'}</td>
+          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 500;">${idx + 1}. ${item.itemName || item.description || EMAIL_MESSAGES.NOT_SPECIFIED}</td>
+          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${quantityWithUnit}</td>
           <td style="padding: 8px 12px; border: 1px solid #e2e8f0;">${specs}</td>
         </tr>`;
     })
@@ -74,11 +88,11 @@ function generateStandardRFQEmail(rfq, vendor) {
   const attachmentsList = attachments
     .map(
       (file) =>
-        `<li style="margin-bottom: 4px;">${file.fileName || file.name || 'Attachment'}</li>`
+        `<li style="margin-bottom: 4px;">${file.fileName || file.name || EMAIL_MESSAGES.NOT_SPECIFIED}</li>`
     )
     .join('');
 
-  const subject = `[OFFICIAL RFQ] ${rfqNumber} - Request for Quotation: ${rfq.title}`;
+  const subject = `[OFFICIAL RFQ] ${rfqNumber} - Request for Quotation: ${title}`;
 
   const isBuyerVendor = Boolean(
     vendor && (
@@ -89,7 +103,6 @@ function generateStandardRFQEmail(rfq, vendor) {
       (vendor.source && String(vendor.source).toLowerCase().includes('buyer')) ||
       (vendor.id && (
         String(vendor.id).startsWith('v-hist-') ||
-        String(vendor.id).startsWith('v-navin-') ||
         String(vendor.id).startsWith('vm-') ||
         String(vendor.id).startsWith('v-ingest-') ||
         String(vendor.id).startsWith('v-buyer-')
@@ -128,7 +141,7 @@ function generateStandardRFQEmail(rfq, vendor) {
                 </tr>
                 <tr>
                   <td style="padding: 8px 12px; font-weight: bold;">Title / Requirement:</td>
-                  <td style="padding: 8px 12px;">${rfq.title}</td>
+                  <td style="padding: 8px 12px;">${title}</td>
                 </tr>
                 ${
                   isBuyerVendor && rfq.buyerAccountName
@@ -144,16 +157,12 @@ function generateStandardRFQEmail(rfq, vendor) {
                 </tr>
                 <tr>
                   <td style="padding: 8px 12px; font-weight: bold;">Submission Deadline:</td>
-                  <td style="padding: 8px 12px; color: #dc2626; font-weight: bold;">${deadline} (23:59 IST)</td>
+                  <td style="padding: 8px 12px; color: #dc2626; font-weight: bold;">${deadlineText}</td>
                 </tr>
-                ${
-                  budget > 0
-                    ? `<tr>
+                <tr>
                   <td style="padding: 8px 12px; font-weight: bold;">Indicative Budget:</td>
-                  <td style="padding: 8px 12px;">₹${budget.toLocaleString('en-IN')}</td>
-                </tr>`
-                    : ''
-                }
+                  <td style="padding: 8px 12px;">${budgetText}</td>
+                </tr>
               </table>
 
               <h4 style="margin: 16px 0 8px 0; color: #0f172a;">Requested Bill of Quantities (BOQ):</h4>
@@ -167,7 +176,7 @@ function generateStandardRFQEmail(rfq, vendor) {
                     </tr>
                   </thead>
                   <tbody>
-                    ${lineItemsList || '<tr><td colspan="3" style="padding: 8px 12px; border: 1px solid #e2e8f0;">See attached procurement specifications document.</td></tr>'}
+                    ${lineItemsList || '<tr><td colspan="3" style="padding: 8px 12px; border: 1px solid #e2e8f0;">No line items are recorded for this RFQ.</td></tr>'}
                   </tbody>
                 </table>
               </div>
@@ -181,7 +190,7 @@ function generateStandardRFQEmail(rfq, vendor) {
 
               <div style="background: #eff6ff; border-left: 4px solid #3b82f6; padding: 12px 16px; margin: 20px 0; border-radius: 0 4px 4px 0; box-sizing: border-box;">
                 <p style="margin: 0; font-size: 13px; color: #1e40af;">
-                  <strong>Autonomous AI Multi-Channel Follow-up:</strong> Our automated AI sourcing agent will monitor response milestones across WhatsApp and Voice calls.
+                  <strong>Follow-up:</strong> Reminders about this RFQ can reach you on WhatsApp, SMS and email.
                 </p>
               </div>
 
@@ -193,7 +202,7 @@ function generateStandardRFQEmail(rfq, vendor) {
 
               <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
               <p style="font-size: 12px; color: #64748b; margin: 0;">
-                Procucev Enterprise Solutions | Secure 256-Bit SHA Encrypted Transmission | DLT Registered
+                Procucev Enterprise Solutions | DLT Registered
               </p>
             </div>
           </div>
@@ -215,14 +224,23 @@ function generateStandardRFQEmail(rfq, vendor) {
     rfqNumber,
     htmlBody,
     sentAt: new Date().toISOString(),
+    ...(vendorEmail ? {} : { error: EMAIL_MESSAGES.VENDOR_EMAIL_REQUIRED }),
   };
 }
 
+/**
+ * Builds the portal onboarding email for a vendor.
+ * When the vendor has no email, `to` is null and `error` explains why.
+ */
 function generateVendorOnboardingEmail(vendor) {
+  const safeVendor = vendor || {};
   const frontendUrl = getPublicFrontendUrl();
   const logoUrl = getLogoUrl();
   const subject = `Welcome to Procucev Enterprise Supplier Network - Onboarding Instructions`;
   const portalUrl = `${frontendUrl}/login`;
+  const contactPerson = safeVendor.contactPerson || EMAIL_MESSAGES.NOT_SPECIFIED;
+  const vendorName = safeVendor.name || EMAIL_MESSAGES.NOT_SPECIFIED;
+  const vendorEmail = safeVendor.email || null;
 
   const htmlBody = `
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
@@ -244,13 +262,13 @@ function generateVendorOnboardingEmail(vendor) {
               <p style="margin: 4px 0 0 0; opacity: 0.8; font-size: 14px;">Direct Empanelled Sourcing & RFQ Access</p>
             </div>
             <div class="email-content" style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word;">
-              <p>Dear <strong>${vendor.contactPerson || 'Partner'}</strong>,</p>
-              <p>Your enterprise profile for <strong>${vendor.name}</strong> has been registered on the Procucev platform.</p>
+              <p>Dear <strong>${contactPerson}</strong>,</p>
+              <p>Your enterprise profile for <strong>${vendorName}</strong> has been registered on the Procucev platform.</p>
               
               <div style="background: #f8fafc; padding: 16px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 20px 0; box-sizing: border-box;">
                 <h4 style="margin: 0 0 10px 0; color: #0f172a;">Portal Access:</h4>
                 <p style="margin: 4px 0;"><strong>Portal URL:</strong> <a href="${portalUrl}">${portalUrl}</a></p>
-                <p style="margin: 4px 0;"><strong>Login Email:</strong> ${vendor.email}</p>
+                <p style="margin: 4px 0;"><strong>Login Email:</strong> ${vendorEmail || EMAIL_MESSAGES.NOT_SPECIFIED}</p>
                 <p style="margin: 4px 0;"><strong>Sign-in:</strong> Use your registered email and follow the verification steps shown on the portal.</p>
               </div>
 
@@ -272,12 +290,13 @@ function generateVendorOnboardingEmail(vendor) {
   `;
 
   return {
-    to: vendor.email,
-    recipientName: vendor.contactPerson || 'Vendor Partner',
-    vendorName: vendor.name,
+    to: vendorEmail,
+    recipientName: safeVendor.contactPerson || EMAIL_MESSAGES.NOT_SPECIFIED,
+    vendorName: safeVendor.name,
     subject,
     htmlBody,
     sentAt: new Date().toISOString(),
+    ...(vendorEmail ? {} : { error: EMAIL_MESSAGES.VENDOR_EMAIL_REQUIRED }),
   };
 }
 
@@ -292,4 +311,3 @@ module.exports = {
   renderTransactionalEmail: transactionalEmailTemplates.renderTransactionalEmail,
   sendTransactionalEmail: transactionalEmailTemplates.sendTransactionalEmail,
 };
-

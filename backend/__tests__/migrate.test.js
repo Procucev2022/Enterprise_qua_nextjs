@@ -358,6 +358,9 @@ describe('PostgreSQL migration runner', () => {
         '0025_vendor_owner_lookup_indexes',
         '0026_action_center_delivery_outbox',
         '0027_email_gateway_retry_claims',
+        '0028_drop_system_error_logs',
+        '0029_drop_all_remaining_log_tables',
+        '0030_drop_vendors_search_fts',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

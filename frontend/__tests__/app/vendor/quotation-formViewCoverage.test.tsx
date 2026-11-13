@@ -15,7 +15,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import '@testing-library/jest-dom';
 import QuotationForm from '@/app/vendor/quotation-form';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
-import { UNLIMITED_ACCESS_EMAILS, formatFileSize } from '@/lib/constants';
+import { formatFileSize } from '@/lib/constants';
+import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 import { submitRFQInquiry } from '@/lib/rfqClient';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -44,6 +45,26 @@ jest.mock('@/lib/bidComparisonExport', () => ({
   downloadVendorQuotationExcel: jest.fn(),
 }));
 
+jest.mock('@/lib/subscriptionPaymentClient', () => ({
+  ...jest.requireActual<typeof import('@/lib/subscriptionPaymentClient')>('@/lib/subscriptionPaymentClient'),
+  fetchSubscriptionPricing: jest.fn(),
+}));
+
+/** Shape of GET /api/subscriptions/pricing; the 12-month GST-inclusive totals are what checkout charges. */
+const PRICING_RESPONSE = {
+  gstPercent: 18,
+  gstRate: 0.18,
+  buyer: {},
+  seller: {
+    connect: {
+      '12_months': { price: 8848.82, baseDurationPrice: 7499, gstAmount: 1349.82, totalWithGst: 8848.82 },
+    },
+    select: {
+      '12_months': { price: 17698.82, baseDurationPrice: 14999, gstAmount: 2699.82, totalWithGst: 17698.82 },
+    },
+  },
+};
+
 const mockedSubmitRFQInquiry = submitRFQInquiry as jest.MockedFunction<typeof submitRFQInquiry>;
 const mockedExcelExport = downloadVendorQuotationExcel as jest.MockedFunction<typeof downloadVendorQuotationExcel>;
 
@@ -58,6 +79,10 @@ const EM_DASH = '\u2014';
 const CLOSE_GLYPH = '\u2715';
 
 const COPY = UI_STRINGS.vendorSubscriptionModal;
+
+beforeEach(() => {
+  jest.mocked(fetchSubscriptionPricing).mockResolvedValue(PRICING_RESPONSE);
+});
 
 const SESSION: UserSession = {
   id: 'usr-vendor-1',
@@ -581,20 +606,21 @@ describe('enquiry rows', () => {
     expect(row.queryByRole('button', { name: /Buyer Details/i })).not.toBeInTheDocument();
   });
 
-  test('shows a generic submitted label when this vendor quote carries no total price', async () => {
+  test('shows a dash, not a made-up amount, when this vendor quote carries no total price', async () => {
     const rfq = makeRfq({
       id: 'rfq-quoted',
       rfqNumber: 'RFQ-QUOTED-1',
       title: 'Quoted requirement',
       quotes: [
-        { vendorEmail: VENDOR_EMAIL, vendorName: SESSION.name, totalPrice: 0 },
+        { vendorEmail: VENDOR_EMAIL, vendorName: SESSION.name, totalPrice: null },
       ] as unknown as RFQItem['quotes'],
     });
     installApp({ rfqs: [rfq], vendorOpportunities: [makeOpportunity(rfq)], currentUserSession: SESSION });
     await renderForm();
 
     const row = within(rowFor('RFQ-QUOTED-1'));
-    expect(row.getByText('Quote submitted')).toBeInTheDocument();
+    expect(row.queryByText('Quote submitted')).not.toBeInTheDocument();
+    expect(row.getByText(EM_DASH, { selector: 'span.font-bold' })).toBeInTheDocument();
     expect(row.getByText(`Portal Submission ${MIDDLE_DOT} -`)).toBeInTheDocument();
     expect(row.getByText('Quote Submitted')).toBeInTheDocument();
     expect(row.queryByRole('button', { name: /Submit Quote$/ })).not.toBeInTheDocument();
@@ -707,12 +733,12 @@ describe('quoting access', () => {
     expect(screen.getByText('0 Free Left')).toBeInTheDocument();
   });
 
-  test('never locks a vendor with unlimited access, even with no free quotation credits left', async () => {
+  test('never locks a vendor on an unlimited subscription, even with no free quotation credits left', async () => {
     installApp({
       rfqs: [externalRfq],
       vendorOpportunities: [makeOpportunity(externalRfq)],
       vendorFreeCreditsRemaining: 0,
-      currentUserSession: { ...SESSION, email: Array.from(UNLIMITED_ACCESS_EMAILS)[0] },
+      vendorSubscription: 'unlimited',
     });
     await renderForm();
 
@@ -820,9 +846,10 @@ describe('clarification thread modal', () => {
     const answer = messageHeader(modal, 'Yes, revision C is final.');
     expect(answer).toHaveTextContent('Priya Nair (Buyer)');
     expect(answer).toHaveTextContent(formatTime('2024-09-02T11:30:00.000Z'));
-    // A reply with no named responder is signed by the procurement team.
-    expect(messageHeader(modal, 'Split delivery is acceptable.')).toHaveTextContent('Buyer Procurement Team (Buyer)');
-    expect(messageHeader(modal, 'Reminder: quotes close on Friday.')).toHaveTextContent('Buyer Procurement Team (Buyer)');
+    // A reply with no named responder is labelled as the buyer, without inventing a name.
+    expect(messageHeader(modal, 'Split delivery is acceptable.')).toHaveTextContent(/^Buyer/);
+    expect(messageHeader(modal, 'Split delivery is acceptable.')).not.toHaveTextContent('Procurement Team');
+    expect(messageHeader(modal, 'Reminder: quotes close on Friday.')).toHaveTextContent(/^Buyer/);
     // The name-matched inquiry keeps the vendor name it was sent under, and a nameless one reads "You".
     expect(messageHeader(modal, 'What is the packing standard?')).toHaveTextContent('Test Vendor Co (You)');
     expect(messageHeader(modal, 'Undated question')).toHaveTextContent('You (You)');
@@ -857,7 +884,7 @@ describe('clarification thread modal', () => {
 
     expect(within(modal).queryByText('Legacy question text that the thread supersedes')).not.toBeInTheDocument();
     expectInDocumentOrder(modal, ['Thread opener', 'Thread answer']);
-    expect(within(modal).getAllByText('Recently')).toHaveLength(2);
+    expect(within(modal).getAllByText(EM_DASH)).toHaveLength(2);
 
     const opener = messageHeader(modal, 'Thread opener');
     expect(opener).toHaveTextContent('Test Vendor Co (You)');
@@ -868,10 +895,10 @@ describe('clarification thread modal', () => {
 
     const deskNote = messageHeader(modal, 'Undated desk note');
     expect(deskNote).toHaveTextContent('Buyer Desk (Buyer)');
-    expect(deskNote).toHaveTextContent('Recently');
+    expect(deskNote).toHaveTextContent(EM_DASH);
     const followUp = messageHeader(modal, 'Follow-up without a stamp');
     expect(followUp).toHaveTextContent('Test Vendor Co (You)');
-    expect(followUp).toHaveTextContent('Recently');
+    expect(followUp).toHaveTextContent(EM_DASH);
   });
 
   test('matches inquiries by the signed-in name when the vendor record could not be loaded', async () => {
@@ -937,7 +964,7 @@ describe('clarification thread modal', () => {
     await waitFor(() =>
       expect(showToast).toHaveBeenCalledWith(
         'Clarification Sent',
-        'Your query has been dispatched to the procurement officer.',
+        'Your clarification was saved for the buyer.',
         'success',
       ),
     );
@@ -1139,6 +1166,9 @@ describe('bid form', () => {
 
 describe('upgrade and payment modals', () => {
   const lockedRfq = makeRfq({ id: 'rfq-ext', rfqNumber: 'RFQ-EXT-001', title: 'External buyer pumps' });
+  // Plan titles are built from the pricing API response (see PRICING_RESPONSE above).
+  const CONNECT_PLAN_TITLE = `Connect Model (${RUPEE}7,499 + 18% GST / yr)`;
+  const SELECT_PLAN_TITLE = `Select Model (${RUPEE}14,999 + 18% GST / yr)`;
 
   function installLockedScenario(overrides: Partial<AppSlice> = {}) {
     return installApp({
@@ -1166,10 +1196,13 @@ describe('upgrade and payment modals', () => {
     expect(within(rowFor('RFQ-EXT-001')).getByText(/Premium Locked/)).toBeInTheDocument();
 
     const modal = await openUpgradeModalFromRow();
+    // Plan titles carry the prices from the pricing API, so they appear once it has loaded.
+    await waitFor(() => expect(within(modal).getByText(CONNECT_PLAN_TITLE)).toBeInTheDocument());
+    await waitFor(() => expect(within(modal).getByText(SELECT_PLAN_TITLE)).toBeInTheDocument());
 
     expect(within(modal).getByText(COPY.creditsExhaustedWarning)).toBeInTheDocument();
-    expect(within(planCard(modal, COPY.connectTitle)).getByText(COPY.connectDesc)).toBeInTheDocument();
-    expect(within(planCard(modal, COPY.selectTitle)).getByText(COPY.selectDesc)).toBeInTheDocument();
+    expect(within(planCard(modal, CONNECT_PLAN_TITLE)).getByText(UI_STRINGS.vendorWorkspace.connectQuotaWithoutCount)).toBeInTheDocument();
+    expect(within(planCard(modal, SELECT_PLAN_TITLE)).getByText(UI_STRINGS.vendorWorkspace.selectQuotaWithoutCount)).toBeInTheDocument();
     expect(within(modal).queryByText(COPY.activeBadge)).not.toBeInTheDocument();
 
     fireEvent.click(within(modal).getByRole('button', { name: CLOSE_GLYPH }));
@@ -1181,8 +1214,8 @@ describe('upgrade and payment modals', () => {
   });
 
   test.each([
-    ['connect', 'Connect Model (Marketplace Access)', `${RUPEE}2 / 3 months`],
-    ['select', 'Select Model (Catalogue + Scale)', `${RUPEE}5 / 3 months`],
+    ['connect', 'Connect Model (Marketplace Access)', `${RUPEE}8,849`],
+    ['select', 'Select Model (Catalogue + Scale)', `${RUPEE}17,699`],
   ])('upgrading to the %s plan opens secure checkout for that plan and cancelling closes it', async (planId, planName, price) => {
     installLockedScenario();
     await renderForm();
@@ -1192,6 +1225,8 @@ describe('upgrade and payment modals', () => {
       .getAllByRole('button', { name: COPY.upgradeAction })
       .find((button) => button.getAttribute('data-plan') === planId);
     if (!planButton) throw new Error(`No upgrade button for the ${planId} plan`);
+    // The paid upgrade buttons stay disabled until the plan prices have loaded.
+    await waitFor(() => expect(planButton).toBeEnabled());
     fireEvent.click(planButton);
 
     expect(screen.queryByText(COPY.upgradeTitle)).not.toBeInTheDocument();
@@ -1214,7 +1249,7 @@ describe('upgrade and payment modals', () => {
   ] as const)(
     'marks the %s plan Active and still offers the %s plan when the server asks the vendor to upgrade',
     async (activePlan, otherPlan) => {
-      const planTitle = { connect: COPY.connectTitle, select: COPY.selectTitle };
+      const planTitle = { connect: CONNECT_PLAN_TITLE, select: SELECT_PLAN_TITLE };
       installApp({
         rfqs: [lockedRfq],
         vendorOpportunities: [makeOpportunity(lockedRfq)],
@@ -1230,6 +1265,7 @@ describe('upgrade and payment modals', () => {
 
       fireEvent.click(within(rowFor('RFQ-EXT-001')).getByRole('button', { name: /Submit Quote$/ }));
       fireEvent.change(screen.getByPlaceholderText('e.g. 25000'), { target: { value: '1500' } });
+      fireEvent.change(screen.getByPlaceholderText('e.g. 14'), { target: { value: '7' } });
       fireEvent.click(screen.getByRole('button', { name: 'Submit Quotation' }));
 
       const title = await screen.findByText(COPY.upgradeTitle);
@@ -1245,6 +1281,7 @@ describe('upgrade and payment modals', () => {
         '/vendor/vendor-subscription',
       );
 
+      await waitFor(() => expect(within(modal).getByText(planTitle[otherPlan])).toBeInTheDocument());
       const activeCard = within(planCard(modal, planTitle[activePlan]));
       expect(activeCard.getByText(COPY.activeBadge)).toBeInTheDocument();
       expect(activeCard.queryByRole('button')).not.toBeInTheDocument();
@@ -1253,9 +1290,7 @@ describe('upgrade and payment modals', () => {
     },
   );
 
-  test('falls back to the built-in English copy when the dictionary has no vendor subscription section', async () => {
-    dictionary.vendorSubscriptionModal = undefined;
-    expect(UI_STRINGS.vendorSubscriptionModal).toBeUndefined();
+  test('reflects a plan change on the cards of an open upgrade dialog', async () => {
     installLockedScenario();
     const view = await renderForm();
 
@@ -1263,29 +1298,22 @@ describe('upgrade and payment modals', () => {
 
     const title = await screen.findByText(/Upgrade Plan to Submit Quotations/);
     const modal = asElement(title.closest('.modal-backdrop'), 'Upgrade modal');
-    const connectTitle = `Connect Model (${RUPEE}2 / 3 mo)`;
-    const selectTitle = `Select Model (${RUPEE}5 / 3 mo)`;
-    expect(
-      within(modal).getByText(/5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits/),
-    ).toBeInTheDocument();
-    expect(
-      within(planCard(modal, connectTitle)).getByText('Quote and download up to 50 RFQs in 3 months from Marketplace.'),
-    ).toBeInTheDocument();
-    expect(
-      within(planCard(modal, selectTitle)).getByText('Item Catalogue (100 products) + 100 RFQs / 3 months.'),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(within(modal).getByText(CONNECT_PLAN_TITLE)).toBeInTheDocument());
+    await waitFor(() => expect(within(modal).getByText(SELECT_PLAN_TITLE)).toBeInTheDocument());
+    expect(within(planCard(modal, CONNECT_PLAN_TITLE)).getByText(UI_STRINGS.vendorWorkspace.connectQuotaWithoutCount)).toBeInTheDocument();
+    expect(within(planCard(modal, SELECT_PLAN_TITLE)).getByText(UI_STRINGS.vendorWorkspace.selectQuotaWithoutCount)).toBeInTheDocument();
     expect(within(modal).getAllByRole('button', { name: 'Upgrade' })).toHaveLength(2);
     expect(within(modal).getByRole('button', { name: 'Close' })).toBeInTheDocument();
 
     // The plan changing underneath the open modal is reflected on its cards.
     installLockedScenario({ vendorSubscription: 'connect' });
     view.rerender(<QuotationForm onBack={view.onBack} />);
-    expect(within(planCard(modal, connectTitle)).getByText('Active')).toBeInTheDocument();
+    expect(within(planCard(modal, CONNECT_PLAN_TITLE)).getByText('Active')).toBeInTheDocument();
     expect(within(modal).getAllByRole('button', { name: 'Upgrade' })).toHaveLength(1);
 
     installLockedScenario({ vendorSubscription: 'select' });
     view.rerender(<QuotationForm onBack={view.onBack} />);
-    expect(within(planCard(modal, selectTitle)).getByText('Active')).toBeInTheDocument();
-    expect(within(planCard(modal, connectTitle)).queryByText('Active')).not.toBeInTheDocument();
+    expect(within(planCard(modal, SELECT_PLAN_TITLE)).getByText('Active')).toBeInTheDocument();
+    expect(within(planCard(modal, CONNECT_PLAN_TITLE)).queryByText('Active')).not.toBeInTheDocument();
   });
 });

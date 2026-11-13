@@ -265,6 +265,7 @@ describe('Buyer profile service', () => {
         state: 'UP',
         pincode: '201301',
         gstin: '07AAACL1234F1Z5',
+        pan: 'AAACL1234F',
         country: 'India',
       });
       const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
@@ -317,10 +318,10 @@ describe('Buyer profile service', () => {
       expect(profile.street).toBe('Bengaluru, Karnataka');
       expect(profile.pincode).toBe('560001');
       expect(profile.gstNumber).toBe('29AAACL1234F1Z5');
-      expect(profile.panNumber).toBe('AAACL1234F');
+      expect(profile.panNumber).toBeNull();
     });
 
-    test('auto-heals PAN from GSTIN when buyer account not found in storeService', async () => {
+    test('does not auto-heal dummy PAN from GSTIN when buyer account not found in storeService', async () => {
       const partialProfile = {
         organizationId: 'org-1',
         userId: 'user-1',
@@ -334,12 +335,8 @@ describe('Buyer profile service', () => {
       const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
 
       const profile = await buyerProfileService.getProfile(SESSION);
-      expect(profile.panNumber).toBe('AAACL1234F');
-      expect(updateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          patch: { panNumber: 'AAACL1234F' },
-        })
-      );
+      expect(profile.panNumber).toBeNull();
+      expect(updateSpy).not.toHaveBeenCalled();
     });
 
     test('handles storeService and updateProfile errors gracefully in auto-healing', async () => {
@@ -829,7 +826,7 @@ describe('Buyer profile service', () => {
       expect(profile.street).toBe('Delhi');
     });
 
-    test('catches updateProfile error during PAN auto-healing in getProfile', async () => {
+    test('catches updateProfile error during buyer account auto-healing in getProfile', async () => {
       const partialProfile = {
         organizationId: 'org-1',
         userId: 'user-1',
@@ -839,7 +836,7 @@ describe('Buyer profile service', () => {
         panNumber: null,
       };
       jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
-      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ pan: 'AAACL1234F' });
       jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValue(new Error('PAN update failed'));
 
       const profile = await buyerProfileService.getProfile(SESSION);

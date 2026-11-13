@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import VendorProfilePage from '@/app/vendor/vendor-profile';
 import { AppProvider, useApp } from '@/lib/store';
@@ -133,19 +133,21 @@ describe('VendorProfilePage Comprehensive Suite', () => {
 
     // PAN validation
     const panInput = screen.getByDisplayValue('AAACA9876K');
-    expect(screen.getByText('✓ Valid PAN')).toBeInTheDocument();
+    const panBlock = screen.getByText('PAN Number *').parentElement as HTMLElement;
+    expect(within(panBlock).getByText('✓ Valid format')).toBeInTheDocument();
     fireEvent.change(panInput, { target: { value: 'INVALIDPAN' } });
-    expect(screen.getByText('Invalid Format')).toBeInTheDocument();
+    expect(within(panBlock).getByText('Invalid Format')).toBeInTheDocument();
     fireEvent.change(panInput, { target: { value: 'ABCDE1234F' } });
-    expect(screen.getByText('✓ Valid PAN')).toBeInTheDocument();
+    expect(within(panBlock).getByText('✓ Valid format')).toBeInTheDocument();
 
     // GSTIN validation
     const gstInput = screen.getByDisplayValue('27AAACA9876K1Z9');
-    expect(screen.getByText('✓ State 27 Verified')).toBeInTheDocument();
+    const gstBlock = screen.getByText('GSTIN / GST Number *').parentElement as HTMLElement;
+    expect(within(gstBlock).getByText('✓ Valid format')).toBeInTheDocument();
     fireEvent.change(gstInput, { target: { value: 'INVALIDGSTIN' } });
-    expect(screen.getByText('Invalid GSTIN')).toBeInTheDocument();
+    expect(within(gstBlock).getByText('Invalid GSTIN')).toBeInTheDocument();
     fireEvent.change(gstInput, { target: { value: '27ABCDE1234F1Z5' } });
-    expect(screen.getByText('✓ State 27 Verified')).toBeInTheDocument();
+    expect(within(gstBlock).getByText('✓ Valid format')).toBeInTheDocument();
 
     const msmeInput = screen.getByDisplayValue('UDYAM-MH-03-0048291');
     fireEvent.change(msmeInput, { target: { value: 'UDYAM-MH-03-9999999' } });
@@ -503,8 +505,9 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     );
 
     await waitFor(() => expect(screen.getByDisplayValue('Sparse Vendor Co')).toBeInTheDocument());
-    // Org type falls back to the component's own default since v.orgType is absent
-    expect(screen.getByDisplayValue('Private Limited Company')).toBeInTheDocument();
+    // No constitution is pre-selected when v.orgType is absent, so the select stays on its blank placeholder.
+    const orgTypeSelect = screen.getByText('Business Constitution *').parentElement?.querySelector('select');
+    expect(orgTypeSelect).toHaveValue('');
   });
 
   test('allows vendor to add custom category, remove category via chip, and rejects duplicates/empty', async () => {

@@ -291,6 +291,31 @@ describe('largeFileIngestionService unit tests', () => {
       expect(res.failed).toBe(1);
     });
 
+    it('validates mobile numbers in vendor master batches and rejects alphanumeric or non-10-digit phones', async () => {
+      const upsertSpy = jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValueOnce([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }]);
+      const res = await largeFileIngestionService.processVendorMasterBatch('s1', 'o1', [
+        { companyName: 'Valid Mobile Co', phone: '+91 9811223344', vendorCode: '1' },
+        { companyName: 'Valid 0-Prefixed Co', phone: '09811223344' },
+        { companyName: 'Valid Without Plus Co', phone: '9811223344' },
+        { companyName: 'Valid 12-Digit Co', phone: '919811223344' },
+        { companyName: 'Valid Duplicated +91 Co', phone: '+91+91 9811223344' },
+        { companyName: 'Alpha Mobile Co', phone: '98765abcde' },
+        { companyName: 'Short Mobile Co', phone: '12345' },
+        { companyName: 'Long Mobile Co', phone: '+91 981122334455' },
+      ]);
+      expect(res.imported).toBe(5);
+      expect(res.skipped).toBe(3);
+      expect(res.failed).toBe(3);
+      const passedRows = upsertSpy.mock.calls[0][2];
+      expect(passedRows[0].phone).toBe('+919811223344');
+      expect(passedRows[1].phone).toBe('+919811223344');
+      expect(passedRows[2].phone).toBe('+919811223344');
+      expect(passedRows[3].phone).toBe('+919811223344');
+      expect(passedRows[4].phone).toBe('+919811223344');
+      // Second row generated code 2 because 1 was already taken
+      expect(passedRows[1].vendorCode).toBe('2');
+    });
+
     it('handles bulkUpsertVendorMasterRecords failure', async () => {
       jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockRejectedValueOnce(new Error('DB err'));
       const res = await largeFileIngestionService.processVendorMasterBatch('s1', 'o1', [{ companyName: 'Valid' }]);

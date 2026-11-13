@@ -2,7 +2,7 @@ const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
-const { hasUnlimitedRfqAccess } = require('../config/constants');
+const { hasUnlimitedRfqAccess, BUYER_FREE_TRIAL_RFQ_CREDITS } = require('../config/constants');
 
 const PAID_BUYER_PLANS = new Set(['version_1', 'version_2', 'version_3', 'unlimited']);
 const V0_MODES = new Set(['mode_0', 'v0', 'version_0']);
@@ -27,7 +27,7 @@ function creditState(account, sourcingMode) {
   const mode = String(sourcingMode || '').trim().toLowerCase();
   const unlimited = hasUnlimitedRfqAccess(account);
   const shouldCharge = !V0_MODES.has(mode) && !PAID_BUYER_PLANS.has(plan) && !unlimited;
-  const rawRemaining = Number(account.remainingFreeRFQs !== undefined ? account.remainingFreeRFQs : 5);
+  const rawRemaining = Number(account.remainingFreeRFQs !== undefined ? account.remainingFreeRFQs : BUYER_FREE_TRIAL_RFQ_CREDITS);
   const remaining = Number.isFinite(rawRemaining) ? Math.max(0, rawRemaining) : 0;
   return { shouldCharge, remaining, plan, unlimited };
 }
@@ -94,7 +94,7 @@ function successResult({ rfq, account, transaction, replayed = false, shouldChar
     replayed,
     credit: {
       consumed: Boolean(transaction),
-      remaining: Number(account.remainingFreeRFQs !== undefined ? account.remainingFreeRFQs : 5),
+      remaining: Number(account.remainingFreeRFQs !== undefined ? account.remainingFreeRFQs : BUYER_FREE_TRIAL_RFQ_CREDITS),
       transaction: transaction || null,
     },
     shouldCharge,
@@ -234,7 +234,7 @@ function makeD1Statements({ rfq, buyerId, transactionId, idempotencyKey }) {
   ];
   const charge = d1ChargeExpression(6);
   const buyerCharge = d1ChargeExpression(6, '(SELECT raw FROM buyer_accounts WHERE id = $1)');
-  const remaining = `MAX(0, COALESCE(CAST(json_extract(raw, '$.remainingFreeRFQs') AS INTEGER), 5))`;
+  const remaining = `MAX(0, COALESCE(CAST(json_extract(raw, '$.remainingFreeRFQs') AS INTEGER), ${BUYER_FREE_TRIAL_RFQ_CREDITS}))`;
   return [
     { text: 'SELECT raw FROM buyer_accounts WHERE id = $1 LIMIT 1', params },
     { text: 'SELECT raw FROM rfqs WHERE id = $2 LIMIT 1', params },
@@ -258,7 +258,7 @@ function makeD1Statements({ rfq, buyerId, transactionId, idempotencyKey }) {
           previous_balance, updated_balance, status, description, idempotency_key, created_at
         )
         SELECT $9, $1, $2, 'RFQ_CREATE', 'FREE_TRIAL', 1,
-          MAX(0, COALESCE(CAST(json_extract(raw, '$.remainingFreeRFQs') AS INTEGER), 5)) + 1,
+          MAX(0, COALESCE(CAST(json_extract(raw, '$.remainingFreeRFQs') AS INTEGER), ${BUYER_FREE_TRIAL_RFQ_CREDITS})) + 1,
           CAST(json_extract(raw, '$.remainingFreeRFQs') AS INTEGER),
           'COMPLETED', 'Free trial credit consumed for RFQ ' || COALESCE($3, $2), $10, CURRENT_TIMESTAMP
         FROM buyer_accounts
@@ -345,10 +345,10 @@ async function createRFQWithCreditInDB(options) {
   const idempotencyKey = transactionKey(options.buyerId, options.rfq.id);
   const transactionId = options.transactionId || `credit-${require('crypto').randomUUID()}`;
   const normalized = { ...options, idempotencyKey, transactionId };
-  const binding = d1Bridge.getD1Binding();
-  if (binding) {
+  const db = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
+  if (db) {
     try {
-      const result = await createRFQWithCreditInD1(normalized, binding);
+      const result = await createRFQWithCreditInD1(normalized, db);
       queryCache.invalidate('buyer_accounts');
       queryCache.invalidate('buyer_credits');
       queryCache.invalidate('rfqs');
@@ -362,15 +362,11 @@ async function createRFQWithCreditInDB(options) {
       throw error;
     }
   }
-  if (d1Bridge.getD1HttpClient()) {
-    const error = new Error('Buyer RFQ credit consumption requires PostgreSQL transactions or a Workers D1 atomic batch.');
+
+  if (!pool.pool) {
+    const error = new Error('Database storage is unavailable for creating RFQ. Cloudflare D1 connection is required.');
     error.statusCode = 503;
-    error.code = 'ATOMIC_PERSISTENCE_REQUIRED';
-    logger.error('Buyer RFQ create rejected by the non-atomic D1 HTTP adapter', {
-      error,
-      buyerId: normalized.buyerId,
-      rfqId: normalized.rfq.id,
-    }, 'BUYER_RFQ_CREDIT');
+    error.code = 'DATABASE_UNAVAILABLE';
     throw error;
   }
 

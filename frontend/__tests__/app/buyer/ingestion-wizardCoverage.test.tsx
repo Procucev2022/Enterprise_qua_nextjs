@@ -19,6 +19,7 @@ import type {
   RFQItem,
   RFQVendorCandidate,
   RFQVendorPageResult,
+  SourcingMode,
   VendorEntry,
 } from '@/lib/types';
 
@@ -258,6 +259,11 @@ async function dispatchRfq() {
   await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalledTimes(1));
 }
 
+/** Nothing is preselected, so a test picks the sourcing mode it is about. */
+function chooseSourcingMode(mode: SourcingMode) {
+  fireEvent.click(screen.getByTestId(`sourcing-mode-btn-${mode}`));
+}
+
 function dropFiles(files: File[]) {
   const dropZone = screen.getByText(/Drag and drop BOQ spreadsheets/i).closest('div') as HTMLElement;
   fireEvent.drop(dropZone, { dataTransfer: { files } });
@@ -327,8 +333,8 @@ describe('IngestionWizard coverage: category detection and plan fallbacks', () =
     expect(screen.queryByTestId('ingestion-wizard-quota-exhausted-banner')).not.toBeInTheDocument();
   });
 
-  it('Clear Form returns to Mode 2 when the store has no current mode', async () => {
-    const store = setupStore({ currentMode: undefined });
+  it('Clear Form leaves no sourcing mode selected', async () => {
+    const store = setupStore();
     renderWizard();
 
     fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_3'));
@@ -338,8 +344,10 @@ describe('IngestionWizard coverage: category detection and plan fallbacks', () =
 
     fireEvent.click(screen.getAllByRole('button', { name: /Clear Form/i })[0]);
 
-    expect(screen.getByTestId('sourcing-mode-btn-mode_2')).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByTestId('sourcing-mode-btn-mode_3')).toHaveAttribute('aria-checked', 'false');
+    // No mode is preselected after a clear, so every mode card is unchecked.
+    for (const mode of ['mode_0', 'mode_1', 'mode_2', 'mode_3'] as const) {
+      expect(screen.getByTestId(`sourcing-mode-btn-${mode}`)).toHaveAttribute('aria-checked', 'false');
+    }
     expect(store.showToast).toHaveBeenCalledWith(
       'Form Cleared',
       'All fields, line items, and uploaded files have been reset.',
@@ -387,6 +395,7 @@ describe.each(['mode_1', 'mode_2'] as const)('IngestionWizard coverage: sparse r
       buyerVendors: [idLessVendor, nameLessVendor, ghostVendor],
     });
     renderWizard();
+    chooseSourcingMode(mode);
     fillLineItem(0, { major: MECHANICAL });
     fireEvent.click(await screen.findByRole('button', { name: /Category Mismatch \(3\)/ }));
     const sendButtons = screen.getAllByRole('button', { name: /Send Email to Update Category/i });
@@ -506,6 +515,7 @@ describe('IngestionWizard coverage: Mode 1 roster search', () => {
       buyerVendors: [vendor({ id: 'v-a1', name: 'Alpha Bearings', source: 'buyer_uploaded', majorCategory: MECHANICAL })],
     });
     renderWizard();
+    chooseSourcingMode('mode_1');
 
     fireEvent.change(screen.getByPlaceholderText('Filter vendors...'), { target: { value: 'zzz-no-such-vendor' } });
 
@@ -538,7 +548,9 @@ describe('IngestionWizard coverage: add-vendor dialog', () => {
     jest.useRealTimers();
   });
 
+  // The Add Vendor button sits in the Mode 1 roster, so opening the dialog chooses that mode first.
   function openAddVendorDialog(): HTMLElement {
+    chooseSourcingMode('mode_1');
     fireEvent.click(screen.getByRole('button', { name: /Add Vendor/i }));
     return screen.getByRole('heading', { name: 'Add Approved Vendor' }).closest('.modal-content') as HTMLElement;
   }
@@ -694,7 +706,7 @@ describe('IngestionWizard coverage: delivery pincode lookups', () => {
   const PUNE_OFFICE: PostOfficeDetail = { Name: 'Shivajinagar', District: 'Pune', State: 'Maharashtra' };
 
   describe('after the typing debounce', () => {
-    it('fills the location from the PIN prefix map when the lookup lists no post offices', async () => {
+    it('leaves the location blank when the lookup lists no post offices, because PIN digits are never guessed', async () => {
       mockValidatePincode.mockResolvedValue({ isValid: true });
       renderWizard();
 
@@ -704,10 +716,10 @@ describe('IngestionWizard coverage: delivery pincode lookups', () => {
       });
 
       expect(mockValidatePincode).toHaveBeenCalledWith('411001');
-      expect(locationInput()).toHaveValue('Pune, Maharashtra');
+      expect(locationInput()).toHaveValue('');
     });
 
-    it('keeps the typed location when the PIN prefix is unknown to the fallback map', async () => {
+    it('keeps the typed location when the lookup lists no post offices', async () => {
       mockValidatePincode.mockResolvedValue({ isValid: true });
       renderWizard();
 
@@ -765,7 +777,7 @@ describe('IngestionWizard coverage: delivery pincode lookups', () => {
       expect(screen.queryByText('Invalid')).not.toBeInTheDocument();
     });
 
-    it('fills the location from the PIN prefix map when the lookup lists no post offices', async () => {
+    it('leaves the location blank on blur when the lookup lists no post offices', async () => {
       mockValidatePincode.mockResolvedValue({ isValid: true });
       renderWizard();
       fireEvent.change(pincodeInput(), { target: { value: '411001' } });
@@ -773,10 +785,10 @@ describe('IngestionWizard coverage: delivery pincode lookups', () => {
       fireEvent.blur(pincodeInput());
       await flushAsync();
 
-      expect(locationInput()).toHaveValue('Pune, Maharashtra');
+      expect(locationInput()).toHaveValue('');
     });
 
-    it('keeps the typed location when the PIN prefix is unknown to the fallback map', async () => {
+    it('keeps the typed location on blur when the lookup lists no post offices', async () => {
       mockValidatePincode.mockResolvedValue({ isValid: true });
       renderWizard();
       fireEvent.change(locationInput(), { target: { value: 'Hazira Works' } });
@@ -945,7 +957,7 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
 
     expect(store.showToast).toHaveBeenCalledWith(
       'Validation Error',
-      `Validation Error ${EN_DASH} Please complete: RFQ Title, Target Delivery Date (cannot be in the past), At least 1 complete line item.`,
+      `Validation Error ${EN_DASH} Please complete: Sourcing Mode, RFQ Title, Target Delivery Date (cannot be in the past), At least 1 complete line item.`,
       'warning'
     );
     expect(screen.getByText(formatString(MANUAL.titleLength, { min: 3, max: 200 }))).toBeInTheDocument();
@@ -958,6 +970,7 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
   it('falls back to the generic validation toast when only an unlisted field fails', () => {
     const store = setupStore();
     renderWizard();
+    chooseSourcingMode('mode_2');
     fillValidForm();
 
     fireEvent.change(screen.getByPlaceholderText('e.g. 500000'), { target: { value: '-5' } });
@@ -981,6 +994,7 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
       ],
     });
     renderWizard();
+    chooseSourcingMode('mode_2');
     fillValidForm();
 
     await dispatchRfq();
@@ -1041,6 +1055,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
     directoryPool = [ALPHA, BETA];
     setupStore({ currentMode: 'mode_3' });
     renderWizard();
+    chooseSourcingMode('mode_3');
     fillLineItem(0, { major: MECHANICAL });
     fireEvent.click(await cardFor('Alpha Pumps'));
     expect(await screen.findByText('1 of 2 selected')).toBeInTheDocument();
@@ -1080,6 +1095,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
       ],
     });
     renderWizard();
+    chooseSourcingMode('mode_3');
     fillValidForm({ major: MECHANICAL });
     fireEvent.click(await cardFor('Dup Network Twin'));
     expect(await screen.findByText('1 of 1 selected')).toBeInTheDocument();
@@ -1099,40 +1115,22 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
     expect(store.adoptCreatedRFQ).toHaveBeenCalledTimes(1);
   });
 
-  it('shows and dispatches ranked vendors that have no name, id or category on record', async () => {
+  it('keeps sparse network records out of an RFQ that has no category to match them against', async () => {
     directoryPool = [
       candidate({ id: 'net-nameless', source: 'procucev_network' }),
       candidate({ name: 'Idless Network Co', source: 'procucev_network', majorCategory: 'Raw Material' }),
     ];
-    setupStore({ currentMode: 'mode_3' });
     renderWizard();
+    chooseSourcingMode('mode_3');
     fillValidForm();
 
-    const cards = await screen.findAllByTestId('procucev-v3-vendor');
-    expect(cards).toHaveLength(2);
-    const namelessCategory = within(cards[0]).getByTestId('procucev-v3-vendor-category');
-    expect(namelessCategory).toHaveTextContent('General Industrial');
-    expect(namelessCategory).toHaveAttribute('title', 'General Industrial');
-    expect(within(cards[1]).getByText('Idless Network Co')).toBeInTheDocument();
-    expect(within(cards[1]).getByTestId('procucev-v3-vendor-category')).toHaveTextContent('Raw Material');
+    // With no category signal nothing is ranked, so no card is shown and nothing is pre-selected.
+    expect(await screen.findByText(/No Procucev network vendors matched this RFQ/)).toBeInTheDocument();
+    expect(screen.queryAllByTestId('procucev-v3-vendor')).toHaveLength(0);
 
-    fireEvent.click(cards[0]);
-    expect(cards[0]).toHaveAttribute('aria-pressed', 'true');
     await dispatchRfq();
 
-    expect(assignedVendorsSent()).toEqual([
-      {
-        id: 'net-nameless',
-        name: 'Procucev Verified Supplier',
-        email: null,
-        contactPerson: null,
-        phone: null,
-        vendorCategory: 'Procucev Network',
-        majorCategory: 'General Industrial',
-        location: 'Nationwide supplier',
-        matchScore: 54,
-      },
-    ]);
+    expect(assignedVendorsSent()).toEqual([]);
   });
 
   it('labels a ranked vendor by the category it matched on when it lists no major category', async () => {
@@ -1148,6 +1146,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
     ];
     setupStore({ currentMode: 'mode_3' });
     renderWizard();
+    chooseSourcingMode('mode_3');
     fillValidForm({ major: MECHANICAL, minor: 'Pumps & Accessories' });
 
     const card = await cardFor('Minor Only Pumps');
@@ -1182,6 +1181,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
         rfq: createdRfq({ sourcingMode: 'mode_3', procucevVendorCount: 0, assignedVendors: echoedVendors }),
       });
       renderWizard();
+      chooseSourcingMode('mode_3');
       fillValidForm({ major: MECHANICAL });
       fireEvent.click(await cardFor('Alpha Pumps'));
       expect(await screen.findByText('1 of 1 selected')).toBeInTheDocument();
@@ -1204,6 +1204,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
   it('asks for the whole directory when a line item opts into All Categories', async () => {
     setupStore({ currentMode: 'mode_3' });
     renderWizard();
+    chooseSourcingMode('mode_3');
     await flushAsync();
     expect(mockFetchAllVendors).toHaveBeenCalledTimes(1);
 
@@ -1303,6 +1304,7 @@ describe('IngestionWizard coverage: dispatch confirmation dialog', () => {
       }),
     });
     renderWizard();
+    chooseSourcingMode('mode_0');
     fillValidForm();
 
     await dispatchRfq();
@@ -1315,6 +1317,7 @@ describe('IngestionWizard coverage: dispatch confirmation dialog', () => {
   it('treats an RFQ confirmed without a sourcing mode as a mode with no Procucev vendor box', async () => {
     mockCreateRFQ.mockResolvedValue({ success: true, rfq: createdRfq({ sourcingMode: undefined }) });
     renderWizard();
+    chooseSourcingMode('mode_2');
     fillValidForm();
 
     await dispatchRfq();
@@ -1331,6 +1334,7 @@ describe('IngestionWizard coverage: dispatch confirmation dialog', () => {
     ['Done', false],
   ])('closes through "%s" without a completion callback', async (buttonName, navigates) => {
     renderWizard({ onComplete: undefined as unknown as WizardProps['onComplete'] });
+    chooseSourcingMode('mode_2');
     fillValidForm();
     await dispatchRfq();
 
@@ -1349,6 +1353,7 @@ describe('IngestionWizard coverage: dispatch confirmation dialog', () => {
       throw new Error('app router is not mounted');
     });
     const { props } = renderWizard();
+    chooseSourcingMode('mode_2');
     fillValidForm();
     await dispatchRfq();
 

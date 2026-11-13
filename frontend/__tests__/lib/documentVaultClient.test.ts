@@ -7,6 +7,7 @@ import {
 } from '@/lib/documentVaultClient';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 describe('Document Vault Client', () => {
   const originalFetch = global.fetch;
@@ -140,7 +141,7 @@ describe('Document Vault Client', () => {
         },
       } as unknown as Response);
 
-      await expect(fetchDocuments()).rejects.toThrow('Failed to fetch documents (502)');
+      await expect(fetchDocuments()).rejects.toThrow(formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource: UI_STRINGS.dataLoad.resources.documentVault, status: 502 }));
     });
   });
 
@@ -166,19 +167,13 @@ describe('Document Vault Client', () => {
       expect(result).toEqual(mockSummary);
     });
 
-    test('returns default zeroed summary when payload lacks summary', async () => {
+    test('throws instead of returning a zeroed summary when payload lacks summary', async () => {
       global.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         json: async () => ({}),
       } as unknown as Response);
 
-      const result = await fetchDocumentVaultSummary();
-      expect(result).toEqual({
-        totalDocuments: 0,
-        activeDocuments: 0,
-        totalSizeBytes: 0,
-        categoriesCount: 0,
-      });
+      await expect(fetchDocumentVaultSummary()).rejects.toThrow(formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource: UI_STRINGS.dataLoad.resources.documentVaultSummary }));
     });
 
     test('throws structured error when summary fetch fails', async () => {
@@ -200,7 +195,7 @@ describe('Document Vault Client', () => {
         },
       } as unknown as Response);
 
-      await expect(fetchDocumentVaultSummary()).rejects.toThrow('Failed to fetch vault summary (503)');
+      await expect(fetchDocumentVaultSummary()).rejects.toThrow(formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource: UI_STRINGS.dataLoad.resources.documentVaultSummary, status: 503 }));
     });
   });
 
@@ -306,8 +301,7 @@ describe('Document Vault Client', () => {
         ok: true,
         json: async () => ({}),
       } as unknown as Response);
-      const docs = await fetchDocuments();
-      expect(docs).toEqual([]);
+      await expect(fetchDocuments()).rejects.toThrow(formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource: UI_STRINGS.dataLoad.resources.documentVault }));
 
       // createDocument with failing json parse
       global.fetch = jest.fn().mockResolvedValueOnce({
@@ -319,7 +313,7 @@ describe('Document Vault Client', () => {
       } as unknown as Response);
       const createRes = await createDocument({ documentName: 'A', fileName: 'a.pdf', category: 'templates' });
       expect(createRes.success).toBe(false);
-      expect(createRes.error).toContain('Failed to create document (500)');
+      expect(createRes.error).toBe(formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: 500 }));
 
       // updateDocument with empty json error
       global.fetch = jest.fn().mockResolvedValueOnce({
@@ -329,7 +323,7 @@ describe('Document Vault Client', () => {
       } as unknown as Response);
       const updateRes = await updateDocument('doc_1', { documentName: 'B' });
       expect(updateRes.success).toBe(false);
-      expect(updateRes.error).toContain('Failed to update document (500)');
+      expect(updateRes.error).toBe(formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: 500 }));
 
       // updateDocument with failing json parse
       global.fetch = jest.fn().mockResolvedValueOnce({
@@ -350,7 +344,7 @@ describe('Document Vault Client', () => {
       } as unknown as Response);
       const deleteRes = await deleteDocument('doc_1');
       expect(deleteRes.success).toBe(false);
-      expect(deleteRes.error).toContain('Failed to delete document (500)');
+      expect(deleteRes.error).toBe(formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: 500 }));
 
       // deleteDocument with failing json parse
       global.fetch = jest.fn().mockResolvedValueOnce({

@@ -20,20 +20,22 @@ import {
   Upload,
 } from 'lucide-react';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { DEFAULT_INTERNAL_MEMBERS, ACTION_CENTER_SMS_MAX_CHARS } from '@/lib/constants';
+import { ACTION_CENTER_SMS_MAX_CHARS } from '@/lib/constants';
 import { dispatchActionCenterCommunication } from '@/lib/actionCenterCommClient';
 import {
   getScenariosForEntityType,
   interpolateScenarioTemplate,
-  type EmailScenarioTemplate,
 } from '@/lib/emailScenarioTemplates';
 import { fetchDocuments } from '@/lib/documentVaultClient';
+import { fetchInternalAssignees } from '@/lib/internalTaskClient';
+import { authClient } from '@/lib/authClient';
 import type {
   ActionCenterCommChannel,
   ActionCenterEntityType,
   ActionCenterCommunicationResult,
   ActionCenterAttachment,
   DocumentVaultItem,
+  InternalTeamMember,
 } from '@/lib/types';
 
 const EMPTY_ATTACHMENTS: ActionCenterAttachment[] = [];
@@ -88,8 +90,12 @@ export default function ActionCenterComposeModal({
   const [scheduleFollowup, setScheduleFollowup] = useState(false);
   const [followupDueDate, setFollowupDueDate] = useState('');
   const [followupPriority, setFollowupPriority] = useState<'Critical' | 'High' | 'Medium' | 'Low'>('Medium');
-  const [followupAssigneeId, setFollowupAssigneeId] = useState(DEFAULT_INTERNAL_MEMBERS[0]?.id || '');
+  // Blank until the user chooses an assignee from the list the API returns.
+  const [followupAssigneeId, setFollowupAssigneeId] = useState('');
+  const [assignees, setAssignees] = useState<InternalTeamMember[]>([]);
+  const [assigneesError, setAssigneesError] = useState<string | null>(null);
   const [followupNotes, setFollowupNotes] = useState('');
+  const localAttachmentSeqRef = useRef(0);
 
   const [isSending, setIsSending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -120,6 +126,20 @@ export default function ActionCenterComposeModal({
 
 
 
+  // Load the follow-up assignees from the API each time the modal opens.
+  useEffect(() => {
+    if (!isOpen) return;
+    let isMounted = true;
+    void fetchInternalAssignees().then((result) => {
+      if (!isMounted) return;
+      setAssignees(result.assignees);
+      setAssigneesError(result.error ?? null);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen]);
+
   // Sync default props when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -137,6 +157,7 @@ export default function ActionCenterComposeModal({
       setFollowupErrorNotice(null);
       setScheduleFollowup(false);
       setFollowupDueDate('');
+      setFollowupAssigneeId('');
       setFollowupNotes('');
       setIsDispatched(false);
     }
@@ -162,8 +183,8 @@ export default function ActionCenterComposeModal({
   }, [smsChars]);
 
   const assignedMember = useMemo(() => {
-    return DEFAULT_INTERNAL_MEMBERS.find((m) => m.id === followupAssigneeId);
-  }, [followupAssigneeId]);
+    return assignees.find((m) => m.id === followupAssigneeId);
+  }, [assignees, followupAssigneeId]);
 
   // Scenario Selection Handler with Auto-select of suggested documents
   const handleScenarioChange = useCallback(
@@ -176,25 +197,21 @@ export default function ActionCenterComposeModal({
       const template = scenarios.find((s) => s.id === scenarioId);
       if (!template) return;
 
-      const defaultDateStr = new Date(Date.now() + 86400000 * (template.defaultFollowupDays || 2))
-        .toISOString()
-        .slice(0, 10);
-
+      // Each token holds only what the user entered or the record supplies. A
+      // token without a value renders as an empty string in the template.
       const tokens: Record<string, string | number | undefined> = {
-        contactName: recipientName.trim() || 'Partner',
-        companyName: recipientName.trim() || entityId,
+        contactName: recipientName.trim(),
+        companyName: recipientName.trim(),
         entityId,
-        followupDate: followupDueDate || defaultDateStr,
-        followupTime: '11:00 AM',
-        followupNotes: followupNotes.trim() || 'Commercial proposal and plan review',
-        assigneeName: assignedMember?.name || 'Category Specialist',
-        senderName: 'Category Manager',
-        dueDate: followupDueDate || defaultDateStr,
+        followupDate: followupDueDate,
+        followupNotes: followupNotes.trim(),
+        assigneeName: assignedMember?.name,
+        senderName: authClient.getSessionUser()?.name,
+        dueDate: followupDueDate,
         rfqNumber: entityId,
-        rfqTitle: 'Procurement Requirements',
-        notes: message || 'Please review the attached commercial details',
+        notes: message,
         priority: followupPriority,
-        taskTitle: subject || 'Commercial Action Item',
+        taskTitle: subject,
       };
 
       if (template.subjectTemplate) {
@@ -271,12 +288,13 @@ export default function ActionCenterComposeModal({
     const file = e.target.files?.[0];
     if (file) {
       const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+      localAttachmentSeqRef.current += 1;
       const newLocalAtt: ActionCenterAttachment = {
-        id: `local_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        id: `local_${Date.now()}_${localAttachmentSeqRef.current}`,
         documentName: `${cleanName} (Local Upload)`,
         fileName: file.name,
         fileSize: file.size,
-        mimeType: file.type || 'application/pdf',
+        mimeType: file.type || 'application/octet-stream',
         category: 'local_upload',
       };
       setSelectedAttachments((prev) => [...prev, newLocalAtt]);
@@ -304,12 +322,17 @@ export default function ActionCenterComposeModal({
     }
 
     if (scheduleFollowup && !followupDueDate.trim()) {
-      setFormError(strings.validationFollowupDueDateRequired || 'A due date is required when scheduling a follow-up task.');
+      setFormError(strings.validationFollowupDueDateRequired);
+      return false;
+    }
+
+    if (scheduleFollowup && !followupAssigneeId) {
+      setFormError(UI_STRINGS.actionCenter.tasks.selectAssignee);
       return false;
     }
 
     return true;
-  }, [channel, message, recipientEmail, recipientPhone, scheduleFollowup, followupDueDate, strings]);
+  }, [channel, message, recipientEmail, recipientPhone, scheduleFollowup, followupDueDate, followupAssigneeId, strings]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -336,7 +359,7 @@ export default function ActionCenterComposeModal({
               dueDate: followupDueDate,
               priority: followupPriority,
               assigneeId: followupAssigneeId,
-              assigneeName: assignedMember?.name || 'Assignee',
+              assigneeName: assignedMember?.name ?? '',
               notes: followupNotes.trim() || undefined,
             }
           : undefined,
@@ -631,8 +654,8 @@ export default function ActionCenterComposeModal({
                   >
                     <span className="truncate">
                       {selectedAttachments.length > 0
-                        ? `${selectedAttachments.length} document(s) attached`
-                        : 'Select from Document Vault...'}
+                        ? formatString(strings.selectedAttachmentsCount, { count: selectedAttachments.length })
+                        : strings.attachmentsDropdownPlaceholder}
                     </span>
                     <ChevronDown size={14} className="text-slate-400 shrink-0 ml-2" />
                   </button>
@@ -803,12 +826,16 @@ export default function ActionCenterComposeModal({
                       onChange={(e) => setFollowupAssigneeId(e.target.value)}
                       className="w-full text-xs px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
-                      {DEFAULT_INTERNAL_MEMBERS.map((m) => (
+                      <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                      {assignees.map((m) => (
                         <option key={m.id} value={m.id}>
                           {m.name} ({m.role})
                         </option>
                       ))}
                     </select>
+                    {assigneesError && (
+                      <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{assigneesError}</p>
+                    )}
                   </div>
                 </div>
                 <div>

@@ -82,6 +82,24 @@ function mockFetchImpl(url: string, options: any = {}) {
       }),
     });
   }
+  if (/\/api\/subscriptions\/pricing$/.test(url) && method === 'GET') {
+    // The pricing API's 12-month rows: Connect ₹8,849 and Select ₹17,699 including 18% GST.
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          gstPercent: 18,
+          gstRate: 0.18,
+          buyer: {},
+          seller: {
+            connect: { '12_months': { price: 8849, baseDurationPrice: 7499, gstAmount: 1350, totalWithGst: 8849 } },
+            select: { '12_months': { price: 17699, baseDurationPrice: 14999, gstAmount: 2700, totalWithGst: 17699 } },
+          },
+        },
+      }),
+    });
+  }
   if (/\/api\/vendors\/v-mock-apex\/subscription$/.test(url) && method === 'PUT') {
     const body = options.body ? JSON.parse(options.body) : {};
     return Promise.resolve({
@@ -470,11 +488,13 @@ describe('Vendor Screens Comprehensive Suite', () => {
       // payment link and redirects to Zoho; the plan itself only flips once
       // the backend's webhook (or reconciliation poller) confirms payment, so
       // this UI no longer flips it client-side.
+      // The paid plan buttons stay disabled until the pricing API answers.
+      await waitFor(() => expect(screen.getByRole('button', { name: /Switch to Connect Model/i })).toBeEnabled());
       const connectBtn = screen.getByRole('button', { name: /Switch to Connect Model/i });
       fireEvent.click(connectBtn);
       expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
 
-      const payBtn = screen.getByRole('button', { name: /Pay ₹7,499/i });
+      const payBtn = screen.getByRole('button', { name: /Pay ₹8,849/i });
       await act(async () => {
         fireEvent.click(payBtn);
         await Promise.resolve();
@@ -532,7 +552,8 @@ describe('Vendor Screens Comprehensive Suite', () => {
       expect(screen.getByText(/Vendor Subscription Updated!/i)).toBeInTheDocument();
 
       // Cancel also closes the (Connect/Select) checkout modal without paying.
-      const connectBtn = await screen.findByRole('button', { name: /Switch to Connect Model/i });
+      await waitFor(() => expect(screen.getByRole('button', { name: /Switch to Connect Model/i })).toBeEnabled());
+      const connectBtn = screen.getByRole('button', { name: /Switch to Connect Model/i });
       fireEvent.click(connectBtn);
       expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
@@ -665,8 +686,9 @@ describe('Vendor Screens Comprehensive Suite', () => {
         await Promise.resolve();
       });
 
+      await waitFor(() => expect(screen.getByRole('button', { name: /Switch to Connect Model/i })).toBeEnabled());
       fireEvent.click(screen.getByRole('button', { name: /Switch to Connect Model/i }));
-      const payBtn = screen.getByRole('button', { name: /Pay ₹7,499/i });
+      const payBtn = screen.getByRole('button', { name: /Pay ₹8,849/i });
       await act(async () => {
         fireEvent.click(payBtn);
         await Promise.resolve();
@@ -698,8 +720,9 @@ describe('Vendor Screens Comprehensive Suite', () => {
         await Promise.resolve();
       });
 
+      await waitFor(() => expect(screen.getByRole('button', { name: /Switch to Connect Model/i })).toBeEnabled());
       fireEvent.click(screen.getByRole('button', { name: /Switch to Connect Model/i }));
-      const payBtn = screen.getByRole('button', { name: /Pay ₹7,499/i });
+      const payBtn = screen.getByRole('button', { name: /Pay ₹8,849/i });
       await act(async () => {
         fireEvent.click(payBtn);
         await Promise.resolve();

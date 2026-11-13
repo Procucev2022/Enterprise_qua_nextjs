@@ -12,6 +12,7 @@ import {
 } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
+import { resolveMinorCategory, findMajorForMinor } from '@/lib/categoryTaxonomy';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -216,6 +217,59 @@ const getUniqueEmails = (raw?: string | null): string[] => {
     });
 };
 
+// Parse vendor mobile number: accepts with or without +91 country code,
+// validates exactly 10 digits after country code, and stores country code without duplication.
+export interface ParsedVendorMobile {
+  isValid: boolean;
+  nationalNumber: string;
+  storedNumber: string;
+}
+
+export const parseVendorMobile = (phone: string | undefined | null): ParsedVendorMobile => {
+  if (!phone || typeof phone !== 'string') {
+    return { isValid: true, nationalNumber: '', storedNumber: '' };
+  }
+  const trimmed = phone.trim();
+  if (trimmed === '') {
+    return { isValid: true, nationalNumber: '', storedNumber: '' };
+  }
+
+  // Reject alphanumeric characters
+  if (/[a-zA-Z]/.test(trimmed)) {
+    return { isValid: false, nationalNumber: '', storedNumber: trimmed };
+  }
+
+  // Reject invalid symbols (only digits, +, -, spaces, parentheses allowed)
+  if (!/^[\d\s+\-()]+$/.test(trimmed)) {
+    return { isValid: false, nationalNumber: '', storedNumber: trimmed };
+  }
+
+  // Strip duplicate or multiple leading country code indicators (+91, + 91, (+91), leading +, etc.)
+  let remainder = trimmed;
+  while (/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/.test(remainder)) {
+    remainder = remainder.replace(/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/, '').trim();
+  }
+
+  // Extract all digits from remainder
+  let digits = remainder.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  // Must be numeric value with exactly 10 digits after country code
+  if (digits.length === 10 && /^\d{10}$/.test(digits)) {
+    return {
+      isValid: true,
+      nationalNumber: digits,
+      storedNumber: `+91 ${digits}`,
+    };
+  }
+
+  return { isValid: false, nationalNumber: '', storedNumber: trimmed };
+};
+
 export default function InitialSetupModal() {
   const {
     initialSetupModalOpen,
@@ -276,8 +330,16 @@ export default function InitialSetupModal() {
   const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
   const [apiJoinedVendors, setApiJoinedVendors] = useState<HistoricalPurchaseVendorRecord[] | null>(null);
 
+  // Validate vendor mobile number: accepts with or without +91, exactly 10 numeric digits after country code
+  const isValidVendorMobile = (phone: string | undefined | null): boolean => {
+    if (!phone || typeof phone !== 'string') return true;
+    const trimmed = phone.trim();
+    if (trimmed === '') return true;
+
+    return parseVendorMobile(trimmed).isValid;
+  };
+
   // Validate a vendor row for required fields
-  // Note: Temporary required columns (email, phone) are not enforced from uploaded files
   const getVendorRowErrors = (v: VendorMasterUploadRecord): string[] => {
     const errs: string[] = [];
     if (!v.companyName || v.companyName.trim() === '') {
@@ -285,6 +347,9 @@ export default function InitialSetupModal() {
     }
     if (v.email && v.email.trim() !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim())) {
       errs.push('Invalid email format');
+    }
+    if (v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone)) {
+      errs.push('Mobile number must be a 10-digit numeric value');
     }
     return errs;
   };
@@ -295,12 +360,6 @@ export default function InitialSetupModal() {
     // Backward navigation to Step 1 or 2 is always allowed
     if (targetStep <= 2) {
       setStep(targetStep);
-      return true;
-    }
-
-    // If ingestion was completed, allow viewing Step 5 summary
-    if (targetStep === 5 && (completionSummary || lastIngestionSummary)) {
-      setStep(5);
       return true;
     }
 
@@ -323,12 +382,18 @@ export default function InitialSetupModal() {
     }
 
     // Moving forward to Step 4 or 5 requires PO Dump data
-    if (targetStep >= 4 && poLineItems.length === 0) {
+    if (targetStep >= 4 && (!poDataUploaded || poLineItems.length === 0)) {
       const msg = 'Historical PO Dump is required. Please upload your PO purchase dump spreadsheet before running AI Category Cross-Match.';
       setPoUploadError(msg);
       showToast('PO Dump Required', msg, 'warning');
       setStep(3);
       return false;
+    }
+
+    // If ingestion was completed in the current session, allow viewing Step 5 summary
+    if (targetStep === 5 && (completionSummary || (lastIngestionSummary && poDataUploaded && poLineItems.length > 0))) {
+      setStep(5);
+      return true;
     }
 
     setVendorUploadError(null);
@@ -570,50 +635,96 @@ export default function InitialSetupModal() {
             return;
           }
 
-          const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
+          const vendorCodeAliases = [
+            'vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code',
+            'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no',
+            'vendor number', 'supplier number', 'vendor identifier'
+          ];
+
+          const getRowVal = (row: any, possibleKeys: string[], excludeSubstrings: string[] = []): string => {
             const keys = Object.keys(row);
-            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string => {
-              // Pass 1: Exact matches (after stripping non-alphanumeric)
-              for (const pk of possibleKeys) {
-                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                const matchedKey = keys.find((k) => {
-                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
-                  return kClean === pkClean;
-                });
-                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
-                }
+            // Pass 1: Exact matches (after stripping non-alphanumeric)
+            for (const pk of possibleKeys) {
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const matchedKey = keys.find((k) => {
+                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                return kClean === pkClean;
+              });
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
               }
-              // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars to avoid short false matches like 'id' or 'code')
-              for (const pk of possibleKeys) {
-                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!pkClean || pkClean.length < 4) continue;
-                const matchedKey = keys.find((k) => {
-                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
-                  return kClean.includes(pkClean);
-                });
-                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
-                }
+            }
+            // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars)
+            for (const pk of possibleKeys) {
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (!pkClean || pkClean.length < 4) continue;
+              const matchedKey = keys.find((k) => {
+                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                return kClean.includes(pkClean);
+              });
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
               }
-              return '';
-            };
+            }
+            return '';
+          };
+
+          // Collect all explicitly provided vendor codes to avoid overwriting or duplicate collisions
+          const explicitlyProvidedCodes = new Set<string>();
+          storedVendors.forEach((v) => {
+            if (v.vendorCode && v.vendorCode.trim()) {
+              explicitlyProvidedCodes.add(v.vendorCode.trim().toLowerCase());
+            }
+          });
+
+          rawJson.forEach((row) => {
+            let code = getRowVal(row, vendorCodeAliases, ['email', 'mail', 'phone', 'contact', 'gst']);
+            if (code && (code.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(code))) {
+              code = '';
+            }
+            if (code.trim()) {
+              explicitlyProvidedCodes.add(code.trim().toLowerCase());
+            }
+          });
+
+          // Unique sequential code generator: 1, 2, 3, etc. skipping any explicitly provided codes
+          let nextSequentialVendorCode = 1;
+          const getNextUniqueSequentialVendorCode = (): string => {
+            while (explicitlyProvidedCodes.has(String(nextSequentialVendorCode).toLowerCase())) {
+              nextSequentialVendorCode++;
+            }
+            const generated = String(nextSequentialVendorCode);
+            explicitlyProvidedCodes.add(generated.toLowerCase());
+            nextSequentialVendorCode++;
+            return generated;
+          };
+
+          const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
+            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string =>
+              getRowVal(row, possibleKeys, excludeSubstrings);
 
             let rawVendorCode = getVal(
-              ['vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code', 'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no', 'vendor number', 'supplier number', 'vendor identifier'],
+              vendorCodeAliases,
               ['email', 'mail', 'phone', 'contact', 'gst']
             );
             // If the resolved vendorCode is an email address, discard it so it doesn't take email as vendor code
             if (rawVendorCode && (rawVendorCode.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawVendorCode))) {
               rawVendorCode = '';
             }
-            const vendorCode = rawVendorCode || `VND-${1000 + idx + 1}`;
+            // If a vendor code is provided, retain and use that code.
+            // If no vendor code is provided, automatically generate sequential vendor codes: 1, 2, 3, etc.
+            const vendorCode = rawVendorCode.trim() ? rawVendorCode.trim() : getNextUniqueSequentialVendorCode();
             const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier name', 'supplier', 'company', 'organization', 'vendor', 'name'], ['email', 'mail', 'phone', 'contactperson', 'code']);
             const contactPerson = getVal(['contactperson', 'contact person', 'contact person name', 'representative', 'person name', 'contact name', 'person', 'poc'], ['email', 'mail', 'phone', 'mobile']);
             const email = getVal(['email', 'email id', 'email_id', 'emailid', 'email address', 'emailaddress', 'mail', 'corporate email', 'company email', 'vendor email']);
-            const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']);
+            const rawPhone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']);
+            const parsedPhone = parseVendorMobile(rawPhone);
+            // Accept mobile numbers with or without +91, validate 10 digits after country code, and store with country code without duplication
+            const phone = parsedPhone.isValid && parsedPhone.nationalNumber
+              ? `+91 ${parsedPhone.nationalNumber}`
+              : rawPhone;
             const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address', 'plant', 'state', 'pincode', 'pin code']);
             const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']);
             const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
@@ -650,7 +761,17 @@ export default function InitialSetupModal() {
             return;
           }
 
-          setVendorUploadError(null);
+          const invalidMobiles = parsedVendors.filter(
+            (v) => v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone)
+          );
+          if (invalidMobiles.length > 0) {
+            const sample = invalidMobiles[0].phone;
+            const errMsg = `${invalidMobiles.length} vendor record(s) contain invalid or alphanumeric mobile numbers (e.g. "${sample}"). Mobile numbers must be numeric values with exactly 10 digits. Please click 'Edit Data' to correct them.`;
+            setVendorUploadError(errMsg);
+            showToast('Invalid Mobile Numbers', errMsg, 'warning');
+          } else {
+            setVendorUploadError(null);
+          }
 
           setStoredVendors(parsedVendors);
           setVendorMasterUploaded(true);
@@ -882,6 +1003,7 @@ export default function InitialSetupModal() {
             return;
           }
 
+          const invalidPoRows: string[] = [];
           const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
             const keys = Object.keys(row);
             const getRawVal = (possibleKeys: string[], excludeSubstrings: string[] = []): unknown => {
@@ -912,17 +1034,18 @@ export default function InitialSetupModal() {
               return raw !== undefined && raw !== null ? String(raw).trim() : '';
             };
 
-            const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']) || `PO-2025-${(1000 + idx).toString()}`;
+            const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']);
             const rawPoDate = getRawVal(['podate', 'po date', 'date', 'order date', 'creation date']);
-            const poDate = normalizePoDate(rawPoDate) || '2025-06-15';
-            const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']) || 'Apex Supplies Ltd.';
-            const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']) || 'Industrial Mechanical Spares';
+            const poDate = normalizePoDate(rawPoDate) || '';
+            const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']);
+            const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']);
             const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
             
             const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
-            const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
+            // 0 means no usable quantity. The row is rejected below rather than set to 1.
+            const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) : 0;
             
-            const unit = getVal(['unit', 'uom', 'unit of measure', 'units']) || 'Units';
+            const unit = getVal(['unit', 'uom', 'unit of measure', 'units']);
 
             const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
             const totalSpendRaw = getVal(['total spend inr', 'total spend (inr)', 'total spend rs', 'total spend', 'total amount inr', 'total amount (inr)', 'total amount', 'total inr', 'total (inr)', 'spend inr', 'spend', 'amount inr', 'amount', 'total value', 'po amount', 'total']);
@@ -937,12 +1060,26 @@ export default function InitialSetupModal() {
               unitPrice = Math.round(totalSpend / quantity);
             } else if (totalSpend === 0 && unitPrice > 0) {
               totalSpend = unitPrice * quantity;
-            } else if (totalSpend === 0 && unitPrice === 0) {
-              unitPrice = 500;
-              totalSpend = unitPrice * quantity;
             }
+            // With neither a unit price nor a spend figure, the row is rejected below. It is not priced at a guess.
 
-            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category', 'function']) || 'General';
+            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'function']);
+            const categoryInput = getVal(['minor category', 'category', 'minor', 'sub category', 'sub-category', 'sub_category']);
+            const resolvedCategory = resolveMinorCategory(itemName, specs, categoryInput || department);
+
+            // Rows the filter below would drop as blank are skipped here. Any other row must name every
+            // required field it lacks. Nothing is substituted for a missing value.
+            const isBlankRow = !vendorIdentifier && !itemName && !department && !categoryInput;
+            const missingFields: string[] = [];
+            if (!poNumber) missingFields.push('PO Number');
+            if (!poDate) missingFields.push('PO Date');
+            if (!vendorIdentifier) missingFields.push('Vendor');
+            if (!itemName) missingFields.push('Line Item Description');
+            if (quantity < 1) missingFields.push('Quantity');
+            if (totalSpend <= 0) missingFields.push('Spend');
+            if (!isBlankRow && missingFields.length > 0) {
+              invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
+            }
 
             return {
               id: `po-upload-${Date.now()}-${idx}`,
@@ -960,11 +1097,25 @@ export default function InitialSetupModal() {
               unitPrice,
               totalSpend,
               spend: totalSpend,
-              department,
+              department: department || '',
+              category: resolvedCategory || '',
+              minorCategory: resolvedCategory || '',
+              categoryStatus: resolvedCategory ? ('MAPPED' as const) : ('UNMAPPED' as const),
             };
           })
-            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.department?.trim()))
+            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.category?.trim() || p.department?.trim()))
             .sort((a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime());
+
+          // Any incomplete row rejects the whole file, so no partial PO dump is stored.
+          if (invalidPoRows.length > 0) {
+            const errMsg = `Nothing was imported. Fix these rows and upload the PO dump again: ${invalidPoRows.join('; ')}.`;
+            setPoUploadError(errMsg);
+            showToast('Invalid PO File', errMsg, 'warning');
+            setIsParsingPo(false);
+            setPoJob(null);
+            if (poFileInputRef.current) poFileInputRef.current.value = '';
+            return;
+          }
 
           if (parsedPOs.length === 0) {
             const errMsg = 'The uploaded PO dump file contains no recognizable purchase order records. Please verify your file.';
@@ -1082,7 +1233,7 @@ export default function InitialSetupModal() {
     showToast('Selection Cleared', 'Vendor Master selection has been removed. Please upload a file.', 'info');
   };
 
-  const resetToSamplePoData = () => {
+  const resetPoUpload = () => {
     setPoLineItems([]);
     setApiJoinedVendors(null);
     setPoFileName(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
@@ -1170,13 +1321,16 @@ export default function InitialSetupModal() {
         secondSetMinors = Array.from(new Set(secondSetMinors));
       }
 
+      const parsedP = parseVendorMobile(v.phone);
+      const cleanPhone = parsedP.isValid && parsedP.nationalNumber ? `+91 ${parsedP.nationalNumber}` : v.phone;
+
       return {
         id: v.id,
         vendorCode: v.vendorCode,
         companyName: v.companyName,
         email: v.email,
         contactPerson: v.contactPerson,
-        phone: v.phone,
+        phone: cleanPhone,
         address: v.address,
         gstNumber: v.gstNumber,
         vendorRatingScore: v.vendorRatingScore,
@@ -1212,9 +1366,16 @@ export default function InitialSetupModal() {
   };
 
   const handleAddVendorRow = () => {
+    const usedCodes = new Set(
+      storedVendors.map((v) => String(v.vendorCode || '').trim().toLowerCase()).filter(Boolean)
+    );
+    let nextSeq = 1;
+    while (usedCodes.has(String(nextSeq).toLowerCase())) {
+      nextSeq++;
+    }
     const newVendor: VendorMasterUploadRecord = {
-      id: `vm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      vendorCode: '',
+      id: globalThis.crypto.randomUUID(),
+      vendorCode: String(nextSeq),
       companyName: '',
       contactPerson: '',
       email: '',
@@ -1233,52 +1394,12 @@ export default function InitialSetupModal() {
   const mappedVendors = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
   const unmappedVendors = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
 
-  // Download Sample Vendor Master Excel (.xlsx)
+  // Download the Vendor Master template (.xlsx)
   const handleDownloadVendorMasterExcel = () => {
-    const sampleRows = [
-      {
-        'Vendor Code': 'VND-1001',
-        'Company Name': 'Apex Supplies Ltd.',
-        'Contact Person': 'Rajesh Nair',
-        'Email ID': 'rajesh@apexsupplies.in',
-        Phone: '+91 98201 44820',
-        Address: 'MIDC Thane, Mumbai, MH',
-        GSTIN: '27AAACA1928K1Z4',
-        'Rating (0-100 Optional)': 95,
-      },
-      {
-        'Vendor Code': 'VND-1002',
-        'Company Name': 'Kiran Valve Industries',
-        'Contact Person': 'Amit Kumar',
-        'Email ID': 'amit@kiranvalves.com',
-        Phone: '+91 97653 21098',
-        Address: 'Bhosari, Pune, MH',
-        GSTIN: '27AAACK3921P1Z9',
-        'Rating (0-100 Optional)': 78,
-      },
-      {
-        'Vendor Code': 'VND-1007',
-        'Company Name': 'Vortex Hydraulic Systems',
-        'Contact Person': 'Nikhil Rane',
-        'Email ID': 'nikhil@vortexhydraulics.in',
-        Phone: '+91 98450 11920',
-        Address: 'Peenya, Bangalore, KA',
-        GSTIN: '29AAACV8841P1Z5',
-        'Rating (0-100 Optional)': 82,
-      },
-      {
-        'Vendor Code': 'VND-1008',
-        'Company Name': 'Nova Electrical Spares',
-        'Contact Person': 'Pooja Deshmukh',
-        'Email ID': 'sales@novaelectricals.com',
-        Phone: '+91 97230 44510',
-        Address: 'Makarpura, Vadodara, GJ',
-        GSTIN: '24AAACN4419K1Z1',
-        'Rating (0-100 Optional)': '',
-      },
-    ];
-
-    const worksheet = XLSX.utils.json_to_sheet(sampleRows);
+    // Headers only. The template carries no sample vendors, so nothing is pre-filled.
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      ['Vendor Code', 'Company Name', 'Contact Person', 'Email ID', 'Phone', 'Address', 'GSTIN', 'Rating (0-100 Optional)'],
+    ]);
     const workbook: XLSX.WorkBook = {
       Sheets: { 'Vendor Master': worksheet },
       SheetNames: ['Vendor Master'],
@@ -1290,76 +1411,27 @@ export default function InitialSetupModal() {
     link.href = url;
     link.download = 'Procucev_Template_1_Vendor_Master.xlsx';
     link.click();
-    showToast('Template Downloaded', 'Sample Vendor Master Excel template downloaded.', 'success');
+    showToast('Template Downloaded', 'Vendor Master Excel template downloaded.', 'success');
   };
   const handleDownloadVendorMasterCsv = handleDownloadVendorMasterExcel;
 
-  // Download Sample PO Data Excel (.xlsx)
+  // Download the PO Purchase Dump template (.xlsx)
   const handleDownloadPoDataExcel = () => {
-    const samplePoRows = [
-      {
-        'PO Number': 'PO-2025-00891',
-        'PO Date': '2025-04-12',
-        'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Description': 'Centrifugal Water Pump 500 GPM (15 HP Motor)',
-        'Specifications': '15 HP Motor, 500 GPM, Cast Iron, Class 150',
-        Quantity: 12,
-        Unit: 'Units',
-        'Unit Price (INR)': 12500,
-        'Total Spend (INR)': 150000,
-        Department: 'Mechanical',
-      },
-      {
-        'PO Number': 'PO-2025-01156',
-        'PO Date': '2025-08-04',
-        'Vendor Name': 'Kiran Valve Industries',
-        'Item Description': 'Flanged Gate Valve 4-inch Class 150',
-        'Specifications': 'Forged Steel, ASTM A105, Flanged RF',
-        Quantity: 24,
-        Unit: 'Units',
-        'Unit Price (INR)': 3800,
-        'Total Spend (INR)': 91200,
-        Department: 'Piping',
-      },
-      {
-        'PO Number': 'PO-2025-01431',
-        'PO Date': '2025-10-10',
-        'Vendor Name': 'Nova Electrical Spares',
-        'Item Description': 'LV Switchgear Modular Panels with Drawout MCCB',
-        'Specifications': '415V, 3-Phase 50Hz, 800A Busbar Rating',
-        Quantity: 3,
-        Unit: 'Panels',
-        'Unit Price (INR)': 85000,
-        'Total Spend (INR)': 255000,
-        Department: 'Electrical',
-      },
-      {
-        'PO Number': 'PO-2025-01740',
-        'PO Date': '2025-12-05',
-        'Vendor Name': 'Everest Steel & Infra Structures',
-        'Item Description': 'Fe500D TMT High-Yield Reinforcement Bars',
-        'Specifications': 'IS 1786 Grade Fe500D, 16mm Diameter',
-        Quantity: 120,
-        Unit: 'Tons',
-        'Unit Price (INR)': 6200,
-        'Total Spend (INR)': 744000,
-        Department: 'Civil',
-      },
-      {
-        'PO Number': 'PO-2025-02015',
-        'PO Date': '2026-01-20',
-        'Vendor Name': 'Vortex Hydraulic Systems',
-        'Item Description': 'Hydraulic Power Pack Unit 200 Bar with Gear Pump',
-        'Specifications': '200 Bar Working Pressure, 40L Reservoir',
-        Quantity: 2,
-        Unit: 'Units',
-        'Unit Price (INR)': 110000,
-        'Total Spend (INR)': 220000,
-        Department: 'Mechanical',
-      },
-    ];
-
-    const worksheet = XLSX.utils.json_to_sheet(samplePoRows);
+    // Headers only. The template carries no sample purchase orders, so nothing is pre-filled.
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      [
+        'PO Number',
+        'PO Date',
+        'Vendor Name',
+        'Item Description',
+        'Specifications',
+        'Quantity',
+        'Unit',
+        'Unit Price (INR)',
+        'Total Spend (INR)',
+        'Category',
+      ],
+    ]);
     const workbook: XLSX.WorkBook = {
       Sheets: { 'PO Purchase Dump': worksheet },
       SheetNames: ['PO Purchase Dump'],
@@ -1371,7 +1443,7 @@ export default function InitialSetupModal() {
     link.href = url;
     link.download = `Procucev_Template_2_PO_Purchase_Dump_${selectedPeriod}.xlsx`;
     link.click();
-    showToast('Template Downloaded', 'Sample PO Pre-Purchase Order Dump Excel template downloaded.', 'success');
+    showToast('Template Downloaded', 'PO Purchase Dump Excel template downloaded.', 'success');
   };
   const handleDownloadPoDataCsv = handleDownloadPoDataExcel;
 
@@ -1390,7 +1462,7 @@ export default function InitialSetupModal() {
       setStep(2);
       return;
     }
-    if (poLineItems.length === 0) {
+    if (!poDataUploaded || poLineItems.length === 0) {
       const msg = 'Historical PO Dump is required. Please upload your PO purchase dump spreadsheet before running AI Category Cross-Match.';
       setPoUploadError(msg);
       showToast('PO Dump Required', msg, 'warning');
@@ -1439,6 +1511,15 @@ export default function InitialSetupModal() {
     setSubmissionError(null);
     setIsConfirmingIngestion(true);
     try {
+      if (!poDataUploaded || poLineItems.length === 0) {
+        const msg = 'PO purchase data is mandatory. Please upload your PO purchase dump spreadsheet before completing vendor ingestion.';
+        setSubmissionError(msg);
+        setPoUploadError(msg);
+        showToast('PO Dump Required', msg, 'warning');
+        setStep(3);
+        setIsConfirmingIngestion(false);
+        return;
+      }
       if (joinedVendors.length === 0) {
         const msg = 'No vendor records found to ingest. Please upload a valid Vendor Master file first.';
         setSubmissionError(msg);
@@ -1452,10 +1533,23 @@ export default function InitialSetupModal() {
         showToast('Ingestion Error', actualError, 'warning');
         return;
       }
+      const summary = lastIngestionSummary;
+      if (summary) {
+        setCompletionSummary(summary);
+      }
+      if (summary && ((summary.skippedCount && summary.skippedCount > 0) || (summary.failedEmailCount && summary.failedEmailCount > 0))) {
+        setInitialSetupModalOpen(false);
+        showToast(
+          'Ingestion Completed with Warnings',
+          `${imported} vendor(s) uploaded successfully, but ${summary.skippedCount || 0} record(s) failed or were skipped.`,
+          'warning'
+        );
+        return;
+      }
       setInitialSetupModalOpen(false);
       showToast(
         'Setup Complete',
-        `Dual-file vendor master and PO data ingested successfully for ${selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'} (${joinedVendors.length} suppliers processed).`,
+        `Dual-file vendor master and PO data ingested successfully for ${selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'} (${imported} suppliers processed).`,
         'success'
       );
     } catch (err: any) {
@@ -1508,12 +1602,9 @@ export default function InitialSetupModal() {
                 <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
                   Buyer Initial Setup: Vendor Master & PO Data Ingestion
                 </h2>
-                <span className="badge badge-amber font-mono font-bold text-[10px] uppercase">
-                  Dual-File ERP Setup
-                </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 leading-relaxed">
-                Organization: <strong>{activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited'}</strong> · Upload Vendor Master and PO purchase dump separately for AI category cross-mapping.
+                {activeBuyerAccount?.organizationName ? <>Organization: <strong>{activeBuyerAccount.organizationName}</strong> · </> : null}Upload Vendor Master and PO purchase dump separately for AI category cross-mapping.
               </p>
             </div>
           </div>
@@ -1564,25 +1655,6 @@ export default function InitialSetupModal() {
               <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
                 Step 1: Choose Historical Purchase Period
               </h3>
-            </div>
-
-            {/* Vendor Master Template & Required Columns Banner */}
-            <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs flex-wrap sm:flex-nowrap">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
-                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium">
-                  Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN &amp; Location
-                </span>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleDownloadVendorMasterExcel}
-                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
-                >
-                  <Download size={13} /> Download Vendor Master Template
-                </button>
-              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1680,6 +1752,25 @@ export default function InitialSetupModal() {
               )}
             </div>
 
+            {/* Vendor Master Template & Required Columns Banner */}
+            <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium">
+                  Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN &amp; Location
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleDownloadVendorMasterExcel}
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+                >
+                  <Download size={13} /> Download Vendor Master Template
+                </button>
+              </div>
+            </div>
+
             {/* Error Banner if Vendor Upload has issues */}
             {vendorUploadError && (
               <div
@@ -1713,8 +1804,8 @@ export default function InitialSetupModal() {
                     {invalidVendors.length} Supplier Record{invalidVendors.length > 1 ? 's' : ''} Missing Required Fields
                   </p>
                   <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                    Required field: <strong>Company Name</strong>.
-                    Please click &apos;Edit Data&apos; to fix records missing company names before continuing.
+                    Required field: <strong>Company Name</strong> (and mobile numbers must be 10-digit numeric values).
+                    Please click &apos;Edit Data&apos; to fix records missing company names or with invalid mobile numbers before continuing.
                   </p>
                   {!isEditingVendorTable && (
                     <button
@@ -1754,7 +1845,7 @@ export default function InitialSetupModal() {
                       </span>
                     </div>
                     <p className="text-sm font-black font-mono text-slate-900 dark:text-white">
-                      {vendorFileName || vendorJob?.fileName || 'Vendor_Master_Database.xlsx'}
+                      {vendorFileName || vendorJob?.fileName || '—'}
                     </p>
                     <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 font-medium">
                       {(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} suppliers parsed and loaded into vendor master
@@ -1897,7 +1988,7 @@ export default function InitialSetupModal() {
                           const hasErrors = rowErrors.length > 0;
                           const isNameInvalid = !v.companyName || v.companyName.trim() === '';
                           const isEmailInvalid = Boolean(v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim()));
-                          const isPhoneInvalid = false;
+                          const isPhoneInvalid = Boolean(v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone));
 
                           return (
                             <tr
@@ -1965,6 +2056,12 @@ export default function InitialSetupModal() {
                                   type="text"
                                   value={v.phone || ''}
                                   onChange={(e) => handleUpdateVendorField(v.id, 'phone', e.target.value)}
+                                  onBlur={(e) => {
+                                    const parsed = parseVendorMobile(e.target.value);
+                                    if (parsed.isValid && parsed.nationalNumber) {
+                                      handleUpdateVendorField(v.id, 'phone', `+91 ${parsed.nationalNumber}`);
+                                    }
+                                  }}
                                   placeholder="+91 Phone"
                                   className={`w-full text-[10px] px-1.5 py-1 rounded focus:outline-none transition-all ${
                                     isPhoneInvalid
@@ -1973,7 +2070,7 @@ export default function InitialSetupModal() {
                                   }`}
                                 />
                                 {isPhoneInvalid && (
-                                  <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">Required</span>
+                                  <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">Must be 10 numeric digits</span>
                                 )}
                               </td>
                               <td className="p-1.5 align-top">
@@ -2053,7 +2150,7 @@ export default function InitialSetupModal() {
                           const hasErrors = rowErrors.length > 0;
                           const isNameInvalid = !v.companyName || v.companyName.trim() === '';
                           const isEmailInvalid = Boolean(v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim()));
-                          const isPhoneInvalid = false;
+                          const isPhoneInvalid = Boolean(v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone));
 
                           return (
                             <tr
@@ -2064,31 +2161,57 @@ export default function InitialSetupModal() {
                                   : 'hover:bg-slate-50 dark:hover:bg-gray-800/40'
                               }`}
                             >
-                              <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
-                              <td className="p-2.5 font-bold text-slate-800 dark:text-white">
+                              <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[100px] truncate" title={v.vendorCode || '1'}>
+                                {v.vendorCode || '1'}
+                              </td>
+                              <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[180px]">
                                 {isNameInvalid ? (
                                   <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
                                     <AlertCircle size={11} /> Required
                                   </span>
                                 ) : (
-                                  v.companyName
+                                  <span className="truncate block" title={v.companyName}>
+                                    {v.companyName}
+                                  </span>
                                 )}
                               </td>
-                              <td className="p-2.5 text-slate-700 dark:text-gray-300 font-medium">{v.contactPerson || '—'}</td>
-                              <td className="p-2.5 font-mono text-[11px]">
+                              <td className="p-2.5 text-slate-700 dark:text-gray-300 font-medium max-w-[140px]">
+                                <span className="truncate block" title={v.contactPerson || undefined}>
+                                  {v.contactPerson || '—'}
+                                </span>
+                              </td>
+                              <td className="p-2.5 font-mono text-[11px] max-w-[180px]">
                                 {isEmailInvalid ? (
                                   <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
                                     <AlertCircle size={11} /> Invalid Email
                                   </span>
                                 ) : (
-                                  <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{v.email || '—'}</span>
+                                  <span className="text-indigo-600 dark:text-indigo-400 font-semibold truncate block" title={v.email || undefined}>
+                                    {v.email || '—'}
+                                  </span>
                                 )}
                               </td>
-                              <td className="p-2.5 font-mono text-[11px]">
-                                <span className="text-slate-600 dark:text-gray-400">{v.phone || '—'}</span>
+                              <td className="p-2.5 font-mono text-[11px] max-w-[130px]">
+                                {isPhoneInvalid ? (
+                                  <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1">
+                                    <AlertCircle size={11} /> Invalid Mobile ({v.phone})
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-600 dark:text-gray-400 truncate block" title={v.phone || undefined}>
+                                    {v.phone || '—'}
+                                  </span>
+                                )}
                               </td>
-                              <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold">{v.gstNumber || '—'}</td>
-                              <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] truncate max-w-[200px]">{v.address || '—'}</td>
+                              <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold max-w-[130px]">
+                                <span className="truncate block" title={v.gstNumber || undefined}>
+                                  {v.gstNumber || '—'}
+                                </span>
+                              </td>
+                              <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] max-w-[200px]">
+                                <span className="truncate block" title={v.address || undefined}>
+                                  {v.address || '—'}
+                                </span>
+                              </td>
                               <td className="p-2.5 font-bold">
                                 {v.vendorRatingScore !== undefined && v.vendorRatingScore !== null ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
@@ -2209,7 +2332,7 @@ export default function InitialSetupModal() {
               <div className="flex items-center gap-2 min-w-0">
                 <span className="badge badge-purple font-bold text-[10px] shrink-0">Required Columns</span>
                 <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
-                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Department
+                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Category
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -2222,7 +2345,7 @@ export default function InitialSetupModal() {
                 </button>
                 <button
                   type="button"
-                  onClick={resetToSamplePoData}
+                  onClick={resetPoUpload}
                   className="text-[11px] text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200 underline font-medium"
                 >
                   Reset Template
@@ -2295,9 +2418,9 @@ export default function InitialSetupModal() {
                   </button>
                   <button
                     type="button"
-                    onClick={resetToSamplePoData}
+                    onClick={resetPoUpload}
                     className="btn btn-secondary btn-sm font-bold text-xs text-slate-600 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 border-slate-300 dark:border-gray-700 flex items-center gap-1.5"
-                    title="Reset PO data to default sample"
+                    title="Reset PO data"
                   >
                     <RotateCcw size={13} /> Reset
                   </button>
@@ -2349,10 +2472,28 @@ export default function InitialSetupModal() {
 
             {/* PO Line Items Preview */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                  PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
-                </span>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                    PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
+                  </span>
+                  {poLineItems.length > 0 && (() => {
+                    const mappedCount = poLineItems.filter((p) => Boolean(p.category || p.minorCategory)).length;
+                    const unmappedCount = poLineItems.length - mappedCount;
+                    return (
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-medium">
+                        <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold">
+                          {mappedCount} {UI_STRINGS.vendorPoIngestion.poDump.categoryMapped}
+                        </span>
+                        {unmappedCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 font-bold">
+                            {unmappedCount} {UI_STRINGS.vendorPoIngestion.poDump.categoryUnmapped}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
                   Total Spend: {formatCurrency(poLineItems.reduce((acc, p) => acc + p.totalSpend, 0))}
                 </span>
@@ -2371,24 +2512,43 @@ export default function InitialSetupModal() {
                       <th className="p-2.5">Unit</th>
                       <th className="p-2.5">Unit Price</th>
                       <th className="p-2.5">Total Spend</th>
-                      <th className="p-2.5">Department</th>
+                      <th className="p-2.5">Category</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
                     {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                        <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[120px] truncate" title={p.poNumber}>{p.poNumber}</td>
                         <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{normalizePoDate(p.poDate) || p.poDate || '—'}</td>
-                        <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
-                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200">{p.itemName}</td>
-                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px] truncate">{p.specs || '—'}</td>
+                        <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[160px]">
+                          <span className="truncate block" title={p.vendorIdentifier}>{p.vendorIdentifier}</span>
+                        </td>
+                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200 max-w-[200px]">
+                          <span className="truncate block" title={p.itemName}>{p.itemName}</span>
+                        </td>
+                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px]">
+                          <span className="truncate block" title={p.specs || undefined}>{p.specs || '—'}</span>
+                        </td>
                         <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity.toLocaleString('en-IN')}</td>
                         <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.unit}</td>
                         <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {formatCurrency(p.totalSpend)}
                         </td>
-                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.department || 'General'}</td>
+                        <td className="p-2.5 text-[10px] max-w-[160px]">
+                          {p.category || p.minorCategory ? (
+                            <span
+                              className="font-semibold text-slate-800 dark:text-gray-200 truncate block"
+                              title={p.category || p.minorCategory}
+                            >
+                              {p.category || p.minorCategory}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60">
+                              {UI_STRINGS.vendorPoIngestion.poDump.categoryUnmapped}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2514,7 +2674,9 @@ export default function InitialSetupModal() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="font-black text-slate-900 dark:text-white text-xs">{v.companyName}</h4>
+                          <h4 className="font-black text-slate-900 dark:text-white text-xs truncate max-w-[200px]" title={v.companyName}>
+                            {v.companyName}
+                          </h4>
                           {v.vendorCode && (
                             <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300">
                               {v.vendorCode}
@@ -2627,7 +2789,7 @@ export default function InitialSetupModal() {
             </div>
 
             {/* Ingestion Totals Grid */}
-            <div className="grid grid-cols-4 gap-2.5 text-center text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center text-xs">
               <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700">
                 <span className="text-[10px] text-slate-400 block">Total Stored</span>
                 <span className="font-black text-slate-900 dark:text-white text-sm">{joinedVendors.length} Vendors</span>
@@ -2639,10 +2801,6 @@ export default function InitialSetupModal() {
               <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50">
                 <span className="text-[10px] text-amber-600 dark:text-amber-400 block">Self-Map Required</span>
                 <span className="font-black text-amber-700 dark:text-amber-300 text-sm">{unmappedVendors.length} Suppliers</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50">
-                <span className="text-[10px] text-purple-600 dark:text-purple-400 block">3-Day Reminders</span>
-                <span className="font-black text-purple-700 dark:text-purple-300 text-sm">Active (Day 3)</span>
               </div>
             </div>
 
@@ -2684,15 +2842,17 @@ export default function InitialSetupModal() {
               >
                 Back to Category Join
               </button>
-              <button
-                type="button"
-                onClick={handleConfirmFinalIngestion}
-                disabled={isConfirmingIngestion}
-                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
-              >
-                <CheckCircle2 size={16} />{' '}
-                {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleConfirmFinalIngestion}
+                  disabled={isConfirmingIngestion}
+                  className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
+                >
+                  <CheckCircle2 size={16} />{' '}
+                  {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
+                </button>
+              </div>
             </div>
           </div>
         )}

@@ -1,16 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { MultiChannelChaserModal, VendorSurveyModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
+import { VendorSurveyModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import {
   MessageSquare,
   Smartphone,
   Mail,
-  Share2,
   AlertTriangle,
-  FileCheck,
   ChevronRight,
   Sliders,
   TrendingUp,
@@ -47,13 +45,10 @@ export default function KanbanBoard({
 }: KanbanBoardProps) {
   const {
     rfqs,
-    triggerChannelChaser,
     triggerBatchChannelChaser,
-    addAuditLog,
     showToast,
     setSelectedRFQForMatrix,
     updateRFQ,
-    openRFQDeepDive,
     deepDiveModalOpen,
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
@@ -62,19 +57,7 @@ export default function KanbanBoard({
   // The RFQ the category manager is reviewing. Reuses the existing edit dialog
   // rather than introducing a second category-management surface.
   const [rfqUnderReview, setRfqUnderReview] = useState<RFQItem | null>(null);
-  const [chaserModalOpen, setChaserModalOpen] = useState(false);
   const [surveyModalOpen, setSurveyModalOpen] = useState(false);
-  const [selectedRfqForChaser, setSelectedRfqForChaser] = useState<string>('');
-  const [targetVendor, setTargetVendor] = useState<string>('Vendor Pool');
-  const [chaserInitialChannel, setChaserInitialChannel] = useState<'call' | 'whatsapp' | 'sms'>('whatsapp');
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTick((t) => t + 1);
-    }, 10000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Group into 3 specification Kanban columns, driven by the real, live RFQ
   // pipeline — no static demo cards. A column stays empty (with its own
@@ -100,50 +83,29 @@ export default function KanbanBoard({
     return Math.round((total / entities.length) * 10) / 10;
   };
 
-  const handleOpenChaser = (rfq: RFQItem, channel: 'call' | 'whatsapp' | 'sms' | 'email') => {
-    const primaryVendorName = rfq.followUpData?.vendors?.[0]?.vendorName || 'Vendor Pool';
-    setSelectedRfqForChaser(rfq.rfqNumber);
-    setTargetVendor(primaryVendorName);
-    setChaserInitialChannel(channel === 'email' ? 'whatsapp' : channel);
-    if (channel === 'email') {
-      triggerChannelChaser(rfq.rfqNumber, 'email', primaryVendorName);
-    } else {
-      setChaserModalOpen(true);
-    }
-  };
-
-  const handleEscalateToBuyer = (rfqNumber: string) => {
-    addAuditLog(`Category Manager escalated ${rfqNumber} to Enterprise Buyer review queue`, rfqNumber);
-    showToast('Escalated to Buyer', `${rfqNumber} flagged for buyer intervention with priority notice.`, 'warning');
-  };
-
-  const handleApproveReport = (rfq: RFQItem) => {
-    addAuditLog(`Approved Mode 3 AI Capability & Pricing Evaluation Report for ${rfq.rfqNumber}`, rfq.rfqNumber);
-    showToast('AI Report Approved', `Autonomous scoring and vendor selection report validated for ${rfq.rfqNumber}.`, 'success');
-  };
-
-  const handleShareReport = (rfq: RFQItem) => {
-    addAuditLog(`Shared AI Evaluation Report with client@procucev.com for ${rfq.rfqNumber}`, rfq.rfqNumber);
-    showToast('Report Shared with Client', `Executive summary dispatched to client@procucev.com.`, 'info');
-  };
-
   const handleViewMatrix = (rfq: RFQItem) => {
     setSelectedRFQForMatrix(rfq);
     if (onNavigateToMatrix) onNavigateToMatrix(rfq);
   };
 
-  const handleBatchFollowUp = () => {
+  const handleBatchFollowUp = async () => {
     if (col2_pending.length === 0) {
-      showToast('No RFQs Awaiting Quotes', 'There are no RFQs in Quotes Pending to batch-chase.', 'info');
+      showToast(KANBAN.noPendingBatchTitle, KANBAN.noPendingBatchMessage, 'info');
       return;
     }
-    col2_pending.forEach((rfq) => triggerBatchChannelChaser(rfq.rfqNumber, ['call', 'whatsapp', 'sms'], true));
-    addAuditLog(
-      `Executed Global Override: Multi-Channel Batch Follow-up (Call + WhatsApp + SMS) to ${col2_pending.length} pending RFQ(s)`
+    // Each RFQ counts only when the server reports that a provider accepted a message for it.
+    const outcomes = await Promise.all(
+      col2_pending.map((rfq) => triggerBatchChannelChaser(rfq.rfqNumber, ['call', 'whatsapp', 'sms'], true))
     );
+    const acceptedCount = outcomes.filter(Boolean).length;
+    if (acceptedCount === 0) {
+      // 'warning' is the failure variant of the store's toast. The store does not accept 'error'.
+      showToast(KANBAN.batchNotSentTitle, KANBAN.batchNotSentMessage, 'warning');
+      return;
+    }
     showToast(
-      'Multi-Channel Batch Broadcast Active!',
-      `AI chasing dispatched across Call, WhatsApp, and SMS for ${col2_pending.length} pending RFQ(s).`,
+      KANBAN.batchSentTitle,
+      formatString(KANBAN.batchSentMessage, { accepted: acceptedCount, total: col2_pending.length }),
       'success'
     );
   };
@@ -154,16 +116,19 @@ export default function KanbanBoard({
   const totalRFQs = rfqs.length;
   const activeChasing = rfqs.filter((r) => r.chasingActive).length;
   const quotesReceived = rfqs.reduce((sum, r) => sum + (r.quotesCount || 0), 0);
-  const avgQuotesPerRFQ = totalRFQs === 0 ? 0 : Math.round((quotesReceived / totalRFQs) * 10) / 10;
+  // No RFQs means no average. The card shows a dash rather than a zero.
+  const avgQuotesPerRFQ = totalRFQs === 0 ? null : Math.round((quotesReceived / totalRFQs) * 10) / 10;
   const awaitingQuotes = rfqs.filter((r) => (r.quotesCount || 0) === 0).length;
-  const chaserVendorsInvited = rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
-  const chaserVendorsResponded = rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
-  const responseRate = chaserVendorsInvited > 0 ? Math.round((chaserVendorsResponded / chaserVendorsInvited) * 100) : null;
-  // The real count of vendors a category manager has actually invited onto
-  // each RFQ (assignedVendors) — not the simulated AI chaser's outreach
-  // count above, which is a different, deliberately-unaudited feature.
+  // Response rate from recorded data: quotes received on RFQs that have invited vendors, over the
+  // vendors invited onto those RFQs (assignedVendors). With no invited vendors the rate is null and shows a dash.
   const rfqsWithInvites = rfqs.filter((r) => (r.assignedVendors?.length || 0) > 0).length;
   const totalVendorsInvited = rfqs.reduce((sum, r) => sum + (r.assignedVendors?.length || 0), 0);
+  const quotesOnInvitedRfqs = rfqs.reduce(
+    (sum, r) => sum + ((r.assignedVendors?.length || 0) > 0 ? (r.quotesCount || 0) : 0),
+    0
+  );
+  const responseRate =
+    totalVendorsInvited > 0 ? Math.min(100, Math.round((quotesOnInvitedRfqs / totalVendorsInvited) * 100)) : null;
 
   const [summaryFilterModal, setSummaryFilterModal] = useState<'pipeline' | 'quotes' | 'awaiting' | null>(null);
 
@@ -180,7 +145,7 @@ export default function KanbanBoard({
       key: 'quotes',
       label: 'Quotes Received',
       value: `${quotesReceived} Total`,
-      hint: `Avg ${avgQuotesPerRFQ} / RFQ`,
+      hint: avgQuotesPerRFQ === null ? UI_STRINGS.dataLoad.emptyCell : formatString(KANBAN.avgQuotesHint, { average: avgQuotesPerRFQ }),
       tone: 'text-sky-600 dark:text-cyan-400 bg-sky-50 dark:bg-cyan-950/60 border-sky-200 dark:border-sky-800',
       onClick: () => setSummaryFilterModal('quotes'),
     },
@@ -188,7 +153,7 @@ export default function KanbanBoard({
       key: 'response',
       label: 'Vendor Response Rate',
       value: responseRate === null ? '—' : `${responseRate}%`,
-      hint: responseRate === null ? 'No follow-ups sent yet' : '<24h Response',
+      hint: responseRate === null ? 'No vendors invited yet' : `${quotesOnInvitedRfqs} of ${totalVendorsInvited} invited vendors quoted`,
       tone: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800',
       onClick: onNavigateToVendorConsole,
     },
@@ -252,15 +217,6 @@ export default function KanbanBoard({
             className="btn btn-secondary btn-sm border-purple-300 dark:border-purple-500/40 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 font-semibold"
           >
             <Sliders size={13} /> Conduct Mode 3 Vendor Survey
-          </button>
-          <button
-            onClick={() => {
-              addAuditLog('Category Manager manually adjusted AI Quality Match Threshold to 80%');
-              showToast('AI Threshold Updated', 'AI Quality Score threshold lowered from 85% to 80%.', 'info');
-            }}
-            className="btn btn-secondary btn-sm font-semibold"
-          >
-            ⚙️ Override AI Score
           </button>
           <button
             onClick={handleBatchFollowUp}
@@ -410,7 +366,7 @@ export default function KanbanBoard({
                 Quotes Pending / AI Follow-up ({col2_pending.length})
               </h2>
             </div>
-            <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-mono font-bold">Multi-Channel Active</span>
+            <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-mono font-bold">{col2_pending.filter((r) => r.chasingActive).length} chasing</span>
           </div>
 
           <div className="space-y-3 flex-1">
@@ -455,21 +411,13 @@ export default function KanbanBoard({
                     followUp?.emailStats?.total || 0,
                     Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
                   );
-                  const isDispatched = rfq.status !== 'Parsing' && totalVendors > 0;
-
-                  // Scheduled delivery rules: SMS (5m), WhatsApp (12h), Email (24h)
-                  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : Date.now();
-                  const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
-                  const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
-                  const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
-                  const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
-
                   const waTotal = Math.max(followUp?.whatsappStats?.total || 0, totalVendors);
                   const rawWaDelivered = Math.max(
                     followUp?.whatsappStats?.delivered || 0,
                     Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v.whatsapp?.status === 'delivered' || v.whatsapp?.status === 'read').length : 0
                   );
-                  const waDelivered = waDue ? (rawWaDelivered > 0 ? rawWaDelivered : waTotal) : 0;
+                  // Recorded deliveries only. No follow-up record means the count is unknown, not zero or the total.
+                  const waDelivered = followUp ? rawWaDelivered : null;
                   
                   const smsTotal = Math.max(followUp?.smsStats?.total || 0, totalVendors);
                   const vendorSmsCount = Array.isArray(followUp?.vendors)
@@ -479,31 +427,31 @@ export default function KanbanBoard({
                     followUp?.smsStats?.delivered || 0,
                     vendorSmsCount
                   );
-                  const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
+                  const smsDelivered = followUp ? rawSmsDelivered : null;
 
                   const emailTotal = Math.max(followUp?.emailStats?.total || 0, totalVendors);
                   const vendorEmailCount = Array.isArray(followUp?.vendors)
-                    ? followUp.vendors.filter((v) => v.email24h?.is24hReminderSent || v.email24h?.status === 'reminded_24h' || (v as any).emailSent || (v as any).email?.status === 'delivered').length
+                    ? followUp.vendors.filter((v) => v.email24h?.is24hReminderSent || v.email24h?.status === 'reminded_24h' || v.emailSent || v.email?.status === 'delivered').length
                     : 0;
                   const rawEmailDelivered = Math.max(
                     followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
                     vendorEmailCount
                   );
-                  const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
+                  const emailDelivered = followUp ? rawEmailDelivered : null;
 
                   return (
                     <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">
                       <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300 font-semibold">
                         <span className="flex items-center gap-1.5"><MessageSquare size={11} /> WhatsApp Bot:</span>
-                        <span className="mono">{waDelivered}/{waTotal} Delivered</span>
+                        <span className="mono">{waDelivered ?? UI_STRINGS.dataLoad.emptyCell}/{waTotal} Delivered</span>
                       </div>
                       <div className="flex justify-between items-center text-sky-700 dark:text-cyan-300 font-semibold">
                         <span className="flex items-center gap-1.5"><Smartphone size={11} /> SMS Direct:</span>
-                        <span className="mono">{smsDelivered}/{smsTotal} Delivered</span>
+                        <span className="mono">{smsDelivered ?? UI_STRINGS.dataLoad.emptyCell}/{smsTotal} Delivered</span>
                       </div>
                       <div className="flex justify-between items-center text-amber-700 dark:text-amber-300 font-semibold">
                         <span className="flex items-center gap-1.5"><Mail size={11} /> Email Direct:</span>
-                        <span className="mono">{emailDelivered}/{emailTotal} Delivered</span>
+                        <span className="mono">{emailDelivered ?? UI_STRINGS.dataLoad.emptyCell}/{emailTotal} Delivered</span>
                       </div>
                     </div>
                   );
@@ -567,21 +515,6 @@ export default function KanbanBoard({
                     {rfq.quotesCount} quote{rfq.quotesCount === 1 ? '' : 's'} evaluated
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <button
-                      onClick={() => handleApproveReport(rfq)}
-                      className="btn btn-secondary btn-sm text-[11px] font-semibold"
-                    >
-                      <FileCheck size={12} /> Approve Report
-                    </button>
-                    <button
-                      onClick={() => handleShareReport(rfq)}
-                      className="btn btn-primary btn-sm text-[11px] font-semibold"
-                    >
-                      <Share2 size={12} /> Share Report
-                    </button>
-                  </div>
-
                   {hasQuotes && (
                     <button
                       onClick={() => handleViewMatrix(rfq)}
@@ -598,7 +531,6 @@ export default function KanbanBoard({
         </div>
       </div>
 
-      {/* Multi-Channel Chaser Modal */}
       {/* Category review for an ingested RFQ. Same dialog the buyer uses, so the
           line items and their major/minor categories are edited in one place. It
           saves through PUT /api/rfqs/:id and does not change the RFQ's status, so
@@ -607,14 +539,6 @@ export default function KanbanBoard({
         rfq={rfqUnderReview}
         onClose={() => setRfqUnderReview(null)}
         onSave={updateRFQ}
-      />
-
-      <MultiChannelChaserModal
-        isOpen={chaserModalOpen}
-        onClose={() => setChaserModalOpen(false)}
-        rfqNumber={selectedRfqForChaser}
-        vendorName={targetVendor}
-        initialChannel={chaserInitialChannel}
       />
 
       {/* Mode 3 Survey Modal */}
@@ -704,7 +628,7 @@ export default function KanbanBoard({
                             </td>
                             <td className="px-4 py-3">
                               <div className="font-semibold text-slate-800 dark:text-gray-200">{rfq.title}</div>
-                              <div className="text-[10px] text-slate-400">{rfq.category || 'General'} • {rfq.sourcingMode?.toUpperCase()}</div>
+                              <div className="text-[10px] text-slate-400">{rfq.category || UI_STRINGS.dataLoad.emptyCell} • {rfq.sourcingMode?.toUpperCase()}</div>
                             </td>
                             <td className="px-4 py-3 whitespace-nowrap text-slate-600 dark:text-gray-300">
                               {rfq.deliveryPincode ? `PIN: ${rfq.deliveryPincode}` : '—'}

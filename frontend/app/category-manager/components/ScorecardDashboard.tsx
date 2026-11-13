@@ -44,7 +44,7 @@ function formatCurrency(val: number | null | undefined): string {
 }
 
 function formatRate(rate: number | null | undefined): string {
-  if (rate === null || rate === undefined || isNaN(rate)) return 'N/A';
+  if (rate === null || rate === undefined || isNaN(rate)) return UI_STRINGS.dataLoad.emptyCell;
   return `${Math.round(rate)}%`;
 }
 
@@ -119,7 +119,7 @@ export function ScorecardDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchScorecardData({
+      const result = await fetchScorecardData({
         period,
         startDate: period === 'custom' ? customStartDate : undefined,
         endDate: period === 'custom' ? customEndDate : undefined,
@@ -128,17 +128,18 @@ export function ScorecardDashboard() {
         executiveId: viewMode === 'individual' && selectedExecutiveId !== 'all' ? selectedExecutiveId : undefined,
       });
 
-      if (data) {
-        setScorecardData(data);
-      } else {
-        setScorecardData(null);
-      }
+      // `data` is null when the scorecard could not be loaded. `error` says why.
+      setScorecardData(result.data);
+      setError(result.error ?? null);
     } catch {
-      setError(strings.noDataFound);
+      setScorecardData(null);
+      setError(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.scorecard })
+      );
     } finally {
       setLoading(false);
     }
-  }, [period, customStartDate, customEndDate, selectedProject, selectedPillar, viewMode, selectedExecutiveId, strings.noDataFound]);
+  }, [period, customStartDate, customEndDate, selectedProject, selectedPillar, viewMode, selectedExecutiveId]);
 
   useEffect(() => {
     loadData();

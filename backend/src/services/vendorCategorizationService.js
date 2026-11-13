@@ -511,7 +511,7 @@ async function classifyVendor({ session, organizationId, mapping, vendorProfile,
   return { status: lastStatus, error: lastError || VENDOR_INGESTION_MESSAGES.AI_INVALID_RESPONSE };
 }
 
-/** Write one attempt to ai_classification_logs, swallowing a logging failure. */
+/** Record one classification attempt (delegates to vendorIngestionQueries; table dropped in DB per migration 0029). */
 async function logClassification({
   session,
   organizationId,
@@ -527,24 +527,30 @@ async function logClassification({
 }) {
   try {
     await vendorIngestionQueries.insertAiClassificationLog({
-      sessionId: session.id,
-      organizationId,
-      vendorRecordId: mapping.vendorRecordId,
-      vendorCode: mapping.vendorCode,
-      model,
-      status,
+      sessionId: session?.id,
+      vendorRecordId: mapping?.vendorRecordId,
+      vendorCode: mapping?.vendorCode,
       attempt,
-      // Length only. The prompt embeds the buyer's category master and spend
-      // detail, and this table is read by support tooling.
       promptChars: prompt ? prompt.length : 0,
       poCount: vendorProfile ? vendorProfile.poCount : 0,
       durationMs,
+      status,
       error,
+      model,
       response,
+      organizationId,
     });
   } catch (err) {
-    // A classification must not fail because its audit row could not be written.
-    logger.error('Failed to write AI classification log', err, LOG_CATEGORY);
+    logger.error(
+      'Failed to record AI classification log',
+      {
+        error: err,
+        sessionId: session?.id,
+        mappingId: mapping?.id,
+        status,
+      },
+      LOG_CATEGORY
+    );
   }
 }
 

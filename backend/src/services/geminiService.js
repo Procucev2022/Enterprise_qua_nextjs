@@ -27,6 +27,8 @@ const {
   taxonomyPairForMinor,
   matchByKeyword,
   isGenericCategory,
+  defaultMinorForMajor,
+  isMinorUnderMajor,
 } = require('./rfqIngestionService');
 
 /** Machine-readable outcomes the route maps onto responses. */
@@ -79,6 +81,8 @@ Return a SINGLE JSON object with this shape and no surrounding prose or markdown
 {
   "documentTitle": "Optional string, short title for overall requirement if stated",
   "category": "String, MANDATORY: Choose the single best-fitting category copied exactly from the CATEGORY LIST. If not explicitly stated in the document, you MUST infer the single best-fitting category from the line items and descriptions. MUST NEVER be null.",
+  "majorCategory": "String, MANDATORY: Choose the single best-fitting major category copied exactly from the Major categories in the CATEGORY LIST. MUST NEVER be null.",
+  "minorCategory": "String, MANDATORY: Choose the single best-fitting minor category copied exactly from the Minor categories in the CATEGORY LIST that belongs to the majorCategory. MUST NEVER be null or empty.",
   "deliveryDate": "Optional string in YYYY-MM-DD for the BUYER's target or required delivery date (from Target Delivery Date, Required Delivery Date, or RFQ header). DO NOT use a vendor's quoted delivery date.",
   "deliveryLocation": "Optional destination string if stated",
   "deliveryCity": "Optional destination city if stated",
@@ -86,13 +90,13 @@ Return a SINGLE JSON object with this shape and no surrounding prose or markdown
   "deliveryPincode": "Optional postal code if stated",
   "estimatedBudget": 500000,
   "items": [
-    ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
+    ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice, "minorCategory"]
   ]
 }
 
 CRITICAL COMPACT ROW ARRAY SPECIFICATION (MANDATORY FOR SPEED & TOKEN CONSERVATION):
 - Each item in "items" MUST be formatted as a compact array of values instead of an object with repeated field names:
-  ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
+  ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice, "minorCategory"]
 - Field positions in each item array:
   1. itemDescription (String, REQUIRED): Product or material name including size, dimension, bore or model token.
   2. quantity (Number or null): Stated purchase quantity as a plain number. Never guess or default to 1. Return null if unstated.
@@ -100,7 +104,8 @@ CRITICAL COMPACT ROW ARRAY SPECIFICATION (MANDATORY FOR SPEED & TOKEN CONSERVATI
   4. specification (String or null): Technical specifications, material grade, standard, rating or details if stated.
   5. unitPrice (Number or null): Stated unit price as a plain number if stated.
   6. totalPrice (Number or null): Stated line total price as a plain number if stated.
-- Optional trailing elements if stated in document: [..., brand, category, targetDate, deliveryLocation].
+  7. minorCategory (String, MANDATORY): Choose the single best-fitting minor category for this line item copied exactly from the Minor categories in the CATEGORY LIST.
+- Optional trailing elements if stated in document: [..., brand, targetDate, deliveryLocation].
 - Trailing nulls at the end of the item array may be omitted to save tokens (e.g. ["Hex bolt M8x250", 25, "PCS"]).
 - This array format eliminates thousands of repetitive boilerplate tokens and dramatically accelerates extraction.
 
@@ -125,7 +130,8 @@ function maskApiKey(key) {
 /** Resolve API keys pool from GEMINI_CONFIG.API_KEYS, GEMINI_CONFIG.API_KEY, numbered env vars, and GEMINI_CONFIG.BACKUP_KEYS. */
 function resolveApiKeys() {
   const keys = [];
-  const isInvalidPlaceholder = (k) => typeof k === 'string' && (k.includes('mD3Zq8mD') || k === 'placeholder' || k.startsWith('AIzaSyC_2mDq'));
+  // Rejects only the template text an unfilled env value carries. No real key is named in code.
+  const isInvalidPlaceholder = (k) => typeof k === 'string' && k === 'placeholder';
   const addKey = (val) => {
     if (!val) return;
     if (Array.isArray(val)) {
@@ -341,8 +347,8 @@ function parseExtractionJson(text) {
  * Map the model's item shape onto the raw row shape rfqIngestionService expects.
  *
  * A row with no description cannot be quoted against and is dropped here. A null
- * quantity is passed through untouched so the ingestion layer applies the same
- * documented default the Java service used, rather than the model inventing one.
+ * quantity is passed through as null, so the ingestion layer reports it as missing
+ * and never fills in a quantity of 1.
  */
 function toRawLineItems(parsed) {
   const items = Array.isArray(parsed?.items)
@@ -353,15 +359,43 @@ function toRawLineItems(parsed) {
   return items
     .map((item) => {
       if (Array.isArray(item)) {
-        const [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, rawBrand, rawCat, rawDate, rawLoc] = item;
+        const [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, p6, p7, p8, p9] = item;
         const itemName = typeof rawDesc === 'string' ? rawDesc.trim() : (rawDesc !== null && rawDesc !== undefined ? String(rawDesc).trim() : '');
         if (!itemName) return null;
+
+        let rawBrand = '';
+        let rawCat = '';
+        let rawDate = '';
+        let rawLoc = '';
+
+        if (p6 !== undefined && p6 !== null) {
+          const str6 = String(p6).trim();
+          if (taxonomyPairForMinor(str6) || canonicalMajor(str6)) {
+            rawCat = str6;
+            if (p7) rawDate = String(p7).trim();
+            if (p8) rawLoc = String(p8).trim();
+          } else {
+            rawBrand = str6;
+            if (p7 !== undefined && p7 !== null) {
+              const str7 = String(p7).trim();
+              if (taxonomyPairForMinor(str7) || canonicalMajor(str7)) {
+                rawCat = str7;
+                if (p8) rawDate = String(p8).trim();
+                if (p9) rawLoc = String(p9).trim();
+              } else {
+                rawDate = str7;
+                if (p8) rawLoc = String(p8).trim();
+              }
+            }
+          }
+        }
+
         const row = {
           itemName,
           quantity: typeof rawQty === 'number' && Number.isFinite(rawQty) ? rawQty : parseValidQuantity(rawQty),
           unit: typeof rawUnit === 'string' ? rawUnit.trim() : '',
           technicalSpecs: typeof rawSpec === 'string' ? rawSpec.trim() : '',
-          category: typeof rawCat === 'string' ? rawCat.trim() : '',
+          category: rawCat,
           targetDate: typeof rawDate === 'string' && rawDate.trim() ? rawDate.trim() : docDate,
           unitPrice: normalizeAmount(rawUnitPrice),
           totalPrice: normalizeAmount(rawTotalPrice),
@@ -375,15 +409,22 @@ function toRawLineItems(parsed) {
       }
 
       const row = {
-        itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : '',
+        itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : (typeof item?.itemName === 'string' ? item.itemName.trim() : ''),
         quantity: item?.quantity,
         unit: typeof item?.unit === 'string' ? item.unit.trim() : '',
-        technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : '',
-        category: typeof item?.category === 'string' ? item.category.trim() : '',
+        technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : (typeof item?.technicalSpecs === 'string' ? item.technicalSpecs.trim() : ''),
+        category: typeof item?.category === 'string' ? item.category.trim() : (typeof item?.minorCategory === 'string' ? item.minorCategory.trim() : ''),
         targetDate: typeof item?.targetDate === 'string' ? item.targetDate.trim() : docDate,
         unitPrice: normalizeAmount(item?.unitPrice),
         totalPrice: normalizeAmount(item?.totalPrice),
       };
+
+      if (typeof item?.minorCategory === 'string' && item.minorCategory.trim()) {
+        row.minorCategory = item.minorCategory.trim();
+      }
+      if (typeof item?.majorCategory === 'string' && item.majorCategory.trim()) {
+        row.majorCategory = item.majorCategory.trim();
+      }
 
       if (item?.brand) row.brand = String(item.brand).trim();
       if (item?.deliveryCity || parsed?.deliveryCity) {
@@ -642,14 +683,17 @@ function extractSpreadsheetLineItems(text) {
       }
 
       const rawUnit = unitIdx !== undefined ? cells[unitIdx] : '';
-      const unit = rawUnit ? rawUnit.trim() : 'Nos';
+      // A row with no stated unit keeps the unit as missing (null). It is never filled with 'Nos'.
+      const unit = rawUnit ? rawUnit.trim() : null;
 
+      const rawCatVal = (catIdx !== undefined && cells[catIdx]) ? cells[catIdx].trim() : (sheet.sheetName || '');
       const row = {
         itemName: cleanItemName,
         quantity: validQty,
         unit,
         technicalSpecs: spec,
-        category: (catIdx !== undefined && cells[catIdx]) ? cells[catIdx].trim() : (sheet.sheetName || ''),
+        category: rawCatVal,
+        minorCategory: rawCatVal,
         targetDate: (dateIdx !== undefined && cells[dateIdx]) ? parseSpreadsheetDate(cells[dateIdx].trim()) : (sheetDeliveryDate || ''),
         unitPrice: unitPriceIdx !== undefined ? normalizeAmount(cells[unitPriceIdx]) : null,
         totalPrice: totalPriceIdx !== undefined ? normalizeAmount(cells[totalPriceIdx]) : null,
@@ -679,10 +723,13 @@ function categoryPromptBlock() {
   return `
 
 CATEGORY LIST
-Category generation is MANDATORY. You MUST choose and set "category" to the single best-fitting category copied exactly from the CATEGORY LIST.
-- If the document explicitly states a procurement category (for example "Category: Civil Works"), use it.
-- If the document does not explicitly state a category header, you MUST infer the best-fitting category from the line items, materials, equipment, or service descriptions in the document.
-- The "category" field MUST NEVER be null. Always choose the closest matching major category or minor category from this list. Never invent a category or use a name outside this list.
+Category extraction is MANDATORY. Both majorCategory and minorCategory MUST be determined from the CATEGORY LIST.
+- "minorCategory" extraction is MANDATORY and MUST NEVER be null or empty. Choose the single best-fitting minor category copied exactly from the Minor categories list below that best characterizes the procurement requirement or items.
+- "majorCategory" is MANDATORY and MUST NEVER be null or empty. Choose the corresponding major category copied exactly from the Major categories list below.
+- "category" MUST also be set (to the chosen minorCategory or majorCategory).
+- If the document explicitly states a procurement category (for example "Category: Civil Works" or "Pumps"), map it to the corresponding major and minor categories from this list.
+- If the document does not explicitly state a category, you MUST infer both majorCategory and minorCategory from the line items, materials, equipment, or service descriptions.
+- Never invent a category or use any name outside this list.
 Major categories: ${majors.join(' | ')}
 Minor categories: ${minors.join(' | ')}`;
 }
@@ -696,7 +743,7 @@ function inferCategoryFromLineItems(lineItems = []) {
   const majorCounts = {};
 
   for (const item of lineItems) {
-    const rawCat = (item.category || '').trim();
+    const rawCat = (item.minorCategory || item.category || '').trim();
     if (rawCat && !isGenericCategory(rawCat)) {
       const pair = taxonomyPairForMinor(rawCat);
       const major = canonicalMajor(rawCat) || (pair ? pair.major : null);
@@ -715,6 +762,42 @@ function inferCategoryFromLineItems(lineItems = []) {
     return sorted[0][0];
   }
   return 'Others – New Product';
+}
+
+/**
+ * Infer the best-fitting minor category from line items when the model returned null or unclassified.
+ * Minor category extraction is mandatory in AI extraction flows and should never be null.
+ */
+function inferMinorCategoryFromLineItems(lineItems = [], resolvedMajor = null) {
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    return resolvedMajor ? defaultMinorForMajor(resolvedMajor) : defaultMinorForMajor('Others – New Product');
+  }
+  const minorCounts = {};
+
+  for (const item of lineItems) {
+    const rawMinor = (item.minorCategory || item.category || '').trim();
+    if (rawMinor && !isGenericCategory(rawMinor)) {
+      const pair = taxonomyPairForMinor(rawMinor);
+      if (pair && pair.minor) {
+        if (!resolvedMajor || isMinorUnderMajor(resolvedMajor, pair.minor)) {
+          minorCounts[pair.minor] = (minorCounts[pair.minor] || 0) + 3;
+        }
+      }
+    }
+    const match = matchByKeyword(`${item.itemName || ''} ${item.technicalSpecs || ''}`);
+    if (match && match.minor) {
+      if (!resolvedMajor || isMinorUnderMajor(resolvedMajor, match.minor)) {
+        minorCounts[match.minor] = (minorCounts[match.minor] || 0) + 2;
+      }
+    }
+  }
+
+  const sorted = Object.entries(minorCounts).sort((a, b) => b[1] - a[1]);
+  if (sorted.length > 0 && sorted[0][0]) {
+    return sorted[0][0];
+  }
+
+  return resolvedMajor ? defaultMinorForMajor(resolvedMajor) : defaultMinorForMajor('Others – New Product');
 }
 
 /**
@@ -1476,6 +1559,8 @@ async function extractLineItems(input = {}) {
             deliveryState: item.deliveryState || tab.deliveryState || '',
             deliveryPincode: item.deliveryPincode || tab.deliveryPincode || '',
             category: item.category || tab.category || '',
+            minorCategory: item.minorCategory || tab.minorCategory || item.category || tab.category || '',
+            majorCategory: item.majorCategory || tab.majorCategory || '',
           };
         });
       }
@@ -1493,6 +1578,8 @@ async function extractLineItems(input = {}) {
           itemCount: lineItems.length,
           documentTitle: parsed.documentTitle || null,
           category: parsed.category || null,
+          majorCategory: parsed.majorCategory || null,
+          minorCategory: parsed.minorCategory || null,
           estimatedBudget: normalizeAmount(parsed.estimatedBudget),
         },
         'GEMINI'
@@ -1505,24 +1592,66 @@ async function extractLineItems(input = {}) {
       }
       activeModelIndex = modelIdx;
 
-      let category = typeof parsed.category === 'string' && parsed.category.trim() ? parsed.category.trim() : null;
-      if (category) {
-        const resolvedMajor = canonicalMajor(category) || taxonomyPairForMinor(category)?.major;
-        if (resolvedMajor) {
-          category = resolvedMajor;
+      let rawMajor = typeof parsed.majorCategory === 'string' && parsed.majorCategory.trim() ? parsed.majorCategory.trim() : null;
+      let rawMinor = typeof parsed.minorCategory === 'string' && parsed.minorCategory.trim() ? parsed.minorCategory.trim() : null;
+      let rawCat = typeof parsed.category === 'string' && parsed.category.trim() ? parsed.category.trim() : null;
+
+      if (rawCat) {
+        const pair = taxonomyPairForMinor(rawCat);
+        if (pair) {
+          if (!rawMinor) rawMinor = pair.minor;
+          if (!rawMajor) rawMajor = pair.major;
+        } else {
+          const canonical = canonicalMajor(rawCat);
+          if (canonical && !rawMajor) rawMajor = canonical;
         }
       }
 
-      if (!category && lineItems.length > 0) {
-        category = inferCategoryFromLineItems(lineItems);
+      if (rawMinor) {
+        const pair = taxonomyPairForMinor(rawMinor);
+        if (pair) {
+          rawMinor = pair.minor;
+          if (!rawMajor) rawMajor = pair.major;
+        }
       }
+
+      let resolvedMajor = rawMajor ? canonicalMajor(rawMajor) : null;
+      if (!resolvedMajor && lineItems.length > 0) {
+        resolvedMajor = inferCategoryFromLineItems(lineItems);
+      }
+      if (!resolvedMajor) {
+        resolvedMajor = 'Others – New Product';
+      }
+
+      let resolvedMinor = null;
+      if (rawMinor && isMinorUnderMajor(resolvedMajor, rawMinor)) {
+        resolvedMinor = rawMinor;
+      } else if (rawMinor && taxonomyPairForMinor(rawMinor)?.major === resolvedMajor) {
+        resolvedMinor = taxonomyPairForMinor(rawMinor).minor;
+      }
+
+      if (!resolvedMinor && lineItems.length > 0) {
+        resolvedMinor = inferMinorCategoryFromLineItems(lineItems, resolvedMajor);
+      }
+
+      if (!resolvedMinor) {
+        resolvedMinor = defaultMinorForMajor(resolvedMajor);
+      }
+
+      lineItems.forEach((it) => {
+        if (!it.minorCategory && it.category) {
+          it.minorCategory = it.category;
+        }
+      });
 
       return {
         status: EXTRACTION_STATUS.SUCCESS,
         lineItems,
         model,
         documentTitle: typeof parsed.documentTitle === 'string' ? parsed.documentTitle : null,
-        category,
+        category: resolvedMajor,
+        majorCategory: resolvedMajor,
+        minorCategory: resolvedMinor,
         deliveryDate: (typeof parsed.deliveryDate === 'string' && parsed.deliveryDate.trim())
           ? parseSpreadsheetDate(parsed.deliveryDate.trim())
           : (lineItems.find((it) => it && it.targetDate)?.targetDate || (tabularItems.length > 0 ? tabularItems.find((it) => it && it.targetDate)?.targetDate : null) || null),
@@ -1769,136 +1898,33 @@ function cleanEmailText(text = '') {
     .replace(/&#39;/gi, "'");
 }
 
-/**
- * Fallback heuristic/regex extraction when Gemini AI is not configured or fails.
- */
-function extractQuotationFallback(text = '', rfqContext = {}) {
-  const sanitized = cleanEmailText(text);
-  const clean = sanitized.replace(/\r?\n/g, ' ');
 
-  let unitPrice = 0;
-  let totalPrice = 0;
+/** Messages for quotation extraction results that carry no usable figures. */
+const QUOTATION_EXTRACTION_MESSAGES = Object.freeze({
+  NOT_CONFIGURED: 'Quotation extraction did not run: the AI extraction key is not configured.',
+  AI_FAILED: 'Quotation extraction failed: the AI service did not return a usable result.',
+});
 
-  const unitMatch = clean.match(
-    /(?:unit\s*price|price\s*per\s*unit|unit\s*rate|unit\s*cost|rate\s*per\s*unit|\brate\b)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)/i
-  );
-  const totalMatch = clean.match(
-    /(?:total\s*quoted\s*value|total\s*quoted\s*amount|total\s*order\s*value|total\s*value|total\s*cost|total\s*price|total\s*amount|grand\s*total|total\s*bid|total\s*quote|quoted\s*value)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)/i
-  ) || clean.match(/(?:\btotal\b)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)(?!\s*(?:units?|nos?|items?|pcs?|pieces?|quantity|qty))/i);
-  const generalPriceMatch =
-    clean.match(/(?:(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?))/i) ||
-    clean.match(/(?:price|quote|bid)[\s:=~–—\-\/]*([\d,]+(?:\.\d+)?)/i);
+/** Compliance states the extractor may return. Any other value is recorded as not stated. */
+const QUOTATION_COMPLIANCE_STATUSES = Object.freeze(['Fully Compliant', 'Minor Exception', 'Pending Review']);
 
-  const parseNum = (str) => (str ? Number(String(str).replace(/,/g, '')) : 0);
+/** A stated number, or null. A missing or non-numeric value is never replaced with a default. */
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
-  if (unitMatch) unitPrice = parseNum(unitMatch[1]);
-  if (totalMatch) totalPrice = parseNum(totalMatch[1]);
-  if (!unitPrice && !totalMatch && generalPriceMatch) unitPrice = parseNum(generalPriceMatch[1]);
-
-  const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
-  const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
-
-  if (unitPrice > 0 && !totalPrice) {
-    totalPrice = unitPrice * rfqQty;
-  } else if (totalPrice > 0 && !unitPrice) {
-    unitPrice = Math.round(totalPrice / rfqQty);
-  }
-
-  let leadTimeDays = 7;
-  const leadMatch = clean.match(/(?:lead\s*time|delivery\s*time|delivery\s*period|dispatch\s*in)[\s:=]*(\d+)\s*(days?|weeks?|months?)/i) ||
-    clean.match(/(\d+)\s*(?:working\s*)?(days?|weeks?)\s*(?:delivery|lead\s*time|dispatch)/i);
-  if (leadMatch) {
-    const val = Number(leadMatch[1]);
-    const unit = (leadMatch[2] || '').toLowerCase();
-    if (unit.startsWith('week')) leadTimeDays = val * 7;
-    else if (unit.startsWith('month')) leadTimeDays = val * 30;
-    else leadTimeDays = val;
-  }
-
-  let warrantyYears = 1;
-  const warMatch = clean.match(/(?:warranty|guarantee)[\s:=]*(\d+)\s*(years?|months?)/i) ||
-    clean.match(/(\d+)\s*(years?|months?)\s*(?:warranty|guarantee)/i);
-  if (warMatch) {
-    const val = Number(warMatch[1]);
-    const unit = (warMatch[2] || '').toLowerCase();
-    if (unit.startsWith('month')) warrantyYears = Math.max(1, Math.round(val / 12));
-    else warrantyYears = val;
-  }
-
-  let paymentTerms = 'Standard Terms';
-  const payMatch = sanitized.match(/(?:payment\s*terms?|payment)[\s:=]*([^\n\r,;\.]{2,40})/i);
-  if (payMatch) {
-    paymentTerms = payMatch[1].replace(/(?:taxes|gst|freight|remarks|delivery).*/i, '').trim();
-  }
-
-  let taxes = 0;
-  const taxMatch = clean.match(/(?:gst|tax(?:es)?)[\s:=@]*(\d+(?:\.\d+)?)\s*%/i);
-  if (taxMatch && totalPrice > 0) {
-    taxes = Math.round((totalPrice * Number(taxMatch[1])) / 100);
-  }
-
-  let deliveryCharges = 0;
-  const delMatch = clean.match(/(?:delivery\s*charges?|freight\s*charges?|freight|shipping(?:\s*charges?)?)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
-  if (delMatch) {
-    deliveryCharges = parseNum(delMatch[1]);
-  }
-
-  const lineItemQuotes = rfqItems.map((rfqItem, idx) => {
-    const itemName = rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`;
-    const qty = Number(rfqItem.quantity) || 1;
-    let itemUnitPrice = unitPrice;
-
-    // Search for item-specific price in the email text
-    const escaped = itemName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').split(/\s+/).slice(0, 2).join('\\s+');
-    const itemRegex = new RegExp(
-      `(?:${escaped})[^\\n\\r]*?(?:INR|Rs\\.?|₹)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*(?:per|/|unit|each|piece)?`,
-      'i'
-    );
-    let itemMatch = sanitized.match(itemRegex);
-    if (!itemMatch) {
-      const itemBlockRegex = new RegExp(
-        `(?:${escaped})[\\s\\S]{0,140}?(?:unit\\s*price|rate|price|quote)(?:\\s*\\([^)]*\\)|\\[[^\\]]*\\])?[\\s:=~–—\\-\\/₹RsINR\\.]*([\\d,]+(?:\\.\\d+)?)`,
-        'i'
-      );
-      itemMatch = sanitized.match(itemBlockRegex);
-    }
-    if (itemMatch) {
-      const parsed = parseNum(itemMatch[1]);
-      if (parsed > 0) itemUnitPrice = parsed;
-    }
-
-    return {
-      itemName,
-      quantity: qty,
-      unit: rfqItem.unit || 'Units',
-      unitPrice: itemUnitPrice || 0,
-      totalPrice: (itemUnitPrice || 0) * qty,
-      tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
-      deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || '',
-    };
-  });
-
-  const calculatedTotal = lineItemQuotes.reduce((acc, it) => acc + (it.totalPrice || 0), 0);
-  if (calculatedTotal > 0) {
-    totalPrice = calculatedTotal;
-  }
-
-  if (!unitPrice && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice > 0) {
-    unitPrice = lineItemQuotes[0].unitPrice;
-  }
-
+/** Result for a quotation extraction that did not run or did not succeed. Every figure is null. */
+function quotationExtractionFailure(status, error) {
   return {
-    unitPrice,
-    totalPrice: totalPrice || unitPrice,
-    leadTimeDays,
-    warrantyYears,
-    paymentTerms,
-    remarks: 'Extracted from vendor email quotation reply',
-    taxes,
-    deliveryCharges,
-    complianceStatus: 'Fully Compliant',
-    lineItemQuotes,
-    extractionMethod: 'heuristic_fallback',
+    success: false,
+    status,
+    error,
+    extractionMethod: null,
+    unitPrice: null,
+    totalPrice: null,
+    lineItemQuotes: [],
   };
 }
 
@@ -1910,27 +1936,28 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
  * @param {string} [input.subject] - Email subject
  * @param {string} [input.fromAddress] - Vendor email
  * @param {object} [rfqContext] - Target RFQ metadata for matching line items
- * @returns {Promise<object>} Extracted quotation payload
+ * @returns {Promise<object>} The extracted quotation with success:true. When extraction did not
+ *   run or did not succeed, success is false and every figure is null. No value is estimated.
  */
 async function extractQuotationFromEmail(input = {}, rfqContext = {}) {
   const text = input.bodyText || input.text || '';
   const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
 
   if (!isConfigured()) {
-    logger.info('Extracting quotation details via heuristic parser (API key not configured)', {}, 'GEMINI');
-    return extractQuotationFallback(text, rfqContext);
+    logger.warn('Quotation extraction not run: GEMINI_API_KEY is not set', {}, 'GEMINI');
+    return quotationExtractionFailure(EXTRACTION_STATUS.NOT_CONFIGURED, QUOTATION_EXTRACTION_MESSAGES.NOT_CONFIGURED);
   }
 
   const rfqSummary = {
-    rfqNumber: rfqContext.rfqNumber || 'RFQ',
+    rfqNumber: rfqContext.rfqNumber || null,
     title: rfqContext.title || '',
     category: rfqContext.category || '',
-    budget: rfqContext.budget || 0,
+    budget: normalizeAmount(rfqContext.budget),
     lineItems: rfqItems.map((item, idx) => ({
       index: idx + 1,
       itemName: item.itemName || item.description || '',
-      quantity: Number(item.quantity) || 1,
-      unit: item.unit || 'Units',
+      quantity: optionalNumber(item.quantity),
+      unit: item.unit || null,
       specification: item.technicalSpecs || item.specification || '',
     })),
   };
@@ -1954,10 +1981,10 @@ Extract and return ONLY a JSON object with this EXACT structure:
   "leadTimeDays": Number (delivery lead time in days, integer >= 0),
   "warrantyYears": Number (warranty period in years, integer >= 0),
   "paymentTerms": "String (e.g. Net 30, 100% advance, 30 days against invoice, or as stated)",
-  "complianceStatus": "String (one of: 'Fully Compliant', 'Minor Exception', 'Pending Review')",
+  "complianceStatus": "String (one of: 'Fully Compliant', 'Minor Exception', 'Pending Review', or null if not stated)",
   "remarks": "String (any vendor notes, exclusions, or commercial conditions stated in the email)",
-  "taxes": Number (total tax or GST amount if stated or calculated, else 0),
-  "deliveryCharges": Number (freight or delivery charges if stated, else 0),
+  "taxes": Number (total tax or GST amount if stated, else null),
+  "deliveryCharges": Number (freight or delivery charges if stated, else null),
   "deliveryDate": "String in YYYY-MM-DD if explicit delivery date is stated, else null",
   "quotationValidity": "String (quotation validity period e.g. '30 days', '15 days', or null)",
   "lineItemQuotes": [
@@ -1966,69 +1993,76 @@ Extract and return ONLY a JSON object with this EXACT structure:
       "quantity": Number (quoted quantity),
       "unitPrice": Number (unit rate quoted for this specific item),
       "totalPrice": Number (line total quoted for this specific item),
-      "tax": Number (tax amount for this line item, else 0),
+      "tax": Number (tax amount for this line item if stated, else null),
       "deliveryDate": "String in YYYY-MM-DD or null"
     }
   ]
 }
 
-If specific values are missing from the email, provide reasonable procurement defaults (e.g. leadTimeDays: 7, warrantyYears: 1, paymentTerms: "Standard Terms", complianceStatus: "Fully Compliant") based on the text.
+If a value is not stated in the email, return null for it. Never estimate a value or substitute a default.
 Do NOT include markdown fences, prose or explanation outside the JSON object.`;
 
   const result = await generateJson({ prompt, label: 'vendor-quote-extraction' });
 
   if (result.status === EXTRACTION_STATUS.SUCCESS && result.data && typeof result.data === 'object') {
     const data = result.data;
-    let unitPrice = normalizeAmount(data.unitPrice) || 0;
-    let totalPrice = normalizeAmount(data.totalPrice) || (unitPrice * (rfqItems.length || 1));
-
-    if (totalPrice > 0 && (!unitPrice || unitPrice === 0)) {
-      unitPrice = Math.round(totalPrice / (rfqItems.length || 1));
+    let unitPrice = normalizeAmount(data.unitPrice);
+    const statedTotal = normalizeAmount(data.totalPrice);
+    // A missing unit price is taken from the stated total only when the RFQ has items to divide by.
+    if (unitPrice === null && statedTotal !== null && rfqItems.length > 0) {
+      unitPrice = Math.round(statedTotal / rfqItems.length);
     }
 
-    const leadTimeDays = Number(data.leadTimeDays) || 7;
-    const warrantyYears = Number(data.warrantyYears) || 1;
-    const paymentTerms = String(data.paymentTerms || 'Standard Terms').trim();
-    const complianceStatus = ['Fully Compliant', 'Minor Exception', 'Pending Review'].includes(data.complianceStatus)
-      ? data.complianceStatus
-      : 'Fully Compliant';
+    const leadTimeDays = optionalNumber(data.leadTimeDays);
+    const warrantyYears = optionalNumber(data.warrantyYears);
+    const paymentTerms = String(data.paymentTerms || '').trim() || null;
+    const complianceStatus = QUOTATION_COMPLIANCE_STATUSES.includes(data.complianceStatus) ? data.complianceStatus : null;
     const remarks = String(data.remarks || '').trim();
-    const taxes = normalizeAmount(data.taxes) || 0;
-    const deliveryCharges = normalizeAmount(data.deliveryCharges) || 0;
+    const taxes = normalizeAmount(data.taxes);
+    const deliveryCharges = normalizeAmount(data.deliveryCharges);
 
-    let lineItemQuotes = Array.isArray(data.lineItemQuotes) && data.lineItemQuotes.length > 0
+    const lineItemQuotes = Array.isArray(data.lineItemQuotes) && data.lineItemQuotes.length > 0
       ? data.lineItemQuotes.map((lq, idx) => {
-          const lqUnit = normalizeAmount(lq.unitPrice) || unitPrice || 0;
-          const lqQty = Number(lq.quantity) || Number(rfqItems[idx]?.quantity) || 1;
-          const lqTotal = normalizeAmount(lq.totalPrice) || (lqUnit * lqQty);
+          const lqQuantity = optionalNumber(lq.quantity) ?? optionalNumber(rfqItems[idx]?.quantity);
+          const lqUnit = normalizeAmount(lq.unitPrice) ?? unitPrice;
+          const lqTotal = normalizeAmount(lq.totalPrice)
+            ?? (lqUnit !== null && lqQuantity !== null ? lqUnit * lqQuantity : null);
           return {
-            itemName: lq.itemName || rfqItems[idx]?.itemName || `Item ${idx + 1}`,
-            quantity: lqQty,
+            itemName: lq.itemName || rfqItems[idx]?.itemName || null,
+            quantity: lqQuantity,
             unitPrice: lqUnit,
             totalPrice: lqTotal,
-            tax: normalizeAmount(lq.tax) || 0,
+            tax: normalizeAmount(lq.tax),
             deliveryDate: lq.deliveryDate || null,
           };
         })
-      : rfqItems.map((rfqItem, idx) => ({
-          itemName: rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`,
-          quantity: Number(rfqItem.quantity) || 1,
-          unitPrice: unitPrice || 0,
-          totalPrice: (unitPrice || 0) * (Number(rfqItem.quantity) || 1),
-          tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
-          deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
-        }));
+      : rfqItems.map((rfqItem) => {
+          const quantity = optionalNumber(rfqItem.quantity);
+          return {
+            itemName: rfqItem.itemName || rfqItem.description || null,
+            quantity,
+            unitPrice,
+            totalPrice: unitPrice !== null && quantity !== null ? unitPrice * quantity : null,
+            tax: null,
+            deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
+          };
+        });
 
-    if (!unitPrice && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice > 0) {
+    if (unitPrice === null && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice !== null) {
       unitPrice = lineItemQuotes[0].unitPrice;
-      if (!totalPrice) {
-        totalPrice = lineItemQuotes.reduce((acc, it) => acc + (it.totalPrice || 0), 0);
-      }
     }
 
+    // The total is the stated total, or the sum of the line totals when every line has one.
+    const lineTotals = lineItemQuotes.map((item) => item.totalPrice);
+    const summedLineTotals = lineTotals.length > 0 && lineTotals.every((value) => value !== null)
+      ? lineTotals.reduce((acc, value) => acc + value, 0)
+      : null;
+    const totalPrice = statedTotal ?? summedLineTotals;
+
     return {
+      success: true,
       unitPrice,
-      totalPrice: totalPrice || unitPrice,
+      totalPrice,
       leadTimeDays,
       warrantyYears,
       paymentTerms,
@@ -2043,8 +2077,8 @@ Do NOT include markdown fences, prose or explanation outside the JSON object.`;
     };
   }
 
-  logger.warn('Gemini quotation extraction fell back to heuristic parser', { status: result.status, error: result.error }, 'GEMINI');
-  return extractQuotationFallback(text, rfqContext);
+  logger.warn('Gemini quotation extraction did not return a usable result', { status: result.status, error: result.error }, 'GEMINI');
+  return quotationExtractionFailure(result.status || EXTRACTION_STATUS.AI_FAILED, QUOTATION_EXTRACTION_MESSAGES.AI_FAILED);
 }
 
 module.exports = {
@@ -2074,7 +2108,6 @@ module.exports = {
   buildRequestBody,
   extractLineItems,
   extractQuotationFromEmail,
-  extractQuotationFallback,
   extractSpreadsheetLineItems,
   parseValidQuantity,
   matchHeaderField,
@@ -2086,6 +2119,7 @@ module.exports = {
   isLocationUnsupportedError,
   repairTruncatedJson,
   inferCategoryFromLineItems,
+  inferMinorCategoryFromLineItems,
   getBackoffMs,
   parseSpreadsheetDate,
 };

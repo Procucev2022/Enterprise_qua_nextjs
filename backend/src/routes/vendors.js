@@ -24,6 +24,7 @@ router.get('/:id', authenticate, requireRole('admin', 'category_manager', 'buyer
 router.put('/:id', authenticate, vendorController.updateVendor);
 router.delete('/:id', authenticate, vendorController.deleteVendor);
 router.post('/:id/rating-revision', authenticate, vendorController.reviseRating);
+router.post('/:id/request-evaluation', authenticate, vendorController.requestEvaluation);
 router.put('/:id/categories', authenticate, vendorController.updateCategories);
 router.put('/:id/subscription', authenticate, vendorController.updateSubscription);
 router.post('/:id/payment-link', authenticate, vendorController.createSubscriptionPaymentLink);

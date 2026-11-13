@@ -3,13 +3,22 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl } from '@/lib/rfqClient';
 import { logger } from '@/lib/logger';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
-import { hasUnlimitedAccess, VENDOR_PLAN_RFQ_QUOTA } from '@/lib/constants';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
+import {
+  getPaidVendorPlanPrice,
+  getPaidVendorPlanRfqQuota,
+  paidPlanDisplayName,
+  paidPlanQuotaCopy,
+  pricePlaceholderLabel,
+  type PaidVendorPlanId,
+} from './vendorPlanPricing';
+import { productMatchesOpportunity } from './catalogueMatching';
 import {
   Clock,
   AlertTriangle,
@@ -29,35 +38,69 @@ interface OpportunityFeedProps {
   onNavigateToSubscription?: () => void;
 }
 
+/** Authorization header for the vendor's own backend record. The vendor route rejects requests without a session token. */
+function vendorAuthHeaders(): Record<string, string> {
+  const token = authClient.getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** Distinct, non-empty values in sorted order. Used for filter options taken from real RFQ records. */
+function distinctSorted(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
+}
+
 export default function OpportunityFeed({
   onNavigateToBidForm,
   onNavigateToSubscription,
 }: OpportunityFeedProps) {
   const router = useRouter();
   const {
+    rfqs,
     vendorOpportunities,
     showToast,
     addAuditLog,
     vendorSubscription,
     updateVendorSubscription,
-    vendorRfqDownloadsUsed,
+    vendorFreeCreditsRemaining,
     vendorCatalogue,
     buyerVendors,
     currentUserSession,
     refreshFromDB,
     createVendorPaymentLink,
-    vendorFreeCreditsRemaining,
-    vendorUnlockedRfqIds,
     refreshVendorCredits,
   } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
-  const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
-    (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
-    vendorSubscription === 'unlimited';
+  // Unlimited access comes only from the backend subscription plan held in the store.
+  const isUnlimited = vendorSubscription === 'unlimited';
+
+  // The vendor's catalogue products that match an opportunity by keyword. A count is shown only
+  // for the products that match this opportunity, never for the whole catalogue.
+  const catalogueMatchesFor = (opp: VendorOpportunity) =>
+    (vendorCatalogue || []).filter((product) => productMatchesOpportunity(product, opp));
 
   const [showUpgradeModal, setShowUpgradeModal] = React.useState(false);
   const openUpgradeModal = () => setShowUpgradeModal(true);
   const closeUpgradeModal = () => setShowUpgradeModal(false);
+
+  // Plan prices come from the pricing API and are fetched when the upgrade dialog opens.
+  const [planPricing, setPlanPricing] = React.useState<SubscriptionPricingResponse | null>(null);
+  const [planPricingFailed, setPlanPricingFailed] = React.useState(false);
+  React.useEffect(() => {
+    if (!showUpgradeModal || planPricing || planPricingFailed) return;
+    let cancelled = false;
+    void fetchSubscriptionPricing().then((config) => {
+      if (cancelled) return;
+      if (config) setPlanPricing(config);
+      else setPlanPricingFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showUpgradeModal, planPricing, planPricingFailed]);
+  const connectPrice = getPaidVendorPlanPrice(planPricing, 'connect');
+  const selectPrice = getPaidVendorPlanPrice(planPricing, 'select');
+  const connectRfqQuota = getPaidVendorPlanRfqQuota(planPricing, 'connect');
+  const selectRfqQuota = getPaidVendorPlanRfqQuota(planPricing, 'select');
 
   // This vendor's own real registered category — used to flag a genuine
   // category match against an RFQ's real category (opp.majorCategory/
@@ -68,6 +111,8 @@ export default function OpportunityFeed({
   const [myMinorCategories, setMyMinorCategories] = React.useState<string[]>([]);
   const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = React.useState<string>('');
   const [myBuyerId, setMyBuyerId] = React.useState<string>('');
+  const [myVendorId, setMyVendorId] = React.useState<string>('');
+  const [myVendorName, setMyVendorName] = React.useState<string>('');
   const [myOnboardingSource, setMyOnboardingSource] = React.useState<'buyer' | 'self' | null>(null);
   React.useEffect(() => {
     let cancelled = false;
@@ -76,7 +121,9 @@ export default function OpportunityFeed({
     setMyOnboardingSource(null);
     setMyAddedByBuyerCompany('');
     setMyBuyerId('');
-    fetch(`/api/vendors/${encodeURIComponent(email)}`)
+    setMyVendorId('');
+    setMyVendorName('');
+    fetch(`/api/vendors/${encodeURIComponent(email)}`, { headers: vendorAuthHeaders() })
       .then((res) => {
         if (!res.ok) {
           logger.error(
@@ -94,6 +141,8 @@ export default function OpportunityFeed({
         setMyMinorCategories(Array.isArray(data.data.minorCategories) ? data.data.minorCategories : []);
         setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || '');
         setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || '');
+        setMyVendorId(data.data.id || '');
+        setMyVendorName(data.data.name || '');
         const isBuyerAdded = data.data.addedByBuyerCompany || data.data.buyerId || data.data.buyerAccountId;
         setMyOnboardingSource(
           isBuyerAdded ? 'buyer' : data.data.source === 'self_registration' ? 'self' : null
@@ -141,9 +190,58 @@ export default function OpportunityFeed({
     </option>
   );
 
-  // The RFQs this vendor has not quoted on yet, which is what the reminder banner
-  // is about. `pending_bid` is set by the store when an RFQ carries no quotes.
-  const pendingBidOpportunities = vendorOpportunities.filter((opp) => opp.status === 'pending_bid');
+  // The RFQ's own categories. An empty string means the buyer never classified it.
+  const getOpportunityCategories = (opp: VendorOpportunity) => ({
+    major: opp.majorCategory || '',
+    minor: opp.minorCategory || '',
+  });
+
+  // Filter options come from the categories the feed actually carries, not a fixed list.
+  const feedMajorCategories = distinctSorted(vendorOpportunities.map((opp) => opp.majorCategory || ''));
+  const feedMinorCategoriesFor = (major: string) =>
+    distinctSorted(
+      vendorOpportunities
+        .filter((opp) => (opp.majorCategory || '') === major)
+        .map((opp) => opp.minorCategory || '')
+    );
+
+  // Direct-vs-marketplace reflects the real relationship:
+  // Checks vendor's addedByBuyerCompany against the RFQ's buyerAccountName,
+  // buyer ID mapping, and explicit vendor assignment in assignedVendors.
+  const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
+  const isOwnBuyerRfq = React.useCallback((opp: VendorOpportunity) => {
+    const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
+    const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
+    const assignedList = opp.assignedVendors || rfqRecord?.assignedVendors;
+    if (assignedList && assignedList.length > 0) {
+      const isAssigned = assignedList.some((v) => {
+        const vEmail = (v.email || '').toLowerCase().trim();
+        if (vEmail && sessionEmail && vEmail === sessionEmail) return true;
+        const vId = String(v.id || '').trim();
+        if (vId && myVendorId && vId === myVendorId) return true;
+        const vName = (v.name || '').toLowerCase().trim();
+        return Boolean(vName && myVendorName && vName === myVendorName.toLowerCase().trim());
+      });
+      if (isAssigned) return true;
+    }
+
+    const bCompany = myAddedByBuyerCompany || myVendorRecord?.addedByBuyerCompany;
+    if (bCompany && opp.buyer === bCompany) return true;
+    const bId = myBuyerId || myVendorRecord?.buyerId || myVendorRecord?.buyerAccountId;
+    if (bId && opp.buyerAccountId === bId) return true;
+    return false;
+  }, [rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+
+  // The RFQs this vendor has not quoted on yet, prioritizing direct client invitations first
+  const pendingBidOpportunities = React.useMemo(() => {
+    return vendorOpportunities
+      .filter((opp) => opp.status === 'pending_bid')
+      .sort((a, b) => {
+        const aDirect = isOwnBuyerRfq(a) ? 1 : 0;
+        const bDirect = isOwnBuyerRfq(b) ? 1 : 0;
+        return bDirect - aDirect;
+      });
+  }, [vendorOpportunities, isOwnBuyerRfq]);
   const pendingBidCount = pendingBidOpportunities.length;
   const pendingBidOpportunity = pendingBidOpportunities[0];
 
@@ -164,36 +262,6 @@ export default function OpportunityFeed({
   const handleMinorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedMinorCategoryNet(e.target.value);
   const handleSearchNet = (e: React.ChangeEvent<HTMLInputElement>) => setRfqSearchTermNet(e.target.value);
 
-  // Helper to map RFQs to Major and Minor Sourcing categories dynamically
-  const getOpportunityCategories = (opp: VendorOpportunity) => {
-    const title = opp.title.toLowerCase();
-    if (title.includes('pump') || title.includes('valve')) {
-      return { major: 'Mechanical & Fluid Equipment', minor: 'Pumps & Valves' };
-    }
-    if (title.includes('hvac') || title.includes('control')) {
-      return { major: 'Building & Infrastructure', minor: 'Building Automation & HVAC' };
-    }
-    return { major: 'Mechanical & Fluid Equipment', minor: 'Structural Steel & Beams' };
-  };
-
-  // Was a hardcoded list of 4 specific RFQ numbers standing in for "this
-  // vendor's own buyer roster" — direct-vs-marketplace now reflects the real
-  // relationship: this vendor's real addedByBuyerCompany against the RFQ's
-  // real buyerAccountName (the same real fields the backend's own quota
-  // enforcement in GET /api/rfqs/:id/email-preview checks).
-  const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
-  const isOwnBuyerRfq = (opp: VendorOpportunity) => {
-    if (!opp) return false;
-    if (myAddedByBuyerCompany && opp.buyer === myAddedByBuyerCompany) return true;
-    if (myBuyerId && opp.buyerAccountId === myBuyerId) return true;
-    if (myVendorRecord) {
-      if (myVendorRecord.addedByBuyerCompany && opp.buyer === myVendorRecord.addedByBuyerCompany) return true;
-      if (myVendorRecord.buyerId && opp.buyerAccountId === myVendorRecord.buyerId) return true;
-      if (myVendorRecord.buyerAccountId && opp.buyerAccountId === myVendorRecord.buyerAccountId) return true;
-    }
-    return false;
-  };
-
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     const isDirect = isOwnBuyerRfq(opp);
 
@@ -205,15 +273,12 @@ export default function OpportunityFeed({
       return;
     }
 
-    if (vendorSubscription === 'connect' && vendorRfqDownloadsUsed >= VENDOR_PLAN_RFQ_QUOTA.connect && !isDirect) {
+    // The remaining balance comes from the backend credits. It is null until the credits load,
+    // and the server still enforces the quota on download, so null does not block the click here.
+    const paidQuotaExhausted = (vendorSubscription === 'connect' || vendorSubscription === 'select') && vendorFreeCreditsRemaining === 0;
+    if (paidQuotaExhausted && !isDirect) {
       setShowUpgradeModal(true);
-      showToast('Quarterly Quota Reached', '50 RFQ download limit reached.', 'warning');
-      return;
-    }
-
-    if (vendorSubscription === 'select' && vendorRfqDownloadsUsed >= VENDOR_PLAN_RFQ_QUOTA.select && !isDirect) {
-      setShowUpgradeModal(true);
-      showToast('Quarterly Quota Reached', '100 RFQ download limit reached.', 'warning');
+      showToast(UI_STRINGS.vendorWorkspace.downloadQuotaReachedTitle, UI_STRINGS.vendorWorkspace.downloadQuotaReachedMessage, 'warning');
       return;
     }
 
@@ -236,7 +301,11 @@ export default function OpportunityFeed({
       const data = await res.json();
       if (!res.ok || !data.success) {
         if (data.exhausted || res.status === 403) {
-          showToast('Free Credits Exhausted', data.error || 'You have used all 5 free RFQ download credits. Please upgrade your subscription to download this RFQ.', 'warning');
+          showToast(
+            'Free Credits Exhausted',
+            data.error || UI_STRINGS.vendorSubscriptionModal.subscriptionRequiredToastDesc,
+            'warning'
+          );
           return;
         }
         throw new Error(data.error || 'Could not generate the RFQ specification.');
@@ -280,9 +349,13 @@ export default function OpportunityFeed({
         await refreshFromDB();
       }
       showToast('RFQ Downloaded', `Downloaded RFQ specification for ${opp.rfqNumber}.`, 'success');
-      addAuditLog(`${vendorLabel} downloaded RFQ specifications for ${opp.rfqNumber}`, opp.rfqNumber, currentUserSession?.email);
-    } catch (err: any) {
-      showToast('Download Failed', err?.message || 'Could not download the RFQ specification.', 'warning');
+      addAuditLog(`${vendorLabel} downloaded RFQ specifications for ${opp.rfqNumber}`, opp.rfqNumber);
+    } catch (err: unknown) {
+      showToast(
+        'Download Failed',
+        err instanceof Error && err.message ? err.message : 'Could not download the RFQ specification.',
+        'warning'
+      );
     }
   };
 
@@ -331,7 +404,7 @@ export default function OpportunityFeed({
     }
 
     // Filter by Catalogue Product Matches if summary button clicked
-    if (filterCatalogueMatchesDirect && (vendorCatalogue || []).length === 0) {
+    if (filterCatalogueMatchesDirect && catalogueMatchesFor(opp).length === 0) {
       return false;
     }
 
@@ -368,7 +441,7 @@ export default function OpportunityFeed({
     }
 
     // Filter by Catalogue Product Matches if summary button clicked
-    if (filterCatalogueMatchesNet && (vendorCatalogue || []).length === 0) {
+    if (filterCatalogueMatchesNet && catalogueMatchesFor(opp).length === 0) {
       return false;
     }
 
@@ -376,10 +449,19 @@ export default function OpportunityFeed({
   });
 
   // Total summary counts of RFQs matching vendor's item catalogue
-  const directCatalogueMatchesCount = (vendorCatalogue || []).length > 0 ? eligibleDirectOpportunities.length : 0;
-  const netCatalogueMatchesCount = (vendorCatalogue || []).length > 0 ? eligibleNetworkOpportunities.length : 0;
+  const directCatalogueMatchesCount = eligibleDirectOpportunities.filter((opp) => catalogueMatchesFor(opp).length > 0).length;
+  const netCatalogueMatchesCount = eligibleNetworkOpportunities.filter((opp) => catalogueMatchesFor(opp).length > 0).length;
 
-  const directInvites = eligibleDirectOpportunities;
+  const directInvites = React.useMemo(() => {
+    return [...eligibleDirectOpportunities].sort((a, b) => {
+      const aDirect = isOwnBuyerRfq(a) ? 1 : 0;
+      const bDirect = isOwnBuyerRfq(b) ? 1 : 0;
+      if (bDirect !== aDirect) return bDirect - aDirect;
+      const aTime = new Date(a.deadline || 0).getTime();
+      const bTime = new Date(b.deadline || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [eligibleDirectOpportunities, isOwnBuyerRfq]);
   const networkOpps = eligibleNetworkOpportunities;
 
   const handleUpgradePlan = async (plan: 'premium' | 'connect' | 'select') => {
@@ -387,23 +469,41 @@ export default function OpportunityFeed({
     if (!saved) return;
     setShowUpgradeModal(false);
     showToast(`${plan.toUpperCase()} Plan Activated!`, `Updated vendor subscription to ${plan}.`, 'success');
-    addAuditLog(`${vendorLabel} upgraded to ${plan} plan`, undefined, currentUserSession?.email);
+    addAuditLog(`${vendorLabel} upgraded to ${plan} plan`);
   };
 
-  // Connect/Select advertise real $ prices, so — same as vendor-subscription.tsx
-  // — they go through the dummy payment gateway rather than flipping the plan
-  // for free on click. This modal previously bypassed that gate entirely.
-  const [pendingPayment, setPendingPayment] = React.useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
+  // Connect and Select are paid, so they open a Zoho payment link instead of
+  // switching the plan on click. The plan changes only after Zoho confirms payment.
+  const [pendingPayment, setPendingPayment] = React.useState<{
+    planId: 'connect' | 'select';
+    planName: string;
+    price: string;
+    billingDurationLabel?: string;
+    breakdown?: {
+      basePrice: string;
+      gstAmount: string;
+    };
+  } | null>(null);
 
   const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     const plan = e.currentTarget.getAttribute('data-plan') || 'premium';
     if (plan === 'premium') {
-      handleUpgradePlan(plan);
+      void handleUpgradePlan('premium');
       return;
     }
-    const planName = plan === 'connect' ? 'Connect Model (50 RFQs / 3 Months)' : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
-    const price = plan === 'connect' ? '₹2' : '₹5';
-    setPendingPayment({ planId: plan as 'connect' | 'select', planName, price });
+    const paidPlan: PaidVendorPlanId = plan === 'select' ? 'select' : 'connect';
+    const price = paidPlan === 'connect' ? connectPrice : selectPrice;
+    if (!price) {
+      showToast(UI_STRINGS.vendorWorkspace.pricingUnavailableTitle, UI_STRINGS.vendorWorkspace.pricingUnavailableMessage, 'warning');
+      return;
+    }
+    setPendingPayment({
+      planId: paidPlan,
+      planName: paidPlanDisplayName(paidPlan, paidPlan === 'connect' ? connectRfqQuota : selectRfqQuota),
+      price: price.totalWithGst,
+      billingDurationLabel: '12 Months (Recommended)',
+      breakdown: { basePrice: price.basePrice, gstAmount: price.gstAmount },
+    });
   };
 
   return (
@@ -432,15 +532,25 @@ export default function OpportunityFeed({
           <div className="flex items-center gap-2.5">
             <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
             <div>
-              <span className="font-bold text-slate-900 dark:text-white">AUTOMATED SYSTEM REMINDER:</span>{' '}
-              <span>{pendingBidCount} quotation{pendingBidCount === 1 ? '' : 's'} awaiting your response, starting with <span className="mono font-bold text-slate-900 dark:text-white">{pendingBidOpportunity.rfqNumber}</span>.</span>
+              <span className="font-bold text-slate-900 dark:text-white">
+                {UI_STRINGS.vendorWorkspace.urgentReminderHeader}
+              </span>{' '}
+              <span>
+                {formatString(
+                  pendingBidCount === 1
+                    ? UI_STRINGS.vendorWorkspace.urgentReminderSingular
+                    : UI_STRINGS.vendorWorkspace.urgentReminderPlural,
+                  { count: pendingBidCount }
+                )}{' '}
+                <span className="mono font-bold text-slate-900 dark:text-white">{pendingBidOpportunity.rfqNumber}</span>.
+              </span>
             </div>
           </div>
           <button
             onClick={handleDirectReminderBid}
             className="btn btn-amber btn-sm font-bold shrink-0"
           >
-            Submit Quote Now
+            {UI_STRINGS.vendorWorkspace.submitQuoteNowAction}
           </button>
         </div>
       )}
@@ -515,8 +625,9 @@ export default function OpportunityFeed({
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                 >
                   <option value="all">🌐 All Major Categories</option>
-                  <option value="Mechanical & Fluid Equipment">⚙️ Mechanical & Fluid</option>
-                  <option value="Building & Infrastructure">🏢 Building & Infra</option>
+                  {feedMajorCategories.map((major) => (
+                    <option key={major} value={major}>{major}</option>
+                  ))}
                 </select>
               </div>
 
@@ -531,16 +642,12 @@ export default function OpportunityFeed({
                 >
                   {selectedMajorCategoryDirect === 'all' ? (
                     <option value="all">Select Major First</option>
-                  ) : selectedMajorCategoryDirect === 'Mechanical & Fluid Equipment' ? (
-                    <>
-                      <option value="all">All Mechanical & Fluid</option>
-                      <option value="Pumps & Valves">⚙️ Pumps & Valves</option>
-                      <option value="Structural Steel & Beams">🏗️ Structural Steel</option>
-                    </>
                   ) : (
                     <>
-                      <option value="all">All Building & Infra</option>
-                      <option value="Building Automation & HVAC">❄️ HVAC Control</option>
+                      <option value="all">All Minor Categories</option>
+                      {feedMinorCategoriesFor(selectedMajorCategoryDirect).map((minor) => (
+                        <option key={minor} value={minor}>{minor}</option>
+                      ))}
                     </>
                   )}
                 </select>
@@ -579,7 +686,7 @@ export default function OpportunityFeed({
                 const isLocked = !isUnlimited && !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = isRealCategoryMatch(opp);
-                const catalogueMatches = vendorCatalogue || [];
+                const catalogueMatches = catalogueMatchesFor(opp);
                 const hasCatalogueMatch = catalogueMatches.length > 0;
 
                 return (
@@ -641,9 +748,6 @@ export default function OpportunityFeed({
                         <span className="text-slate-400 dark:text-gray-500 block text-[10px]">Deadline</span>
                         <span className="font-bold text-amber-600 dark:text-amber-300 mono flex items-center gap-1">
                           <Clock size={11} /> {opp.deadline}
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[9px] text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.25 rounded font-mono mt-1 border border-emerald-200 dark:border-emerald-800">
-                          ⚡ 24h SLA Active
                         </span>
                       </div>
                       <div>
@@ -767,8 +871,9 @@ export default function OpportunityFeed({
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                 >
                   <option value="all">🌐 All Major Categories</option>
-                  <option value="Mechanical & Fluid Equipment">⚙️ Mechanical & Fluid</option>
-                  <option value="Building & Infrastructure">🏢 Building & Infra</option>
+                  {feedMajorCategories.map((major) => (
+                    <option key={major} value={major}>{major}</option>
+                  ))}
                 </select>
               </div>
 
@@ -783,16 +888,12 @@ export default function OpportunityFeed({
                 >
                   {selectedMajorCategoryNet === 'all' ? (
                     <option value="all">Select Major First</option>
-                  ) : selectedMajorCategoryNet === 'Mechanical & Fluid Equipment' ? (
-                    <>
-                      <option value="all">All Mechanical & Fluid</option>
-                      <option value="Pumps & Valves">⚙️ Pumps & Valves</option>
-                      <option value="Structural Steel & Beams">🏗️ Structural Steel</option>
-                    </>
                   ) : (
                     <>
-                      <option value="all">All Building & Infra</option>
-                      <option value="Building Automation & HVAC">❄️ HVAC Control</option>
+                      <option value="all">All Minor Categories</option>
+                      {feedMinorCategoriesFor(selectedMajorCategoryNet).map((minor) => (
+                        <option key={minor} value={minor}>{minor}</option>
+                      ))}
                     </>
                   )}
                 </select>
@@ -827,7 +928,7 @@ export default function OpportunityFeed({
                 const isLocked = !isUnlimited && !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = isRealCategoryMatch(opp);
-                const catalogueMatches = vendorCatalogue || [];
+                const catalogueMatches = catalogueMatchesFor(opp);
                 const hasCatalogueMatch = catalogueMatches.length > 0;
 
                 return (
@@ -884,7 +985,6 @@ export default function OpportunityFeed({
                     <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto font-bold text-slate-900 dark:text-white flex-wrap">
                       <div className="text-right text-[11px] text-slate-500 dark:text-gray-450 hidden sm:block">
                         <span>Deadline: {opp.deadline}</span>
-                        <span className="block text-[9px] text-emerald-600 dark:text-emerald-400 font-mono">⚡ 24h SLA Active</span>
                       </div>
 
                       <div className="flex gap-2 flex-wrap">
@@ -965,8 +1065,27 @@ export default function OpportunityFeed({
 
             {/* Current Context Alert */}
             <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-955/40 text-amber-800 dark:text-amber-300 border border-amber-250/20 leading-relaxed">
-              ⚠️ <strong>Roster Account Limit</strong>: Your vendor profile was uploaded by <strong>Larsen & Toubro Ltd. (L&T)</strong>. Bidding or downloading technical specs for other buyers is restricted.
+              ⚠️ <strong>Roster Account Limit</strong>:{' '}
+              {myAddedByBuyerCompany ? (
+                <>
+                  Your vendor profile was uploaded by <strong>{myAddedByBuyerCompany}</strong>.{' '}
+                </>
+              ) : null}
+              Bidding or downloading technical specs for other buyers is restricted.
             </div>
+
+            {planPricingFailed && (
+              <div role="alert" className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span>{UI_STRINGS.vendorWorkspace.pricesUnavailableNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setPlanPricingFailed(false)}
+                  className="btn btn-secondary btn-xs font-bold shrink-0"
+                >
+                  {UI_STRINGS.vendorWorkspace.pricesRetryAction}
+                </button>
+              </div>
+            )}
 
             {/* Plan Options */}
             <div className="space-y-3">
@@ -997,9 +1116,9 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Connect Model (₹2 / 3 mo)
+                    Connect Model ({connectPrice ? `${connectPrice.basePrice} + ${connectPrice.gstLabel} GST / yr` : pricePlaceholderLabel(planPricingFailed)})
                   </h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Download up to 50 RFQs in 3 months from Marketplace.</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">{paidPlanQuotaCopy('connect', connectRfqQuota)}</p>
                 </div>
                 {vendorSubscription === 'connect' ? (
                   <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded">Active</span>
@@ -1007,7 +1126,8 @@ export default function OpportunityFeed({
                   <button
                     data-plan="connect"
                     onClick={handleUpgradeClick}
-                    className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700"
+                    disabled={!connectPrice}
+                    className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Upgrade
                   </button>
@@ -1020,9 +1140,9 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Select Model (₹5 / 3 mo)
+                    Select Model ({selectPrice ? `${selectPrice.basePrice} + ${selectPrice.gstLabel} GST / yr` : pricePlaceholderLabel(planPricingFailed)})
                   </h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Item Catalogue (100 products) + 100 RFQs / 3 months.</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">{paidPlanQuotaCopy('select', selectRfqQuota)}</p>
                 </div>
                 {vendorSubscription === 'select' ? (
                   <span className="text-[10px] font-bold text-purple-600 bg-purple-100 dark:bg-purple-950 px-2 py-0.5 rounded">Active</span>
@@ -1030,7 +1150,8 @@ export default function OpportunityFeed({
                   <button
                     data-plan="select"
                     onClick={handleUpgradeClick}
-                    className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-purple-600 hover:bg-purple-700"
+                    disabled={!selectPrice}
+                    className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Upgrade
                   </button>
@@ -1056,6 +1177,8 @@ export default function OpportunityFeed({
         planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
+        billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+        breakdown={pendingPayment?.breakdown}
         createPaymentLink={createVendorPaymentLink}
       />
     </div>

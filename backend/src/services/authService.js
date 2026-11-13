@@ -9,6 +9,7 @@ const {
   PASSWORD_MIN_LENGTH,
   VENDOR_DIRECTORY_AUTH_CONFIG,
   VENDOR_FREE_CREDITS_LIMIT,
+  BUYER_FREE_TRIAL_RFQ_CREDITS,
 } = require('../config/constants');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const pool = require('../db/pool');
@@ -132,7 +133,7 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
  * Load an account from the `user` table in PostgreSQL.
  *
  * This is the single source of truth for authentication: there is no in-memory
- * user registry, no seeded demo credentials, and no second database. If the
+ * user registry, no seeded credentials, and no second database. If the
  * connection is unavailable, authentication fails closed with a descriptive error
  * rather than silently accepting anything.
  *
@@ -232,6 +233,7 @@ function generateSessionToken(user, options = {}) {
       role: user.role,
       orgId: user.orgId,
       orgName: user.orgName,
+      ...(user.mobile ? { mobile: user.mobile } : {}),
       passwordChangeRequired: user.resetPasswordRequired === true,
       onboardingRequired:
         user.onboardingRequired === true ||
@@ -258,7 +260,7 @@ function generateVendorDirectoryToken(user, sessionId, options = {}) {
   return generateSessionToken(user, {
     scope: 'vendor_directory',
     sessionId,
-    ttlSeconds: options.ttlSeconds || 300,
+    ttlSeconds: options.ttlSeconds || VENDOR_DIRECTORY_AUTH_CONFIG.INACTIVITY_TIMEOUT_SECONDS,
     ...options,
   });
 }
@@ -612,14 +614,32 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
 }
 
 const OTP_DELIVERY_STATUS = {
+  // Only a send that a provider accepted.
   SENT: 'sent',
-  // No provider configured (local dev) or the test environment: nothing was
-  // attempted, so nothing failed — the demo code in the response covers it.
-  NOT_ATTEMPTED: 'not_attempted',
-  // Still in flight when the wait ran out; it keeps going in the background.
+  // Still in flight when the wait ran out. It is not confirmed, so it is never
+  // reported as sent.
   PENDING: 'pending',
+  // Refused, throttled, not configured, skipped, or threw.
   FAILED: 'failed',
 };
+
+// Statuses from the send helpers that mean the message did not reach a provider.
+const UNDELIVERED_SEND_STATUSES = new Set(['throttled', 'not_configured', 'skipped', 'failed', 'link_only']);
+
+/**
+ * Map a send helper's result to a delivery status.
+ *
+ * Helpers report `success` (true only when a provider accepted the message) and a
+ * `status`. The mailer still returns `{ sent }` on its OTP path, so that is read
+ * when `success` is absent. A missing result, a throttled send, or a result with
+ * a non-delivered status is FAILED, never SENT.
+ */
+function toOtpDeliveryStatus(result) {
+  if (!result || typeof result !== 'object') return OTP_DELIVERY_STATUS.FAILED;
+  if (result.throttled === true || UNDELIVERED_SEND_STATUSES.has(result.status)) return OTP_DELIVERY_STATUS.FAILED;
+  const accepted = typeof result.success === 'boolean' ? result.success : result.sent === true;
+  return accepted ? OTP_DELIVERY_STATUS.SENT : OTP_DELIVERY_STATUS.FAILED;
+}
 
 // Long enough for the mailer to walk its whole provider chain, short enough
 // that the sign-in screen never hangs.
@@ -645,9 +665,17 @@ function settleWithin(promise, ms) {
 async function dispatchOtpCodes({ email, emailCode, mobile, mobileCode, isRegistration }) {
   const emailSend = mailerService
     .sendOtpEmail(email, emailCode, OTP_EXPIRY_MS / 1000, { isRegistration })
-    .then((result) => ({
-      status: result && result.sent ? OTP_DELIVERY_STATUS.SENT : OTP_DELIVERY_STATUS.NOT_ATTEMPTED,
-    }))
+    .then((result) => {
+      const status = toOtpDeliveryStatus(result);
+      if (status !== OTP_DELIVERY_STATUS.SENT) {
+        logger.warn(
+          'OTP email was not accepted by a mail provider',
+          { reason: (result && (result.reason || result.error || result.status)) || 'no result' },
+          'AUTH_SERVICE'
+        );
+      }
+      return { status };
+    })
     .catch((err) => {
       logger.error('OTP email dispatch error', err, 'AUTH_SERVICE');
       return { status: OTP_DELIVERY_STATUS.FAILED };
@@ -655,9 +683,11 @@ async function dispatchOtpCodes({ email, emailCode, mobile, mobileCode, isRegist
   const smsSend = smsService
     .sendOtpSms(mobile, mobileCode, OTP_EXPIRY_MS / 1000)
     .then((result) => {
-      if (result && result.success) return { status: OTP_DELIVERY_STATUS.SENT };
-      logger.error('OTP SMS dispatch failed', { error: result && result.error }, 'AUTH_SERVICE');
-      return { status: OTP_DELIVERY_STATUS.FAILED };
+      const status = toOtpDeliveryStatus(result);
+      if (status !== OTP_DELIVERY_STATUS.SENT) {
+        logger.error('OTP SMS dispatch failed', { error: result && result.error, status: result && result.status }, 'AUTH_SERVICE');
+      }
+      return { status };
     })
     .catch((err) => {
       logger.error('OTP SMS dispatch error', err, 'AUTH_SERVICE');
@@ -776,30 +806,47 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
     'AUTH_SERVICE'
   );
 
-  let message;
-  if (isRegistration) {
-    message = `Verification codes dispatched — Email OTP sent to ${normalizedEmail} and SMS OTP sent to +91 ${submittedMobile}`;
-  } else if (delivery.email === OTP_DELIVERY_STATUS.FAILED) {
-    message = `Verification OTP sent to your mobile +91 ${submittedMobile}. The email could not be delivered right now.`;
-  } else if (delivery.sms === OTP_DELIVERY_STATUS.FAILED) {
-    message = `Verification OTP sent to ${normalizedEmail}. The SMS could not be delivered right now.`;
-  } else {
-    message = `Verification OTP dispatched to ${normalizedEmail} and mobile`;
-  }
-
   return {
     success: true,
-    message,
+    message: buildOtpDispatchMessage({
+      isRegistration: Boolean(isRegistration),
+      email: normalizedEmail,
+      mobile: submittedMobile,
+      delivery,
+    }),
     delivery,
     email: normalizedEmail,
-    // Only echoed back in tests or when SMTP isn't configured, so local/dev/test
-    // runs without real email delivery can still complete the OTP flow; once
-    // SMTP is live, the real code is never exposed in the API response.
-    ...(process.env.NODE_ENV !== 'production' || !mailerService.isConfigured()
-      ? { demoCode: emailCode, demoEmailCode: emailCode, demoMobileCode: mobileCode }
-      : {}),
+    // The issued codes are never part of the response. They reach the visitor
+    // only through the email and SMS providers.
     expiresInSeconds: OTP_EXPIRY_MS / 1000,
   };
+}
+
+const CHANNEL_STATE_TEXT = {
+  [OTP_DELIVERY_STATUS.SENT]: 'was sent',
+  [OTP_DELIVERY_STATUS.PENDING]: 'is still being sent',
+  [OTP_DELIVERY_STATUS.FAILED]: 'could not be delivered',
+};
+
+/**
+ * The visitor-facing sentence for an OTP request. A channel is named as sent only
+ * when a provider accepted it, so a pending or failed channel never reads as sent.
+ */
+function buildOtpDispatchMessage({ isRegistration, email, mobile, delivery }) {
+  const mobileLabel = `+91 ${mobile}`;
+  if (delivery.email === OTP_DELIVERY_STATUS.SENT && delivery.sms === OTP_DELIVERY_STATUS.SENT) {
+    return isRegistration
+      ? `Verification codes dispatched — Email OTP sent to ${email} and SMS OTP sent to ${mobileLabel}`
+      : `Verification OTP dispatched to ${email} and mobile`;
+  }
+  if (!isRegistration && delivery.email === OTP_DELIVERY_STATUS.FAILED && delivery.sms === OTP_DELIVERY_STATUS.SENT) {
+    return `Verification OTP sent to your mobile ${mobileLabel}. The email could not be delivered right now.`;
+  }
+  if (!isRegistration && delivery.sms === OTP_DELIVERY_STATUS.FAILED && delivery.email === OTP_DELIVERY_STATUS.SENT) {
+    return `Verification OTP sent to ${email}. The SMS could not be delivered right now.`;
+  }
+  const subject = isRegistration ? 'Verification codes' : 'Verification OTP';
+  return `${subject} status: the email to ${email} ${CHANNEL_STATE_TEXT[delivery.email]}, and the SMS to ${mobileLabel} ${CHANNEL_STATE_TEXT[delivery.sms]}.`;
 }
 
 /**
@@ -926,22 +973,20 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
     throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
   }
 
-  let delivery = 'SENT';
+  let delivery = OTP_DELIVERY_STATUS.FAILED;
   try {
-    if (mailerService && typeof mailerService.sendOtpEmail === 'function') {
-      await mailerService.sendOtpEmail(normalizedEmail, code, VENDOR_DIRECTORY_AUTH_CONFIG.OTP_TTL_SECONDS, {
-        purpose: 'Vendor Directory Login',
-        role: 'category_manager',
-      });
-    }
+    const result = await mailerService.sendOtpEmail(normalizedEmail, code, VENDOR_DIRECTORY_AUTH_CONFIG.OTP_TTL_SECONDS, {
+      purpose: 'Vendor Directory Login',
+      role: 'category_manager',
+    });
+    delivery = toOtpDeliveryStatus(result);
   } catch (err) {
-    delivery = 'FAILED';
     logger.warn('Failed to deliver Vendor Directory OTP email', { error: err, hasRecipient: true }, 'AUTH_SERVICE');
   }
 
   storeService.addAuditLog({
     userEmail: normalizedEmail,
-    action: `Vendor Directory 6-digit OTP requested for Category Manager (${normalizedEmail})`,
+    action: `Vendor Directory 6-digit OTP requested for Category Manager (${normalizedEmail}) — email delivery: ${delivery}`,
     ipAddress,
   });
 
@@ -950,6 +995,12 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
     { ipAddress, delivery, hasRecipient: true },
     'AUTH_SERVICE'
   );
+
+  // The code only reaches the visitor through the email provider. When no
+  // provider accepted it, the request fails instead of claiming it was sent.
+  if (delivery !== OTP_DELIVERY_STATUS.SENT) {
+    throw new Error('We could not send the verification code to your Procucev email address right now. Please try again in a few minutes.');
+  }
 
   return {
     success: true,
@@ -1019,12 +1070,14 @@ async function verifyVendorDirectoryOtp(email, code, ipAddress, userAgent) {
   await authSessionQueries.deleteOtp(otpKey);
 
   if (!user) {
-    const localPart = normalizedEmail.split('@')[0] || 'Employee';
+    // Derived from the verified address only. With no usable local part, the
+    // address itself is shown rather than an invented name.
+    const localPart = normalizedEmail.split('@')[0] || '';
     const displayName = localPart
       .split(/[._-]/)
       .filter(Boolean)
       .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-      .join(' ') || 'Procucev Employee';
+      .join(' ') || normalizedEmail;
 
     user = {
       id: `procucev-emp-${crypto.createHash('sha256').update(normalizedEmail).digest('hex').slice(0, 16)}`,
@@ -1114,7 +1167,7 @@ async function registerUser(payload, ipAddress) {
   const normalizedCountry = (country || 'India').trim();
   const streetAddress = (street || address || (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')).trim();
   const normalizedGstin = (gstin || '').trim().toUpperCase();
-  const normalizedPan = (pan || (normalizedGstin.length === 15 ? normalizedGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const normalizedPan = (pan || '').trim().toUpperCase();
 
   // If OTP codes were provided with registration, verify both email and mobile OTPs
   const submittedEmailOtp = emailOtp || code;
@@ -1219,7 +1272,6 @@ async function registerUser(payload, ipAddress) {
         brandName: orgName || name,
         corporateEmail: normalizedEmail,
         contactPerson: name,
-        contactDesignation: 'Procurement Specialist',
         mobileNumber: mobile,
         gstin: normalizedGstin,
         pan: normalizedPan,
@@ -1231,10 +1283,9 @@ async function registerUser(payload, ipAddress) {
         zip_code: normalizedPincode,
         country: normalizedCountry,
         primaryPlantLocation: [normalizedCity, normalizedState && normalizedPincode ? `${normalizedState} (${normalizedPincode})` : normalizedState].filter(Boolean).join(', '),
-        industrySector: 'Enterprise SCM & Manufacturing',
         sourcingMode: 'mode_2',
         subscriptionPlan: 'free_trial',
-        remainingFreeRFQs: 5,
+        remainingFreeRFQs: BUYER_FREE_TRIAL_RFQ_CREDITS,
         accountSource: 'web_registration',
         status: 'ACTIVE_VERIFIED',
         onboardingRequired: false,
@@ -1278,7 +1329,7 @@ async function registerUser(payload, ipAddress) {
           country: 'India',
           location: [city, state && pincode ? `${state} ${pincode}` : state, 'India'].filter(Boolean).join(', '),
           source: 'self_registration',
-          status: 'PREFERRED ENTERPRISE SUPPLIER',
+          status: 'PENDING EVALUATION',
           subscriptionPlan: 'premium',
           freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
           majorCategory: 'Mechanical & Fluid Equipment',
@@ -1366,7 +1417,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   } = payload || {};
 
   const effectiveGstin = (gstin || gstNumber || '').trim().toUpperCase();
-  const effectivePan = (pan || panNumber || (effectiveGstin.length === 15 ? effectiveGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const effectivePan = (pan || panNumber || '').trim().toUpperCase();
   const effectiveAddress = (address || street || '').trim();
 
   const normalizedEmail = (user.email || '').trim().toLowerCase();
@@ -1404,7 +1455,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     (await authSessionQueries.findOtp(emailDirectKey));
 
   if (!storedEmailOtp) {
-    // Check demo OTP fallback in test environments or if OTP was sent to account
+    // The code may have been issued against the mobile number already on file.
     const fallbackOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, dbUser.mobile));
     if (fallbackOtp) storedEmailOtp = fallbackOtp;
   }
@@ -1627,6 +1678,7 @@ module.exports = {
   requestOtp,
   dispatchOtpCodes,
   OTP_DELIVERY_STATUS,
+  toOtpDeliveryStatus,
   verifyOtp,
   buildVendorDirectoryOtpKey,
   requestVendorDirectoryOtp,

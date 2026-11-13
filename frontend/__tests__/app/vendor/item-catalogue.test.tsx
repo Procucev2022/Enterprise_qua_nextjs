@@ -176,7 +176,8 @@ describe('ItemCatalogue Comprehensive Suite', () => {
     const priceInput = screen.getByPlaceholderText('850');
     const leadTimeInput = screen.getByPlaceholderText('5');
     const moqInput = screen.getByPlaceholderText('10');
-    const categorySelect = screen.getByDisplayValue(/Pumps & Fluid/i);
+    // The category master comes from the database. The test store holds none, so the select is found by its place in the form.
+    const categorySelect = document.querySelector('form select') as HTMLSelectElement;
 
     // Add a matching RFQ product to trigger matching word comparison and tooltip
     fireEvent.change(nameInput, { target: { value: 'Centrifugal Water Pump with 15 HP Electric Motor' } });

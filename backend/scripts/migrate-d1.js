@@ -33,9 +33,37 @@ if (fs.existsSync(envSpecific)) {
 }
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID;
-const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+function resolveD1Config({ target = targetEnv, wranglerPath = path.resolve(__dirname, '../wrangler.jsonc') } = {}) {
+  let accountId = process.env.CLOUDFLARE_ACCOUNT_ID || null;
+  let databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID || null;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN || null;
+
+  if (!databaseId || !accountId) {
+    try {
+      if (fs.existsSync(wranglerPath)) {
+        const raw = fs.readFileSync(wranglerPath, 'utf8');
+        const sanitized = raw.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        const config = JSON.parse(sanitized);
+        if (!databaseId) {
+          databaseId = (target && config.env?.[target]?.d1_databases?.[0]?.database_id)
+            || config.d1_databases?.[0]?.database_id
+            || null;
+        }
+        if (!accountId) {
+          accountId = (target && config.env?.[target]?.account_id)
+            || config.account_id
+            || null;
+        }
+      }
+    } catch {
+      // Fall back to environment values
+    }
+  }
+
+  return { accountId, databaseId, apiToken };
+}
+
+const { accountId: ACCOUNT_ID, databaseId: DATABASE_ID, apiToken: API_TOKEN } = resolveD1Config();
 
 const SCHEMA_PATH = path.join(__dirname, '../src/db/schema.d1.sql');
 const MIGRATIONS_PATH = path.join(__dirname, '../src/db/migrations');
@@ -56,12 +84,12 @@ const REPORTED_TABLES = [
   'category_division', 'org_division_category', 'vendor_dispatch_templates',
   'auth_otp_codes', 'auth_revoked_tokens',
   'vendors', 'rfqs', 'evaluations', 'vendor_catalogue',
-  'buyer_accounts', 'ai_feed', 'audit_logs', 'audit_chain_state', 'event_outbox', 'notifications',
+  'buyer_accounts', 'ai_feed', 'event_outbox', 'notifications',
   'email_ingestion_log', 'zoho_oauth_token', 'payment_links',
   'vendor_ingestion_sessions', 'ingestion_jobs', 'vendor_master_records',
   'po_line_items', 'vendor_category_mappings', 'vendor_category_dispatches',
-  'vendor_email_dispatch_log', 'vendor_ingestion_audit', 'ai_classification_logs',
-  'bulk_vendor_import_sessions', 'vendor_directory_sessions', 'user_login_logs',
+  'vendor_email_dispatch_log', 'vendor_ingestion_audit',
+  'bulk_vendor_import_sessions', 'vendor_directory_sessions',
   'payment_dues_communications',
   'schema_migration_locks',
   'management_approvals',
@@ -73,25 +101,44 @@ const REPORTED_TABLES = [
   'vendor_credit_transactions', 'buyer_credit_transactions',
   'tickets', 'ticket_activities', 'internal_task_types',
   'internal_tasks', 'internal_task_activities', 'approvals',
-  'system_error_logs', 'vendor_categories_indexed', 'document_vault', 'account_documents',
+  'vendor_categories_indexed', 'document_vault', 'account_documents',
 ];
 
-async function d1Query(sql, params = []) {
-  const res = await fetch(QUERY_URL, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify({ sql, params }),
-  });
-  const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); } catch {
-    throw new Error(`D1 non-JSON response (${res.status}): ${text.slice(0, 300)}`);
+async function d1Query(sql, params = [], { maxRetries = 4, backoffBaseMs = 3000, minWindowDelayMs = 10_000 } = {}) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const res = await fetch(QUERY_URL, {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({ sql, params }),
+    });
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch {
+      throw new Error(`D1 non-JSON response (${res.status}): ${text.slice(0, 300)}`);
+    }
+
+    if (res.status === 429 && attempt < maxRetries) {
+      const isWindowOverload = /Too many resources consumed within a 10 second window/i.test(text);
+      const delayMs = isWindowOverload
+        ? Math.max(minWindowDelayMs, backoffBaseMs * (2 ** attempt))
+        : backoffBaseMs * (2 ** attempt);
+      logger.warn('D1 query rate/resource limited (429); retrying with backoff', {
+        attempt: attempt + 1,
+        maxRetries,
+        delayMs,
+        isWindowOverload,
+      }, 'DATABASE_MIGRATION');
+      console.warn(`[migrate-d1] D1 rate/resource limited (429); waiting ${Math.round(delayMs / 1000)}s before retry (${attempt + 1}/${maxRetries})...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    if (!res.ok || !json.success) {
+      const msg = (json.errors && json.errors[0] && json.errors[0].message) || text.slice(0, 300);
+      throw new Error(`D1 query failed (${res.status}): ${msg}`);
+    }
+    return json;
   }
-  if (!res.ok || !json.success) {
-    const msg = (json.errors && json.errors[0] && json.errors[0].message) || text.slice(0, 300);
-    throw new Error(`D1 query failed (${res.status}): ${msg}`);
-  }
-  return json;
 }
 
 function splitStatements(sql = '') {
@@ -293,21 +340,64 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
       continue;
     }
 
+    console.log(`  -> Applying migration ${version}...`);
     const statements = splitStatements(sql);
     for (const statement of statements) {
+      const isFtsRebuild = /INSERT\s+INTO\s+["`]?vendors_search_fts["`]?\s*\(\s*["`]?vendors_search_fts["`]?\s*\)\s*SELECT\s+'rebuild'/i.test(statement);
+      if (isFtsRebuild) {
+        let skipRebuild = false;
+        try {
+          const vendorCountRows = resultRows(await query('SELECT COUNT(*) AS total FROM vendors'));
+          const totalVendors = Number(vendorCountRows[0]?.total || 0);
+          if (totalVendors > 5000) {
+            skipRebuild = true;
+            logger.warn('Skipping synchronous D1 FTS rebuild for large vendors table to avoid CPU limit (429)', {
+              migrationVersion: version,
+              totalVendors,
+            }, 'DATABASE_MIGRATION');
+            console.log(`  ~  (skipped synchronous FTS rebuild on ${totalVendors} vendors to avoid D1 CPU limit 429)`);
+          }
+        } catch {
+          // If vendor count check fails, continue to statement execution
+        }
+        if (skipRebuild) continue;
+      }
+
       try {
         await query(statement);
       } catch (error) {
         const addedColumn = statement.match(/^\s*ALTER\s+TABLE\s+["`]?([\w]+)["`]?\s+ADD\s+COLUMN\s+["`]?([\w]+)/i);
         const duplicateColumn = String(error?.message || '').match(/duplicate column name:\s*["`]?([\w]+)/i);
-        if (!addedColumn || !duplicateColumn || addedColumn[2].toLowerCase() !== duplicateColumn[1].toLowerCase()) {
-          throw error;
+        if (addedColumn && duplicateColumn && addedColumn[2].toLowerCase() === duplicateColumn[1].toLowerCase()) {
+          logger.info('D1 migration column already exists; skipping idempotent add', {
+            migrationVersion: version,
+            table: addedColumn[1],
+            column: addedColumn[2],
+          }, 'DATABASE_MIGRATION');
+          continue;
         }
-        logger.info('D1 migration column already exists; skipping idempotent add', {
-          migrationVersion: version,
-          table: addedColumn[1],
-          column: addedColumn[2],
-        }, 'DATABASE_MIGRATION');
+
+        const isFtsRebuildStmt = /vendors_search_fts/i.test(statement) && /rebuild/i.test(statement);
+        const isCpuReset = /exceeded its CPU time limit|database isolate was reset/i.test(error?.message || '');
+        if (isFtsRebuildStmt && isCpuReset) {
+          logger.warn('FTS rebuild exceeded D1 CPU limits; skipping to allow compatibility search path', {
+            migrationVersion: version,
+            error: error.message,
+          }, 'DATABASE_MIGRATION');
+          console.warn('  ~  (FTS rebuild exceeded D1 CPU limit; skipped to preserve compatibility path)');
+          continue;
+        }
+
+        const missingAuditLogs = /no such table:\s*["`]?audit_logs["`]?/i.test(error?.message || '');
+        if (missingAuditLogs) {
+          logger.info('D1 audit_logs table does not exist; skipping legacy audit log backfill', {
+            migrationVersion: version,
+          }, 'DATABASE_MIGRATION');
+          console.log('  ~  (audit_logs table absent; skipped legacy backfill)');
+          continue;
+        }
+
+        throw error;
       }
     }
 
@@ -370,14 +460,35 @@ async function reportRowCounts(query = d1Query) {
   }
 }
 
+async function purgeDeprecatedTables(query = d1Query) {
+  const { DEPRECATED_DATABASE_TABLES } = require('../src/config/constants');
+  for (const table of DEPRECATED_DATABASE_TABLES) {
+    try {
+      if (table === 'vendors_search_fts') {
+        await query('DROP TRIGGER IF EXISTS vendors_search_fts_insert');
+        await query('DROP TRIGGER IF EXISTS vendors_search_fts_delete');
+        await query('DROP TRIGGER IF EXISTS vendors_search_fts_update');
+      }
+      await query(`DROP TABLE IF EXISTS "${table}"`);
+    } catch {
+      // Ignore if table does not exist
+    }
+  }
+}
+
 async function migrate({
   query = d1Query,
   schemaPath = SCHEMA_PATH,
   migrationsPath = MIGRATIONS_PATH,
   includeRowCounts = process.argv.includes('--report-row-counts'),
   requireCredentials = true,
+  credentials = { accountId: ACCOUNT_ID, databaseId: DATABASE_ID, apiToken: API_TOKEN },
 } = {}) {
-  if (requireCredentials && (!ACCOUNT_ID || !DATABASE_ID || !API_TOKEN)) {
+  const accountId = credentials?.accountId;
+  const databaseId = credentials?.databaseId;
+  const apiToken = credentials?.apiToken;
+
+  if (requireCredentials && (!accountId || !databaseId || !apiToken)) {
     console.error(
       '[migrate-d1] Missing required env vars.\n' +
       '  Set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_API_TOKEN in .env'
@@ -459,6 +570,7 @@ async function migrate({
     try {
       migrationSummary = await applyD1Migrations({ query: migrationQuery, migrationsPath });
       console.log(`[migrate-d1] Numbered migrations applied: ${migrationSummary.applied}; already applied: ${migrationSummary.skipped}.`);
+      await purgeDeprecatedTables(migrationQuery);
     } catch (err) {
       console.error('\n[migrate-d1] Numbered migration failed. The base schema may be present; fix the migration error and rerun safely.');
       console.error(`     Error : ${err.stack || err.message}`);
@@ -512,4 +624,6 @@ module.exports = {
   splitStatements,
   REPORTED_TABLES,
   acquireMigrationLock,
+  resolveD1Config,
+  purgeDeprecatedTables,
 };

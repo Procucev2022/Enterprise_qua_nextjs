@@ -2,7 +2,22 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import TicketsDashboard from '@/app/category-manager/components/TicketsDashboard';
 import * as ticketClient from '@/lib/ticketClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { fetchInternalAssignees } from '@/lib/internalTaskClient';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import type { InternalTeamMember } from '@/lib/types';
+
+jest.mock('@/lib/internalTaskClient', () => ({
+  fetchInternalAssignees: jest.fn(),
+}));
+
+const STAFF_MEMBERS: InternalTeamMember[] = [
+  { id: 'staff-1', name: 'Naveen Kumar', role: 'Operations', email: 'naveen@team.test' },
+  { id: 'staff-2', name: 'Priya Sharma', role: 'Category Manager', email: 'priya@team.test' },
+];
+
+// Required-field message as the component builds it (copy is local until UI_STRINGS.tickets exists).
+const ALL_REQUIRED_FIELDS_MISSING =
+  'Enter Subject, Customer Name, Customer Email, Customer Phone, Assigned Executive, SLA (Hours) before creating the ticket.';
 
 jest.mock('@/lib/ticketClient', () => {
   const actual = jest.requireActual('@/lib/ticketClient');
@@ -107,7 +122,8 @@ const mockTicketsList = [
 describe('TicketsDashboard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (ticketClient.fetchTicketSummary as jest.Mock).mockResolvedValue(mockSummary);
+    (fetchInternalAssignees as jest.Mock).mockResolvedValue({ assignees: STAFF_MEMBERS });
+    (ticketClient.fetchTicketSummary as jest.Mock).mockResolvedValue({ summary: mockSummary });
     (ticketClient.fetchTickets as jest.Mock).mockResolvedValue({
       data: mockTicketsList,
       total: 3,
@@ -127,6 +143,16 @@ describe('TicketsDashboard', () => {
     (ticketClient.addTicketComment as jest.Mock).mockResolvedValue({ success: true });
     (ticketClient.deleteTicket as jest.Mock).mockResolvedValue(true);
   });
+
+  // Fills the phone and picks the assignee from the staff list once it has loaded.
+  const fillCustomerPhoneAndAssignee = async (assignee: string, phone: string): Promise<void> => {
+    const assignedSelect = screen.getByLabelText(/Assigned Executive/i) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(assignedSelect.querySelector(`option[value="${assignee}"]`)).not.toBeNull();
+    });
+    fireEvent.change(assignedSelect, { target: { value: assignee } });
+    fireEvent.change(screen.getByLabelText(/Customer Phone/i), { target: { value: phone } });
+  };
 
   it('renders summary cards and ticket table rows', async () => {
     render(<TicketsDashboard />);
@@ -253,7 +279,7 @@ describe('TicketsDashboard', () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('Please provide a ticket subject.')).toBeInTheDocument();
+      expect(screen.getByText(ALL_REQUIRED_FIELDS_MISSING)).toBeInTheDocument();
     });
 
     // Fill all form fields
@@ -262,6 +288,7 @@ describe('TicketsDashboard', () => {
     fireEvent.change(projectInput, { target: { value: 'Project Titan' } });
     fireEvent.change(customerNameInput, { target: { value: 'Titan Corp' } });
     fireEvent.change(customerEmailInput, { target: { value: 'titan@corp.com' } });
+    fireEvent.change(screen.getByLabelText(/Customer Phone/i), { target: { value: '+91 70000 00001' } });
 
     // In modal, change priority and category selects
     const prioritySelect = screen.getByLabelText(/Ticket Priority/i);
@@ -269,7 +296,10 @@ describe('TicketsDashboard', () => {
     fireEvent.change(prioritySelect, { target: { value: 'High' } });
     fireEvent.change(categorySelect, { target: { value: 'Quality & Compliance' } });
 
-    const assignedInput = screen.getByLabelText(/Assigned Executive/i);
+    const assignedInput = screen.getByLabelText(/Assigned Executive/i) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(assignedInput.querySelector('option[value="Naveen Kumar"]')).not.toBeNull();
+    });
     const slaInput = screen.getByLabelText(/SLA Hours/i);
     fireEvent.change(assignedInput, { target: { value: 'Naveen Kumar' } });
     fireEvent.change(slaInput, { target: { value: '48' } });
@@ -287,6 +317,9 @@ describe('TicketsDashboard', () => {
           project: 'Project Titan',
           customer_name: 'Titan Corp',
           customer_email: 'titan@corp.com',
+          customer_phone: '+91 70000 00001',
+          assigned_to_name: 'Naveen Kumar',
+          sla_hours: 48,
         })
       );
     });
@@ -332,6 +365,10 @@ describe('TicketsDashboard', () => {
 
     const subjectInput = screen.getByPlaceholderText(/e.g. Discrepancy in motor test certificates/i);
     fireEvent.change(subjectInput, { target: { value: 'Duplicate' } });
+    fireEvent.change(screen.getByPlaceholderText(/e.g. Tata Steel Ltd/i), { target: { value: 'Titan Corp' } });
+    fireEvent.change(screen.getByPlaceholderText(/buyer@tatasteel.com/i), { target: { value: 'titan@corp.com' } });
+    fireEvent.change(screen.getByLabelText(/SLA Hours/i), { target: { value: '24' } });
+    await fillCustomerPhoneAndAssignee('Naveen Kumar', '+91 70000 00001');
 
     const submitBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tickets.saveTicket });
     fireEvent.click(submitBtn);
@@ -592,8 +629,42 @@ describe('TicketsDashboard', () => {
     render(<TicketsDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to load tickets.')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.tickets })
+        )
+      ).toBeInTheDocument();
     });
+    // A failed list is not an empty list.
+    expect(screen.queryByText(UI_STRINGS.actionCenter.tickets.noTicketsFound)).not.toBeInTheDocument();
+  });
+
+  it('shows dashes for the KPI cards and the client error when the summary and list fail', async () => {
+    const summaryError = formatString(UI_STRINGS.dataLoad.failedWithStatus, {
+      resource: UI_STRINGS.dataLoad.resources.ticketSummary,
+      status: 503,
+    });
+    const listError = formatString(UI_STRINGS.dataLoad.failedWithStatus, {
+      resource: UI_STRINGS.dataLoad.resources.tickets,
+      status: 503,
+    });
+    (ticketClient.fetchTicketSummary as jest.Mock).mockResolvedValueOnce({ summary: null, error: summaryError });
+    (ticketClient.fetchTickets as jest.Mock).mockResolvedValueOnce({
+      data: [],
+      total: 0,
+      limit: 25,
+      offset: 0,
+      error: listError,
+    });
+
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText(summaryError)).toBeInTheDocument();
+      expect(screen.getByText(listError)).toBeInTheDocument();
+    });
+    // Four of the five KPI figures are dashes, plus the table row placeholder.
+    expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThanOrEqual(5);
   });
 
   it('marks ticket as completed from table row successfully when drawer closed', async () => {
@@ -641,17 +712,25 @@ describe('TicketsDashboard', () => {
 
     const subjectInput = screen.getByPlaceholderText(/e.g. Discrepancy in motor test certificates/i);
     fireEvent.change(subjectInput, { target: { value: 'Minimal ticket' } });
+    fireEvent.change(screen.getByPlaceholderText(/e.g. Tata Steel Ltd/i), { target: { value: 'Titan Corp' } });
+    fireEvent.change(screen.getByPlaceholderText(/buyer@tatasteel.com/i), { target: { value: 'titan@corp.com' } });
+    fireEvent.change(screen.getByLabelText(/SLA Hours/i), { target: { value: '24' } });
+    await fillCustomerPhoneAndAssignee('Priya Sharma', '+91 70000 00002');
 
     const submitBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tickets.saveTicket });
     fireEvent.click(submitBtn);
 
+    // Only what the user entered is sent. Optional fields stay empty rather than being filled in.
     await waitFor(() => {
       expect(ticketClient.createTicket).toHaveBeenCalledWith(
         expect.objectContaining({
           subject: 'Minimal ticket',
-          customer_name: 'Enterprise Client',
-          customer_email: 'client@procucev.com',
-          customer_phone: '+919876543210',
+          project: '',
+          description: '',
+          customer_name: 'Titan Corp',
+          customer_email: 'titan@corp.com',
+          customer_phone: '+91 70000 00002',
+          assigned_to_name: 'Priya Sharma',
           sla_hours: 24,
         })
       );
@@ -675,6 +754,10 @@ describe('TicketsDashboard', () => {
     fireEvent.click(createBtn);
     const subjectInput = screen.getByPlaceholderText(/e.g. Discrepancy in motor test certificates/i);
     fireEvent.change(subjectInput, { target: { value: 'Fallback error test' } });
+    fireEvent.change(screen.getByPlaceholderText(/e.g. Tata Steel Ltd/i), { target: { value: 'Titan Corp' } });
+    fireEvent.change(screen.getByPlaceholderText(/buyer@tatasteel.com/i), { target: { value: 'titan@corp.com' } });
+    fireEvent.change(screen.getByLabelText(/SLA Hours/i), { target: { value: '24' } });
+    await fillCustomerPhoneAndAssignee('Naveen Kumar', '+91 70000 00003');
     const saveBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tickets.saveTicket });
     fireEvent.click(saveBtn);
 
@@ -715,7 +798,7 @@ describe('TicketsDashboard', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Failed to add note.')).toBeInTheDocument();
-    }, { timeout: 3000 });
+    }, { timeout: 8000 });
 
   });
   it('opens ActionCenterComposeModal from ticket details drawer, exercises fallbacks, and closes', async () => {

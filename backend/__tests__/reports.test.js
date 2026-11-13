@@ -72,9 +72,9 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(endOnly.toDate.getDate()).toBe(15);
     });
 
-    test('formatMode handles valid, missing, and fallback modes', () => {
-      expect(formatMode(null)).toBe('Mode 0');
-      expect(formatMode('')).toBe('Mode 0');
+    test('formatMode handles valid and missing modes without inventing a label', () => {
+      expect(formatMode(null)).toBe('');
+      expect(formatMode('')).toBe('');
       expect(formatMode(RFQ_MODES.MODE_1)).toBe(RFQ_MODE_LABELS[RFQ_MODES.MODE_1]);
       expect(formatMode(RFQ_MODES.MODE_2)).toBe(RFQ_MODE_LABELS[RFQ_MODES.MODE_2]);
       expect(formatMode(RFQ_MODES.MODE_3)).toBe(RFQ_MODE_LABELS[RFQ_MODES.MODE_3]);
@@ -142,7 +142,7 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(getBuyerLocation({ address: 'Delhi' })).toBe('Delhi');
       expect(getBuyerLocation({ country: 'India' })).toBe('India');
       expect(getBuyerLocation(null, { deliveryLocation: 'Kolkata' })).toBe('Kolkata');
-      expect(getBuyerLocation(null, null)).toBe('All India');
+      expect(getBuyerLocation(null, null)).toBe('');
     });
 
     test('getBuyerLastLogin covers authentic lastLogin and returns empty string when missing', () => {
@@ -336,7 +336,8 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].Category1).toBe('Plastics & Polymers');
       expect(res.body.data[0].Category2).toBe('Engineering Plastics');
-      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      // This vendor has no location on record, so none is shown.
+      expect(res.body.data[0].CompanyLocation).toBe('');
       expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].Category1).toBe('Fasteners');
       expect(res.body.data[1].Category2).toBe('Bolts');
@@ -367,10 +368,14 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].FreeQuotationCredits).toBe(15);
       expect(res.body.data[0].QuotedRFQsCount).toBe(2);
-      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      // This vendor has no location on record, so none is shown.
+      expect(res.body.data[0].CompanyLocation).toBe('');
       expect(res.body.data[0].LastLogin).toBeDefined();
-      expect(res.body.data[1].FreeQuotationCredits).toBe(5);
-      expect(res.body.data[1].QuotedRFQsCount).toBe(0);
+      // Nothing is on record for this vendor, so nothing is invented for it.
+      expect(res.body.data[1].FreeQuotationCredits).toBeNull();
+      expect(res.body.data[1].QuotedRFQsCount).toBeNull();
+      expect(res.body.data[1].Plan).toBe('');
+      expect(res.body.data[1].Status).toBe('');
     });
 
     test('GET /api/reports/seller-report with invalid requestType returns 400', async () => {
@@ -528,9 +533,11 @@ describe('Reports Controller & Endpoints Suite', () => {
       const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCreditsReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].RemainingFreeRFQs).toBe(2);
-      expect(res.body.data[0].CreditsConsumed).toBe(3);
-      expect(res.body.data[1].RemainingFreeRFQs).toBe(5);
-      expect(res.body.data[1].CreditsConsumed).toBe(0);
+      expect(res.body.data[0].CreditsConsumed).toBeNull();
+      // A buyer with no free-RFQ count on record reports null, not the old default of 5.
+      expect(res.body.data[1].RemainingFreeRFQs).toBeNull();
+      // No consumed-credit count is stored on buyer records, so the column is null.
+      expect(res.body.data[1].CreditsConsumed).toBeNull();
     });
 
     test('GET /api/reports/buyer-report with invalid requestType returns 400', async () => {
@@ -595,7 +602,8 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.data[0].TotalVendors).toBe(2);
       expect(res.body.data[0].NumberOfQuotesReceived).toBe(1);
       expect(res.body.data[0].AwardedAmount).toContain('4,50,000');
-      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      // The buyer on this RFQ has no city, state, or delivery location on record.
+      expect(res.body.data[0].CompanyLocation).toBe('');
       expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].NumberOfQuotesReceived).toBe(0);
       expect(res.body.data[1].FirstQuoteDate).toBe('');
@@ -666,10 +674,11 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.data[0].SellerCompanyName).toBe('Precision Tools Pvt Ltd');
       expect(res.body.data[0].QuotedPrice).toContain('1,25,000');
       expect(res.body.data[0].SellerLocation).toBe('Bangalore');
-      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      // The buyer on these RFQs has no location on record, so none is shown.
+      expect(res.body.data[0].CompanyLocation).toBe('');
       expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].SellerCompanyName).toBe('None Yet');
-      expect(res.body.data[1].CompanyLocation).toBeTruthy();
+      expect(res.body.data[1].CompanyLocation).toBe('');
       expect(res.body.data[1].LastLogin).toBe('');
     });
 
@@ -712,11 +721,12 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].ChaserActive).toBe('YES');
       expect(res.body.data[0].Budget).toContain('80,000');
-      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      // Neither RFQ has a buyer or delivery location on record, so none is shown.
+      expect(res.body.data[0].CompanyLocation).toBe('');
       expect(res.body.data[0].LastLogin).toBe('');
       expect(res.body.data[1].ChaserActive).toBe('NO');
       expect(res.body.data[1].Budget).toBe('');
-      expect(res.body.data[1].CompanyLocation).toBeTruthy();
+      expect(res.body.data[1].CompanyLocation).toBe('');
       expect(res.body.data[1].LastLogin).toBe('');
     });
 
@@ -905,8 +915,34 @@ describe('Reports Controller & Endpoints Suite', () => {
         .expect(200);
 
       expect(res.body.success).toBe(true);
-      expect(res.body.message).toContain('dispatched successfully');
+      expect(res.body.message).toContain('dry run');
+      expect(res.body.result.dryRun).toBe(true);
       expect(res.body.result.reportDate).toBe('2026-11-03');
+    });
+
+    test('reports the report as dispatched only when the mail provider accepted it', async () => {
+      const dailyRfqReportService = require('../src/services/dailyRfqReportService');
+      const send = jest.spyOn(dailyRfqReportService, 'sendDailyRfqReport');
+      try {
+        send.mockResolvedValueOnce({ success: true, reportDate: '2026-11-03', totalRFQs: 2, summary: {}, recipients: [], subject: 's' });
+        const accepted = await request(app)
+          .post('/api/reports/send-daily-rfq-email')
+          .set(authHeader('category_manager'))
+          .send({ targetDate: '2026-11-03' })
+          .expect(200);
+        expect(accepted.body.message).toBe('Daily RFQ report dispatched successfully');
+
+        send.mockResolvedValueOnce({ success: false, reportDate: '2026-11-03', totalRFQs: 2, summary: {}, recipients: [], subject: 's' });
+        const refused = await request(app)
+          .post('/api/reports/send-daily-rfq-email')
+          .set(authHeader('category_manager'))
+          .send({ targetDate: '2026-11-03' })
+          .expect(502);
+        expect(refused.body.success).toBe(false);
+        expect(refused.body.error).toMatch(/not accepted by the mail provider/);
+      } finally {
+        send.mockRestore();
+      }
     });
 
     test('POST /api/reports/send-daily-rfq-email validates targetDate format', async () => {

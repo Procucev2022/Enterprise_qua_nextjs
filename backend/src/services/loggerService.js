@@ -80,7 +80,9 @@ class LoggerService {
     this.maxFileSizeBytes = options.maxFileSizeBytes ?? 10 * 1024 * 1024; // 10MB default
     this.purgeAfterWrites = options.purgeAfterWrites ?? 500;
     this.purgeCheckIntervalMs = options.purgeCheckIntervalMs ?? 15 * 60 * 1000;
-    this.isLocalLoggingEnabled = options.isLocalLoggingEnabled !== undefined ? options.isLocalLoggingEnabled : true;
+    this.isLocalLoggingEnabled = options.isLocalLoggingEnabled !== undefined
+      ? options.isLocalLoggingEnabled
+      : LoggerService.isLocalEnvironment();
     this.inMemoryLogs = [];
     this.writesSincePurge = 0;
     this.lastPurgeAt = 0;
@@ -89,6 +91,21 @@ class LoggerService {
     this.suppressedDatabaseFailureCount = 0;
 
     this.ensureLogsDirectory();
+  }
+
+  /**
+   * Determine whether the runtime is a local Node.js environment (localhost)
+   * or a Cloudflare Worker environment. On Cloudflare, logs are streamed via
+   * standard console output to Cloudflare Observability and file writes are skipped.
+   */
+  static isLocalEnvironment() {
+    if (typeof globalThis !== 'undefined' && Boolean(globalThis.__CF_ENV__)) {
+      return false;
+    }
+    if (process.env.CF_PAGES || process.env.CLOUDFLARE_WORKERS) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -108,7 +125,7 @@ class LoggerService {
   }
 
   ensureLogsDirectory() {
-    if (this.isLocalLoggingEnabled) {
+    if (this.isLocalLoggingEnabled && LoggerService.isLocalEnvironment()) {
       try {
         if (!fs.existsSync(this.logsDir)) {
           fs.mkdirSync(this.logsDir, { recursive: true });
@@ -214,7 +231,7 @@ class LoggerService {
   }
 
   writeToDisk(logEntry) {
-    if (!this.isLocalLoggingEnabled) return;
+    if (!this.isLocalLoggingEnabled || !LoggerService.isLocalEnvironment()) return;
 
     try {
       this.ensureLogsDirectory();
@@ -285,11 +302,6 @@ class LoggerService {
     // Persist to local disk
     this.writeToDisk(entry);
 
-    // Persist critical errors and audits to durable database sink
-    if (level === 'ERROR' || level === 'AUDIT') {
-      this.persistToDatabase(entry);
-    }
-
     return entry;
   }
 
@@ -307,48 +319,13 @@ class LoggerService {
     LoggerService._dbLogTimestamps = [];
   }
 
-  persistToDatabase(entry) {
-    if (process.env.NODE_ENV === 'test') return;
-    try {
-      const { isD1Overloaded } = require('../db/d1Bridge');
-      if (typeof isD1Overloaded === 'function' && isD1Overloaded()) return;
-
-      const entryText = `${entry.message || ''} ${entry.metadata?.errorMessage || ''} ${entry.stackTrace || ''} ${entry.category || ''}`;
-      if (/overloaded|too many resources|system_error_logs|SQLITE_ERROR/i.test(entryText)) return;
-
-      if (LoggerService.isDbLoggingRateLimited()) return;
-
-      const pool = require('../db/pool');
-      if (!pool.hasStorage()) return;
-      const sql = `
-        INSERT INTO system_error_logs (
-          id, level, category, message, error_name, stack_trace, user_email, request_path, correlation_id, metadata, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      `;
-      const metaStr = entry.metadata ? JSON.stringify(entry.metadata) : null;
-      const params = [
-        entry.id,
-        entry.level,
-        entry.category,
-        entry.message,
-        entry.metadata?.errorName || null,
-        entry.stackTrace || null,
-        entry.userEmail || null,
-        entry.metadata?.url || null,
-        entry.correlationId || null,
-        metaStr,
-        entry.timestamp || new Date().toISOString(),
-      ];
-      const p = pool.query(sql, params, { d1: true, d1Text: sql }).catch((error) => {
-        this.reportDatabaseFailure(error, entry);
-      });
-      const { getWaitUntil } = require('../db/d1Bridge');
-      const waitUntil = getWaitUntil();
-      if (waitUntil) waitUntil(p);
-      return p;
-    } catch (error) {
-      this.reportDatabaseFailure(error, entry);
-    }
+  /**
+   * Persist to database is decommissioned per migration 0028.
+   * Logs are streamed to Cloudflare observability or persisted to local filesystem.
+   * Returns a resolved promise for backward compatibility.
+   */
+  persistToDatabase(_entry) {
+    return Promise.resolve();
   }
 
   info(message, meta = {}, category = 'SYSTEM') {
@@ -432,7 +409,7 @@ class LoggerService {
 
     // Prune expired entries and cap every local log file at the configured size.
     let diskFilesPurged = 0;
-    if (this.isLocalLoggingEnabled && fs.existsSync(this.logsDir)) {
+    if (this.isLocalLoggingEnabled && LoggerService.isLocalEnvironment() && fs.existsSync(this.logsDir)) {
       try {
         const files = fs.readdirSync(this.logsDir);
         files.forEach((file) => {
@@ -502,7 +479,7 @@ class LoggerService {
     });
 
     let diskLogFiles = [];
-    if (this.isLocalLoggingEnabled && fs.existsSync(this.logsDir)) {
+    if (this.isLocalLoggingEnabled && LoggerService.isLocalEnvironment() && fs.existsSync(this.logsDir)) {
       try {
         diskLogFiles = fs.readdirSync(this.logsDir).map((f) => {
           const fp = path.join(this.logsDir, f);

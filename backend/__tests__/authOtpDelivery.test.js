@@ -70,11 +70,12 @@ describe('authService OTP delivery confirmation', () => {
       });
     });
 
-    test('treats an unconfigured mailer as not attempted, not failed', async () => {
+    test('treats an unconfigured mailer as failed, never as sent', async () => {
       jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue({ sent: false, reason: 'SMTP not configured' });
       jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: true });
       const delivery = await authService.dispatchOtpCodes(args);
-      expect(delivery.email).toBe(OTP_DELIVERY_STATUS.NOT_ATTEMPTED);
+      expect(delivery.email).toBe(OTP_DELIVERY_STATUS.FAILED);
+      expect(delivery.sms).toBe(OTP_DELIVERY_STATUS.SENT);
     });
 
     test('reports a thrown mail error and an unsuccessful or thrown SMS as failed', async () => {
@@ -88,12 +89,52 @@ describe('authService OTP delivery confirmation', () => {
       smsService.sendOtpSms.mockRejectedValue(new Error('socket hang up'));
       mailerService.sendOtpEmail.mockResolvedValue(undefined);
       expect(await authService.dispatchOtpCodes(args)).toEqual({
-        email: OTP_DELIVERY_STATUS.NOT_ATTEMPTED,
+        email: OTP_DELIVERY_STATUS.FAILED,
         sms: OTP_DELIVERY_STATUS.FAILED,
       });
 
       smsService.sendOtpSms.mockResolvedValue(undefined);
       expect((await authService.dispatchOtpCodes(args)).sms).toBe(OTP_DELIVERY_STATUS.FAILED);
+    });
+
+    test.each([
+      ['throttled', { success: false, status: 'throttled' }],
+      ['not_configured', { success: false, status: 'not_configured' }],
+      ['skipped', { success: false, status: 'skipped' }],
+      ['failed', { success: false, status: 'failed' }],
+      ['link_only', { success: false, status: 'link_only' }],
+      ['throttled flag on a success', { success: true, throttled: true, messageId: 'throttled-cooldown' }],
+    ])('maps a non-delivered send (%s) to FAILED', async (_label, result) => {
+      jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue(result);
+      jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue(result);
+      await expect(authService.dispatchOtpCodes(args)).resolves.toEqual({
+        email: OTP_DELIVERY_STATUS.FAILED,
+        sms: OTP_DELIVERY_STATUS.FAILED,
+      });
+    });
+
+    test('maps only a provider-accepted send to SENT, whether it reports success or the legacy sent flag', async () => {
+      jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue({ success: true, status: 'sent', messageId: 'm2' });
+      jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: true, status: 'sent' });
+      await expect(authService.dispatchOtpCodes(args)).resolves.toEqual({
+        email: OTP_DELIVERY_STATUS.SENT,
+        sms: OTP_DELIVERY_STATUS.SENT,
+      });
+    });
+
+    test('toOtpDeliveryStatus prefers the success field and never reads an empty result as sent', () => {
+      const { toOtpDeliveryStatus } = authService;
+      expect(toOtpDeliveryStatus(undefined)).toBe(OTP_DELIVERY_STATUS.FAILED);
+      expect(toOtpDeliveryStatus('accepted')).toBe(OTP_DELIVERY_STATUS.FAILED);
+      expect(toOtpDeliveryStatus({})).toBe(OTP_DELIVERY_STATUS.FAILED);
+      expect(toOtpDeliveryStatus({ sent: true })).toBe(OTP_DELIVERY_STATUS.SENT);
+      expect(toOtpDeliveryStatus({ sent: false })).toBe(OTP_DELIVERY_STATUS.FAILED);
+      expect(toOtpDeliveryStatus({ success: false, sent: true })).toBe(OTP_DELIVERY_STATUS.FAILED);
+      expect(toOtpDeliveryStatus({ success: true })).toBe(OTP_DELIVERY_STATUS.SENT);
+    });
+
+    test('does not expose a NOT_ATTEMPTED state any more', () => {
+      expect(OTP_DELIVERY_STATUS).not.toHaveProperty('NOT_ATTEMPTED');
     });
 
     test('hands both sends to waitUntil on Workers so they survive the response', async () => {
@@ -145,6 +186,56 @@ describe('authService OTP delivery confirmation', () => {
       jest.spyOn(mailerService, 'sendOtpEmail').mockRejectedValue(new Error('User-rate limit exceeded'));
       jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: false });
       await expect(authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1')).rejects.toThrow(AUTH_MESSAGES.OTP_DELIVERY_FAILED);
+    });
+
+    test.each([
+      ['development', undefined],
+      ['test', 'test'],
+      ['production with SMTP configured', 'production'],
+    ])('never returns the issued code in the response (%s)', async (_label, nodeEnv) => {
+      const originalEnv = process.env.NODE_ENV;
+      if (nodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = nodeEnv;
+      jest.spyOn(mailerService, 'isConfigured').mockReturnValue(nodeEnv === 'production');
+      const emailSend = jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue({ success: true, status: 'sent' });
+      jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: true, status: 'sent' });
+      try {
+        const res = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+        const issuedCode = emailSend.mock.calls[0][1];
+        expect(issuedCode).toMatch(/^\d{6}$/);
+        expect(res).not.toHaveProperty('demoCode');
+        expect(res).not.toHaveProperty('demoEmailCode');
+        expect(res).not.toHaveProperty('demoMobileCode');
+        expect(JSON.stringify(res)).not.toContain(issuedCode);
+      } finally {
+        if (originalEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = originalEnv;
+      }
+    });
+
+    test('never returns the issued code in a registration response either', async () => {
+      const emailSend = jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue({ success: true, status: 'sent' });
+      const smsSend = jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: true, status: 'sent' });
+      const res = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1', true);
+      expect(res).not.toHaveProperty('demoCode');
+      expect(res).not.toHaveProperty('demoMobileCode');
+      expect(JSON.stringify(res)).not.toContain(emailSend.mock.calls[0][1]);
+      expect(JSON.stringify(res)).not.toContain(smsSend.mock.calls[0][1]);
+    });
+
+    test('does not say a pending channel was sent, and names what is still in flight', async () => {
+      jest.useFakeTimers();
+      jest.spyOn(mailerService, 'sendOtpEmail').mockReturnValue(new Promise(() => { }));
+      jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: true, status: 'sent' });
+      const pending = authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      await jest.advanceTimersByTimeAsync(20 * 1000 + 1);
+      const res = await pending;
+      expect(res.delivery).toEqual({ email: 'pending', sms: 'sent' });
+      expect(res.message).toBe(
+        `Verification OTP status: the email to ${EMAIL} is still being sent, and the SMS to +91 ${MOBILE} was sent.`
+      );
+      expect(res.message).not.toMatch(/dispatched|sent to/);
+      jest.useRealTimers();
     });
   });
 
@@ -293,5 +384,46 @@ describe('authService registration OTP verification and startup', () => {
     await authService.hydrateFromDB();
     purge.mockRejectedValue(new Error('sweep failed'));
     await expect(authService.hydrateFromDB()).resolves.not.toThrow();
+  });
+});
+
+describe('Vendor Directory OTP delivery', () => {
+  let originalPool;
+
+  beforeEach(() => {
+    originalPool = dbPool.pool;
+    dbPool.pool = { query: jest.fn() };
+    jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+    jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValue(true);
+    jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => { });
+  });
+
+  afterEach(() => {
+    dbPool.pool = originalPool;
+    jest.restoreAllMocks();
+  });
+
+  test('says the code was sent only when the mail provider accepted it', async () => {
+    const send = jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue({ success: true, status: 'sent' });
+
+    const res = await authService.requestVendorDirectoryOtp('analyst@procucev.com', '::1');
+
+    expect(res.message).toBe(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_SENT);
+    expect(send.mock.calls[0][1]).toMatch(/^\d{6}$/);
+    expect(JSON.stringify(res)).not.toContain(send.mock.calls[0][1]);
+  });
+
+  test.each([
+    ['the provider refused', { success: false, status: 'not_configured' }],
+    ['the send was throttled', { sent: false, reason: 'throttled' }],
+    ['the mailer threw', 'throw'],
+  ])('fails the request and does not claim the code was sent when %s', async (_label, outcome) => {
+    const send = jest.spyOn(mailerService, 'sendOtpEmail');
+    if (outcome === 'throw') send.mockRejectedValue(new Error('SMTP down'));
+    else send.mockResolvedValue(outcome);
+
+    await expect(authService.requestVendorDirectoryOtp('analyst@procucev.com', '::1')).rejects.toThrow(
+      /could not send the verification code/
+    );
   });
 });

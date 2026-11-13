@@ -511,7 +511,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
 
       // Invalid plan
       const resPlan = mockRes();
-      const vendorWithEmail = { id: 'v-ok', email: 'ok@vendor.com' };
+      const vendorWithEmail = { id: 'v-ok', email: 'ok@vendor.com', phone: '+919876543210' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValueOnce(vendorWithEmail);
       await vendorController.createSubscriptionPaymentLink(
         { params: { id: 'v-ok' }, body: { plan: 'invalid_tier' }, user: { role: 'admin' } },
@@ -878,6 +878,8 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
           }),
         })
       );
+      // The import is attributed to the signed-in user, not to a built-in mailbox.
+      expect(storeService.bulkAddVendors).toHaveBeenCalledWith(expect.any(Array), 'buyer@authed.com');
     });
 
     test('isHydratedFromDB surfaces persisted source in getVendors and getVendorById', async () => {
@@ -1036,6 +1038,149 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       );
       expect(resSess.json).toHaveBeenCalledWith(
         expect.objectContaining({ success: true, data: expect.objectContaining({ sessionId: existingSessionId }) })
+      );
+
+      // Branch coverage for id === 'me' in updateSubscription, createSubscriptionPaymentLink, getPaymentLinks, downloadInvoice
+      const meVendor = { id: 'v-me', email: 'me@vendor.com', phone: '+919988776655' };
+      jest.spyOn(storeService, 'getVendorById').mockImplementation((queryId) => {
+        if (queryId === 'me@vendor.com') return meVendor;
+        return null;
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ ...meVendor, subscriptionPlan: 'premium' });
+      jest.spyOn(storeService, 'getPaymentLinksForVendor').mockResolvedValue([]);
+      jest.spyOn(storeService, 'getPaymentLinkById').mockResolvedValue(null);
+
+      const resSubMe = mockRes();
+      await vendorController.updateSubscription(
+        { params: { id: 'me' }, body: { plan: 'premium' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resSubMe,
+        next
+      );
+      expect(resSubMe.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      const resPayMe = mockRes();
+      await vendorController.createSubscriptionPaymentLink(
+        { params: { id: 'me' }, body: { plan: 'connect' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resPayMe,
+        next
+      );
+      // Zoho payment link created or attempted
+      expect(resPayMe.json).toHaveBeenCalled();
+
+      const resLinksMe = mockRes();
+      await vendorController.getPaymentLinks(
+        { params: { id: 'me' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resLinksMe,
+        next
+      );
+      expect(resLinksMe.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      const resInvMe = mockRes();
+      await vendorController.downloadInvoice(
+        { params: { id: 'me', linkId: 'missing-link' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resInvMe,
+        next
+      );
+      expect(resInvMe.status).toHaveBeenCalledWith(404);
+
+      // Bulk delete vendor when deleteVendorDurably returns false
+      const nonDeletable = { id: 'v-nodelete', email: 'admin@qua.com' };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(nonDeletable);
+      jest.spyOn(storeService, 'deleteVendorDurably').mockResolvedValue(false);
+      const resBulkDel = mockRes();
+      await vendorController.bulkDeleteVendors(
+        { body: { vendorIds: ['v-nodelete'] }, user: { role: 'admin', email: 'admin@qua.com' } },
+        resBulkDel,
+        next
+      );
+      expect(resBulkDel.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, skippedIds: ['v-nodelete'] })
+      );
+
+      // Public vendor with 11+ digits un-prefixed phone to exercise maskPhoneNumber slice branch
+      const phoneVendor = {
+        id: 'v-phone-long',
+        name: 'Phone Vendor',
+        email: 'phone@vendor.com',
+        phone: '123456789012',
+      };
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(phoneVendor);
+      const resPubPhone = mockRes();
+      await vendorController.getPublicVendorById(
+        { params: { id: 'v-phone-long' } },
+        resPubPhone,
+        next
+      );
+      expect(resPubPhone.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, data: expect.objectContaining({ phone: expect.any(String) }) })
+      );
+
+      // Public vendor when sanitizePublicVendor returns null
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue('invalid-vendor-object');
+      const resPubInvalid = mockRes();
+      await vendorController.getPublicVendorById(
+        { params: { id: 'v-invalid' } },
+        resPubInvalid,
+        next
+      );
+      expect(resPubInvalid.status).toHaveBeenCalledWith(404);
+    });
+
+    test('deleteVendor and bulkDeleteVendors allow buyers to delete their uploaded vendors permanently', async () => {
+      const next = jest.fn();
+      const buyerUser = { role: 'buyer', email: 'procurement@acme.com', sub: 'buyer-sub-1' };
+      const timestampVendor = {
+        id: 'v-1792579884052-6ip0',
+        name: 'Internal Rigor Supplies',
+        email: 'rigor@internal.com',
+        buyerEmail: 'procurement@acme.com',
+        addedByBuyerCompany: 'Acme Corp',
+        source: 'buyer_manual',
+      };
+
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'acc-buyer-1',
+        organizationName: 'Acme Corp',
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(timestampVendor);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(timestampVendor);
+      const deleteDurablySpy = jest.spyOn(storeService, 'deleteVendorDurably').mockResolvedValue(true);
+
+      // Single delete
+      const resDelete = mockRes();
+      await vendorController.deleteVendor(
+        { params: { id: 'v-1792579884052-6ip0' }, user: buyerUser },
+        resDelete,
+        next
+      );
+      expect(resDelete.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('deleted successfully') })
+      );
+      expect(deleteDurablySpy).toHaveBeenCalledWith('v-1792579884052-6ip0', 'procurement@acme.com');
+
+      // Deletion when vendor is not in memory (DB fallback / cleanup)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      const resCleanup = mockRes();
+      await vendorController.deleteVendor(
+        { params: { id: 'v-1792579884052-6ip0' }, user: buyerUser },
+        resCleanup,
+        next
+      );
+      expect(resCleanup.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('deleted successfully') })
+      );
+
+      // Bulk delete
+      const resBulk = mockRes();
+      await vendorController.bulkDeleteVendors(
+        { body: { vendorIds: ['v-1792579884052-6ip0'] }, user: buyerUser },
+        resBulk,
+        next
+      );
+      expect(resBulk.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, deletedCount: 1, deletedIds: ['v-1792579884052-6ip0'] })
       );
     });
   });

@@ -445,14 +445,14 @@ describe('AllRFQsConsole invited vendors column', () => {
     expect(within(vendorsCell).queryByText(S.colVendorsNone)).not.toBeInTheDocument();
   });
 
-  it('labels an invited vendor that has no name of any kind as "Vendor"', async () => {
+  it('shows a dash for an invited vendor that has no name of any kind', async () => {
     const nameless = makeRfq({ id: 'iv02', title: 'Nameless Invite', assignedVendors: [NAMELESS_VENDOR] });
     await renderLoaded([nameless]);
 
-    fireEvent.click(within(cellOf(nameless, COL.vendors)).getByRole('button', { name: 'Vendor' }));
+    fireEvent.click(within(cellOf(nameless, COL.vendors)).getByRole('button', { name: UI_STRINGS.dataLoad.emptyCell }));
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'Vendor' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: UI_STRINGS.dataLoad.emptyCell })).toBeInTheDocument();
     expect(within(dialog).getByText(INVITED_NOTICE)).toBeInTheDocument();
   });
 
@@ -499,7 +499,7 @@ describe('AllRFQsConsole invited vendors roster', () => {
 
     expect(within(dialog).getByRole('heading', { name: 'Invited Vendors (4)' })).toBeInTheDocument();
     expect(within(dialog).getByText(`${rfq.rfqNumber} ${BULLET} ${rfq.title}`)).toBeInTheDocument();
-    ['Alpha Supplies', 'Legacy Traders', 'Vendor', 'Delta Fabricators'].forEach((vendorName) => {
+    ['Alpha Supplies', 'Legacy Traders', UI_STRINGS.dataLoad.emptyCell, 'Delta Fabricators'].forEach((vendorName) => {
       expect(within(dialog).getByText(vendorName)).toBeInTheDocument();
     });
     expect(within(dialog).getAllByText(/^Contact:/)).toHaveLength(2);
@@ -513,7 +513,7 @@ describe('AllRFQsConsole invited vendors roster', () => {
   it.each([
     { position: 0, expectedName: 'Alpha Supplies' },
     { position: 1, expectedName: 'Legacy Traders' },
-    { position: 2, expectedName: 'Vendor' },
+    { position: 2, expectedName: UI_STRINGS.dataLoad.emptyCell },
     { position: 3, expectedName: 'Delta Fabricators' },
   ])('opens the profile of $expectedName and dismisses the roster from View Details', async ({ position, expectedName }) => {
     const { dialog } = await openInvitedVendorList();

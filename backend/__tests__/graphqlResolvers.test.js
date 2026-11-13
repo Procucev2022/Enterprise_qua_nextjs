@@ -495,6 +495,19 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       adminCtx
     );
     expect(autoResolveAction.remediationsApplied[0].actionType).toBe('OPTIMIZE_QUERY_CACHE');
+    expect(autoResolveAction.remediationsApplied[0]).toMatchObject({ success: true, status: 'applied' });
+    expect(typeof autoResolveAction.remediationsApplied[0].remediationId).toBe('string');
+    expect(autoResolveDefault.remediationsApplied.every((r) => typeof r.success === 'boolean' && typeof r.status === 'string')).toBe(true);
+
+    // A refused action has a null remediationId, because the resolver records nothing for it.
+    const refusedAction = await rootResolvers.autoResolveLogErrors({ action: 'NOT_A_REAL_ACTION' }, adminCtx);
+    expect(refusedAction.remediationsApplied[0]).toMatchObject({
+      remediationId: null,
+      actionType: 'NOT_A_REAL_ACTION',
+      success: false,
+      status: 'not_supported',
+    });
+    expect(refusedAction.diagnosedCount).toBe(refusedAction.issues.length);
 
     const optDefault = await rootResolvers.optimizePerformance(undefined, adminCtx);
     expect(optDefault.status).toBe('OPTIMIZED');

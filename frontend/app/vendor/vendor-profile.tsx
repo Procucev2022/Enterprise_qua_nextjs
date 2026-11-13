@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { findMajorForMinor, getMinorCategories, getDefaultCategoryTaxonomy } from '@/lib/categoryTaxonomy';
+import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   ShieldCheck,
@@ -37,8 +37,6 @@ export default function VendorProfilePage() {
     addAuditLog,
     showToast,
     vendorSubscription,
-    completeVendorProfile,
-    clientMappedCategories,
     vendorSelectedCategories,
     saveVendorProfileCategories,
     currentUserSession,
@@ -50,17 +48,21 @@ export default function VendorProfilePage() {
 
   const MAX_CATEGORIES = 10;
 
+  // Loads the category master once. The store function is recreated on every render, so
+  // listing it as a dependency would refetch on each render while the request fails.
   useEffect(() => {
     if (typeof ensureCategoryTaxonomy === 'function') {
       void ensureCategoryTaxonomy();
     }
-  }, [ensureCategoryTaxonomy]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Vendor Organization State — starts blank; populated from the authenticated
   // vendor's own backend record once it loads (see the profile-load effect below).
+  // Nothing is pre-selected for the vendor: an unset constitution is saved as unset.
   const [companyName, setCompanyName] = useState('');
   const [brandName, setBrandName] = useState('');
-  const [orgType, setOrgType] = useState<'Private Limited' | 'Public Limited' | 'Partnership' | 'Sole Proprietorship' | 'LLP'>('Private Limited');
+  const [orgType, setOrgType] = useState<'' | 'Private Limited' | 'Public Limited' | 'Partnership' | 'Sole Proprietorship' | 'LLP'>('');
   const [panNumber, setPanNumber] = useState('');
   const [gstNumber, setGstNumber] = useState('');
   const [msmeNumber, setMsmeNumber] = useState('');
@@ -130,7 +132,7 @@ export default function VendorProfilePage() {
       setPincodePostOffices([]);
     }
   }, [pincode]);
-  const [country, setCountry] = useState('India');
+  const [country, setCountry] = useState('');
 
   // Contact Person State. Email is the vendor's own login identity (see the
   // read-only field below) — it's what the backend uses to find this vendor's
@@ -152,6 +154,9 @@ export default function VendorProfilePage() {
   const [loadedClientCats, setLoadedClientCats] = useState<string[]>([]);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  // Set when the saved profile could not be read. The form then stays blocked, because
+  // saving a blank form would create a second vendor record instead of updating this one.
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
 
   const CUSTOM_CATEGORY_GROUP = UI_STRINGS.vendorProfile.customCategoryGroup;
   const [customCategoryInput, setCustomCategoryInput] = useState('');
@@ -186,6 +191,7 @@ export default function VendorProfilePage() {
         setIsLoadingProfile(false);
         return;
       }
+      setProfileLoadError(null);
       try {
         const token = authClient.getToken();
         const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
@@ -197,7 +203,15 @@ export default function VendorProfilePage() {
           return;
         }
         const data = await res.json();
-        if (cancelled || !res.ok || !data.success || !data.data) return;
+        if (cancelled) return;
+        if (!res.ok || !data.success || !data.data) {
+          setProfileLoadError(
+            typeof data?.error === 'string' && data.error
+              ? data.error
+              : `Your supplier profile could not be loaded (server responded with HTTP ${res.status}).`
+          );
+          return;
+        }
 
         const v = data.data;
         setVendorRecordId(v.id);
@@ -213,7 +227,7 @@ export default function VendorProfilePage() {
         setCity(v.city || '');
         setState(v.state || '');
         setPincode(v.pincode || '');
-        setCountry(v.country || 'India');
+        setCountry(v.country || '');
         setContactName(v.contactPerson || '');
         setContactDesignation(v.contactDesignation || '');
         setContactEmail(email);
@@ -225,9 +239,12 @@ export default function VendorProfilePage() {
         setSelectedMinor(minorMap);
         setExpandedMajor(Object.fromEntries(majors.map((m) => [m, true])));
       } catch {
-        // Network failure loading the profile: leave the form blank rather
-        // than showing fabricated placeholder data for the wrong vendor.
-        if (!cancelled) setContactEmail(email);
+        // Network failure: the form stays blank and the error is shown above it, so a
+        // blank form is never read as a profile that does not exist yet.
+        if (!cancelled) {
+          setContactEmail(email);
+          setProfileLoadError('Your supplier profile could not be reached. Check your connection and reload this page.');
+        }
       } finally {
         if (!cancelled) setIsLoadingProfile(false);
       }
@@ -455,8 +472,8 @@ export default function VendorProfilePage() {
     });
   };
 
-  // Base taxonomy from backend, or standard default fixture if backend table has 0 rows
-  const displayTaxonomy = categoryTaxonomy.length > 0 ? categoryTaxonomy : getDefaultCategoryTaxonomy();
+  // The category master as the database returned it. Empty while loading or after a failure.
+  const displayTaxonomy = categoryTaxonomy;
 
   // Include custom categories in the active taxonomy list under 'Other'
   const customMinors = selectedMinor[CUSTOM_CATEGORY_GROUP] || [];
@@ -487,16 +504,9 @@ export default function VendorProfilePage() {
     return matchesMajor || matchesMinor;
   });
 
-  // Reconciled Dual Stream Categories — prefer this vendor's own backend
-  // record over the shared client-side store fallback (which isn't scoped
-  // to a specific vendor and only reflects whichever profile was last saved
-  // in this browser session).
-  const clientCats =
-    loadedClientCats.length > 0
-      ? loadedClientCats
-      : clientMappedCategories && clientMappedCategories.length > 0
-      ? clientMappedCategories
-      : ['Bearings & Accessories', 'Pumps & Accessories'];
+  // Buyer-mapped categories come only from this vendor's own backend record. The shared store
+  // copy is not scoped to a vendor, so it is never substituted here.
+  const clientCats: string[] = loadedClientCats;
   const flatSelectedCategories = Object.values(selectedMinor).flat();
   const clientLower = clientCats.map((c: string) => c.toLowerCase().trim());
   const vendorLower = flatSelectedCategories.map((c) => c.toLowerCase().trim());
@@ -544,7 +554,8 @@ export default function VendorProfilePage() {
       const profilePayload = {
         name: companyName,
         brandName,
-        orgType,
+        // Omitted (not sent as an empty string) when the vendor has not chosen one.
+        orgType: orgType || undefined,
         pan: panNumber,
         gst: gstNumber,
         msme: msmeNumber,
@@ -609,8 +620,12 @@ export default function VendorProfilePage() {
       }
       addAuditLog(`Updated Vendor Supplier Profile & Manufacturing Capabilities for ${companyName}`);
       showToast('Profile Saved', 'Supplier details and manufacturing categories updated successfully.', 'success');
-    } catch (err: any) {
-      showToast('Save Failed', err?.message || 'Could not save the supplier profile. Please try again.', 'warning');
+    } catch (err: unknown) {
+      showToast(
+        'Save Failed',
+        err instanceof Error && err.message ? err.message : 'Could not save the supplier profile. Please try again.',
+        'warning'
+      );
     } finally {
       setIsSaving(false);
     }
@@ -637,7 +652,7 @@ export default function VendorProfilePage() {
           </a>
           <button
             onClick={handleSaveProfile}
-            disabled={isLoadingProfile || isSaving}
+            disabled={isLoadingProfile || isSaving || Boolean(profileLoadError)}
             className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <Save size={16} /> {isSaving ? 'Saving...' : 'Save Supplier Profile'}
@@ -649,6 +664,12 @@ export default function VendorProfilePage() {
         <p className="text-xs text-slate-500 dark:text-gray-400 -mt-2">Loading your supplier profile…</p>
       )}
 
+      {profileLoadError && (
+        <p role="alert" className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-xs font-semibold text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {profileLoadError}
+        </p>
+      )}
+
       <form onSubmit={handleSaveProfile} className="space-y-6">
         {/* Section 1: Legal Entity & Tax Compliance */}
         <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
@@ -656,9 +677,7 @@ export default function VendorProfilePage() {
             <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
               <ShieldCheck className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 1: Supplier Tax & Business Details
             </h2>
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
-              <CheckCircle2 size={12} /> Verified Vendor
-            </span>
+
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -696,9 +715,10 @@ export default function VendorProfilePage() {
               </label>
               <select
                 value={orgType}
-                onChange={(e) => setOrgType(e.target.value as any)}
+                onChange={(e) => setOrgType(e.target.value as typeof orgType)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
               >
+                <option value="" disabled>—</option>
                 <option value="Private Limited">Private Limited Company</option>
                 <option value="Public Limited">Public Limited Company</option>
                 <option value="LLP">Limited Liability Partnership (LLP)</option>
@@ -714,7 +734,7 @@ export default function VendorProfilePage() {
                   PAN Number *
                 </label>
                 {isPanValid(panNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid format</span>
                 ) : (
                   <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
                 )}
@@ -736,7 +756,7 @@ export default function VendorProfilePage() {
                   GSTIN / GST Number *
                 </label>
                 {isGstValid(gstNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ State 27 Verified</span>
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid format</span>
                 ) : (
                   <span className="text-[10px] font-bold text-rose-500">Invalid GSTIN</span>
                 )}
@@ -935,9 +955,6 @@ export default function VendorProfilePage() {
                 <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
                   <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Dual-Stream Category Reconciliation &amp; Taxonomy (Max 10 Categories)
                 </h2>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
-                  Backend Dual-Stream Active
-                </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
                 Manage your self-selected supply capabilities (up to 10 categories). The system reconciles buyer-mapped categories and routes RFQs across both streams.
@@ -999,7 +1016,7 @@ export default function VendorProfilePage() {
                   )}
                 </div>
                 <p className="text-[9.5px] text-slate-400">
-                  Extracted from historical buyer pre-purchase orders &amp; master records (Larsen &amp; Toubro).
+                  Extracted from historical buyer pre-purchase orders &amp; master records.
                 </p>
               </div>
 
@@ -1137,9 +1154,14 @@ export default function VendorProfilePage() {
 
           {/* Categories Selector Grid */}
           <div className="space-y-3 pt-1">
-            {filteredCategories.length === 0 && (
-              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+            {categoryTaxonomy.length === 0 && (
+              <p role="alert" className="text-xs font-semibold text-amber-700 dark:text-amber-400">
                 {categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty}
+              </p>
+            )}
+            {categoryTaxonomy.length > 0 && filteredCategories.length === 0 && (
+              <p className="text-xs font-semibold text-slate-500 dark:text-gray-400">
+                No supply categories match your search.
               </p>
             )}
             {filteredCategories.map((cat) => {
@@ -1244,7 +1266,7 @@ export default function VendorProfilePage() {
         <div className="flex justify-end pt-2">
           <button
             type="submit"
-            disabled={isLoadingProfile || isSaving}
+            disabled={isLoadingProfile || isSaving || Boolean(profileLoadError)}
             className="btn btn-emerald btn-lg shadow-xl shadow-emerald-600/20 font-bold flex items-center gap-2 px-8 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <Save size={18} /> {isSaving ? 'Saving...' : 'Save & Reconcile Vendor Profile'}

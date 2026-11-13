@@ -76,7 +76,7 @@ const COPY = {
   lastHandledBy: 'Last Handled By:',
   receivedAt: 'Received At:',
   internalNotes: 'Internal Notes:',
-  recent: 'Recent',
+  recent: UI_STRINGS.dataLoad.emptyCell,
   newBadge: 'New \u2014 Action Required',
   contactedBadge: 'Contacted',
   whatsappChat: 'WhatsApp Chat',
@@ -531,7 +531,7 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
   });
 
   describe('leads with missing or unexpected fields', () => {
-    it('treats an unknown status as New and a missing timestamp as Recent, in the list and the dialog', async () => {
+    it('treats an unknown status as New and a missing timestamp as a dash, in the list and the dialog', async () => {
       routeFetch({ list: () => listing([MYSTERY]) });
       const user = await renderLoaded();
 

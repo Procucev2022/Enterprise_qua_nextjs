@@ -27,7 +27,7 @@ describe('buyerProfileController 100% Branch Coverage', () => {
   test('getClientIp handles ip, x-forwarded-for, and fallback', () => {
     expect(buyerProfileController.getClientIp({ ip: '10.0.0.1' })).toBe('10.0.0.1');
     expect(buyerProfileController.getClientIp({ headers: { 'x-forwarded-for': '192.168.1.1' } })).toBe('192.168.1.1');
-    expect(buyerProfileController.getClientIp({})).toBe('127.0.0.1');
+    expect(buyerProfileController.getClientIp({})).toBeNull();
   });
 
   test('respondWithError formats BuyerProfileError with and without details, and handles generic error', () => {

@@ -1,16 +1,57 @@
 import {
   fetchLoginLogs,
   fetchLoginLogsSummary,
-  FALLBACK_LOGIN_LOGS,
-  FALLBACK_SUMMARY,
 } from '@/lib/loginLogsClient';
+import type { LoginLogEntry } from '@/lib/types';
 import { authClient } from '@/lib/authClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/authClient', () => ({
   authClient: {
     getToken: jest.fn(),
   },
 }));
+
+// Test-only rows. They use reserved example domains and placeholder identifiers, so they can
+// never be mistaken for a real account. The client itself has no fixture data.
+const TEST_LOGS: LoginLogEntry[] = [
+  {
+    id: 'log-test-1',
+    userId: 'TEST-BUYER-1',
+    userName: 'Test Buyer One',
+    email: 'buyer1@example.test',
+    phoneNumber: '+00 00000 00001',
+    companyName: 'Test Buyer Co',
+    userType: 'buyer',
+    loginAt: '2026-01-01T10:00:00.000Z',
+    logoutAt: null,
+    durationSeconds: 60,
+    status: 'ACTIVE',
+    ipAddress: '192.0.2.1',
+    deviceInfo: 'Test device',
+    location: 'Test City',
+    userAgent: 'test-agent',
+    createdAt: '2026-01-01T10:00:00.000Z',
+  },
+  {
+    id: 'log-test-2',
+    userId: 'TEST-VENDOR-1',
+    userName: 'Test Vendor One',
+    email: 'vendor1@example.test',
+    phoneNumber: '+00 00000 00002',
+    companyName: 'Test Supplier Co',
+    userType: 'vendor',
+    loginAt: '2026-01-01T09:00:00.000Z',
+    logoutAt: '2026-01-01T09:30:00.000Z',
+    durationSeconds: 1800,
+    status: 'LOGGED_OUT',
+    ipAddress: '192.0.2.2',
+    deviceInfo: 'Test device',
+    location: 'Test Town',
+    userAgent: 'test-agent',
+    createdAt: '2026-01-01T09:00:00.000Z',
+  },
+];
 
 describe('loginLogsClient', () => {
   const originalFetch = global.fetch;
@@ -25,149 +66,150 @@ describe('loginLogsClient', () => {
   });
 
   describe('fetchLoginLogs', () => {
-    it('fetches logs successfully via API endpoint', async () => {
-      const mockResponse = {
-        logs: [
-          {
-            id: 'log_1',
-            userName: 'Test User',
-            email: 'test@example.com',
-            phoneNumber: '+91 99999 88888',
-            companyName: 'Test Corp',
-            userType: 'buyer',
-            loginAt: '2026-11-05T10:00:00.000Z',
-            status: 'ACTIVE',
-            createdAt: '2026-11-05T10:00:00.000Z',
-          },
-        ],
-        total: 1,
-        page: 1,
-        totalPages: 1,
-      };
-
+    it('returns the logs and totals the API reports, with the auth header and query string', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
-        json: async () => mockResponse,
+        json: async () => ({ logs: TEST_LOGS, total: 2, page: 1, totalPages: 1 }),
       });
 
-      const result = await fetchLoginLogs({ userType: 'buyer', search: 'Test' });
+      const result = await fetchLoginLogs({ userType: 'buyer', status: 'ACTIVE', search: 'Test', page: 2, limit: 10 });
 
+      expect(result).toEqual({ logs: TEST_LOGS, total: 2, page: 1, totalPages: 1 });
+      expect(result.error).toBeUndefined();
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/login-logs?userType=buyer&search=Test',
+        '/api/login-logs?userType=buyer&status=ACTIVE&search=Test&page=2&limit=10',
         expect.objectContaining({
           method: 'GET',
-          headers: expect.objectContaining({
-            Authorization: 'Bearer mock-jwt-token',
-          }),
+          headers: expect.objectContaining({ Authorization: 'Bearer mock-jwt-token' }),
         })
       );
-      expect(result.logs).toEqual(mockResponse.logs);
-      expect(result.total).toBe(1);
     });
 
-    it('passes all optional filters as query parameters', async () => {
+    it('omits the auth header and "all" filters when no token or filter is set', async () => {
+      (authClient.getToken as jest.Mock).mockReturnValue(null);
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({ logs: [], total: 0 }),
       });
 
-      await fetchLoginLogs({
-        userType: 'vendor',
-        status: 'LOGGED_OUT',
-        search: 'Apex',
-        startDate: '2026-11-01',
-        endDate: '2026-11-05',
-        dateRangePreset: 'last7',
-        page: 2,
-        limit: 5,
-      });
+      await fetchLoginLogs({ userType: 'all', status: 'all' });
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/login-logs?userType=vendor&status=LOGGED_OUT&search=Apex&startDate=2026-11-01&endDate=2026-11-05&dateRangePreset=last7&page=2&limit=5',
-        expect.any(Object)
-      );
+      const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(url).toBe('/api/login-logs');
+      expect((init as RequestInit).headers).not.toHaveProperty('Authorization');
     });
 
-    it('falls back gracefully to filtered mock dataset on fetch rejection', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
-
-      // Filter by userType
-      const resultBuyer = await fetchLoginLogs({ userType: 'buyer' });
-      expect(resultBuyer.logs.every((l) => l.userType === 'buyer')).toBe(true);
-
-      // Filter by status
-      const resultActive = await fetchLoginLogs({ status: 'ACTIVE' });
-      expect(resultActive.logs.every((l) => l.status === 'ACTIVE')).toBe(true);
-
-      // Filter by search query (name / email / company / phone)
-      const resultSearch = await fetchLoginLogs({ search: 'tatamotors' });
-      expect(resultSearch.logs.length).toBeGreaterThan(0);
-      expect(resultSearch.logs[0].email).toContain('tatamotors');
-
-      // Test pagination
-      const resultPaged = await fetchLoginLogs({ page: 1, limit: 2 });
-      expect(resultPaged.logs.length).toBe(2);
-      expect(resultPaged.totalPages).toBe(Math.ceil(FALLBACK_LOGIN_LOGS.length / 2));
-    });
-
-    it('falls back to mock dataset when HTTP response is not ok', async () => {
+    it('derives total from the list length and defaults page metadata when the API omits them', async () => {
       global.fetch = jest.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
+        ok: true,
+        json: async () => ({ logs: TEST_LOGS }),
       });
 
       const result = await fetchLoginLogs();
-      expect(result.logs.length).toBeGreaterThan(0);
-      expect(result.total).toBe(FALLBACK_LOGIN_LOGS.length);
+
+      expect(result.total).toBe(2);
+      expect(result.page).toBe(1);
+      expect(result.totalPages).toBe(1);
     });
 
-    it('handles requests without token gracefully', async () => {
-      (authClient.getToken as jest.Mock).mockReturnValue(null);
+    it('returns no rows and an error when the API responds with a failure status', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+
+      const result = await fetchLoginLogs({ page: 3 });
+
+      expect(result.logs).toEqual([]);
+      expect(result.total).toBe(0);
+      expect(result.page).toBe(3);
+      expect(result.totalPages).toBe(0);
+      expect(result.error).toBe(
+        `Could not load login logs (HTTP 503). Try again in a moment.`
+      );
+    });
+
+    it('returns no rows and an error when the network request fails', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Failed to fetch'));
+
+      const result = await fetchLoginLogs();
+
+      expect(result.logs).toEqual([]);
+      expect(result.total).toBe(0);
+      expect(result.page).toBe(1);
+      expect(result.error).toBe(
+        'Could not reach the server to load login logs. Check your connection and try again.'
+      );
+    });
+
+    it('returns an error instead of rows when the reply has no logs array', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ logs: [] }),
+        json: async () => ({ total: 5 }),
       });
 
-      await fetchLoginLogs();
+      const result = await fetchLoginLogs();
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/login-logs',
-        expect.objectContaining({
-          headers: { 'Content-Type': 'application/json' },
-        })
+      expect(result.logs).toEqual([]);
+      expect(result.error).toBe(
+        'The server returned an unexpected response while loading login logs. Try again.'
       );
     });
   });
 
   describe('fetchLoginLogsSummary', () => {
-    it('returns summary from API when response is successful', async () => {
+    it('returns the summary from the API when the response is successful', async () => {
       const mockSummary = {
-        totalToday: 200,
-        activeNow: 40,
-        buyerLogins: 110,
-        sellerLogins: 90,
-        avgDurationMinutes: 35,
-        todayPeakHour: '11:00 AM',
+        totalToday: 4,
+        activeNow: 1,
+        buyerLogins: 2,
+        sellerLogins: 2,
+        avgDurationMinutes: 12,
+        todayPeakHour: '10:00',
       };
-
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({ summary: mockSummary }),
       });
 
       const res = await fetchLoginLogsSummary();
-      expect(res).toEqual(mockSummary);
+
+      expect(res).toEqual({ summary: mockSummary });
     });
 
-    it('falls back to FALLBACK_SUMMARY on network error or failed status', async () => {
+    it('returns a null summary and an error on a failure status', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+
+      const res = await fetchLoginLogsSummary();
+
+      expect(res.summary).toBeNull();
+      expect(res.error).toBe(
+        'Could not load login log summary (HTTP 503). Try again in a moment.'
+      );
+    });
+
+    it('returns a null summary and an error on a network failure', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('API error'));
 
       const res = await fetchLoginLogsSummary();
-      expect(res).toEqual(FALLBACK_SUMMARY);
 
-      global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503 });
-      const res503 = await fetchLoginLogsSummary();
-      expect(res503).toEqual(FALLBACK_SUMMARY);
+      expect(res.summary).toBeNull();
+      expect(res.error).toBe(
+        'Could not reach the server to load login log summary. Check your connection and try again.'
+      );
     });
+
+    it('returns a null summary and an error when the reply has no summary', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+
+      const res = await fetchLoginLogsSummary();
+
+      expect(res.summary).toBeNull();
+      expect(res.error).toBe(
+        'The server returned an unexpected response while loading login log summary. Try again.'
+      );
+    });
+  });
+
+  it('uses the shared UI_STRINGS resource names in its error messages', () => {
+    expect(UI_STRINGS.dataLoad.resources.loginLogs).toBe('login logs');
+    expect(UI_STRINGS.dataLoad.resources.loginLogsSummary).toBe('login log summary');
   });
 });

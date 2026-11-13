@@ -18,19 +18,15 @@ All AI coding assistants (including Antigravity, Gemini, Cursor, Claude, Codex, 
 ## 2. Automated Test Verification on Every Change
 Whenever making any code changes or adding new features:
 1. Immediately write or update corresponding unit tests in `frontend/__tests__/` or `backend/__tests__/`.
-2. Run the test suite with coverage enforcement:
+2. For rapid iterative feedback during active edits, run targeted tests with coverage or the fast check command:
    ```bash
-   # From root:
-   npm run test:coverage
-   # Or individually:
-   npm run test:coverage --prefix frontend
-   npm run test:coverage --prefix backend
+   # Rapid test & coverage on modified file (~1-3s):
+   npm test --prefix frontend -- --coverage --collectCoverageFrom="app/path/to/file.tsx" --coverageThreshold="{}" __tests__/path/to/test.test.tsx
+   # Or run fast check for all changed files (~3-7s):
+   npm run check:fast   # or: npm run qc:fast
    ```
-3. Run the coverage verification checker:
-   ```bash
-   npm run check:coverage
-   ```
-4. Verify that all unit tests pass with zero errors and that the coverage report shows `>= 90%` across all parameters for each individual file.
+3. Verify that the modified file meets `>= 90%` coverage across lines, statements, branches, and functions with zero test failures.
+4. Run the full workspace coverage check (`npm run test:coverage` and `npm run check:coverage`) when preparing a pull request, pre-commit, or workspace-wide release.
 
 ---
 
@@ -106,27 +102,27 @@ Whenever making any code changes or adding new features:
 ---
 
 ## 13. Quality Check Pipeline & Multi-Project Verification Protocol
-- **Mandatory Quality Check Execution**: After every code change, AI agents **MUST** run the comprehensive workspace quality check pipeline.
-- **Strict Verification Sequence**:
-  1. **Production Build & Asset Verification**: `npm run build` (Ensures compilation, bundling, and prerendering succeed).
-  2. **Unit Test & 90% Per-File Coverage Enforcement**: `npm run test:coverage` and `npm run check:coverage` (Enforces per-file $\ge 90\%$ benchmarks across statements, branches, functions, and lines with 0 failures).
-  3. **TypeScript Static Typecheck**: `npm run typecheck` (Ensures zero type errors).
-  4. **Linting & Code Style Analysis**: `npm run lint` (Ensures zero ESLint warnings and errors).
-  5. **Database Schema & Migrations Verification**: `npm run db:migrate` (Applies and verifies pending schema updates and seed integrity).
-- **Workspace-Wide Global Commands**:
-  - Run full quality check across all workspace projects:
-    ```bash
-    npm run check:quality
-    # Or shorthand:
-    npm run qc
-    ```
-- **Fast Change Verification**:
-  - For rapid iterative feedback during active edits, run the fast verification command to validate modified files:
+- **Fast Change Verification (Active Iterations & Small Changes)**:
+  - For rapid feedback during active code edits, AI agents **MUST** use the fast verification command to validate modified files in **~3-7s**:
     ```bash
     npm run check:fast
     # Or shorthand:
     npm run qc:fast
     ```
+  - This automatically checks Git status, skips untouched backend/frontend subsystems, executes tests only for changed files (`--onlyChanged`), runs TypeScript typechecking, and performs linting.
+- **Comprehensive Workspace Quality Check Execution (`npm run qc`)**:
+  - Run the full workspace pipeline (`npm run build`, full `npm run test:coverage`, `check:coverage`, `typecheck`, `lint`, `db:migrate`) before concluding a major task, creating pull requests, or running pre-commit verification:
+    ```bash
+    npm run check:quality
+    # Or shorthand:
+    npm run qc
+    ```
+- **Strict Verification Sequence (Full Pipeline)**:
+  1. **Production Build & Asset Verification**: `npm run build` (Ensures compilation, bundling, and prerendering succeed).
+  2. **Unit Test & 90% Per-File Coverage Enforcement**: `npm run test:coverage` and `npm run check:coverage` (Enforces per-file $\ge 90\%$ benchmarks across statements, branches, functions, and lines with 0 failures).
+  3. **TypeScript Static Typecheck**: `npm run typecheck` (Ensures zero type errors).
+  4. **Linting & Code Style Analysis**: `npm run lint` (Ensures zero ESLint warnings and errors).
+  5. **Database Schema & Migrations Verification**: `npm run db:migrate` (Applies and verifies pending schema updates and seed integrity).
 
 ---
 

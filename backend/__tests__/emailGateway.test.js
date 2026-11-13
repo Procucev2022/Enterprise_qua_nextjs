@@ -829,7 +829,7 @@ describe('emailGatewayService start and stop', () => {
     const result = emailGatewayService.startPolling(
       emailGatewayService.resolveConfig({ EMAIL_GATEWAY_ENABLED: 'true' })
     );
-    expect(result).toEqual({ started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED });
+    expect(result).toEqual({ started: false, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED });
   });
 
   test('starts once and refuses to start twice', () => {
@@ -1652,11 +1652,11 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
 
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     expect(mailerSpy).toHaveBeenCalledWith('stranger.default@outside.org', expect.objectContaining({
-      gatewayAddress: EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      gatewayAddress: null,
     }));
     expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
       status: INGESTION_OUTCOME.ACK_PENDING,
-      detail: expect.stringContaining(EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS),
+      detail: expect.stringContaining(EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER),
     }));
   });
 
@@ -1696,11 +1696,11 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
 
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     expect(mailerSpy).toHaveBeenCalledWith('stranger.vendor-default@outside.org', expect.objectContaining({
-      gatewayAddress: EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      gatewayAddress: null,
     }));
     expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
       status: INGESTION_OUTCOME.ACK_PENDING,
-      detail: expect.stringContaining(EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS),
+      detail: expect.stringContaining(EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER),
     }));
   });
 
@@ -1978,16 +1978,24 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       const foundAssigned = await emailGatewayService.resolveVendorFromEmail('assigned@vendor.com', rfqWithAssigned);
       expect(foundAssigned).toEqual(assignedVendor);
 
-      // srinu20252026@gmail.com and rfqprocucev@gmail.com are platform gateway accounts and never resolve as vendors
-      const foundGateway = await emailGatewayService.resolveVendorFromEmail('srinu20252026@gmail.com', rfqWithAssigned);
+      // Configured buyer and vendor gateway accounts are platform identities and never resolve as vendors
+      const savedBuyerGatewayEnv = process.env.EMAIL_GATEWAY_ADDRESS;
+      const savedVendorGatewayEnv = process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      process.env.EMAIL_GATEWAY_ADDRESS = 'gateway-buyer@platform.test';
+      process.env.VENDOR_EMAIL_GATEWAY_ADDRESS = 'gateway-vendor@platform.test';
+      const foundGateway = await emailGatewayService.resolveVendorFromEmail('gateway-vendor@platform.test', rfqWithAssigned);
       expect(foundGateway).toBeNull();
 
       const rfqEmptyAssigned = { ...sampleRfq, assignedVendors: [] };
-      const foundGatewayFallback = await emailGatewayService.resolveVendorFromEmail('srinu20252026@gmail.com', rfqEmptyAssigned);
+      const foundGatewayFallback = await emailGatewayService.resolveVendorFromEmail('gateway-buyer@platform.test', rfqEmptyAssigned);
       expect(foundGatewayFallback).toBeNull();
 
-      const rfqProcucevNotVendor = await emailGatewayService.resolveVendorFromEmail('rfqprocucev@gmail.com', rfqEmptyAssigned);
+      const rfqProcucevNotVendor = await emailGatewayService.resolveVendorFromEmail('gateway-buyer@platform.test', rfqEmptyAssigned);
       expect(rfqProcucevNotVendor).toBeNull();
+      if (savedBuyerGatewayEnv === undefined) delete process.env.EMAIL_GATEWAY_ADDRESS;
+      else process.env.EMAIL_GATEWAY_ADDRESS = savedBuyerGatewayEnv;
+      if (savedVendorGatewayEnv === undefined) delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      else process.env.VENDOR_EMAIL_GATEWAY_ADDRESS = savedVendorGatewayEnv;
 
       const nullCheck = await emailGatewayService.resolveVendorFromEmail(null);
       expect(nullCheck).toBeNull();
@@ -2201,37 +2209,30 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(outcome.quote.unitPrice).toBe(12500);
     });
 
-    test('processVendorQuoteMessage uses second-chance fallback when initial extraction has 0 unitPrice', async () => {
+    test('refuses a quote whose extraction states no unit price, with no second heuristic pass', async () => {
       const emailRecord = {
-        messageId: '<quote-fallback-pass@apex.com>',
+        messageId: '<quote-no-unit-price@apex.com>',
         subject: 'Re: [RFQ-2026-00421] Bid',
         fromAddress: VENDOR_EMAIL,
         bodyText: 'Unit Price: 18000',
       };
       jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
-        unitPrice: 0,
-        totalPrice: 0,
+        success: true,
+        unitPrice: null,
+        totalPrice: null,
+        lineItemQuotes: [],
       });
-      jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({
-        unitPrice: 18000,
-        totalPrice: 72000,
-        leadTimeDays: 5,
-        warrantyYears: 1,
-        paymentTerms: 'Net 30',
-        complianceStatus: 'Fully Compliant',
-        remarks: 'Fallback quote',
-      });
-      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [{ unitPrice: 18000 }] });
-      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
-      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+      const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [] });
+      const failSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
 
       const outcome = await emailGatewayService.processVendorQuoteMessage(
         emailRecord,
         sampleRfq,
         sampleVendor
       );
-      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
-      expect(outcome.quote.unitPrice).toBe(18000);
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+      expect(addQuoteSpy).not.toHaveBeenCalled();
+      expect(failSpy).toHaveBeenCalled();
     });
 
     test('does not send a second buyer quote email when local submission owns delivery', async () => {
@@ -2677,7 +2678,7 @@ Price INR 5000
       VENDOR_EMAIL_GATEWAY_ENABLED: 'true',
       VENDOR_EMAIL_GATEWAY_HOST: 'imap.gmail.com',
       VENDOR_EMAIL_GATEWAY_USER: 'srinu20252026@gmail.com',
-      VENDOR_EMAIL_GATEWAY_PASSWORD: 'oycrikpkvnjirwgo',
+      VENDOR_EMAIL_GATEWAY_PASSWORD: 'test-vendor-gateway-password',
     };
 
     const vendorSampleRfq = {
@@ -2707,8 +2708,9 @@ Price INR 5000
 
     test('resolveVendorConfig resolves environment overrides and defaults', () => {
       const def = emailGatewayService.resolveVendorConfig({});
-      expect(def.user).toBe('srinu20252026@gmail.com');
-      expect(def.address).toBe('srinu20252026@gmail.com');
+      // No personal mailbox is assumed when the vendor gateway is not configured.
+      expect(def.user).toBe('');
+      expect(def.address).toBe('');
       expect(def.isVendorMailbox).toBe(true);
 
       const custom = emailGatewayService.resolveVendorConfig({
@@ -2880,10 +2882,30 @@ Hello team, sending catalog.
     });
 
     test('getStatus surfaces vendor gateway status', async () => {
-      const status = await emailGatewayService.getStatus();
-      expect(status.vendorGateway).toBeDefined();
-      expect(status.vendorGateway.gatewayAddress).toBe(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com');
-      expect(status.vendorGateway.mailboxUser).toBe(process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com');
+      const saved = { ...process.env };
+      delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      Object.assign(process.env, VENDOR_ENV);
+      try {
+        const status = await emailGatewayService.getStatus();
+        expect(status.vendorGateway).toBeDefined();
+        expect(status.vendorGateway.gatewayAddress).toBe(VENDOR_ENV.VENDOR_EMAIL_GATEWAY_USER);
+        expect(status.vendorGateway.mailboxUser).toBe(VENDOR_ENV.VENDOR_EMAIL_GATEWAY_USER);
+      } finally {
+        process.env = saved;
+      }
+    });
+
+    test('getStatus reports no vendor gateway address when the gateway is not configured', async () => {
+      const saved = { ...process.env };
+      delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      delete process.env.VENDOR_EMAIL_GATEWAY_USER;
+      try {
+        const status = await emailGatewayService.getStatus();
+        expect(status.vendorGateway.gatewayAddress).toBeNull();
+        expect(status.vendorGateway.mailboxUser).toBeNull();
+      } finally {
+        process.env = saved;
+      }
     });
 
     test('pollVendorOnce handles unreadable message and already-processed message via the Gmail API', async () => {
@@ -3036,9 +3058,13 @@ Hello team, sending catalog.
       const directVendor = await emailGatewayService.resolveVendorFromEmail('direct@supplier.com', rfqDirect);
       expect(directVendor.id).toBe('v-direct');
 
-      // srinu20252026@gmail.com is strictly the platform vendor gateway and never resolves as a vendor
-      const matchedVendorGw = await emailGatewayService.resolveVendorFromEmail('srinu20252026@gmail.com', rfqDirect);
+      // A configured vendor gateway account is a platform identity and never resolves as a vendor
+      const savedVendorGwEnv = process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      process.env.VENDOR_EMAIL_GATEWAY_ADDRESS = 'gateway-vendor@platform.test';
+      const matchedVendorGw = await emailGatewayService.resolveVendorFromEmail('gateway-vendor@platform.test', rfqDirect);
       expect(matchedVendorGw).toBeNull();
+      if (savedVendorGwEnv === undefined) delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      else process.env.VENDOR_EMAIL_GATEWAY_ADDRESS = savedVendorGwEnv;
 
       // Direct vendor matched by getVendorById
       jest.spyOn(storeService, 'getVendorById').mockReturnValueOnce({ id: 'v-direct-id', name: 'ID Vendor' });
@@ -3693,7 +3719,6 @@ describe('emailGatewayService.processVendorQuoteMessage branch coverage', () => 
     storeService.vendors = [vendor];
 
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 0, totalPrice: 0 });
-    jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({ unitPrice: 0 });
     const failSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
 
     const message = { fromAddress: vendor.email, subject: 'Re: RFQ-DIRECT-5', bodyText: 'Please find our proposal attached.' };
@@ -3918,7 +3943,6 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
       unitPrice: 0,
       totalPrice: 0,
     });
-    jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({ unitPrice: 0 });
     const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
 
     const message = {
@@ -3968,7 +3992,6 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
     const rfqV2 = createTestRfq('rfq-v2', 'RFQ-V2-FAIL', 'mode_2', buyerEmailV2);
     jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV2);
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 0, totalPrice: 0 });
-    jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({ unitPrice: 0 });
     const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
 
     const message = {

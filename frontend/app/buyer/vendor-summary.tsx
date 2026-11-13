@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
@@ -23,7 +23,6 @@ import {
   X,
   AlertCircle,
   UploadCloud,
-  Sparkles,
   Users,
   Eye,
   Pencil,
@@ -41,13 +40,11 @@ import {
   Download,
   FileSpreadsheet,
   Clock,
-  Database,
-  Workflow,
   Filter,
   ArrowLeft,
-  BadgeCheck,
 } from 'lucide-react';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
 interface VendorSummaryProps {
@@ -55,11 +52,14 @@ interface VendorSummaryProps {
   onNavigateToWizard?: () => void;
 }
 
-// Classification helper: Uploaded by Buyer
-export const isBuyerUploaded = (v: any): boolean => {
+// Classification helper: Uploaded by Buyer. Reads only the ownership fields the
+// vendor record carries (source, buyerId, buyerAccountId, addedByBuyerCompany).
+// The vendor ID is never parsed for a prefix.
+export const isBuyerUploaded = (
+  v: Partial<Pick<VendorEntry, 'source' | 'buyerId' | 'buyerAccountId' | 'addedByBuyerCompany'>> | null | undefined
+): boolean => {
   if (!v) return false;
   const s = String(v.source || '').toLowerCase().trim();
-  const id = String(v.id || '').toLowerCase().trim();
   return (
     s === 'buyer_uploaded' ||
     s === 'vendor_master_ingestion' ||
@@ -71,11 +71,8 @@ export const isBuyerUploaded = (v: any): boolean => {
     s.includes('ingestion') ||
     s.includes('purchase_dump') ||
     !!v.addedByBuyerCompany ||
-    id.startsWith('v-hist-') ||
-    id.startsWith('v-navin-') ||
-    id.startsWith('vm-') ||
-    id.startsWith('v-ingest-') ||
-    id.startsWith('v-buyer-')
+    !!v.buyerId ||
+    !!v.buyerAccountId
   );
 };
 
@@ -96,10 +93,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     deleteBuyerVendor,
     deleteMultipleBuyerVendors,
     categoryTaxonomy,
+    ensureCategoryTaxonomy,
     reviseVendorRating,
+    requestVendorEvaluation,
     openRatingRevisionEmailModal,
     activeBuyerAccount,
     isLoadingVendors,
+    fetchVendorEvaluation,
   } = useApp();
 
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
@@ -132,6 +132,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     };
   }, [activeBuyerAccount?.pincode]);
 
+  useEffect(() => {
+    if (ensureCategoryTaxonomy) {
+      void ensureCategoryTaxonomy();
+    }
+  }, [ensureCategoryTaxonomy]);
+
   // Pincode-first sort: vendors whose pincode matches the buyer's own are
   // moved to the front, preserving whatever relative order (rating, etc.)
   // each group already had — mirrors the backend's pincode-match-then-rating
@@ -161,12 +167,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   // Rating Revision State
   const [selectedVendorForRevision, setSelectedVendorForRevision] = useState<any | null>(null);
-  const [qualityScore, setQualityScore] = useState<number | string>(85);
-  const [costScore, setCostScore] = useState<number | string>(85);
-  const [deliveryScore, setDeliveryScore] = useState<number | string>(85);
+  const [qualityScore, setQualityScore] = useState<number | string>('');
+  const [costScore, setCostScore] = useState<number | string>('');
+  const [deliveryScore, setDeliveryScore] = useState<number | string>('');
   const [remarks, setRemarks] = useState('');
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
-  const [isAiGeneratingRating, setIsAiGeneratingRating] = useState(false);
+  const isSubmittingRevisionRef = useRef(false);
+  const [isRequestingEvaluation, setIsRequestingEvaluation] = useState(false);
+  const [evaluationRequestDispatched, setEvaluationRequestDispatched] = useState(false);
 
   // CRUD Form State
   const [formName, setFormName] = useState('');
@@ -174,6 +182,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formMajorCategory, setFormMajorCategory] = useState('');
   const [formMinorCategories, setFormMinorCategories] = useState<string[]>([]);
   const [formMinorInput, setFormMinorInput] = useState('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
   const [formContactPerson, setFormContactPerson] = useState('');
   const [formContactDesignation, setFormContactDesignation] = useState('');
   const [formEmail, setFormEmail] = useState('');
@@ -237,8 +246,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formPan, setFormPan] = useState('');
   const [formMsme, setFormMsme] = useState('');
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
-  const [formRating, setFormRating] = useState<number>(4.5);
-  const [formStatus, setFormStatus] = useState<VendorEntry['status']>('PREFERRED ENTERPRISE SUPPLIER');
+  const [isEditingStatutorySection, setIsEditingStatutorySection] = useState(false);
+  // Null until the user enters a rating (1.0 - 5.0). No default rating is assumed.
+  const [formRating, setFormRating] = useState<number | null>(null);
 
   // Vendor Upload History State & Handlers
   const [showUploadHistoryModal, setShowUploadHistoryModal] = useState(false);
@@ -264,13 +274,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (!batch) return;
     const records = batch.records || [];
     let csv = 'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Major Category,Rating\n';
-    if (records.length > 0) {
-      records.forEach((r: any) => {
-        csv += `"${r.vendorCode || ''}","${r.name || ''}","${r.contactPerson || ''}","${r.email || ''}","${r.phone || ''}","${r.city || ''}","${r.gstin || ''}","${r.category || ''}","${r.rating || ''}"\n`;
-      });
-    } else {
-      csv += `"VND-1001","${batch.fileName || 'Uploaded Vendor'}","Contact Person","vendor@domain.com","+91 9800000000","India","27AAACA1928K1Z4","General","85"\n`;
-    }
+    // Only the batch's real records become rows. A batch without records exports the header alone.
+    records.forEach((r: any) => {
+      csv += `"${r.vendorCode || ''}","${r.name || ''}","${r.contactPerson || ''}","${r.email || ''}","${r.phone || ''}","${r.city || ''}","${r.gstin || ''}","${r.category || ''}","${r.rating ?? ''}"\n`;
+    });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -280,39 +287,77 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     showToast('Template Downloaded', `Downloaded vendor template data for ${batch.fileName}.`, 'success');
   };
 
-  // Available Major Categories from Taxonomy or Default List
+  // Exports the selected rows of the current list. Every value written is a field
+  // the vendor record holds; nothing is added.
+  const handleExportSelectedCsv = () => {
+    const rows = buyerFilteredVendors.filter((v) => selectedVendorIds.includes(v.id));
+    const header = 'Vendor ID,Company Name,Major Category,Contact Person,Email ID,Phone,Location,Rating\n';
+    const body = rows
+      .map((v) =>
+        [v.id, v.name, v.majorCategory, v.contactPerson, v.email, v.phone, v.location, v.rating]
+          .map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`)
+          .join(',')
+      )
+      .join('\n');
+    const blob = new Blob([header + body + (body ? '\n' : '')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Procucev_Selected_Suppliers_${new Date().toISOString().substring(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast('Export Complete', `Exported ${rows.length} selected supplier records.`, 'success');
+  };
+
+  // Major categories come only from the category master read from the database.
+  // When it is empty or failed to load, the picker is empty; no list is substituted.
   const availableMajorCategories = Array.from(
-    new Set([
-      ...(categoryTaxonomy && categoryTaxonomy.length > 0
-        ? categoryTaxonomy.map((c) => c.majorCategory)
-        : [
-            'Mechanical',
-            'Electrical',
-            'Civil',
-            'Instrumentation & Automation',
-            'Chemicals & Petrochemicals',
-            'Piping & Fittings',
-            'Safety & PPE',
-            'Raw Materials',
-            'General Industrial',
-          ]),
-      'Mechanical',
-      'Electrical',
-      'Civil',
-      'Instrumentation & Automation',
-    ])
-  ).filter(Boolean);
+    new Set((categoryTaxonomy || []).map((c) => c.majorCategory).filter(Boolean))
+  );
+
+  const getMajorForCategory = useCallback(
+    (minorName: string): string => {
+      if (!minorName) return '';
+      const match = (categoryTaxonomy || []).find((c) =>
+        (c.minorCategories || []).some((m) => m.toLowerCase() === minorName.toLowerCase())
+      );
+      return match ? match.majorCategory : '';
+    },
+    [categoryTaxonomy]
+  );
+
+  const allAvailableMinorCategories = useMemo(() => {
+    const list: string[] = [];
+    (categoryTaxonomy || []).forEach((c) => {
+      (c.minorCategories || []).forEach((m) => {
+        if (m && !list.includes(m)) {
+          list.push(m);
+        }
+      });
+    });
+    return list.sort((a, b) => a.localeCompare(b));
+  }, [categoryTaxonomy]);
+
+  const filteredCategorySuggestions = useMemo(() => {
+    const q = formMinorInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableMinorCategories.filter((cat) => cat.toLowerCase().includes(q));
+  }, [formMinorInput, allAvailableMinorCategories]);
 
   // Open Add Vendor Modal — reuses the same form field state as Edit, reset
   // to blanks/defaults since there is no existing vendor to populate from.
   const handleOpenAddModal = () => {
+    if (ensureCategoryTaxonomy) {
+      void ensureCategoryTaxonomy();
+    }
     setFormName('');
     setFormBrandName('');
-    setFormMajorCategory(availableMajorCategories[0] || 'Mechanical');
+    setFormMajorCategory('');
     setFormMinorCategories([]);
     setFormMinorInput('');
+    setShowCategorySuggestions(false);
     setFormContactPerson('');
-    setFormContactDesignation('Authorized Representative');
+    setFormContactDesignation('');
     setFormEmail('');
     setFormPhone('');
     setFormLocation('');
@@ -324,8 +369,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormPan('');
     setFormMsme('');
     setFormAnnualTurnover('');
-    setFormRating(4.5);
-    setFormStatus('REGISTERED / NOT EVALUATED');
+    setFormRating(null);
     setAddModalOpen(true);
   };
 
@@ -343,9 +387,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       !formCity.trim() ||
       !formState.trim() ||
       !formPincode.trim() ||
-      !formGst.trim()
+      !formGst.trim() ||
+      formRating === null
     ) {
-      showToast('Validation Error', 'Please complete all required fields including City, State, Pincode and GSTIN.', 'warning');
+      showToast(
+        'Validation Error',
+        'Please complete all required fields including Division, City, State, Pincode, GSTIN and Rating (1.0 - 5.0).',
+        'warning'
+      );
+      return;
+    }
+
+    if (formRating < 1 || formRating > 5) {
+      showToast('Invalid Rating', 'Rating must be between 1.0 and 5.0.', 'warning');
       return;
     }
 
@@ -359,7 +413,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       name: formName.trim(),
       brandName: formBrandName.trim() || formName.trim(),
       majorCategory: formMajorCategory,
-      minorCategories: formMinorCategories.length > 0 ? formMinorCategories : [formMajorCategory],
+      minorCategories: formMinorCategories,
       contactPerson: formContactPerson.trim(),
       contactDesignation: formContactDesignation.trim(),
       email: formEmail.trim().toLowerCase(),
@@ -374,9 +428,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       pan: formPan.trim().toUpperCase(),
       msme: formMsme.trim(),
       annualTurnover: formAnnualTurnover.trim(),
-      rating: Number(formRating) || 4.5,
-      score: Math.round((Number(formRating) || 4.5) * 20),
-      status: formStatus,
+      rating: formRating,
+      score: Math.round(formRating * 20),
       source: 'buyer_manual',
     });
     setIsSubmittingAdd(false);
@@ -390,14 +443,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   // Open Edit Vendor Modal
   const handleOpenEditModal = (vendor: any) => {
+    if (ensureCategoryTaxonomy) {
+      void ensureCategoryTaxonomy();
+    }
     setSelectedVendorForCrud(vendor);
     setFormName(vendor.name || '');
     setFormBrandName(vendor.brandName || vendor.name || '');
-    setFormMajorCategory(vendor.majorCategory || availableMajorCategories[0] || 'Mechanical');
+    setFormMajorCategory(vendor.majorCategory || '');
     setFormMinorCategories(vendor.minorCategories ? [...vendor.minorCategories] : []);
     setFormMinorInput('');
+    setShowCategorySuggestions(false);
     setFormContactPerson(vendor.contactPerson || '');
-    setFormContactDesignation(vendor.contactDesignation || 'Authorized Representative');
+    setFormContactDesignation(vendor.contactDesignation || '');
     setFormEmail(vendor.email || '');
     setFormPhone(vendor.phone || '');
     setFormLocation(vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`);
@@ -408,9 +465,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormGst(vendor.gst || vendor.gstin || '');
     setFormPan(vendor.pan || '');
     setFormMsme(vendor.msme || '');
-    setFormAnnualTurnover(vendor.annualTurnover || '₹10 - ₹50 Cr');
-    setFormRating(vendor.rating || 4.5);
-    setFormStatus(vendor.status || 'PREFERRED ENTERPRISE SUPPLIER');
+    setFormAnnualTurnover(vendor.annualTurnover || '');
+    setFormRating(typeof vendor.rating === 'number' ? vendor.rating : null);
+    setIsEditingStatutorySection(false);
     setEditModalOpen(true);
   };
 
@@ -431,8 +488,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const trimmed = tag.trim();
     if (trimmed && !formMinorCategories.includes(trimmed)) {
       setFormMinorCategories([...formMinorCategories, trimmed]);
+      if (!formMajorCategory) {
+        const inferredMajor = getMajorForCategory(trimmed);
+        if (inferredMajor) {
+          setFormMajorCategory(inferredMajor);
+        }
+      }
     }
     setFormMinorInput('');
+    setShowCategorySuggestions(false);
   };
 
   // Remove Minor Category Tag
@@ -449,6 +513,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return;
     }
 
+    if (formRating !== null && (formRating < 1 || formRating > 5)) {
+      showToast('Invalid Rating', 'Rating must be between 1.0 and 5.0.', 'warning');
+      return;
+    }
+
     if (formPincode.trim() && formPincodeError) {
       showToast('Invalid Pincode', formPincodeError, 'warning');
       return;
@@ -458,7 +527,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       name: formName.trim(),
       brandName: formBrandName.trim() || formName.trim(),
       majorCategory: formMajorCategory,
-      minorCategories: formMinorCategories.length > 0 ? formMinorCategories : [formMajorCategory],
+      minorCategories: formMinorCategories,
       contactPerson: formContactPerson.trim(),
       contactDesignation: formContactDesignation.trim(),
       email: formEmail.trim().toLowerCase(),
@@ -473,9 +542,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       pan: formPan.trim().toUpperCase(),
       msme: formMsme.trim(),
       annualTurnover: formAnnualTurnover.trim(),
-      rating: Number(formRating) || 4.5,
-      score: Math.round((Number(formRating) || 4.5) * 20),
-      status: formStatus,
+      // Rating and score change only when the user enters a rating. Status is not
+      // edited here, so it is not sent.
+      ...(formRating !== null ? { rating: formRating, score: Math.round(formRating * 20) } : {}),
     };
 
     updateBuyerVendor(selectedVendorForCrud.id, updates);
@@ -483,12 +552,43 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorForCrud(null);
   };
 
-  // Confirm Delete Vendor
-  const handleDeleteVendorConfirm = () => {
+  // Save Section 3 (Statutory & Commercial Identifiers) independently
+  const handleSaveStatutorySectionIndependently = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
     if (!selectedVendorForCrud) return;
-    deleteBuyerVendor(selectedVendorForCrud.id);
-    setDeleteModalOpen(false);
-    setSelectedVendorForCrud(null);
+
+    const cleanGst = formGst.trim().toUpperCase();
+    const cleanPan = formPan.trim().toUpperCase();
+    const cleanMsme = formMsme.trim();
+    const cleanTurnover = formAnnualTurnover.trim();
+
+    const statutoryUpdates: Partial<VendorEntry> = {
+      gst: cleanGst,
+      gstin: cleanGst,
+      pan: cleanPan,
+      msme: cleanMsme,
+      annualTurnover: cleanTurnover,
+    };
+
+    updateBuyerVendor(selectedVendorForCrud.id, statutoryUpdates);
+    setSelectedVendorForCrud((prev: any) => (prev ? { ...prev, ...statutoryUpdates } : prev));
+    setIsEditingStatutorySection(false);
+    showToast('Statutory Details Saved', 'Statutory & commercial identifiers have been updated independently.', 'success');
+  };
+
+  // Confirm Delete Vendor
+  const handleDeleteVendorConfirm = async () => {
+    if (!selectedVendorForCrud) return;
+    const vendorId = selectedVendorForCrud.id;
+    try {
+      const res = await deleteBuyerVendor(vendorId);
+      if (res !== false) {
+        setDeleteModalOpen(false);
+        setSelectedVendorForCrud(null);
+      }
+    } catch (err) {
+      logger.log('ERROR', 'Failed to delete vendor', { error: err, vendorId }, 'VENDOR_DIRECTORY');
+    }
   };
 
   // Open Bulk Delete Modal
@@ -506,7 +606,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       if (typeof deleteMultipleBuyerVendors === 'function') {
         await deleteMultipleBuyerVendors(idsToDelete);
       } else if (typeof deleteBuyerVendor === 'function') {
-        idsToDelete.forEach((id) => deleteBuyerVendor(id));
+        await Promise.all(idsToDelete.map((id) => deleteBuyerVendor(id)));
       }
       setSelectedVendorIds([]);
       setBulkDeleteModalOpen(false);
@@ -613,94 +713,118 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   // Open Rating / Revision Modal for any vendor
+  // The scores start from the vendor's latest recorded revision, or stay empty.
+  // Nothing is estimated for the buyer.
   const openRevisionModal = (vendor: any) => {
-    const engagement = getVendorRfqEngagement(vendor);
-
     setSelectedVendorForRevision(vendor);
-    const currentScore = vendor.score || (vendor.rating ? Math.round(vendor.rating * 20) : 88);
-    const baseScore = vendor.latestRatingRevision
-      ? vendor.latestRatingRevision.qualityScore
-      : Math.min(100, Math.max(70, currentScore));
-
-    setQualityScore(vendor.latestRatingRevision?.qualityScore || baseScore);
-    setCostScore(vendor.latestRatingRevision?.costScore || Math.max(65, baseScore - 5));
-    setDeliveryScore(vendor.latestRatingRevision?.deliveryScore || Math.min(100, baseScore + 3));
-
-    const contextNote = engagement.isUsedInRFQ
-      ? `Performance evaluated on procurement cycle (${engagement.recentRfqNumber}): Excellent technical adherence, competitive cost structure, and verified on-time delivery compliance.`
-      : `Operational evaluation for supplier (${vendor.name}): Verified commercial terms, technical capability, and quotation parameters.`;
-
-    setRemarks(vendor.latestRatingRevision?.remarks || contextNote);
+    setQualityScore(vendor.latestRatingRevision?.qualityScore ?? '');
+    setCostScore(vendor.latestRatingRevision?.costScore ?? '');
+    setDeliveryScore(vendor.latestRatingRevision?.deliveryScore ?? '');
+    setRemarks(vendor.latestRatingRevision?.remarks ?? '');
+    setEvaluationRequestDispatched(Boolean(vendor.evaluationRequested));
   };
 
-  const handleAiGenerateRating = () => {
-    if (!selectedVendorForRevision) return;
-    setIsAiGeneratingRating(true);
-    const vendor = selectedVendorForRevision;
-    const engagement = getVendorRfqEngagement(vendor);
+  const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
+    const targetVendor = vendorToRequest || selectedVendorForRevision;
+    if (!targetVendor) return;
 
-    // Performance & quotation parameters calculation:
-    const hasGst = Boolean(vendor.gstin);
-    const hasIso = Boolean(vendor.verified || vendor.iso);
-    const baseQuality = hasIso ? 92 : hasGst ? 88 : 82;
-    const computedQuality = Math.min(98, Math.max(70, baseQuality + ((vendor.score || 85) > 80 ? 4 : -2)));
-    const computedCost = Math.min(96, Math.max(65, 86 + (vendor.rating && vendor.rating >= 4.5 ? 6 : -4)));
-    const computedDelivery = Math.min(99, Math.max(75, engagement.isUsedInRFQ ? 94 : 88));
-
-    setTimeout(() => {
-      setQualityScore(computedQuality);
-      setCostScore(computedCost);
-      setDeliveryScore(computedDelivery);
-      const composite = Math.round((computedQuality + computedCost + computedDelivery) / 3);
-      const stars = (composite / 20).toFixed(1);
-      setRemarks(
-        `AI Auto-Generated Performance Rating (${stars} ★): Quality compliance indexed at ${computedQuality}% (${hasIso ? 'ISO/Verified' : 'Standard compliance'}), quotation competitiveness scored at ${computedCost}%, and OTIF delivery adherence calculated at ${computedDelivery}%.`
+    setIsRequestingEvaluation(true);
+    try {
+      // The store asks the server to look for a saved evaluation before it sends any request.
+      const res = await requestVendorEvaluation(targetVendor.id);
+      if (res.success && res.evaluationExists && res.evaluation) {
+        // A saved evaluation was returned. Open it. No request was sent, so the dispatched badge stays off.
+        setSelectedVendorForRevision(null);
+        setViewModalOpen(false);
+        onViewEvaluation(res.evaluation);
+        return;
+      }
+      if (res.success) {
+        setEvaluationRequestDispatched(true);
+      }
+    } catch (err: any) {
+      logger.log('ERROR', 'Failed to request vendor evaluation', { error: err }, 'VENDOR_SUMMARY');
+      showToast(
+        UI_STRINGS.vendorEvaluationRequest.requestFailedTitle,
+        err?.message || UI_STRINGS.vendorEvaluationRequest.requestFailedFallback,
+        'warning'
       );
-      setIsAiGeneratingRating(false);
-      showToast('AI Rating Generated', `Calculated performance scores for ${vendor.name} based on operational and quotation parameters.`, 'success');
-    }, 400);
+    } finally {
+      setIsRequestingEvaluation(false);
+    }
   };
 
   const handleSaveRatingRevision = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedVendorForRevision || isSubmittingRevision) return;
+    if (!selectedVendorForRevision || isSubmittingRevision || isSubmittingRevisionRef.current) return;
+
+    const isEnteredScore = (value: number | string) =>
+      value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 100;
+    if (!isEnteredScore(qualityScore) || !isEnteredScore(costScore) || !isEnteredScore(deliveryScore)) {
+      showToast('Scores Required', 'Enter quality, cost and delivery scores between 0 and 100.', 'warning');
+      return;
+    }
 
     if (!remarks.trim()) {
       showToast('Remarks Required', 'Please provide performance remarks explaining the rating change.', 'warning');
       return;
     }
 
+    isSubmittingRevisionRef.current = true;
     setIsSubmittingRevision(true);
-    const saved = await reviseVendorRating(
-      selectedVendorForRevision.id,
-      Number(qualityScore),
-      Number(costScore),
-      Number(deliveryScore),
-      remarks
-    );
-    setIsSubmittingRevision(false);
-
-    if (!saved) return;
-
-    setSelectedVendorForRevision(null);
+    try {
+      const saved = await reviseVendorRating(
+        selectedVendorForRevision.id,
+        Number(qualityScore),
+        Number(costScore),
+        Number(deliveryScore),
+        remarks
+      );
+      if (saved) {
+        setSelectedVendorForRevision(null);
+        setRemarks('');
+      }
+    } finally {
+      isSubmittingRevisionRef.current = false;
+      setIsSubmittingRevision(false);
+    }
   };
 
   // Merge evaluations in store onto a vendor list, shared by both tabs.
   const allEvaluations = [...vendorEvaluations];
   const mergeWithEvaluations = (list: VendorEntry[]) =>
     list.map((bv) => {
-      const storeEval = allEvaluations.find((e) => e.vendorName === bv.name || e.vendorId === bv.id);
-      if (storeEval) {
+      const storeEval = allEvaluations.find(
+        (e) =>
+          (e.vendorId && e.vendorId === bv.id) ||
+          (e.vendorName && e.vendorName.toLowerCase() === (bv.name || '').toLowerCase())
+      );
+      if (storeEval && typeof storeEval.overallScore === 'number') {
         return {
           ...bv,
-          status: storeEval.status,
+          status: storeEval.status || bv.status,
           score: storeEval.overallScore,
           evaluated: true,
           hasRecord: true,
           storeRecord: storeEval,
         };
       }
-      return { ...bv };
+      if (bv.storeRecord && typeof bv.storeRecord.overallScore === 'number') {
+        return {
+          ...bv,
+          status: bv.storeRecord.status || bv.status,
+          score: bv.storeRecord.overallScore,
+          evaluated: true,
+          hasRecord: true,
+        };
+      }
+      return {
+        ...bv,
+        score: null,
+        evaluated: false,
+        hasRecord: false,
+        storeRecord: null,
+      };
     });
 
   const mergedVendors = mergeWithEvaluations(buyerVendors);
@@ -709,7 +833,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // Filter categories dynamically
   const categories = [
     'ALL',
-    ...Array.from(new Set(buyerUploadedVendorsList.map((v) => v.majorCategory || 'General Industrial'))),
+    ...Array.from(new Set(buyerUploadedVendorsList.map((v) => v.majorCategory).filter(Boolean))),
   ];
 
   // Helper filter function
@@ -796,362 +920,350 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     );
 
     // Version Rules
+    const hasCompletedEvaluation = Boolean(
+      (vendor.storeRecord && typeof vendor.storeRecord.overallScore === 'number') ||
+      allEvaluations.some(
+        (e) =>
+          ((e.vendorId && e.vendorId === vendor.id) ||
+           (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())) &&
+          typeof e.overallScore === 'number'
+      )
+    );
     let showEvaluation = false;
-    let showTrigger = false;
     let isLockedForProcucevV2 = false;
 
     if (currentMode === 'mode_1') {
-      showEvaluation = !!(vendor.evaluated && isUploaded);
-      showTrigger = false;
+      showEvaluation = isUploaded;
     } else if (currentMode === 'mode_2') {
       const hasOverlap = (vendor as any).overlap === true;
       if (vendor.source === 'procucev_network' || hasOverlap) {
         if (hasSubmittedQuote) {
-          showEvaluation = !!vendor.evaluated;
-          showTrigger = !vendor.evaluated;
+          showEvaluation = true;
         } else {
           isLockedForProcucevV2 = true;
-          showEvaluation = false;
-          showTrigger = false;
         }
-      } else {
-        showEvaluation = false;
-        showTrigger = false;
       }
     } else {
       // Version 3: AI Sourcing Engine
-      showEvaluation = !!vendor.evaluated;
-      showTrigger = !vendor.evaluated;
+      showEvaluation = true;
     }
 
     const engagement = getVendorRfqEngagement(vendor);
     const isSelected = selectedVendorIds.includes(vendor.id);
 
     return (
-      <div
+      <tr
         key={vendor.id}
-        className={
-          'glass-panel p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 ' +
-          (isSelected
-            ? 'border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/20 ring-1 ring-indigo-500/30'
-            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm hover:border-indigo-500/40 dark:hover:border-indigo-400/40')
-        }
+        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${
+          isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
+        }`}
       >
-        <div className="flex items-start md:items-center gap-3 flex-1">
+        {/* Selection Checkbox */}
+        <td className="py-2.5 px-3 w-10 text-center align-middle">
           <input
             type="checkbox"
             checked={isSelected}
             onChange={() => handleToggleSelectVendor(vendor.id)}
             data-testid={`select-vendor-${vendor.id}`}
             aria-label={`Select ${vendor.name}`}
-            className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer mt-1 md:mt-0 shrink-0"
+            className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
           />
+        </td>
 
-          {/* Left: Vendor Brand & Info */}
-          <div className="space-y-1.5 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
-              {vendor.id}
-            </span>
-            <span className="text-xs text-slate-500 font-semibold">{vendor.majorCategory}</span>
-            <span className="text-slate-400">•</span>
-
-            {/* Primary Source Badge */}
-            {isUploaded ? (
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 flex items-center gap-1 shadow-xs">
-                <UploadCloud size={11} className="text-indigo-600 dark:text-indigo-400" />
-                Uploaded by Buyer
-              </span>
-            ) : (
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 flex items-center gap-1 shadow-xs">
-                <ShieldCheck size={11} className="text-emerald-600 dark:text-emerald-400" />
-                Procucev Vendor
-              </span>
-            )}
-
-            {/* Secondary Origin Tag */}
-            <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
-              {originDetails.origin}
-            </span>
-
-            {/* RFQ Engagement & Upload Status Badge */}
-            {engagement.isEngaged ? (
-              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 flex items-center gap-1">
-                <CheckCircle2 size={10} /> {engagement.qualificationReason}
-              </span>
-            ) : (
+        {/* Supplier & Details */}
+        <td className="py-2.5 px-3 min-w-[240px] align-middle">
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span
-                className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 flex items-center gap-1"
-                title="Vendor neither uploaded nor used in any RFQs by your organization"
+                className="text-[11px] text-slate-500 dark:text-gray-400 font-semibold truncate max-w-[160px] inline-block align-middle"
+                title={vendor.majorCategory}
               >
-                <Lock size={10} /> No RFQs / Not Uploaded
+                {vendor.majorCategory}
               </span>
-            )}
+              <span className="text-slate-300 dark:text-gray-600">•</span>
 
-            {isLockedForProcucevV2 && (
-              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 flex items-center gap-1">
-                <Lock size={10} /> Quote Submission Pending
-              </span>
-            )}
-          </div>
-
-          <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-1.5">
-            {vendor.name}
-            {showEvaluation && vendor.score && vendor.score >= 80 && (
-              <ShieldCheck className="text-emerald-500" size={16} />
-            )}
-          </h3>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-slate-500 dark:text-gray-400">
-            <span className="truncate">👤 Contact: {vendor.contactPerson}</span>
-            <span className="truncate">✉️ {vendor.email}</span>
-            <span className="truncate">📞 {vendor.phone}</span>
-            <span className="flex items-center gap-1">
-              <MapPin size={12} /> {vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`}
-            </span>
-          </div>
-
-          {vendor.minorCategories && vendor.minorCategories.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1 pt-1">
-              <span className="text-[10px] text-slate-400 font-semibold">Minors:</span>
-              {vendor.minorCategories.map((m: string) => (
-                <span
-                  key={m}
-                  className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40"
-                >
-                  {m}
+              {/* Primary Source Badge */}
+              {isUploaded ? (
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
+                  <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
+                  Internal Vendor
                 </span>
-              ))}
-            </div>
-          )}
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-1 shadow-xs">
+                  <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
+                  Procucev Vendor
+                </span>
+              )}
 
-          {/* Performance Rating Revision Badge / History Line */}
-          {vendor.latestRatingRevision && (
-            <div className="mt-2 p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-300">
-                  <Star size={12} className="fill-amber-500 text-amber-500" />
-                  <span>
-                    Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
-                    {vendor.latestRatingRevision.newCompositeScore}%)
-                  </span>
-                  <span className="text-[10px] font-normal text-slate-500">
-                    by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
-                  </span>
+              {/* Secondary Origin Tag */}
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
+                {originDetails.origin}
+              </span>
+
+              {/* RFQ Engagement & Upload Status Badge */}
+              {engagement.isEngaged ? (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
+                  <CheckCircle2 size={9} /> {engagement.qualificationReason}
+                </span>
+              ) : (
+                <span
+                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 inline-flex items-center gap-0.5"
+                  title="Vendor neither uploaded nor used in any RFQs by your organization"
+                >
+                  <Lock size={9} /> No RFQs / Not Uploaded
+                </span>
+              )}
+
+              {isLockedForProcucevV2 && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 inline-flex items-center gap-0.5">
+                  <Lock size={9} /> Quote Submission Pending
+                </span>
+              )}
+            </div>
+
+            <h3
+              className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[280px]"
+              title={vendor.name}
+            >
+              <span className="truncate block" title={vendor.name}>
+                {vendor.name}
+              </span>
+              {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' && vendor.score >= 80 && (
+                <ShieldCheck className="text-emerald-500 shrink-0" size={14} />
+              )}
+            </h3>
+
+            {/* Performance Rating Revision Badge / History Line */}
+            {vendor.latestRatingRevision && (
+              <div className="mt-1 p-2 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
+                <div className="flex items-center justify-between gap-1">
+                  <div className="flex items-center gap-1 font-bold text-amber-900 dark:text-amber-300">
+                    <Star size={11} className="fill-amber-500 text-amber-500" />
+                    <span>
+                      Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
+                      {vendor.latestRatingRevision.newCompositeScore}%)
+                    </span>
+                    <span className="text-[9px] font-normal text-slate-500">
+                      by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
+                    }
+                    className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5 shrink-0"
+                  >
+                    <Mail size={10} /> View Dispatched Email Notice
+                  </button>
                 </div>
-                <p className="text-slate-600 dark:text-gray-300 italic text-[10.5px]">
+                <p className="text-slate-600 dark:text-gray-300 italic text-[9.5px]">
                   &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality:{' '}
                   {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery:{' '}
                   {vendor.latestRatingRevision.deliveryScore})
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
-                }
-                className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
-              >
-                <Mail size={11} /> View Dispatched Email Notice
-              </button>
-            </div>
-          )}
-          </div>
-        </div>
-
-        {/* Right: Score Gauge & View Actions */}
-        <div className="flex items-center gap-4 shrink-0 border-t md:border-t-0 pt-3 md:pt-0 border-slate-100 dark:border-gray-800">
-          <div className="text-right">
-            {showEvaluation && vendor.score ? (
-              <>
-                <div className="text-[10px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
-                <div className="text-xl font-mono font-black text-indigo-600 dark:text-indigo-400">
-                  {vendor.score}%
-                </div>
-                <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-end gap-0.5">
-                  <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
-                  {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="text-[10px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
-                <div className="text-xs font-semibold text-slate-400 italic">
-                  {currentMode === 'mode_1' && !isUploaded
-                    ? 'Hidden (V1 Restriction)'
-                    : isLockedForProcucevV2
-                    ? 'Locked (Awaiting Quote)'
-                    : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                    ? 'Locked (Buyer Roster Only)'
-                    : 'Not Evaluated'}
-                </div>
-                {vendor.rating && (
-                  <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-end gap-0.5">
-                    <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
-                  </div>
-                )}
-              </>
             )}
           </div>
+        </td>
 
-          <div className="flex flex-col items-end gap-1.5">
-            <span
-              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                currentMode === 'mode_1' && !isUploaded
-                  ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
-                  : getStatusStyle(vendor.status || '')
-              }`}
+        {/* Contact & Location */}
+        <td className="py-2.5 px-3 min-w-[200px] align-middle">
+          <div className="space-y-0.5 text-[11px] text-slate-600 dark:text-gray-300">
+            <div
+              className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[190px]"
+              title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
             >
-              {currentMode === 'mode_1' && !isUploaded
-                ? 'UNAVAILABLE IN V1'
-                : isLockedForProcucevV2
-                ? 'LOCKED (PENDING BID)'
-                : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                ? 'BUYER ROSTER (NO EVAL)'
-                : vendor.status}
-            </span>
-
-            {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
-            <div className="flex items-center gap-1.5 flex-wrap justify-end">
-              {/* View Profile Modal Button */}
-              <button
-                type="button"
-                onClick={() => handleOpenViewModal(vendor)}
-                className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 shadow-xs"
-                title="View complete supplier profile, commercial details, and contact scorecard"
-              >
-                <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
-              </button>
-
-              {/* Edit Vendor Button - Only for buyer-uploaded vendors */}
-              {isUploaded && (
-                <button
-                  type="button"
-                  onClick={() => handleOpenEditModal(vendor)}
-                  className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
-                  title="Edit vendor company information, categories, and contact details"
-                >
-                  <Pencil size={11} /> Edit
-                </button>
-              )}
-
-              {/* Delete Vendor Button - Only for buyer-uploaded vendors */}
-              {isUploaded && (
-                <button
-                  type="button"
-                  onClick={() => handleOpenDeleteModal(vendor)}
-                  className="btn btn-ghost btn-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-1"
-                  title="Delete vendor from directory and database"
-                >
-                  <Trash2 size={11} /> Delete
-                </button>
-              )}
-
-              {/* Rate Vendor / AI Rating Button */}
-              <button
-                type="button"
-                onClick={() => openRevisionModal(vendor)}
-                className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
-                title="Rate supplier manually or generate AI rating based on performance & quotation parameters"
-              >
-                <Star size={11} className="fill-current" /> Revise Rating
-              </button>
-
-              {showEvaluation ? (
-                <button
-                  onClick={() => {
-                    const evalRec =
-                      (vendor as any).storeRecord ||
-                      vendorEvaluations.find((e) => e.vendorId === vendor.id) || {
-                        id: `eval-${vendor.id}`,
-                        vendorId: vendor.id,
-                        vendorName: vendor.name,
-                        contactPerson: vendor.contactPerson,
-                        email: vendor.email,
-                        phone: vendor.phone,
-                        category: vendor.majorCategory,
-                        submissionDate: '2026-08-18 14:30 UTC',
-                        status: vendor.status as any,
-                        overallScore: vendor.score || 88,
-                        systemAction: 'Active Roster Direct RFQ dispatch confirmed.',
-                        moduleScores: {
-                          commercial: {
-                            score: 4.8,
-                            maxScore: 5,
-                            weight: 25,
-                            weightedScore: 24.0,
-                            remarks: 'Payment terms Net 60 fixed rate contract approved.',
-                          },
-                          technical: {
-                            score: 4.5,
-                            maxScore: 5,
-                            weight: 15,
-                            weightedScore: 13.5,
-                            remarks: 'Technical parameter compliance datasheet verified.',
-                          },
-                          quality: {
-                            score: 4.6,
-                            maxScore: 5,
-                            weight: 20,
-                            weightedScore: 18.4,
-                            remarks: 'ISO 9001:2015 certificate verified.',
-                          },
-                          delivery: {
-                            score: 4.4,
-                            maxScore: 5,
-                            weight: 20,
-                            weightedScore: 17.6,
-                            remarks: 'Verified average OTIF 92.4%.',
-                          },
-                          financial: {
-                            score: 4.0,
-                            maxScore: 5,
-                            weight: 10,
-                            weightedScore: 8.0,
-                            remarks: 'Credit score A+; clean audit history.',
-                          },
-                          governance: {
-                            score: 4.7,
-                            maxScore: 5,
-                            weight: 10,
-                            weightedScore: 9.4,
-                            remarks: 'Statutory GSTIN/PAN and ESG guidelines verified.',
-                          },
-                        },
-                        documents: [],
-                      };
-                    onViewEvaluation(evalRec);
-                  }}
-                  className="btn btn-secondary btn-xs flex items-center gap-1"
-                >
-                  <FileCheck size={11} /> View 360° Evaluation <ChevronRight size={11} />
-                </button>
-              ) : showTrigger ? (
-                <button
-                  onClick={() =>
-                    showToast(
-                      'Triggering AI Evaluation Request',
-                      `Verification request email dispatched to ${vendor.email}. Sourcing Bot initiated.`,
-                      'info'
-                    )
-                  }
-                  className="btn btn-primary btn-xs flex items-center gap-1"
-                >
-                  <Plus size={11} /> Trigger Evaluation
-                </button>
-              ) : isLockedForProcucevV2 ? (
-                <button
-                  disabled
-                  className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed"
-                  title="Quote submission is required from this Procucev network partner before evaluation can be triggered."
-                >
-                  <Lock size={10} /> Evaluation Locked (Pending Quote)
-                </button>
-              ) : null}
+              👤 Contact: {vendor.contactPerson}
             </div>
+            <div
+              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
+              title={vendor.email}
+            >
+              ✉️ {vendor.email}
+            </div>
+            <div
+              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
+              title={vendor.phone}
+            >
+              📞 {vendor.phone}
+            </div>
+            {(() => {
+              const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
+              return (
+                <div
+                  className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate max-w-[190px]"
+                  title={vendorAddress || undefined}
+                >
+                  <MapPin size={11} className="shrink-0" />
+                  <span className="truncate">{vendorAddress || '—'}</span>
+                </div>
+              );
+            })()}
           </div>
-        </div>
-      </div>
+        </td>
+
+        {/* Category */}
+        <td className="py-2.5 px-3 min-w-[150px] align-middle">
+          {vendor.minorCategories && vendor.minorCategories.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1 max-w-[200px]">
+              <span className="text-[9px] text-slate-400 font-semibold">{UI_STRINGS.vendorCategorySelect.categoryBadgePrefix}</span>
+              {vendor.minorCategories.map((m: string) => (
+                <span
+                  key={m}
+                  title={m}
+                  className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40 truncate max-w-[110px] inline-block align-middle"
+                >
+                  {m}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="text-[10px] text-slate-400 italic">None</span>
+          )}
+        </td>
+
+        {/* AI Score & Rating */}
+        <td className="py-2.5 px-3 min-w-[140px] text-center align-middle">
+          {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
+            <div className="space-y-0.5">
+              <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
+              <div className="text-base font-mono font-black text-indigo-600 dark:text-indigo-400">
+                {vendor.score}%
+              </div>
+              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
+                <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
+                {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
+              <div className="text-[11px] font-semibold text-slate-400 italic">
+                {currentMode === 'mode_1' && !isUploaded
+                  ? 'Hidden (V1 Restriction)'
+                  : isLockedForProcucevV2
+                  ? 'Locked (Awaiting Quote)'
+                  : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                  ? 'Locked (Buyer Roster Only)'
+                  : 'Not Evaluated'}
+              </div>
+              {vendor.rating && (
+                <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
+                  <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
+                </div>
+              )}
+            </div>
+          )}
+        </td>
+
+        {/* Status */}
+        <td className="py-2.5 px-3 min-w-[130px] text-center align-middle">
+          <span
+            className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${
+              currentMode === 'mode_1' && !isUploaded
+                ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
+                : getStatusStyle(vendor.status || '')
+            }`}
+          >
+            {currentMode === 'mode_1' && !isUploaded
+              ? 'UNAVAILABLE IN V1'
+              : isLockedForProcucevV2
+              ? 'LOCKED (PENDING BID)'
+              : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+              ? 'BUYER ROSTER (NO EVAL)'
+              : vendor.status}
+          </span>
+        </td>
+
+        {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
+        <td className="py-2.5 px-3 min-w-[200px] text-right align-middle">
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            {/* View Profile Modal Button */}
+            <button
+              type="button"
+              onClick={() => handleOpenViewModal(vendor)}
+              className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 shadow-xs"
+              title="View complete supplier profile, commercial details, and contact scorecard"
+            >
+              <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
+            </button>
+
+            {/* Edit Vendor Button - Only for buyer-uploaded vendors */}
+            {isUploaded && (
+              <button
+                type="button"
+                onClick={() => handleOpenEditModal(vendor)}
+                className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
+                title="Edit vendor company information, categories, and contact details"
+              >
+                <Pencil size={11} /> Edit
+              </button>
+            )}
+
+            {/* Delete Vendor Button - Only for buyer-uploaded vendors */}
+            {isUploaded && (
+              <button
+                type="button"
+                onClick={() => handleOpenDeleteModal(vendor)}
+                className="btn btn-ghost btn-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-1"
+                title="Delete vendor from directory and database"
+              >
+                <Trash2 size={11} /> Delete
+              </button>
+            )}
+
+            {/* Rate Vendor / AI Rating Button */}
+            <button
+              type="button"
+              onClick={() => openRevisionModal(vendor)}
+              className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
+              title="Rate supplier manually or request vendor evaluation"
+            >
+              <Star size={11} className="fill-current" /> Revise Rating
+            </button>
+
+            {showEvaluation ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  // Opens only a stored evaluation record. No record means no evaluation.
+                  let evalRec =
+                    (vendor as any).storeRecord ||
+                    vendorEvaluations.find(
+                      (e) =>
+                        (e.vendorId && e.vendorId === vendor.id) ||
+                        (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())
+                    );
+                  if (!evalRec && fetchVendorEvaluation) {
+                    try {
+                      evalRec = await fetchVendorEvaluation(vendor.id || vendor.name);
+                    } catch {
+                      // ignore fetch error
+                    }
+                  }
+                  if (!evalRec || typeof evalRec.overallScore !== 'number') {
+                    showToast('Not evaluated', 'No evaluation record exists for this vendor yet.', 'info');
+                    return;
+                  }
+                  onViewEvaluation(evalRec);
+                }}
+                className="btn btn-secondary btn-xs flex items-center gap-1"
+              >
+                <FileCheck size={11} /> View 360° Evaluation <ChevronRight size={11} />
+              </button>
+            ) : isLockedForProcucevV2 ? (
+              <button
+                disabled
+                className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed"
+                title="Quote submission is required from this Procucev network partner before evaluation can be triggered."
+              >
+                <Lock size={10} /> Evaluation Locked (Pending Quote)
+              </button>
+            ) : null}
+          </div>
+        </td>
+      </tr>
     );
   };
 
@@ -1294,7 +1406,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </button>
             <button
               type="button"
-              onClick={() => showToast('Export Complete', `Exported ${selectedVendorIds.length} selected supplier records.`, 'success')}
+              onClick={handleExportSelectedCsv}
               className="btn btn-secondary btn-xs font-semibold"
             >
               Export Selected ({selectedVendorIds.length})
@@ -1314,7 +1426,30 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
       {/* Vendors Display List */}
       <div className="space-y-2.5">
-        {buyerFilteredVendors.map(renderVendorCard)}
+        {buyerFilteredVendors.length > 0 && (
+          <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse min-w-[1100px]">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-gray-800/60 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-2.5 px-3 w-10 text-center">
+                      <span className="sr-only">Select</span>
+                    </th>
+                    <th className="py-2.5 px-3 min-w-[240px]">Supplier &amp; Details</th>
+                    <th className="py-2.5 px-3 min-w-[200px]">Contact &amp; Location</th>
+                    <th className="py-2.5 px-3 min-w-[150px]">{UI_STRINGS.vendorCategorySelect.categoryHeader}</th>
+                    <th className="py-2.5 px-3 min-w-[140px] text-center">AI Score &amp; Rating</th>
+                    <th className="py-2.5 px-3 min-w-[130px] text-center">Status</th>
+                    <th className="py-2.5 px-3 min-w-[200px] text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-gray-800/60">
+                  {buyerFilteredVendors.map(renderVendorCard)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         {isLoadingVendors && buyerFilteredVendors.length === 0 && (
           <div className="p-12 text-center text-slate-500 border border-slate-200 dark:border-gray-800 rounded-2xl bg-white dark:bg-gray-900/60 shadow-xs space-y-3">
             <Loader2 size={24} className="animate-spin text-indigo-600 dark:text-indigo-400 mx-auto" />
@@ -1374,7 +1509,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white">Add Vendor</h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
-                    Add a vendor you deal with directly — added to your vendor directory only.
+                    {UI_STRINGS.addVendorModal.description}
                   </p>
                 </div>
               </div>
@@ -1398,7 +1533,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-name"
                   type="text"
                   required
-                  placeholder="e.g. Ashok Industries"
+                  placeholder="Legal company name"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1414,7 +1549,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     id="add-vendor-contact"
                     type="text"
                     required
-                    placeholder="e.g. John Doe"
+                    placeholder="Full name"
                     value={formContactPerson}
                     onChange={(e) => setFormContactPerson(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1428,7 +1563,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     id="add-vendor-phone"
                     type="tel"
                     required
-                    placeholder="e.g. 9000000001"
+                    placeholder="+91 XXXXX XXXXX"
                     value={formPhone}
                     onChange={(e) => setFormPhone(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1444,7 +1579,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-email"
                   type="email"
                   required
-                  placeholder="e.g. contact@example.com"
+                  placeholder="name@company.com"
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1453,10 +1588,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
               <div>
                 <label htmlFor="add-vendor-major-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                  Major Category <span className="text-rose-500">*</span>
+                  {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
                 </label>
                 <select
                   id="add-vendor-major-category"
+                  aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
                   required
                   value={formMajorCategory}
                   onChange={(e) => {
@@ -1465,6 +1601,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   }}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                 >
+                  <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}</option>
                   {availableMajorCategories.map((cat) => (
                     <option key={cat} value={cat}>
                       {cat}
@@ -1474,53 +1611,97 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
 
               <div>
-                <label htmlFor="add-vendor-minor-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                  Minor Categories
+                <label htmlFor="add-vendor-category-input" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  {UI_STRINGS.vendorCategorySelect.categoryLabel}
                 </label>
-                <div className="flex flex-wrap gap-1.5 mb-1.5">
-                  {formMinorCategories.map((tag) => (
-                    <span
-                      key={tag}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold"
-                    >
-                      {tag}
-                      <button type="button" onClick={() => handleRemoveMinorCategoryTag(tag)}>
-                        <X size={10} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                <div className="space-y-1.5">
-                  <select
-                    id="add-vendor-minor-category"
-                    value=""
+                {formMinorCategories.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {formMinorCategories.map((tag) => (
+                      <span
+                        key={tag}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-semibold border border-indigo-200/50 dark:border-indigo-800"
+                      >
+                        {tag}
+                        <button type="button" aria-label={`Remove ${tag}`} onClick={() => handleRemoveMinorCategoryTag(tag)}>
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="relative">
+                  <input
+                    id="add-vendor-category-input"
+                    type="text"
+                    aria-label={UI_STRINGS.vendorCategorySelect.categoryLabel}
+                    value={formMinorInput}
                     onChange={(e) => {
-                      if (e.target.value) {
-                        handleAddMinorCategoryTag(e.target.value);
+                      setFormMinorInput(e.target.value);
+                      setShowCategorySuggestions(true);
+                    }}
+                    onFocus={() => {
+                      if (formMinorInput.trim().length >= 3) {
+                        setShowCategorySuggestions(true);
                       }
                     }}
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-                  >
-                    <option value="">Select Minor Category from dropdown...</option>
-                    {(formMajorCategory ? getMinorCategories(formMajorCategory) : []).map((minor) => (
-                      <option key={minor} value={minor}>
-                        {minor}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={formMinorInput}
-                    onChange={(e) => setFormMinorInput(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        handleAddMinorCategoryTag(formMinorInput);
+                        if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                          handleAddMinorCategoryTag(filteredCategorySuggestions[0]);
+                        } else if (formMinorInput.trim()) {
+                          handleAddMinorCategoryTag(formMinorInput);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setShowCategorySuggestions(false);
                       }
                     }}
-                    placeholder="Type a minor category and press Enter"
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                    placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
                   />
+                  {formMinorInput.trim().length > 0 && formMinorInput.trim().length < 3 && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
+                      {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                    </p>
+                  )}
+                  {showCategorySuggestions && formMinorInput.trim().length >= 3 && (
+                    <div
+                      id="add-vendor-category-suggestions"
+                      role="listbox"
+                      className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                    >
+                      <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                        <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                        <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                      </div>
+                      {filteredCategorySuggestions.length > 0 ? (
+                        filteredCategorySuggestions.map((category) => (
+                          <button
+                            key={category}
+                            type="button"
+                            role="option"
+                            aria-selected={formMinorCategories.includes(category)}
+                            onClick={() => handleAddMinorCategoryTag(category)}
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors"
+                          >
+                            <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                            <span className="text-[10px] text-slate-400 italic">{getMajorForCategory(category)}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="p-3 text-center">
+                          <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                          <button
+                            type="button"
+                            onClick={() => handleAddMinorCategoryTag(formMinorInput.trim())}
+                            className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            + Add &quot;{formMinorInput.trim()}&quot; as custom category
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1578,7 +1759,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     id="add-vendor-pincode"
                     type="text"
                     required
-                    placeholder="e.g. 411001"
+                    placeholder="6-digit PIN code"
                     maxLength={6}
                     value={formPincode}
                     onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
@@ -1593,6 +1774,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
 
               <div>
+                <label htmlFor="add-vendor-rating" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Rating (1.0 - 5.0) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  id="add-vendor-rating"
+                  type="number"
+                  required
+                  min="1"
+                  max="5"
+                  step="0.1"
+                  placeholder="1.0 - 5.0"
+                  value={formRating ?? ''}
+                  onChange={(e) => setFormRating(e.target.value === '' ? null : Number(e.target.value))}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 font-mono"
+                />
+              </div>
+
+              <div>
                 <label htmlFor="add-vendor-gstin" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                   GSTIN <span className="text-rose-500">*</span>
                 </label>
@@ -1600,7 +1799,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-gstin"
                   type="text"
                   required
-                  placeholder="e.g. 27AAAAA0000A1Z5"
+                  placeholder="15-character GSTIN"
                   maxLength={15}
                   value={formGst}
                   onChange={(e) => setFormGst(e.target.value.toUpperCase())}
@@ -1654,9 +1853,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     Edit Vendor Profile
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-normal">
-                      {selectedVendorForCrud.id}
-                    </span>
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
                     Update supplier corporate details, categories, contact information, and compliance records.
@@ -1676,7 +1872,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </div>
 
             {/* Modal Body Form */}
-            <form onSubmit={handleEditVendorSubmit} className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
+            <form onSubmit={handleEditVendorSubmit} noValidate className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
               {/* Section 1: Basic Company & Brand Details */}
               <div className="space-y-3 p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block flex items-center gap-1.5">
@@ -1711,14 +1907,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                      Major Category <span className="text-rose-500">*</span>
+                    <label htmlFor="edit-vendor-major-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                      {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
                     </label>
                     <select
+                      id="edit-vendor-major-category"
+                      aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
                       value={formMajorCategory}
                       onChange={(e) => setFormMajorCategory(e.target.value)}
                       className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                     >
+                      <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}</option>
                       {availableMajorCategories.map((c) => (
                         <option key={c} value={c}>
                           {c}
@@ -1737,46 +1936,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         min="1.0"
                         max="5.0"
                         step="0.1"
-                        value={formRating}
-                        onChange={(e) => setFormRating(Number(e.target.value))}
+                        value={formRating ?? ''}
+                        onChange={(e) => setFormRating(e.target.value === '' ? null : Number(e.target.value))}
                         className="w-24 text-xs p-2 font-mono font-bold rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                       />
                       <span className="text-amber-500 font-bold flex items-center gap-1">
-                        <Star size={13} className="fill-amber-500" /> {formRating} / 5.0
+                        <Star size={13} className="fill-amber-500" /> {formRating !== null ? `${formRating} / 5.0` : '—'}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Minor Categories Chips Input */}
+                {/* Category Chips & Searchable Dropdown */}
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Minor Categories &amp; Line Items
+                  <label htmlFor="edit-vendor-category-input" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    {UI_STRINGS.vendorCategorySelect.categoryLabel}
                   </label>
-                  <div className="flex items-center gap-2 mb-2">
-                    <input
-                      type="text"
-                      placeholder="Type category and press Add Tag..."
-                      value={formMinorInput}
-                      onChange={(e) => setFormMinorInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddMinorCategoryTag(formMinorInput);
-                        }
-                      }}
-                      className="flex-1 text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleAddMinorCategoryTag(formMinorInput)}
-                      className="btn btn-secondary btn-xs font-semibold px-3 py-2"
-                    >
-                      Add Tag
-                    </button>
-                  </div>
                   {formMinorCategories.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-1.5 mb-2">
                       {formMinorCategories.map((tag) => (
                         <span
                           key={tag}
@@ -1785,6 +1962,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           {tag}
                           <button
                             type="button"
+                            aria-label={`Remove ${tag}`}
                             onClick={() => handleRemoveMinorCategoryTag(tag)}
                             className="hover:text-rose-500 ml-0.5"
                           >
@@ -1794,6 +1972,89 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       ))}
                     </div>
                   )}
+                  <div className="relative">
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="edit-vendor-category-input"
+                        type="text"
+                        aria-label={UI_STRINGS.vendorCategorySelect.categoryLabel}
+                        placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                        value={formMinorInput}
+                        onChange={(e) => {
+                          setFormMinorInput(e.target.value);
+                          setShowCategorySuggestions(true);
+                        }}
+                        onFocus={() => {
+                          if (formMinorInput.trim().length >= 3) {
+                            setShowCategorySuggestions(true);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                              handleAddMinorCategoryTag(filteredCategorySuggestions[0]);
+                            } else if (formMinorInput.trim()) {
+                              handleAddMinorCategoryTag(formMinorInput);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setShowCategorySuggestions(false);
+                          }
+                        }}
+                        className="flex-1 text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAddMinorCategoryTag(formMinorInput)}
+                        className="btn btn-secondary btn-xs font-semibold px-3 py-2 shrink-0"
+                      >
+                        Add Tag
+                      </button>
+                    </div>
+                    {formMinorInput.trim().length > 0 && formMinorInput.trim().length < 3 && (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
+                        {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                      </p>
+                    )}
+                    {showCategorySuggestions && formMinorInput.trim().length >= 3 && (
+                      <div
+                        id="edit-vendor-category-suggestions"
+                        role="listbox"
+                        className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                      >
+                        <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                          <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                          <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                        </div>
+                        {filteredCategorySuggestions.length > 0 ? (
+                          filteredCategorySuggestions.map((category) => (
+                            <button
+                              key={category}
+                              type="button"
+                              role="option"
+                              aria-selected={formMinorCategories.includes(category)}
+                              onClick={() => handleAddMinorCategoryTag(category)}
+                              className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors"
+                            >
+                              <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                              <span className="text-[10px] text-slate-400 italic">{getMajorForCategory(category)}</span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="p-3 text-center">
+                            <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                            <button
+                              type="button"
+                              onClick={() => handleAddMinorCategoryTag(formMinorInput.trim())}
+                              className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                            >
+                              + Add &quot;{formMinorInput.trim()}&quot; as custom category
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1935,56 +2196,126 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
               {/* Section 3: Statutory & Commercial Identifiers */}
               <div className="space-y-3 p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block flex items-center gap-1.5">
-                  <FileText size={13} className="text-indigo-600" /> 3. Statutory &amp; Commercial Identifiers
-                </span>
+                <div className="flex items-center justify-between pb-1 border-b border-slate-200 dark:border-gray-800">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <FileText size={13} className="text-indigo-600 dark:text-indigo-400" /> 3. Statutory &amp; Commercial Identifiers
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {!isEditingStatutorySection ? (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingStatutorySection(true)}
+                        className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 text-[11px] hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
+                        title="Edit statutory and commercial identifiers independently"
+                        data-testid="edit-statutory-section-button"
+                      >
+                        <Pencil size={11} /> Edit
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedVendorForCrud) {
+                              setFormGst(selectedVendorForCrud.gst || selectedVendorForCrud.gstin || '');
+                              setFormPan(selectedVendorForCrud.pan || '');
+                              setFormMsme(selectedVendorForCrud.msme || '');
+                              setFormAnnualTurnover(selectedVendorForCrud.annualTurnover || '');
+                            }
+                            setIsEditingStatutorySection(false);
+                          }}
+                          data-testid="cancel-statutory-section-button"
+                          className="btn btn-ghost btn-xs text-[10px] text-slate-500 hover:text-slate-700 dark:text-gray-400"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveStatutorySectionIndependently}
+                          data-testid="save-statutory-section-button"
+                          className="btn btn-primary btn-xs font-bold flex items-center gap-1 text-[10px] shadow-xs"
+                        >
+                          <Check size={11} /> Save Section
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-gst" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       GSTIN Number
                     </label>
                     <input
+                      id="edit-vendor-gst"
+                      data-testid="edit-vendor-gst-input"
                       type="text"
                       value={formGst}
                       onChange={(e) => setFormGst(e.target.value)}
-                      className="w-full text-xs p-2 font-mono uppercase rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 font-mono uppercase rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-pan" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       PAN Card Number
                     </label>
                     <input
+                      id="edit-vendor-pan"
+                      data-testid="edit-vendor-pan-input"
                       type="text"
                       value={formPan}
                       onChange={(e) => setFormPan(e.target.value)}
-                      className="w-full text-xs p-2 font-mono uppercase rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 font-mono uppercase rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-msme" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       MSME / UDYAM Reg. Number
                     </label>
                     <input
+                      id="edit-vendor-msme"
+                      data-testid="edit-vendor-msme-input"
                       type="text"
                       value={formMsme}
                       onChange={(e) => setFormMsme(e.target.value)}
-                      className="w-full text-xs p-2 font-mono rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 font-mono rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    <label htmlFor="edit-vendor-turnover" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                       Annual Turnover
                     </label>
                     <input
+                      id="edit-vendor-turnover"
+                      data-testid="edit-vendor-turnover-input"
                       type="text"
                       value={formAnnualTurnover}
                       onChange={(e) => setFormAnnualTurnover(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      readOnly={!isEditingStatutorySection}
+                      className={`w-full text-xs p-2 rounded-lg border transition-all ${
+                        !isEditingStatutorySection
+                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
+                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
+                      }`}
                     />
                   </div>
                 </div>
@@ -2029,9 +2360,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     {selectedVendorForCrud.name}
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-normal">
-                      {selectedVendorForCrud.id}
-                    </span>
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
                     Comprehensive supplier registration, compliance, and taxonomy profile.
@@ -2058,28 +2386,41 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
                   <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
                     <Star size={13} className="fill-amber-500 text-amber-500" />
-                    {selectedVendorForCrud.rating || 4.5} / 5.0
+                    {typeof selectedVendorForCrud.rating === 'number' ? `${selectedVendorForCrud.rating} / 5.0` : '—'}
                   </div>
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Mode 3 AI Score</span>
                   <div className="font-extrabold font-mono text-indigo-600 text-sm mt-0.5">
-                    {selectedVendorForCrud.score || 88}%
+                    {(() => {
+                      const hasRecord = Boolean(
+                        (selectedVendorForCrud.storeRecord && typeof selectedVendorForCrud.storeRecord.overallScore === 'number') ||
+                        allEvaluations.some(
+                          (e) =>
+                            ((e.vendorId && e.vendorId === selectedVendorForCrud.id) ||
+                             (e.vendorName && e.vendorName.toLowerCase() === (selectedVendorForCrud.name || '').toLowerCase())) &&
+                            typeof e.overallScore === 'number'
+                        )
+                      );
+                      return hasRecord && typeof selectedVendorForCrud.score === 'number'
+                        ? `${selectedVendorForCrud.score}%`
+                        : '—';
+                    })()}
                   </div>
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Status</span>
                   <div className="font-bold text-[10.5px] text-emerald-600 dark:text-emerald-400 mt-0.5 truncate">
-                    {selectedVendorForCrud.status || 'PREFERRED'}
+                    {selectedVendorForCrud.status || '—'}
                   </div>
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Roster Origin</span>
                   <div className="font-bold text-[10.5px] text-slate-700 dark:text-gray-300 mt-0.5 truncate">
-                    {isBuyerUploaded(selectedVendorForCrud) ? 'Buyer Uploaded' : 'Procucev Network'}
+                    {isBuyerUploaded(selectedVendorForCrud) ? 'Internal Vendor' : 'Procucev Network'}
                   </div>
                 </div>
               </div>
@@ -2091,9 +2432,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-700 dark:text-gray-300">
                   <div>
-                    <span className="text-slate-400 block text-[10px] font-semibold">Major Category:</span>
+                    <span className="text-slate-400 block text-[10px] font-semibold">{UI_STRINGS.vendorCategorySelect.divisionViewPrefix}</span>
                     <strong className="text-slate-900 dark:text-white">
-                      {selectedVendorForCrud.majorCategory || 'General Industrial'}
+                      {selectedVendorForCrud.majorCategory || '—'}
                     </strong>
                   </div>
                   <div>
@@ -2125,7 +2466,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <div>
                     <span className="text-slate-400 block text-[10px] font-semibold">Primary Contact Person:</span>
                     <span className="font-semibold text-slate-900 dark:text-white">
-                      {selectedVendorForCrud.contactPerson || 'N/A'}
+                      {selectedVendorForCrud.contactPerson || '—'}
                     </span>
                     {selectedVendorForCrud.contactDesignation && (
                       <span className="block text-[10px] text-slate-500">
@@ -2141,7 +2482,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px] font-semibold">Phone / Mobile:</span>
-                    <span>{selectedVendorForCrud.phone || 'N/A'}</span>
+                    <span>{selectedVendorForCrud.phone || '—'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px] font-semibold">Location / Address:</span>
@@ -2157,26 +2498,44 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
               {/* Statutory & Financial Compliance */}
               <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block flex items-center gap-1.5">
-                  <FileCheck size={13} className="text-indigo-600" /> Statutory &amp; Financial Registration
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <FileCheck size={13} className="text-indigo-600 dark:text-indigo-400" /> Statutory &amp; Financial Registration
+                  </span>
+                  {isBuyerUploaded(selectedVendorForCrud) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const vendor = selectedVendorForCrud;
+                        setViewModalOpen(false);
+                        handleOpenEditModal(vendor);
+                        setIsEditingStatutorySection(true);
+                      }}
+                      className="btn btn-ghost btn-xs text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                      title="Edit statutory details"
+                      data-testid="view-modal-edit-statutory-button"
+                    >
+                      <Pencil size={10} /> Edit Statutory
+                    </button>
+                  )}
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-700 dark:text-gray-300 font-mono text-[11px]">
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">GSTIN:</span>
-                    <strong>{selectedVendorForCrud.gst || selectedVendorForCrud.gstin || '27AAACD1234F1Z5'}</strong>
+                    <strong>{selectedVendorForCrud.gst || selectedVendorForCrud.gstin || 'Not Provided'}</strong>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">PAN:</span>
-                    <strong>{selectedVendorForCrud.pan || 'AAACD1234F'}</strong>
+                    <strong>{selectedVendorForCrud.pan || 'Not Provided'}</strong>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">MSME / UDYAM:</span>
-                    <span>{selectedVendorForCrud.msme || 'UDYAM-MH-0123'}</span>
+                    <span>{selectedVendorForCrud.msme || 'Not Provided'}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">Turnover:</span>
                     <span className="font-sans font-semibold">
-                      {selectedVendorForCrud.annualTurnover || '₹25 Cr - ₹50 Cr'}
+                      {selectedVendorForCrud.annualTurnover || 'Not Disclosed'}
                     </span>
                   </div>
                 </div>
@@ -2210,16 +2569,32 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
-              <button
-                type="button"
-                onClick={() => {
-                  setViewModalOpen(false);
-                  handleOpenEditModal(selectedVendorForCrud);
-                }}
-                className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
-              >
-                <Pencil size={13} /> Edit Profile
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewModalOpen(false);
+                    handleOpenEditModal(selectedVendorForCrud);
+                  }}
+                  className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
+                >
+                  <Pencil size={13} /> Edit Profile
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
+                  disabled={isRequestingEvaluation}
+                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs"
+                  title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
+                >
+                  {isRequestingEvaluation ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Send size={13} />
+                  )}
+                  {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -2402,12 +2777,30 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {selectedVendorForRevision &&
         (() => {
           const vendor = selectedVendorForRevision;
-          const previousScore = vendor.score || (vendor.rating ? Math.round(vendor.rating * 20) : 88);
-          const previousRating = vendor.rating || Number((previousScore / 20).toFixed(1));
-          const buyerAverage = Math.round((Number(qualityScore) + Number(costScore) + Number(deliveryScore)) / 3);
-          const newCompositeScore = Math.round((previousScore + buyerAverage) / 2);
-          const newRating = Number((newCompositeScore / 20).toFixed(1));
-          const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
+          // Previous figures are the vendor's recorded values. A missing value shows a dash.
+          const previousScore: number | null =
+            typeof vendor.score === 'number' ? vendor.score : typeof vendor.rating === 'number' ? Math.round(vendor.rating * 20) : null;
+          const previousRating: number | null =
+            typeof vendor.rating === 'number' ? vendor.rating : previousScore !== null ? Number((previousScore / 20).toFixed(1)) : null;
+          const scoresEntered = [qualityScore, costScore, deliveryScore].every((s) => s !== '');
+          const buyerAverage = scoresEntered
+            ? parseFloat(((Number(qualityScore) + Number(costScore) + Number(deliveryScore)) / 3).toFixed(2))
+            : null;
+          const baselineScore = previousScore ?? buyerAverage;
+          const newCompositeScore =
+            baselineScore !== null && buyerAverage !== null
+              ? parseFloat((baselineScore * 0.6 + buyerAverage * 0.4).toFixed(2))
+              : null;
+          const newRating =
+            newCompositeScore !== null
+              ? parseFloat((Math.min(5.0, (newCompositeScore / 100) * 5)).toFixed(1))
+              : null;
+          const previousScoreText = previousScore !== null ? `${previousScore}%` : '—';
+          const previousRatingText = previousRating !== null ? `${previousRating} ★` : '—';
+          const buyerAverageText = buyerAverage !== null ? `${buyerAverage}%` : '—';
+          const newRatingText = newRating !== null ? `${newRating} ★` : '—';
+          const newCompositeText = newCompositeScore !== null ? `${Math.round(newCompositeScore)}% Score` : '—';
+          const buyerCompany = activeBuyerAccount?.organizationName || '—';
 
           return (
             <div className="modal-overlay !z-[1100]">
@@ -2437,7 +2830,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </div>
 
                 {/* Modal Body Form */}
-                <form onSubmit={handleSaveRatingRevision} className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
+                <form onSubmit={handleSaveRatingRevision} noValidate className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
                   {/* Vendor & Buyer Context Bar */}
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 grid grid-cols-2 gap-2 text-[11px]">
                     <div>
@@ -2449,7 +2842,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">Reviewing Buyer</span>
                       <strong className="text-slate-800 dark:text-gray-200">{buyerCompany}</strong>
                       <div className="text-[10px] text-slate-500 font-mono">
-                        Current: {previousRating} ★ ({previousScore}%)
+                        Current: {previousRatingText} ({previousScoreText})
                       </div>
                     </div>
                   </div>
@@ -2458,22 +2851,35 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <div className="space-y-3.5 p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
-                        1. Rate Performance (Manual or AI Generated)
+                        1. Rate Performance (Manual)
                       </span>
                       <button
                         type="button"
-                        onClick={handleAiGenerateRating}
-                        disabled={isAiGeneratingRating}
-                        className="btn btn-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white flex items-center gap-1.5 shadow-sm"
+                        onClick={() => handleRequestVendorEvaluation(vendor)}
+                        disabled={isRequestingEvaluation}
+                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all"
+                        title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
                       >
-                        {isAiGeneratingRating ? (
+                        {isRequestingEvaluation ? (
                           <Loader2 size={11} className="animate-spin" />
                         ) : (
-                          <Sparkles size={11} />
+                          <Send size={11} />
                         )}
-                        Auto-Generate with AI
+                        {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
                       </button>
                     </div>
+
+                    {(evaluationRequestDispatched || vendor.evaluationRequested) && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-700 dark:text-emerald-300 font-medium">
+                        <Check size={12} className="text-emerald-600 dark:text-emerald-400" />
+                        <span>{UI_STRINGS.vendorEvaluationRequest.requestDispatchedBadge}</span>
+                        {vendor.evaluationRequestedAt && (
+                          <span className="text-slate-400 text-[10px]">
+                            ({new Date(vendor.evaluationRequestedAt).toLocaleDateString()})
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Quality Score */}
                     <div className="space-y-1.5">
@@ -2570,12 +2976,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <div className="p-3.5 rounded-xl bg-gradient-to-r from-slate-50 to-indigo-50/50 dark:from-gray-950 dark:to-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 space-y-2 text-[11px]">
                     <div className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center justify-between">
                       <span>2. Rating Calculation Preview:</span>
-                      <span className="font-mono text-[10px]">Avg(Q,C,D) → Avg(Prev, BuyerAvg)</span>
+                      <span className="font-mono text-[10px]">
+                        {previousScore !== null ? '60% Historical + 40% Buyer Avg' : 'Buyer Average Baseline'}
+                      </span>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-center">
                       <div className="p-2 rounded bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
                         <span className="text-[9.5px] text-slate-400 block uppercase">Buyer Input Avg</span>
-                        <div className="font-bold font-mono text-indigo-600 text-xs mt-0.5">{buyerAverage}%</div>
+                        <div className="font-bold font-mono text-indigo-600 text-xs mt-0.5">{buyerAverageText}</div>
                         <span className="text-[9px] text-slate-400">
                           ({qualityScore}+{costScore}+{deliveryScore})/3
                         </span>
@@ -2583,18 +2991,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <div className="p-2 rounded bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
                         <span className="text-[9.5px] text-slate-400 block uppercase">Actual Previous</span>
                         <div className="font-bold font-mono text-slate-700 dark:text-gray-300 text-xs mt-0.5">
-                          {previousScore}%
+                          {previousScoreText}
                         </div>
-                        <span className="text-[9px] text-slate-400">{previousRating} ★</span>
+                        <span className="text-[9px] text-slate-400">{previousRatingText}</span>
                       </div>
                       <div className="p-2 rounded bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800">
                         <span className="text-[9.5px] text-emerald-700 dark:text-emerald-300 font-bold block uppercase">
                           New Composite
                         </span>
                         <div className="font-extrabold font-mono text-emerald-700 dark:text-emerald-300 text-sm mt-0.5">
-                          {newRating} ★
+                          {newRatingText}
                         </div>
-                        <span className="text-[9px] text-emerald-600 font-bold">{newCompositeScore}% Score</span>
+                        <span className="text-[9px] text-emerald-600 font-bold">{newCompositeText}</span>
                       </div>
                     </div>
                   </div>
@@ -2626,7 +3034,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <p className="leading-relaxed text-slate-700 dark:text-gray-300">
                       These revised ratings (Quality: {qualityScore}, Cost: {costScore}, Delivery: {deliveryScore}) and
                       your remarks will be <strong>officially emailed to {vendor.email}</strong>. Once submitted, the new
-                      aggregate rating ({newRating} ★) will update the platform master directory and will be{' '}
+                      aggregate rating ({newRatingText}) will update the platform master directory and will be{' '}
                       <strong>visible to all other enterprise buyers</strong>.
                     </p>
                   </div>
@@ -2643,10 +3051,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </button>
                     <button
                       type="submit"
-                      className="btn btn-amber btn-sm font-bold flex items-center gap-1.5 shadow-md"
+                      className="btn btn-amber btn-sm font-bold flex items-center gap-1.5 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                       disabled={isSubmittingRevision}
                     >
-                      <Send size={13} /> {isSubmittingRevision ? 'Submitting...' : 'Submit Revision & Dispatch Email'}
+                      <Send size={13} /> {isSubmittingRevision ? 'Submitting & Dispatching...' : 'Submit Revision & Dispatch Email'}
                     </button>
                   </div>
                 </form>
@@ -2720,9 +3128,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 /* ========================================================================= */
                 (() => {
                   const records = selectedHistoryBatch.records || [];
-                  const totalCount = selectedHistoryBatch.total || selectedHistoryBatch.imported || records.length || 0;
-                  const importedCount = selectedHistoryBatch.imported ?? totalCount;
-                  const duplicateCount = selectedHistoryBatch.duplicates || 0;
+                  // Counts are the batch's recorded values. Missing values show a dash.
+                  const totalCount: number | string = selectedHistoryBatch.total ?? selectedHistoryBatch.imported ?? (records.length > 0 ? records.length : '—');
+                  const importedCount: number | string = selectedHistoryBatch.imported ?? totalCount;
+                  const duplicateCount: number | string = selectedHistoryBatch.duplicates ?? '—';
 
                   const filteredRecords = records.filter((r: any) => {
                     if (!batchSearchQuery.trim()) return true;
@@ -2752,14 +3161,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
                               <h4 className="text-sm font-black text-slate-900 dark:text-white font-mono">
-                                {selectedHistoryBatch.fileName || 'Vendor_Master_Upload.xlsx'}
+                                {selectedHistoryBatch.fileName || '—'}
                               </h4>
                               <span className="badge badge-emerald font-bold text-[10px] flex items-center gap-1">
-                                <CheckCircle2 size={10} /> Verified &amp; Ingested
+                                <CheckCircle2 size={10} /> Imported
                               </span>
                             </div>
                             <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                              Batch ID: <span className="font-mono font-semibold">{selectedHistoryBatch.id || 'BATCH-INGEST-01'}</span> · Uploaded: {selectedHistoryBatch.timestamp || 'Recent'}
+                              Batch ID: <span className="font-mono font-semibold">{selectedHistoryBatch.id || '—'}</span> · Uploaded: {selectedHistoryBatch.timestamp || '—'}
                             </p>
                           </div>
                         </div>
@@ -2787,40 +3196,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
                           <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Data Scope &amp; Horizon</span>
-                            <p className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
-                              <Clock size={13} className="text-indigo-500 shrink-0" />
-                              2-Year Historical Baseline
-                            </p>
-                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Complete Master &amp; Purchase Data</p>
-                          </div>
-
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
                             <span className="text-[10px] font-bold text-slate-400 uppercase">Template File Source</span>
                             <p className="font-bold text-slate-800 dark:text-white font-mono truncate flex items-center gap-1.5">
                               <FileText size={13} className="text-indigo-500 shrink-0" />
-                              {selectedHistoryBatch.fileName || 'Vendor_Master_Upload.xlsx'}
+                              {selectedHistoryBatch.fileName || '—'}
                             </p>
                             <p className="text-[10px] text-slate-500 dark:text-gray-400">Excel / Spreadsheet Dataset</p>
                           </div>
 
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Ingestion Engine</span>
-                            <p className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
-                              <Database size={13} className="text-indigo-500 shrink-0" />
-                              Multi-Stream Ingestion
-                            </p>
-                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Direct ERP Format Parser</p>
-                          </div>
-
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Empanelment Policy</span>
-                            <p className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                              <ShieldCheck size={13} className="shrink-0" />
-                              Active Empanelled
-                            </p>
-                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Immediate Sourcing Access</p>
-                          </div>
                         </div>
                       </div>
 
@@ -2848,7 +3231,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                             <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
                               {importedCount}
                             </div>
-                            <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-medium">100% Valid</span>
+                            <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-medium">Rows recorded in this batch</span>
                           </div>
 
                           <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800/60 text-center space-y-0.5 bg-amber-50/20">
@@ -2859,13 +3242,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                             <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-medium">Auto-Merged</span>
                           </div>
 
-                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 text-center space-y-0.5 bg-indigo-50/20">
-                            <span className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400">Category Taxonomy</span>
-                            <div className="text-xl font-black text-indigo-600 dark:text-indigo-400">
-                              100%
-                            </div>
-                            <span className="text-[10px] text-indigo-600/80 dark:text-indigo-400/80 font-medium">Auto-Categorized</span>
-                          </div>
                         </div>
                       </div>
 
@@ -2927,42 +3303,47 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                                 {filteredRecords.map((r: any, idx: number) => (
                                   <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition-colors">
                                     <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-slate-400 font-bold whitespace-nowrap">
-                                      {r.vendorCode || `VND-${idx + 1001}`}
+                                      {r.vendorCode || '—'}
                                     </td>
-                                    <td className="p-2.5">
-                                      <div className="font-bold text-slate-800 dark:text-white">
+                                    <td className="p-2.5 max-w-[180px]">
+                                      <div className="font-bold text-slate-800 dark:text-white truncate" title={r.name || undefined}>
                                         {r.name || '—'}
                                       </div>
                                       {r.brandName && (
-                                        <div className="text-[10px] text-slate-400 font-medium">
+                                        <div className="text-[10px] text-slate-400 font-medium truncate" title={`Brand: ${r.brandName}`}>
                                           Brand: {r.brandName}
                                         </div>
                                       )}
                                     </td>
-                                    <td className="p-2.5">
-                                      <div className="font-medium text-slate-700 dark:text-gray-300">
+                                    <td className="p-2.5 max-w-[140px]">
+                                      <div className="font-medium text-slate-700 dark:text-gray-300 truncate" title={r.contactPerson || undefined}>
                                         {r.contactPerson || '—'}
                                       </div>
                                       {r.contactDesignation && (
-                                        <div className="text-[10px] text-slate-400">
+                                        <div className="text-[10px] text-slate-400 truncate" title={r.contactDesignation}>
                                           {r.contactDesignation}
                                         </div>
                                       )}
                                     </td>
-                                    <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold whitespace-nowrap">
+                                    <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold max-w-[180px] truncate" title={r.email || undefined}>
                                       {r.email || '—'}
                                     </td>
-                                    <td className="p-2.5 whitespace-nowrap">
-                                      <div className="font-mono text-[11px] text-slate-600 dark:text-gray-400">
+                                    <td className="p-2.5 max-w-[160px]">
+                                      <div className="font-mono text-[11px] text-slate-600 dark:text-gray-400 truncate" title={r.phone || undefined}>
                                         {r.phone || '—'}
                                       </div>
-                                      <div className="text-[10px] text-slate-500">
-                                        {[r.city, r.state, r.pincode].filter(Boolean).join(', ') || 'India'}
-                                      </div>
+                                      {(() => {
+                                        const loc = [r.city, r.state, r.pincode].filter(Boolean).join(', ');
+                                        return (
+                                          <div className="text-[10px] text-slate-500 truncate" title={loc || undefined}>
+                                            {loc || '—'}
+                                          </div>
+                                        );
+                                      })()}
                                     </td>
-                                    <td className="p-2.5">
-                                      <span className="badge badge-slate font-bold text-[10px]">
-                                        {r.category || 'General'}
+                                    <td className="p-2.5 max-w-[140px]">
+                                      <span className="badge badge-slate font-bold text-[10px] truncate max-w-[130px] inline-block" title={r.category || undefined}>
+                                        {r.category || '—'}
                                       </span>
                                     </td>
                                     <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-300 font-bold whitespace-nowrap">
@@ -2971,12 +3352,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                                     <td className="p-2.5 whitespace-nowrap">
                                       <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-600 dark:text-amber-400">
                                         <Star size={11} className="fill-amber-400 text-amber-400" />
-                                        {r.rating || 85}
+                                        {r.rating ?? '—'}
                                       </span>
                                     </td>
                                     <td className="p-2.5 whitespace-nowrap">
                                       <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                                        <CheckCircle2 size={10} /> Active
+                                        {r.status || '—'}
                                       </span>
                                     </td>
                                   </tr>
@@ -3012,54 +3393,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         )}
                       </div>
 
-                      {/* STEP 4: Downstream Sourcing & Workflow Activation */}
-                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
-                            4
-                          </span>
-                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                            Step 4: Sourcing &amp; Downstream Workflow Activation
-                          </h4>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200/80 dark:border-emerald-900/40 flex items-start gap-2.5">
-                            <div className="p-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0">
-                              <BadgeCheck size={16} />
-                            </div>
-                            <div>
-                              <h5 className="font-bold text-slate-800 dark:text-white">Organization Directory</h5>
-                              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                                Synced and active in Buyer Vendor Directory with real-time profile lookups.
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200/80 dark:border-indigo-900/40 flex items-start gap-2.5">
-                            <div className="p-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0">
-                              <Workflow size={16} />
-                            </div>
-                            <div>
-                              <h5 className="font-bold text-slate-800 dark:text-white">RFQ Sourcing Engine</h5>
-                              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                                Enabled for automated V1, V2, and V3 multi-category quotation matching.
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-purple-200/80 dark:border-purple-900/40 flex items-start gap-2.5">
-                            <div className="p-1 rounded-lg bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 mt-0.5 shrink-0">
-                              <ShieldCheck size={16} />
-                            </div>
-                            <div>
-                              <h5 className="font-bold text-slate-800 dark:text-white">ERP Audit Trail</h5>
-                              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                                Ingestion timestamp &amp; record checksums preserved for procurement audit compliance.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
                     </div>
                   );
                 })()
@@ -3078,7 +3411,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         <div className="space-y-0.5">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs font-black text-slate-900 dark:text-white font-mono">
-                              {batch.fileName || 'Vendor_Master_Upload.xlsx'}
+                              {batch.fileName || '—'}
                             </span>
                             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                               <CheckCircle2 size={10} /> Imported
@@ -3086,11 +3419,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           </div>
                           <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-gray-400 flex-wrap">
                             <span className="flex items-center gap-1">
-                              <Clock size={11} className="text-slate-400" /> {batch.timestamp || 'Recent'}
+                              <Clock size={11} className="text-slate-400" /> {batch.timestamp || '—'}
                             </span>
                             <span>•</span>
                             <span className="font-bold text-slate-700 dark:text-slate-300">
-                              {batch.imported ?? batch.total ?? 0} valid suppliers
+                              {batch.imported ?? batch.total ?? '—'} suppliers
                             </span>
                             {batch.duplicates > 0 && (
                               <>
@@ -3161,7 +3494,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Footer */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800 shrink-0 text-xs">
               <span className="text-[11px] text-slate-400">
-                All uploaded vendor template data is recorded and audit-logged in browser &amp; platform history.
+                This history is stored in this browser only.
               </span>
               <button
                 type="button"

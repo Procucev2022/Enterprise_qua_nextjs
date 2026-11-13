@@ -187,10 +187,13 @@ export async function saveBuyerProfile(
  * A failure therefore yields an empty list plus a reason for the caller to
  * surface, rather than a plausible-looking tree assembled offline.
  */
-export async function fetchCategoryTaxonomy(): Promise<CategoryTaxonomyResult> {
+export async function fetchCategoryTaxonomy(query?: string): Promise<CategoryTaxonomyResult> {
   let res: Response;
+  const endpoint = query && query.trim()
+    ? `${BUYER_PROFILE_ENDPOINTS.CATEGORIES}?q=${encodeURIComponent(query.trim())}`
+    : BUYER_PROFILE_ENDPOINTS.CATEGORIES;
   try {
-    res = await fetch(BUYER_PROFILE_ENDPOINTS.CATEGORIES, { headers: authHeaders() });
+    res = await fetch(endpoint, { headers: authHeaders() });
   } catch {
     logger.error('Category taxonomy load failed: API unreachable', {}, 'BUYER_PROFILE');
     return { success: false, data: [], error: UI_STRINGS.buyerProfile.loadUnreachable };
@@ -212,7 +215,12 @@ export async function fetchCategoryTaxonomy(): Promise<CategoryTaxonomyResult> {
   }
 
   logger.info('Category taxonomy loaded', { majorCount: body.data.length }, 'BUYER_PROFILE');
-  return { success: true, data: body.data as MajorMinorCategory[] };
+  return {
+    success: true,
+    data: body.data as MajorMinorCategory[],
+    minorCategories: Array.isArray((body as any).minorCategories) ? (body as any).minorCategories : undefined,
+    totalMinors: typeof (body as any).totalMinors === 'number' ? (body as any).totalMinors : undefined,
+  };
 }
 
 /**

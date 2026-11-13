@@ -3,13 +3,22 @@
 ## 1. Mandatory Unit Testing & Coverage Rules
 - **Benchmark**: Achieve and maintain **>= 90% Unit Test Coverage per file** on Lines, Statements, Branches, and Functions across all code files in `frontend/` and `backend/`.
 - **Global Timeout**: 20,000 ms.
-- **Verification Command**:
-  ```bash
-  npm run test:coverage
-  npm run check:coverage
-  ```
+- **Verification Commands**:
+  - **Fast Verification on Active Changes (~3-7s)**:
+    ```bash
+    npm run qc:fast   # or: npm run check:fast
+    ```
+  - **Targeted Single-File Coverage (~1-3s)**:
+    ```bash
+    npm test --prefix frontend -- --coverage --collectCoverageFrom="app/path/to/file.tsx" --coverageThreshold="{}" __tests__/path/to/test.test.tsx
+    ```
+  - **Full Release / PR Gate**:
+    ```bash
+    npm run test:coverage
+    npm run check:coverage
+    ```
 - **Strict Error Enforcement**: If any single file falls below 90% in statements, branches, functions, or lines, the coverage verifier script will exit with error code 1.
-- **AI Agent Obligation**: Before concluding any task or reporting completion to the user, run `npm run test:coverage` and ensure 0 failures and 90%+ coverage on every single file.
+- **AI Agent Obligation**: Before concluding any task or reporting completion to the user, verify that all modified code achieves 90%+ coverage across all 4 metrics with 0 failures.
 
 ---
 
@@ -63,7 +72,11 @@
 ---
 
 ## 10. Quality Check Pipeline & Multi-Project Verification Protocol
-- **Sequence**: Build and Unit Test Coverage MUST be verified first, followed by TypeScript Typecheck, Linting, and Database Migrations.
+- **Fast Change Verification (`npm run qc:fast` / `npm run check:fast`)**:
+  - Run during active iterative edits to get instant feedback in **~3-7 seconds**. Automatically detects Git modifications, tests only touched files via `--onlyChanged`, typechecks, and lints.
+- **Full Workspace Quality Check (`npm run qc` / `npm run check:quality`)**:
+  - Run before final pull requests, pre-commit, or releases.
+  - **Sequence**: Build and Unit Test Coverage MUST be verified first, followed by TypeScript Typecheck, Linting, and Database Migrations.
 - **Global Workspace Commands**:
   - `npm run check:quality` or `npm run qc`: Full workspace quality check pipeline.
   - `npm run check:fast` or `npm run qc:fast`: Fast incremental check for active changes.

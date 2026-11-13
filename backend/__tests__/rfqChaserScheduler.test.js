@@ -1141,10 +1141,12 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
       expect(domainQueries.getRFQByNumberFromDB).toHaveBeenCalledTimes(1);
       expect(upsertSpy).toHaveBeenCalledTimes(1);
       expect(upsertSpy).toHaveBeenCalledWith(rfq);
-      expect(rfq.followUpData.emailStats.delivered).toBe(1);
-      expect(rfq.followUpData.smsStats.delivered).toBe(1);
+      expect(rfq.followUpData.emailStats.sent24h).toBe(1);
+      expect(rfq.followUpData.emailStats.delivered).toBe(0);
+      expect(rfq.followUpData.smsStats.sent).toBe(1);
+      expect(rfq.followUpData.smsStats.delivered).toBe(0);
       expect(rfq.followUpData.vendors[0].emailSent).toBe(true);
-      expect(rfq.followUpData.vendors[1].sms.status).toBe('delivered');
+      expect(rfq.followUpData.vendors[1].sms.status).toBe('sent');
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
     }
@@ -1372,20 +1374,24 @@ describe('_updateLiveFollowUpStats coverage', () => {
       // Null check
       scheduler._updateLiveFollowUpStats(null, 'sms', null);
 
-      // WhatsApp update
+      // WhatsApp update: a provider acceptance is recorded as sent, never as delivered
       scheduler._updateLiveFollowUpStats('RFQ-FUP-TEST', 'whatsapp', VENDOR);
-      expect(mockRfq.followUpData.whatsappStats.delivered).toBe(1);
+      expect(mockRfq.followUpData.whatsappStats.sent).toBe(1);
+      expect(mockRfq.followUpData.whatsappStats.delivered).toBe(0);
+      expect(mockRfq.followUpData.vendors[0].whatsapp.status).toBe('sent');
 
       // SMS update
       scheduler._updateLiveFollowUpStats('RFQ-FUP-TEST', 'sms', VENDOR);
-      expect(mockRfq.followUpData.smsStats.delivered).toBe(1);
+      expect(mockRfq.followUpData.smsStats.sent).toBe(1);
+      expect(mockRfq.followUpData.smsStats.delivered).toBe(0);
       expect(mockRfq.followUpData.smsStats.total).toBe(1);
-      expect(mockRfq.followUpData.vendors[0].sms.status).toBe('delivered');
+      expect(mockRfq.followUpData.vendors[0].sms.status).toBe('sent');
 
       // Email update
       scheduler._updateLiveFollowUpStats('RFQ-FUP-TEST', 'email', VENDOR);
-      expect(mockRfq.followUpData.emailStats.delivered).toBe(1);
+      expect(mockRfq.followUpData.emailStats.delivered).toBe(0);
       expect(mockRfq.followUpData.emailStats.sent24h).toBe(1);
+      expect(mockRfq.followUpData.vendors[0].email.status).toBe('sent');
 
       // Missing followUpData
       const rfqNoFup = { rfqNumber: 'NO-FUP' };

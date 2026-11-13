@@ -10,6 +10,7 @@ describe('internalTaskController - Registrations', () => {
       query: {},
       params: {},
       body: {},
+      user: { uuid: 'manager-1', email: 'manager@test.local', name: 'Test Manager', role: 'category_manager' },
     };
     res = {
       status: jest.fn().mockReturnThis(),
@@ -17,6 +18,20 @@ describe('internalTaskController - Registrations', () => {
       setHeader: jest.fn().mockReturnThis(),
       send: jest.fn().mockReturnThis(),
     };
+  });
+
+  describe('handleRegistrationAction session requirement', () => {
+    test('returns 401 and makes no change when the request has no session', async () => {
+      req.user = undefined;
+      req.params = { id: 'reg-client-101' };
+      req.body = { action: 'accept' };
+      const decisionSpy = jest.spyOn(registrationQueries, 'updateClientRegistrationStatus');
+
+      await internalTaskController.handleRegistrationAction(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(decisionSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('getRegistrations', () => {
@@ -143,7 +158,7 @@ describe('internalTaskController - Registrations', () => {
         client: mockClient,
       });
       expect(registrationQueries.updateClientRegistrationStatus).toHaveBeenCalledWith(
-        'reg-client-102', 'accept', 'Verified by CM', {}
+        'reg-client-102', 'accept', 'Verified by CM', req.user
       );
     });
 

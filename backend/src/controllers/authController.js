@@ -7,7 +7,7 @@ const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueri
 const loginLogsQueries = require('../db/loginLogsQueries');
 
 function getClientIp(req) {
-  return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
+  return req.ip || (req.headers && req.headers['x-forwarded-for']) || null;
 }
 
 function respondIfAuthStorageUnavailable(res, err) {
@@ -27,7 +27,9 @@ async function recordSuccessfulLogin(user, ipAddress, authenticationMethod) {
       userName: user.name,
       email: user.email,
       phoneNumber: user.mobile,
-      companyName: user.orgName || user.companyName || 'Enterprise Partner',
+      // login_logs.company_name is NOT NULL, so an account with no company on
+      // record is stored as an empty value rather than a placeholder company.
+      companyName: user.orgName || user.companyName || '',
       userType: user.role === 'vendor' ? 'vendor' : 'buyer',
       ipAddress,
     });
@@ -248,20 +250,23 @@ async function getSession(req, res, next) {
 
 async function logout(req, res, next) {
   try {
-    const userEmail = (req.body && req.body.email) || 'authenticated-user';
     const ipAddress = getClientIp(req);
     const token = extractToken(req);
+    // This route is public, so the account being signed out comes only from the
+    // verified session token. The request body is not trusted to name it.
+    const decoded = token ? authService.verifySessionToken(token) : null;
+    const sessionUser = decoded && decoded.valid && decoded.user ? decoded.user : null;
+    const userEmail = sessionUser ? sessionUser.email : null;
     if (token) {
       try {
-        const decoded = authService.verifySessionToken(token);
-        if (decoded && decoded.valid && decoded.user) {
+        if (sessionUser) {
           const reason = (req.body && req.body.logoutReason) || 'MANUAL';
-          if (decoded.user.sessionId) {
-            await vendorDirectorySessionQueries.closeSession(decoded.user.sessionId, { logoutReason: reason });
+          if (sessionUser.sessionId) {
+            await vendorDirectorySessionQueries.closeSession(sessionUser.sessionId, { logoutReason: reason });
           }
           await loginLogsQueries.recordLogoutLog({
-            email: decoded.user.email,
-            userUuid: decoded.user.id || decoded.user.uuid,
+            email: sessionUser.email,
+            userUuid: sessionUser.id || sessionUser.uuid,
             logoutReason: reason,
           });
         }
@@ -284,10 +289,12 @@ async function logout(req, res, next) {
         });
       }
     }
-    if (userEmail && userEmail !== 'authenticated-user') {
+    // A request with no valid session has no account to attribute, so nothing is
+    // recorded against one.
+    if (userEmail) {
       vendorPresenceService.clearPresence(userEmail);
+      logger.audit(`User logged out: ${userEmail}`, userEmail, { ipAddress });
     }
-    logger.audit(`User logged out: ${userEmail}`, userEmail, { ipAddress });
     return res.json({ success: true, message: AUTH_MESSAGES.LOGOUT_SUCCESS });
   } catch (err) {
     logger.error('Error logging out', err, 'AUTH_CONTROLLER');

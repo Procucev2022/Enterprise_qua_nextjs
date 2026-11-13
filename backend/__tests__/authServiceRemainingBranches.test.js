@@ -156,6 +156,7 @@ describe('authService remaining branch tests', () => {
           name: 'Acme Supplies Ltd',
           gstin: '27AAAAA0000A1Z5',
           city: 'Mumbai',
+          status: 'PENDING EVALUATION',
         }),
         'newvendor@supplier.com',
         null

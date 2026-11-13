@@ -1,13 +1,25 @@
 /**
  * Document Vault API Client
  * Facilitates listing, searching, uploading, updating, and removing corporate collateral.
+ *
+ * A write counts as saved only when the API responds 2xx with `success: true`. A reply
+ * without that flag is reported as an error, never as success.
  */
 
 import type { DocumentVaultItem, DocumentVaultSummary } from './types';
 import { authClient } from './authClient';
 import { logger } from './logger';
+import { UI_STRINGS, formatString } from './uiStrings';
 
 const DOCUMENT_VAULT_LOG_CATEGORY = 'DOCUMENT_VAULT_CLIENT';
+const RESOURCES = UI_STRINGS.dataLoad.resources;
+
+/** Body shape shared by every vault response. */
+interface DocumentVaultResponseBody {
+  success?: boolean;
+  error?: string;
+  document?: DocumentVaultItem;
+}
 
 function logDocumentVaultFailure(
   operation: string,
@@ -56,6 +68,12 @@ function getAuthHeaders(): HeadersInit {
   return headers;
 }
 
+/** Message for a write whose response did not confirm success. */
+function writeNotConfirmedMessage(body: DocumentVaultResponseBody, res: Response, fallback: string): string {
+  if (body.error) return body.error;
+  return res.ok ? UI_STRINGS.dataLoad.notConfirmed : fallback;
+}
+
 export async function fetchDocuments(params: {
   category?: string;
   search?: string;
@@ -89,13 +107,20 @@ export async function fetchDocuments(params: {
     const errorBody = await readDocumentVaultJson<{ error?: string }>('fetch documents error response', res)
       .catch((): { error?: string } => ({}));
     logDocumentVaultFailure('fetch documents', errorBody.error || `HTTP ${res.status}`, { status: res.status });
-    throw new Error(errorBody.error || `Failed to fetch documents (${res.status})`);
+    throw new Error(errorBody.error || formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource: RESOURCES.documentVault, status: res.status }));
   }
 
   const data = await readDocumentVaultJson<{ documents?: DocumentVaultItem[] }>('fetch documents response', res);
-  return data.documents || [];
+  if (!Array.isArray(data.documents)) {
+    throw new Error(formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource: RESOURCES.documentVault }));
+  }
+  return data.documents;
 }
 
+/**
+ * Vault totals. Throws when the request fails or the reply has no summary, so a zero
+ * total is never shown in place of missing data.
+ */
 export async function fetchDocumentVaultSummary(): Promise<DocumentVaultSummary> {
   const res = await requestDocumentVault('fetch summary', '/api/document-vault/summary', {
     method: 'GET',
@@ -106,18 +131,14 @@ export async function fetchDocumentVaultSummary(): Promise<DocumentVaultSummary>
     const errorBody = await readDocumentVaultJson<{ error?: string }>('fetch summary error response', res)
       .catch((): { error?: string } => ({}));
     logDocumentVaultFailure('fetch summary', errorBody.error || `HTTP ${res.status}`, { status: res.status });
-    throw new Error(errorBody.error || `Failed to fetch vault summary (${res.status})`);
+    throw new Error(errorBody.error || formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource: RESOURCES.documentVaultSummary, status: res.status }));
   }
 
   const data = await readDocumentVaultJson<{ summary?: DocumentVaultSummary }>('fetch summary response', res);
-  return (
-    data.summary || {
-      totalDocuments: 0,
-      activeDocuments: 0,
-      totalSizeBytes: 0,
-      categoriesCount: 0,
-    }
-  );
+  if (!data.summary) {
+    throw new Error(formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource: RESOURCES.documentVaultSummary }));
+  }
+  return data.summary;
 }
 
 export async function createDocument(payload: {
@@ -136,14 +157,12 @@ export async function createDocument(payload: {
     body: JSON.stringify(payload),
   });
 
-  const data = await readDocumentVaultJson<{ error?: string; document?: DocumentVaultItem }>('create document response', res)
-    .catch((): { error?: string; document?: DocumentVaultItem } => ({}));
-  if (!res.ok) {
-    logDocumentVaultFailure('create document', data.error || `HTTP ${res.status}`, { status: res.status });
-    return {
-      success: false,
-      error: data.error || `Failed to create document (${res.status})`,
-    };
+  const data = await readDocumentVaultJson<DocumentVaultResponseBody>('create document response', res)
+    .catch((): DocumentVaultResponseBody => ({}));
+  if (!res.ok || data.success !== true) {
+    const error = writeNotConfirmedMessage(data, res, formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: res.status }));
+    logDocumentVaultFailure('create document', error, { status: res.status });
+    return { success: false, error };
   }
 
   return {
@@ -167,14 +186,12 @@ export async function updateDocument(
     body: JSON.stringify(updates),
   });
 
-  const data = await readDocumentVaultJson<{ error?: string; document?: DocumentVaultItem }>('update document response', res)
-    .catch((): { error?: string; document?: DocumentVaultItem } => ({}));
-  if (!res.ok) {
-    logDocumentVaultFailure('update document', data.error || `HTTP ${res.status}`, { status: res.status });
-    return {
-      success: false,
-      error: data.error || `Failed to update document (${res.status})`,
-    };
+  const data = await readDocumentVaultJson<DocumentVaultResponseBody>('update document response', res)
+    .catch((): DocumentVaultResponseBody => ({}));
+  if (!res.ok || data.success !== true) {
+    const error = writeNotConfirmedMessage(data, res, formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: res.status }));
+    logDocumentVaultFailure('update document', error, { status: res.status });
+    return { success: false, error };
   }
 
   return {
@@ -189,14 +206,12 @@ export async function deleteDocument(id: string): Promise<{ success: boolean; er
     headers: getAuthHeaders(),
   });
 
-  const data = await readDocumentVaultJson<{ error?: string }>('delete document response', res)
-    .catch((): { error?: string } => ({}));
-  if (!res.ok) {
-    logDocumentVaultFailure('delete document', data.error || `HTTP ${res.status}`, { status: res.status });
-    return {
-      success: false,
-      error: data.error || `Failed to delete document (${res.status})`,
-    };
+  const data = await readDocumentVaultJson<DocumentVaultResponseBody>('delete document response', res)
+    .catch((): DocumentVaultResponseBody => ({}));
+  if (!res.ok || data.success !== true) {
+    const error = writeNotConfirmedMessage(data, res, formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: res.status }));
+    logDocumentVaultFailure('delete document', error, { status: res.status });
+    return { success: false, error };
   }
 
   return { success: true };

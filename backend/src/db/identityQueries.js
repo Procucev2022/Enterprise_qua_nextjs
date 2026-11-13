@@ -238,7 +238,7 @@ async function findUserByEmailAndPhone(email, phone) {
   if (!email || !phone) return null;
   const cleanEmail = String(email).trim().toLowerCase();
   const normalizedPhone = normalizePhone(phone);
-  let result = await pool.rows(
+  const result = await pool.rows(
     `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
     [cleanEmail, normalizedPhone],
     {
@@ -249,25 +249,6 @@ async function findUserByEmailAndPhone(email, phone) {
       ttlMs: 60000,
     }
   );
-
-  // If not found with submitted phone, check if the user is an auto-registered buyer with placeholder phone
-  if (!result || result.length === 0) {
-    const placeholderPhone = normalizePhone(IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER);
-    if (normalizedPhone === placeholderPhone) {
-      result = await pool.rows(
-        `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or u.phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}') order by u.is_active desc, u.created_ts desc limit 1`,
-        `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or u.phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}') order by u.is_active desc, u.created_ts desc limit 1`,
-        [cleanEmail, placeholderPhone],
-        {
-          d1: true,
-          d1Text: `${USER_SELECT} where (u.username = $1 or u.username = $1 COLLATE NOCASE) and (u.phone = $2 or u.phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}') order by u.is_active desc, u.created_ts desc limit 1`,
-          useCache: true,
-          tag: 'user',
-          ttlMs: 60000,
-        }
-      );
-    }
-  }
 
   return mapRowToUser(result[0]);
 }
@@ -381,10 +362,12 @@ async function insertBuyerAccount({
   if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
-  if (!email || !password || !phone) {
-    throw new Error('email, password and phone are required to create a buyer account.');
+  if (!email || !password) {
+    throw new Error('email and password are required to create a buyer account.');
   }
 
+  // The phone is optional. When it is unknown the column holds an empty string,
+  // never a placeholder number.
   const normalizedEmail = String(email).trim().toLowerCase();
   const normalizedPhone = normalizePhone(phone);
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Enterprises`;
@@ -395,7 +378,7 @@ async function insertBuyerAccount({
   const addressCountry = (country || 'India').trim();
   const streetAddress = (street || address || (addressCity && addressState ? `${addressCity}, ${addressState}` : addressCity || '')).trim();
   const taxGstin = (gstin || '').trim().toUpperCase();
-  const taxPan = (pan || (taxGstin.length === 15 ? taxGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const taxPan = (pan || '').trim().toUpperCase();
 
   const existing = (await findUserByEmail(normalizedEmail)) || (await findUserByEmailAndPhone(normalizedEmail, normalizedPhone));
   if (existing) {
@@ -731,7 +714,6 @@ async function insertStaffAccount({
       [orgName, orgTypeUuid],
       { d1: true }
     );
-    const placeholderPhone = normalizePhone(IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER);
     const organizationReusedBeforeWrite = orgLookup.rows.length > 0;
     const statements = [];
     let organizationInsertIndex = -1;
@@ -747,8 +729,7 @@ async function insertStaffAccount({
                       $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13,
                       strftime('%Y-%m-%dT%H:%M:%fZ','now')
                 where not exists (select 1 from organization where organization_name = $2 and org_type_uuid = $6)
-                  and not exists (select 1 from "user" where lower(username) = lower($3)
-                    and (phone = $4 or ($4 = '${placeholderPhone}' and phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}')))
+                  and not exists (select 1 from "user" where lower(username) = lower($3) and phone = $4)
                returning uuid`,
         params: [
           crypto.randomUUID(),
@@ -786,8 +767,7 @@ async function insertStaffAccount({
                     $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15,
                     strftime('%Y-%m-%dT%H:%M:%fZ','now')
               where exists (select 1 from organization where organization_name = $8 and org_type_uuid = $16)
-                and not exists (select 1 from "user" where lower(username) = lower($2)
-                  and (phone = $7 or ($7 = '${placeholderPhone}' and phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}')))
+                and not exists (select 1 from "user" where lower(username) = lower($2) and phone = $7)
              returning uuid, org_uuid`,
       params: [
         userUuid,
@@ -946,8 +926,9 @@ async function insertVendorAccount({
     throw new Error('email and password are required to create a vendor account.');
   }
 
+  // The phone is optional. When it is unknown the column holds an empty string, never a placeholder number.
   const normalizedEmail = String(email).trim().toLowerCase();
-  const normalizedPhone = phone ? normalizePhone(phone) : normalizePhone(IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER);
+  const normalizedPhone = normalizePhone(phone);
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Vendor`;
   const displayName = fullName || normalizedEmail.split('@')[0];
 

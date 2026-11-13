@@ -63,10 +63,16 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
       expect(keys[0]).toBe('key-1');
     });
 
-    test('filters out invalid placeholder keys (e.g. AIzaSyC_2mDq... or keys with mD3Zq8mD)', () => {
-      process.env.GEMINI_API_KEYS = 'AIzaSyC_2mDqFAKEKEYmD3Zq8mD, key-valid-1, placeholder, key-valid-2';
+    test('drops the literal placeholder entry and keeps every other configured key', () => {
+      process.env.GEMINI_API_KEYS = ' placeholder , key-valid-1,, key-valid-2 ';
       const keys = gemini.resolveApiKeys();
       expect(keys).toEqual(['key-valid-1', 'key-valid-2']);
+    });
+
+    test('does not filter keys by their shape, so a key-like value is kept as configured', () => {
+      process.env.GEMINI_API_KEYS = 'AIzaSyD-shape-check-value, key-valid-1';
+      const keys = gemini.resolveApiKeys();
+      expect(keys).toEqual(['AIzaSyD-shape-check-value', 'key-valid-1']);
     });
   });
 

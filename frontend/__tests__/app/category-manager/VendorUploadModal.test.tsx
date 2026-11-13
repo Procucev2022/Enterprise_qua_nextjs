@@ -755,4 +755,46 @@ describe('VendorUploadModal', () => {
     await screen.findByText('dropped.xlsx');
     expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file);
   });
+
+  test('displays accurate upload counts and on-screen error messages for failed and duplicate vendor records', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        rows: [
+          validRow({ vendor: { name: 'Vendor One', email: 'v1@test.com', phone: '9876543210' } }, 2),
+          validRow({ vendor: { name: 'Vendor Two', email: 'v2@test.com', phone: '9876543210' } }, 3),
+          validRow({ vendor: { name: 'Vendor Three', email: 'v3@test.com', phone: '9876543210' } }, 4),
+          validRow({ vendor: { name: 'Vendor Four', email: 'v4@test.com', phone: '9876543210' } }, 5),
+        ],
+        blankRowCount: 0,
+      },
+    });
+
+    (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+      total: 4,
+      imported: 2,
+      duplicates: 1,
+      failed: 1,
+      results: [
+        { rowNumber: 2, status: 'imported', email: 'v1@test.com' },
+        { rowNumber: 3, status: 'imported', email: 'v2@test.com' },
+        { rowNumber: 4, status: 'duplicate', email: 'v3@test.com', reason: 'A vendor with this email already exists.' },
+        { rowNumber: 5, status: 'failed', email: 'v4@test.com', errors: ['Validation failed: Invalid mobile number format.'] },
+      ],
+    });
+
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    pickFile(new File(['x'], 'vendors.xlsx'));
+    await screen.findByText('vendors.xlsx');
+
+    fireEvent.click(screen.getByText('Import 4 Vendors'));
+
+    await screen.findByText(/Total: 4 · Imported: 2 · Failed: 1 · Duplicates: 1/);
+    const errorList = screen.getByTestId('vendor-upload-error-list');
+    expect(errorList).toBeInTheDocument();
+    expect(within(errorList).getByText('Vendor Three')).toBeInTheDocument();
+    expect(within(errorList).getByText('A vendor with this email already exists.')).toBeInTheDocument();
+    expect(within(errorList).getByText('Vendor Four')).toBeInTheDocument();
+    expect(within(errorList).getByText('Validation failed: Invalid mobile number format.')).toBeInTheDocument();
+  });
 });

@@ -1,4 +1,7 @@
 const crypto = require('crypto');
+const { SYSTEM_ACTOR_EMAIL } = require('../config/constants');
+
+const UNKNOWN_IP_ADDRESS = 'unknown';
 
 /**
  * Generate a SHA-256 cryptographic seal
@@ -6,7 +9,7 @@ const crypto = require('crypto');
  * @returns {string} - Hex-encoded SHA-256 hash
  */
 function generateShaHash(payload = '') {
-  const content = payload || `${Date.now()}-${Math.random()}`;
+  const content = payload || crypto.randomUUID();
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
@@ -33,10 +36,11 @@ function sealAuditEntry(entry, previousHash = '') {
   return sealedEntry;
 }
 
-function createAuditEntry({ userEmail, action, rfqNumber = null, ipAddress = '10.0.4.12 (Azure Private VNet)', previousHash = '' }) {
+function createAuditEntry({ userEmail, action, rfqNumber = null, ipAddress = UNKNOWN_IP_ADDRESS, previousHash = '' }) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
-  const id = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  const resolvedUserEmail = userEmail || 'system@procucev.ai';
+  const id = `log-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  // An entry with no signed-in actor is attributed to the documented system actor.
+  const resolvedUserEmail = userEmail || SYSTEM_ACTOR_EMAIL;
   return sealAuditEntry({
     id,
     timestamp,
@@ -44,7 +48,7 @@ function createAuditEntry({ userEmail, action, rfqNumber = null, ipAddress = '10
     action,
     rfqNumber,
     status: 'TAMPER_CHECK_OK',
-    ipAddress,
+    ipAddress: ipAddress || UNKNOWN_IP_ADDRESS,
   }, previousHash);
 }
 

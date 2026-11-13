@@ -4,6 +4,7 @@ import VendorConsole from '@/app/category-manager/vendor-console';
 import * as storeModule from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import type { RFQVendorCandidate } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
 jest.mock('@/lib/rfqClient', () => ({
@@ -79,7 +80,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     // Matches "Vendor 1", "Vendor 10".."Vendor 19" (11 rows) — all fit in one
     // page (20), so no Load More button, and unrelated vendors are gone.
     // 350ms search debounce plus the mocked fetch; the default 1s waitFor is too tight under full-suite load.
-    await waitFor(() => expect(screen.queryByText('Vendor 0')).not.toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(screen.queryByText('Vendor 0')).not.toBeInTheDocument(), { timeout: 10000 });
     expect(screen.getAllByText('Vendor 1').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('load-more-vendor-cards')).not.toBeInTheDocument();
   });
@@ -182,7 +183,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     expect(screen.getByText('Fully Compliant')).toBeInTheDocument();
   });
 
-  test('falls back to a placeholder avatar/label when a vendor has no name, and shows the amber badge for a non-Fully-Compliant quote', async () => {
+  test('shows a dash, not an invented label, for a vendor with no name, and shows the amber badge for a non-Fully-Compliant quote', async () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       rfqs: [
         {
@@ -199,9 +200,11 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
       page([{ ...makeVendor(0), id: 'v-noname', name: '' }], 1, 1)
     );
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getAllByText('Unnamed Vendor').length).toBeGreaterThan(0));
+    // The vendor card renders after the first page load. Wait for its control rather than any dash on the page.
+    const reviewButton = await screen.findByRole('button', { name: UI_STRINGS.actions.reviewVendorPerformance });
+    expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByText(/Review Performance/i));
+    fireEvent.click(reviewButton);
     expect(screen.getByText('Partially Compliant')).toBeInTheDocument();
   });
 

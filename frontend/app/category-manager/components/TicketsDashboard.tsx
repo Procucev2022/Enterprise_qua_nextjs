@@ -38,8 +38,9 @@ import {
   addTicketComment,
   getExportTicketsUrl,
 } from '@/lib/ticketClient';
-import type { Ticket, TicketSummary, TicketPriority, TicketStatus } from '@/lib/types';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { fetchInternalAssignees } from '@/lib/internalTaskClient';
+import type { InternalTeamMember, Ticket, TicketSummary, TicketPriority, TicketStatus } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import ActionCenterComposeModal from './ActionCenterComposeModal';
 
 const TICKET_CATEGORIES = [
@@ -61,6 +62,19 @@ const TICKET_CATEGORIES = [
 const TICKET_PRIORITIES: TicketPriority[] = ['Critical', 'High', 'Medium', 'Low'];
 const TICKET_STATUSES: TicketStatus[] = ['Pending', 'In Progress', 'Escalated', 'Completed'];
 
+// Copy for the create-ticket form. It belongs in UI_STRINGS.tickets, which is not yet defined in lib/uiStrings.ts (NEEDS OTHER OWNER).
+const CREATE_TICKET_COPY = {
+  fields: {
+    subject: 'Subject',
+    customerName: 'Customer Name',
+    customerEmail: 'Customer Email',
+    customerPhone: 'Customer Phone',
+    assignedTo: 'Assigned Executive',
+    slaHours: 'SLA (Hours)',
+  },
+  missingFieldsTemplate: 'Enter {fields} before creating the ticket.',
+};
+
 const TICKET_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'ticketId', label: 'Ticket ID', visible: true },
   { key: 'subject', label: 'Subject', visible: true, required: true },
@@ -74,18 +88,15 @@ const TICKET_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 const TICKET_COL_PREF_KEY = 'qua_tickets_col_prefs';
+// Shown wherever a value is missing from the record. Never a substitute value.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 export default function TicketsDashboard() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [total, setTotal] = useState<number>(0);
-  const [summary, setSummary] = useState<TicketSummary>({
-    total: 0,
-    pending: 0,
-    inProgress: 0,
-    escalated: 0,
-    completed: 0,
-    criticalCount: 0,
-  });
+  // Null until the summary loads. Cards show a dash in that state, never a zero.
+  const [summary, setSummary] = useState<TicketSummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -116,16 +127,19 @@ export default function TicketsDashboard() {
   const [newDescription, setNewDescription] = useState('');
   const [newPriority, setNewPriority] = useState<TicketPriority>('Medium');
   const [newCategory, setNewCategory] = useState('General');
-  const [newProject, setNewProject] = useState('Enterprise Procurement Hub');
+  const [newProject, setNewProject] = useState('');
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerEmail, setNewCustomerEmail] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
-  const [newAssignedToName, setNewAssignedToName] = useState('Navin Chaudhary');
-  const [newSlaHours, setNewSlaHours] = useState(24);
+  const [newAssignedToName, setNewAssignedToName] = useState('');
+  const [newSlaHours, setNewSlaHours] = useState<string>('');
+  // Staff list for the assignee select. Nothing is preselected.
+  const [staffMembers, setStaffMembers] = useState<InternalTeamMember[]>([]);
+  const [staffError, setStaffError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Escalate Form State
-  const [escalateTo, setEscalateTo] = useState('Sudheer Kangala (Operations Lead)');
+  const [escalateTo, setEscalateTo] = useState('');
   const [escalateReason, setEscalateReason] = useState('');
 
   // Comment State
@@ -182,8 +196,9 @@ export default function TicketsDashboard() {
   }, []);
 
   const loadSummary = useCallback(async () => {
-    const s = await fetchTicketSummary();
-    setSummary(s);
+    const result = await fetchTicketSummary();
+    setSummary(result.summary);
+    setSummaryError(result.error ?? null);
   }, []);
 
   const loadTickets = useCallback(async () => {
@@ -203,8 +218,13 @@ export default function TicketsDashboard() {
       });
       setTickets(res.data);
       setTotal(res.total);
+      setErrorMessage(res.error ?? null);
     } catch {
-      setErrorMessage('Failed to load tickets.');
+      setTickets([]);
+      setTotal(0);
+      setErrorMessage(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.tickets })
+      );
     } finally {
       setIsLoading(false);
     }
@@ -236,10 +256,31 @@ export default function TicketsDashboard() {
     void loadTickets();
   }, [loadSummary, loadTickets]);
 
+  useEffect(() => {
+    let isSubscribed = true;
+    void fetchInternalAssignees().then((result) => {
+      if (!isSubscribed) return;
+      setStaffMembers(result.assignees);
+      setStaffError(result.error ?? null);
+    });
+    return () => {
+      isSubscribed = false;
+    };
+  }, []);
+
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSubject.trim()) {
-      showToast('Please provide a ticket subject.');
+    // Each required field the user left blank is named in one message. Nothing is filled in for the user.
+    const slaHours = Number(newSlaHours);
+    const missingFields: string[] = [];
+    if (!newSubject.trim()) missingFields.push(CREATE_TICKET_COPY.fields.subject);
+    if (!newCustomerName.trim()) missingFields.push(CREATE_TICKET_COPY.fields.customerName);
+    if (!newCustomerEmail.trim()) missingFields.push(CREATE_TICKET_COPY.fields.customerEmail);
+    if (!newCustomerPhone.trim()) missingFields.push(CREATE_TICKET_COPY.fields.customerPhone);
+    if (!newAssignedToName.trim()) missingFields.push(CREATE_TICKET_COPY.fields.assignedTo);
+    if (!newSlaHours.trim() || !Number.isFinite(slaHours) || slaHours <= 0) missingFields.push(CREATE_TICKET_COPY.fields.slaHours);
+    if (missingFields.length > 0) {
+      showToast(formatString(CREATE_TICKET_COPY.missingFieldsTemplate, { fields: missingFields.join(', ') }));
       return;
     }
 
@@ -250,11 +291,11 @@ export default function TicketsDashboard() {
       priority: newPriority,
       category: newCategory,
       project: newProject.trim(),
-      customer_name: newCustomerName.trim() || 'Enterprise Client',
-      customer_email: newCustomerEmail.trim() || 'client@procucev.com',
-      customer_phone: newCustomerPhone.trim() || '+919876543210',
+      customer_name: newCustomerName.trim(),
+      customer_email: newCustomerEmail.trim(),
+      customer_phone: newCustomerPhone.trim(),
       assigned_to_name: newAssignedToName.trim(),
-      sla_hours: Number(newSlaHours) || 24,
+      sla_hours: slaHours,
     });
     setIsSubmitting(false);
 
@@ -374,13 +415,18 @@ export default function TicketsDashboard() {
       )}
 
       {/* KPI Summary Cards */}
+      {summaryError && (
+        <div role="alert" className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl text-xs text-rose-800 dark:text-rose-200">
+          {summaryError}
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="bg-sky-50/70 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800/60 rounded-xl p-3.5 shadow-xs">
           <div className="flex items-center justify-between text-sky-700 dark:text-sky-300 text-xs font-semibold">
             <span>{strings.total}</span>
             <TicketIcon size={16} />
           </div>
-          <div className="mt-2 text-2xl font-black text-sky-900 dark:text-sky-100">{summary.total}</div>
+          <div className="mt-2 text-2xl font-black text-sky-900 dark:text-sky-100">{summary ? summary.total : UI_STRINGS.dataLoad.emptyCell}</div>
         </div>
 
         <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3.5 shadow-xs">
@@ -388,7 +434,7 @@ export default function TicketsDashboard() {
             <span>{strings.pending}</span>
             <Clock size={16} />
           </div>
-          <div className="mt-2 text-2xl font-black text-amber-900 dark:text-amber-100">{summary.pending}</div>
+          <div className="mt-2 text-2xl font-black text-amber-900 dark:text-amber-100">{summary ? summary.pending : UI_STRINGS.dataLoad.emptyCell}</div>
         </div>
 
         <div className="bg-orange-50/70 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800/60 rounded-xl p-3.5 shadow-xs">
@@ -396,7 +442,7 @@ export default function TicketsDashboard() {
             <span>{strings.escalated}</span>
             <Flame size={16} />
           </div>
-          <div className="mt-2 text-2xl font-black text-orange-900 dark:text-orange-100">{summary.escalated}</div>
+          <div className="mt-2 text-2xl font-black text-orange-900 dark:text-orange-100">{summary ? summary.escalated : UI_STRINGS.dataLoad.emptyCell}</div>
         </div>
 
         <div className="bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl p-3.5 shadow-xs">
@@ -404,7 +450,7 @@ export default function TicketsDashboard() {
             <span>{strings.completed}</span>
             <CheckCircle2 size={16} />
           </div>
-          <div className="mt-2 text-2xl font-black text-emerald-900 dark:text-emerald-100">{summary.completed}</div>
+          <div className="mt-2 text-2xl font-black text-emerald-900 dark:text-emerald-100">{summary ? summary.completed : UI_STRINGS.dataLoad.emptyCell}</div>
         </div>
 
         <div className="bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 rounded-xl p-3.5 shadow-xs col-span-2 sm:col-span-1">
@@ -412,7 +458,7 @@ export default function TicketsDashboard() {
             <span>{strings.critical}</span>
             <AlertCircle size={16} />
           </div>
-          <div className="mt-2 text-2xl font-black text-rose-900 dark:text-rose-100">{summary.criticalCount}</div>
+          <div className="mt-2 text-2xl font-black text-rose-900 dark:text-rose-100">{summary ? summary.criticalCount : UI_STRINGS.dataLoad.emptyCell}</div>
         </div>
       </div>
 
@@ -668,7 +714,10 @@ export default function TicketsDashboard() {
                 <tr>
                   <td colSpan={9} className="py-12 text-center text-slate-400">
                     <TicketIcon className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
-                    <p className="font-semibold text-slate-600 dark:text-slate-300">{strings.noTicketsFound}</p>
+                    {/* A failed load is not an empty result. The error banner above explains it, so the row shows a dash. */}
+                    <p className="font-semibold text-slate-600 dark:text-slate-300">
+                      {errorMessage ? UI_STRINGS.dataLoad.emptyCell : strings.noTicketsFound}
+                    </p>
                   </td>
                 </tr>
               ) : (
@@ -700,13 +749,13 @@ export default function TicketsDashboard() {
 
                     {isColVisible('project') && (
                       <td className="py-3 px-3.5 whitespace-nowrap text-slate-600 dark:text-slate-300 font-medium">
-                        {ticket.project || 'General'}
+                        {ticket.project || EMPTY_VALUE}
                       </td>
                     )}
 
                     {isColVisible('customer') && (
                       <td className="py-3 px-3.5 whitespace-nowrap">
-                        <div className="font-medium text-slate-900 dark:text-white">{ticket.customer_name || 'Client'}</div>
+                        <div className="font-medium text-slate-900 dark:text-white">{ticket.customer_name || EMPTY_VALUE}</div>
                         <div className="text-[10px] text-slate-400">{ticket.customer_email || ''}</div>
                       </td>
                     )}
@@ -714,7 +763,7 @@ export default function TicketsDashboard() {
                     {isColVisible('category') && (
                       <td className="py-3 px-3.5 whitespace-nowrap">
                         <span className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md">
-                          {ticket.category || 'General'}
+                          {ticket.category || EMPTY_VALUE}
                         </span>
                       </td>
                     )}
@@ -733,14 +782,14 @@ export default function TicketsDashboard() {
 
                     {isColVisible('assignedTo') && (
                       <td className="py-3 px-3.5 whitespace-nowrap text-slate-700 dark:text-slate-300 font-medium">
-                        {ticket.assigned_to_name || 'Unassigned'}
+                        {ticket.assigned_to_name || UI_STRINGS.actionCenter.tasks.unassigned}
                       </td>
                     )}
 
                     {isColVisible('sla') && (
                       <td className="py-3 px-3.5 whitespace-nowrap text-[11px] text-slate-500">
-                        <div>{ticket.due_date ? new Date(ticket.due_date).toLocaleDateString() : '24h'}</div>
-                        <div className="text-[10px] text-slate-400">{ticket.sla_hours || 24}h SLA</div>
+                        <div>{ticket.due_date ? new Date(ticket.due_date).toLocaleDateString() : EMPTY_VALUE}</div>
+                        <div className="text-[10px] text-slate-400">{ticket.sla_hours ? `${ticket.sla_hours}h SLA` : EMPTY_VALUE}</div>
                       </td>
                     )}
 
@@ -888,18 +937,36 @@ export default function TicketsDashboard() {
                     className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
                   />
                 </div>
+                <div>
+                  <label htmlFor="ticket-create-phone" className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">{CREATE_TICKET_COPY.fields.customerPhone}</label>
+                  <input
+                    id="ticket-create-phone"
+                    type="tel"
+                    aria-label={CREATE_TICKET_COPY.fields.customerPhone}
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">Assigned Executive</label>
-                  <input
-                    type="text"
+                  <select
                     aria-label="Assigned Executive"
                     value={newAssignedToName}
                     onChange={(e) => setNewAssignedToName(e.target.value)}
                     className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
-                  />
+                  >
+                    <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                    {staffMembers.map((member) => (
+                      <option key={member.id} value={member.name}>
+                        {member.name} ({member.role})
+                      </option>
+                    ))}
+                  </select>
+                  {staffError && <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">{staffError}</p>}
                 </div>
                 <div>
                   <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">SLA (Hours)</label>
@@ -907,7 +974,7 @@ export default function TicketsDashboard() {
                     type="number"
                     aria-label="SLA Hours"
                     value={newSlaHours}
-                    onChange={(e) => setNewSlaHours(Number(e.target.value))}
+                    onChange={(e) => setNewSlaHours(e.target.value)}
                     min={1}
                     className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
                   />
@@ -1087,13 +1154,13 @@ export default function TicketsDashboard() {
             <div className="grid grid-cols-2 gap-2.5 p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700">
               <div>
                 <span className="text-slate-400 text-[10px] uppercase font-bold block">Customer</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedTicket.customer_name || 'N/A'}</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedTicket.customer_name || EMPTY_VALUE}</span>
                 <span className="block text-[11px] text-slate-400">{selectedTicket.customer_email}</span>
               </div>
               <div>
                 <span className="text-slate-400 text-[10px] uppercase font-bold block">Assigned To</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedTicket.assigned_to_name || 'Unassigned'}</span>
-                <span className="block text-[11px] text-slate-400">{selectedTicket.assigned_team || 'Operations'}</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedTicket.assigned_to_name || UI_STRINGS.actionCenter.tasks.unassigned}</span>
+                <span className="block text-[11px] text-slate-400">{selectedTicket.assigned_team || EMPTY_VALUE}</span>
               </div>
               <div>
                 <span className="text-slate-400 text-[10px] uppercase font-bold block">Category & Priority</span>
@@ -1102,9 +1169,9 @@ export default function TicketsDashboard() {
               </div>
               <div>
                 <span className="text-slate-400 text-[10px] uppercase font-bold block">SLA & Due Date</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedTicket.sla_hours || 24} Hours</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedTicket.sla_hours ? `${selectedTicket.sla_hours} Hours` : EMPTY_VALUE}</span>
                 <span className="block text-[11px] text-slate-400">
-                  {selectedTicket.due_date ? new Date(selectedTicket.due_date).toLocaleString() : 'N/A'}
+                  {selectedTicket.due_date ? new Date(selectedTicket.due_date).toLocaleString() : EMPTY_VALUE}
                 </span>
               </div>
             </div>
@@ -1116,7 +1183,7 @@ export default function TicketsDashboard() {
                 {(selectedTicket.activities || []).map((act) => (
                   <div key={act.id} className="p-2.5 bg-slate-50 dark:bg-slate-800/40 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px]">
                     <div className="flex items-center justify-between font-semibold text-slate-700 dark:text-slate-300">
-                      <span>{act.actor_name || 'System'}</span>
+                      <span>{act.actor_name || EMPTY_VALUE}</span>
                       <span className="text-[10px] text-slate-400">{new Date(act.created_at).toLocaleString()}</span>
                     </div>
                     <p className="mt-1 text-slate-600 dark:text-slate-300">{act.comment}</p>
@@ -1170,7 +1237,7 @@ export default function TicketsDashboard() {
           onClose={() => setIsCommModalOpen(false)}
           entityType="ticket"
           entityId={selectedTicket.id}
-          defaultRecipientName={selectedTicket.customer_name || 'Customer'}
+          defaultRecipientName={selectedTicket.customer_name || ''}
           defaultRecipientEmail={selectedTicket.customer_email || ''}
           defaultRecipientPhone={selectedTicket.customer_phone || ''}
           defaultSubject={`Ticket #${selectedTicket.ticket_number}: ${selectedTicket.subject}`}

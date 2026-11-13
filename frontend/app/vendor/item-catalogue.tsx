@@ -3,6 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
+import { getVendorCatalogueLimit } from './vendorPlanPricing';
+import { productMatchesOpportunity } from './catalogueMatching';
 import {
   downloadCatalogueTemplate,
   parseCatalogueWorkbook,
@@ -28,9 +32,15 @@ interface ProductItem {
   category: string;
   sku: string;
   specs: string;
-  unitPrice: number;
-  leadTimeDays: number;
-  moq: number; // Minimum Order Quantity
+  // Null when the server did not return the value. Shown as a dash, never as zero.
+  unitPrice: number | null;
+  leadTimeDays: number | null;
+  moq: number | null; // Minimum Order Quantity
+}
+
+/** A count or amount for display, or a dash when the value is missing. */
+function displayValue(value: number | null | undefined, format: (n: number) => string): string {
+  return typeof value === 'number' && Number.isFinite(value) ? format(value) : '—';
 }
 
 export default function ItemCatalogue() {
@@ -46,6 +56,20 @@ export default function ItemCatalogue() {
   // every read/write needs to know who "my catalogue" actually belongs to.
   const [myVendorId, setMyVendorId] = useState<string | null>(null);
   const [isLoadingCatalogue, setIsLoadingCatalogue] = useState(true);
+  // Set when the catalogue could not be read. The list is then shown as unavailable, not as empty.
+  const [catalogueLoadError, setCatalogueLoadError] = useState<string | null>(null);
+  // The product limit is a Select plan value from the pricing API. Null when the API does not return it,
+  // and then no limit is shown or enforced here (the server still enforces its own cap on save).
+  const [catalogueLimit, setCatalogueLimit] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSubscriptionPricing().then((config) => {
+      if (!cancelled) setCatalogueLimit(getVendorCatalogueLimit(config));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const authHeaders = (): Record<string, string> => {
     const token = authClient.getToken();
@@ -63,10 +87,16 @@ export default function ItemCatalogue() {
         setIsLoadingCatalogue(false);
         return;
       }
+      setCatalogueLoadError(null);
       try {
-        const vendorRes = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
-        if (!vendorRes.ok) {
+        const vendorRes = await fetch(`/api/vendors/${encodeURIComponent(email)}`, { headers: authHeaders() });
+        if (vendorRes.status === 404) {
+          // No vendor profile exists yet, so there is no catalogue to show.
           if (!cancelled) setProducts([]);
+          return;
+        }
+        if (!vendorRes.ok) {
+          if (!cancelled) setCatalogueLoadError(UI_STRINGS.vendorWorkspace.catalogueUnavailable);
           return;
         }
         const vendorData = await vendorRes.json();
@@ -79,11 +109,15 @@ export default function ItemCatalogue() {
 
         const catRes = await fetch(`/api/catalogue?vendorId=${encodeURIComponent(vendorId)}`);
         const catData = await catRes.json();
-        if (!cancelled && catRes.ok && catData.success) {
-          setProducts(catData.data || []);
+        if (cancelled) return;
+        if (!catRes.ok || !catData.success) {
+          setCatalogueLoadError(UI_STRINGS.vendorWorkspace.catalogueUnavailable);
+          return;
         }
+        setProducts(catData.data || []);
       } catch {
-        // Network failure: leave whatever local state exists rather than wiping it.
+        // The list is not replaced, and the failure is shown instead of an empty catalogue.
+        if (!cancelled) setCatalogueLoadError(UI_STRINGS.vendorWorkspace.catalogueUnavailable);
       } finally {
         if (!cancelled) setIsLoadingCatalogue(false);
       }
@@ -99,7 +133,7 @@ export default function ItemCatalogue() {
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [category, setCategory] = useState('Pumps & Fluid Dynamics');
+  const [category, setCategory] = useState('');
   const [sku, setSku] = useState('');
   const [specs, setSpecs] = useState('');
   const [unitPrice, setUnitPrice] = useState('');
@@ -113,8 +147,6 @@ export default function ItemCatalogue() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRfqsAvailableOnly, setFilterRfqsAvailableOnly] = useState(false);
 
-  // Max product limit
-  const MAX_LIMIT = 100;
   const currentCount = products.length;
 
   const handleAddOrEditProduct = async (e: React.FormEvent) => {
@@ -157,10 +189,10 @@ export default function ItemCatalogue() {
 
         setProducts((prev) => prev.map((prod) => (prod.id === editingId ? data.data : prod)));
         showToast('Product Updated', `Successfully updated ${sku} in your catalog.`, 'success');
-        addAuditLog(`${vendorLabel} updated product ${sku} inside catalogue`, undefined, currentUserSession?.email);
+        addAuditLog(`${vendorLabel} updated product ${sku} inside catalogue`);
       } else {
-        if (products.length >= MAX_LIMIT) {
-          showToast('Limit Reached', `Unable to add product. Catalogue size is capped at ${MAX_LIMIT} items.`, 'warning');
+        if (catalogueLimit !== null && products.length >= catalogueLimit) {
+          showToast('Limit Reached', UI_STRINGS.vendorWorkspace.catalogueFullMessage, 'warning');
           return;
         }
 
@@ -174,11 +206,15 @@ export default function ItemCatalogue() {
 
         setProducts((prev) => [data.data, ...prev]);
         showToast('Product Added', `Successfully added product ${data.data.sku} to your catalog.`, 'success');
-        addAuditLog(`${vendorLabel} created new catalogue item ${data.data.sku}`, undefined, currentUserSession?.email);
+        addAuditLog(`${vendorLabel} created new catalogue item ${data.data.sku}`);
       }
       resetForm();
-    } catch (err: any) {
-      showToast('Save Failed', err?.message || 'Could not save the product. Please try again.', 'warning');
+    } catch (err: unknown) {
+      showToast(
+        'Save Failed',
+        err instanceof Error && err.message ? err.message : 'Could not save the product. Please try again.',
+        'warning'
+      );
     } finally {
       setIsSavingProduct(false);
     }
@@ -191,9 +227,9 @@ export default function ItemCatalogue() {
     setCategory(prod.category);
     setSku(prod.sku);
     setSpecs(prod.specs);
-    setUnitPrice(prod.unitPrice.toString());
-    setLeadTimeDays(prod.leadTimeDays.toString());
-    setMoq(prod.moq.toString());
+    setUnitPrice(prod.unitPrice === null ? '' : String(prod.unitPrice));
+    setLeadTimeDays(prod.leadTimeDays === null ? '' : String(prod.leadTimeDays));
+    setMoq(prod.moq === null ? '' : String(prod.moq));
   };
 
   const handleDeleteClick = async (id: string, productSku: string) => {
@@ -204,9 +240,13 @@ export default function ItemCatalogue() {
 
       setProducts((prev) => prev.filter((p) => p.id !== id));
       showToast('Product Deleted', `Removed ${productSku} from catalogue.`, 'success');
-      addAuditLog(`${vendorLabel} deleted product ${productSku} from catalogue`, undefined, currentUserSession?.email);
-    } catch (err: any) {
-      showToast('Delete Failed', err?.message || 'Could not delete the product. Please try again.', 'warning');
+      addAuditLog(`${vendorLabel} deleted product ${productSku} from catalogue`);
+    } catch (err: unknown) {
+      showToast(
+        'Delete Failed',
+        err instanceof Error && err.message ? err.message : 'Could not delete the product. Please try again.',
+        'warning'
+      );
     }
   };
 
@@ -250,10 +290,12 @@ export default function ItemCatalogue() {
 
   const handleCatalogueImport = async () => {
     const validRows = cataloguePreview.filter((row) => row.errors.length === 0);
-    const available = Math.max(0, MAX_LIMIT - products.length);
-    if (validRows.length > available) {
-      showToast('Catalogue Capacity Exceeded', `Only ${available} more products fit in the ${MAX_LIMIT}-item catalogue. Remove rows from the workbook and preview it again.`, 'warning');
-      return;
+    if (catalogueLimit !== null) {
+      const available = Math.max(0, catalogueLimit - products.length);
+      if (validRows.length > available) {
+        showToast('Catalogue Capacity Exceeded', `Only ${available} more products fit in the ${catalogueLimit}-item catalogue. Remove rows from the workbook and preview it again.`, 'warning');
+        return;
+      }
     }
     if (validRows.length === 0) {
       showToast('Nothing to Import', 'Fix the validation errors before importing.', 'warning');
@@ -287,7 +329,7 @@ export default function ItemCatalogue() {
       }
       if (created.length) {
         setProducts((previous) => [...created, ...previous]);
-        addAuditLog(`${vendorLabel} imported ${created.length} catalogue products from Excel`, undefined, currentUserSession?.email);
+        addAuditLog(`${vendorLabel} imported ${created.length} catalogue products from Excel`);
       }
       setCataloguePreview([]);
       showToast(
@@ -295,8 +337,12 @@ export default function ItemCatalogue() {
         `${created.length} imported; ${failures.length + cataloguePreview.filter((row) => row.errors.length > 0).length} skipped.${failures.length ? ` ${failures.join(' ')}` : ''}`,
         failures.length ? 'warning' : 'success'
       );
-    } catch (err: any) {
-      showToast('Import Failed', err?.message || 'Could not complete the catalogue import.', 'warning');
+    } catch (err: unknown) {
+      showToast(
+        'Import Failed',
+        err instanceof Error && err.message ? err.message : 'Could not complete the catalogue import.',
+        'warning'
+      );
     } finally {
       setIsImportingCatalogue(false);
     }
@@ -306,7 +352,7 @@ export default function ItemCatalogue() {
     setIsEditing(false);
     setEditingId(null);
     setName('');
-    setCategory('Pumps & Fluid Dynamics');
+    setCategory('');
     setSku('');
     setSpecs('');
     setUnitPrice('');
@@ -318,16 +364,8 @@ export default function ItemCatalogue() {
   // Was: the filter callback ignored its own parameter and always tested the
   // product's own text against a hardcoded 'pump' literal — every product
   // either matched every RFQ or none, never based on the RFQ's actual content.
-  const getMatchingRfqsForProduct = (prod: ProductItem) => {
-    const prodTokens = `${prod.name} ${prod.category} ${prod.specs}`
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((t) => t.length > 3);
-    return vendorOpportunities.filter((opp) => {
-      const oppText = `${opp.title} ${opp.buyer}`.toLowerCase();
-      return prodTokens.some((token) => oppText.includes(token));
-    });
-  };
+  const getMatchingRfqsForProduct = (prod: ProductItem) =>
+    vendorOpportunities.filter((opp) => productMatchesOpportunity(prod, opp));
 
   // Total count of catalogue items that have matching open RFQs
   const productsWithRfqsCount = products.filter(
@@ -352,7 +390,7 @@ export default function ItemCatalogue() {
     return true;
   });
 
-  const percentage = Math.min(100, (currentCount / MAX_LIMIT) * 100);
+  const percentage = catalogueLimit ? Math.min(100, (currentCount / catalogueLimit) * 100) : 0;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-10">
@@ -384,7 +422,9 @@ export default function ItemCatalogue() {
                 Item Catalogue Feature (Select Model)
               </span>
               <span className="text-[11px] text-slate-500 dark:text-gray-400">
-                Vendors on the <strong>Select Model</strong> (₹5 / 3 mo) can publish up to 100 products with MOQs and download up to 100 RFQs.
+                {catalogueLimit !== null
+                  ? formatString(UI_STRINGS.vendorWorkspace.catalogueSelectBannerWithLimit, { limit: catalogueLimit })
+                  : UI_STRINGS.vendorWorkspace.catalogueSelectBannerWithoutLimit}
               </span>
             </div>
           </div>
@@ -397,11 +437,18 @@ export default function ItemCatalogue() {
           <div className="flex justify-between items-center text-xs font-bold text-slate-800 dark:text-white">
             <span className="flex items-center gap-1">
               <Package size={15} className="text-indigo-500 animate-pulse" />
-              Catalogue Capacity (Limit: 100 Products)
+              {catalogueLimit !== null
+                ? formatString(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit, { limit: catalogueLimit })
+                : UI_STRINGS.vendorWorkspace.catalogueCapacityWithoutLimit}
             </span>
-            <span className="mono">{currentCount} / {MAX_LIMIT} Products Ingested</span>
+            <span className="mono">
+              {catalogueLimit !== null
+                ? formatString(UI_STRINGS.vendorWorkspace.catalogueProductsWithLimit, { count: currentCount, limit: catalogueLimit })
+                : formatString(UI_STRINGS.vendorWorkspace.catalogueProductsWithoutLimit, { count: currentCount })}
+            </span>
           </div>
           
+          {catalogueLimit !== null && (
           <div className="w-full bg-slate-100 dark:bg-gray-800 h-3.5 rounded-full overflow-hidden border border-slate-200/50 dark:border-gray-700/50">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
@@ -414,9 +461,7 @@ export default function ItemCatalogue() {
               style={{ width: `${percentage}%` }}
             ></div>
           </div>
-          <div className="text-[10px] text-slate-400 dark:text-gray-500">
-            Automated Sourcing matching chasers read this catalogue to prioritize direct invitations to {vendorLabel}.
-          </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2 shrink-0 w-full md:w-auto">
@@ -436,7 +481,7 @@ export default function ItemCatalogue() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-bold">Import Preview</h2>
-              <p className="text-xs text-slate-500">{cataloguePreview.filter((row) => !row.errors.length).length} valid; {cataloguePreview.filter((row) => row.errors.length > 0).length} with errors. Catalogue capacity remaining: {Math.max(0, MAX_LIMIT - products.length)}.</p>
+              <p className="text-xs text-slate-500">{cataloguePreview.filter((row) => !row.errors.length).length} valid; {cataloguePreview.filter((row) => row.errors.length > 0).length} with errors. {catalogueLimit !== null ? formatString(UI_STRINGS.vendorWorkspace.catalogueRemainingWithLimit, { count: Math.max(0, catalogueLimit - products.length) }) : null}</p>
             </div>
             <button type="button" disabled={isImportingCatalogue} onClick={handleCatalogueImport} className="btn btn-primary px-4 py-2 text-xs font-bold disabled:opacity-50">
               {isImportingCatalogue ? 'Importing...' : 'Import Valid Rows'}
@@ -499,7 +544,8 @@ export default function ItemCatalogue() {
                   onChange={(e) => setCategory(e.target.value)}
                   className="select w-full bg-slate-50 dark:bg-gray-955 border border-slate-250 rounded-lg font-bold text-slate-800 dark:text-white"
                 >
-                  {!categoryTaxonomy.some((group) => group.majorCategory === category) && <option value={category}>{category}</option>}
+                  <option value="">—</option>
+                  {category !== '' && !categoryTaxonomy.some((group) => group.majorCategory === category) && <option value={category}>{category}</option>}
                   {categoryTaxonomy.map((group) => (
                     <optgroup key={group.majorCategory} label={group.majorCategory}>
                       <option value={group.majorCategory}>{group.majorCategory}</option>
@@ -595,7 +641,7 @@ export default function ItemCatalogue() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3">
             <h3 className="text-xs font-bold text-slate-805 dark:text-gray-255 uppercase tracking-wider flex items-center gap-2">
               <Layers size={14} className="text-indigo-600" />
-              Catalogue Products ({filteredProducts.length} Items Listed)
+              Catalogue Products ({catalogueLoadError ? '—' : filteredProducts.length} Items Listed)
             </h3>
 
             <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
@@ -652,8 +698,8 @@ export default function ItemCatalogue() {
               <tbody className="divide-y divide-slate-100 dark:divide-gray-850 text-[11px]">
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400 text-xs">
-                      No matching products found in catalogue.
+                    <td colSpan={8} role={catalogueLoadError ? 'alert' : undefined} className="py-8 text-center text-slate-400 text-xs">
+                      {catalogueLoadError || 'No matching products found in catalogue.'}
                     </td>
                   </tr>
                 ) : (
@@ -679,17 +725,17 @@ export default function ItemCatalogue() {
 
                       {/* Price */}
                       <td className="py-3 text-right font-mono font-bold text-indigo-650 dark:text-indigo-400">
-                        ${prod.unitPrice.toLocaleString()}
+                        {displayValue(prod.unitPrice, (n) => `₹${n.toLocaleString('en-IN')}`)}
                       </td>
 
                       {/* MOQ */}
                       <td className="py-3 text-center font-bold text-indigo-600 dark:text-indigo-300 mono">
-                        {prod.moq.toLocaleString()} units
+                        {displayValue(prod.moq, (n) => `${n.toLocaleString()} units`)}
                       </td>
 
                       {/* Lead Time */}
                       <td className="py-3 text-center mono text-slate-700 dark:text-gray-300">
-                        {prod.leadTimeDays} Days
+                        {displayValue(prod.leadTimeDays, (n) => `${n} Days`)}
                       </td>
 
                       {/* RFQs Available */}

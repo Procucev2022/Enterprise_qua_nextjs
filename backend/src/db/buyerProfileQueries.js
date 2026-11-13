@@ -107,7 +107,7 @@ function mapRowToProfile(row) {
     // Section 1 — legal entity and tax registration
     companyName: text(row.organization_name),
     brandName: preferred(row.brand_name, row.refference),
-    organizationType: text(row.type) || BUYER_PROFILE_CONFIG.DEFAULT_ORGANIZATION_TYPE,
+    organizationType: text(row.type),
     panNumber: text(row.pan),
     gstNumber: text(row.gstin),
     cinNumber: preferred(row.cin, row.crn),
@@ -119,7 +119,7 @@ function mapRowToProfile(row) {
     city: text(row.city),
     state: text(row.state),
     pincode: text(row.zip_code) || text(row.pincode),
-    country: text(row.country) || BUYER_PROFILE_CONFIG.DEFAULT_COUNTRY,
+    country: text(row.country),
 
     // Section 3 — primary procurement contact. Name falls back to the account
     // holder's name so a profile that has never been saved is not blank.
@@ -532,30 +532,25 @@ async function updateProfileInD1({ organizationId, userId, patch, categories, ac
   const d1Binding = getD1Binding();
 
   if (!d1Binding) {
-    // The REST adapter sends batch members as independent parallel requests,
-    // not as one transaction. Reject multi-write updates before touching data.
-    if (getD1HttpClient() && plan.statements.length > 1) {
-      throw createD1AtomicityError(plan.statements.length);
-    }
-
     const existing = await pool.query('select uuid from organization where uuid = $1 limit 1', [organizationId], {
       d1: true,
     });
     if (existing.rows.length === 0) return { updated: false, reason: 'ORG_NOT_FOUND' };
     if (plan.statements.length === 1) {
       await pool.query(plan.statements[0].text, plan.statements[0].params, { d1: true });
+      queryCache.invalidate('buyer_accounts');
+      return { updated: true, fieldsUpdated: plan.fieldsUpdated, categoryCount: plan.categoryCount };
     }
-    queryCache.invalidate('buyer_accounts');
-    return { updated: true, fieldsUpdated: plan.fieldsUpdated, categoryCount: plan.categoryCount };
   }
 
+  const db = d1Binding || getD1HttpClient();
   const startedAt = Date.now();
   const statements = [
     { text: 'select uuid from organization where uuid = $1 limit 1', params: [organizationId] },
     ...plan.statements,
   ];
   try {
-    const results = await batchD1(d1Binding, statements);
+    const results = await batchD1(db, statements);
     const durationMs = Date.now() - startedAt;
     if (!results[0]?.rows?.[0]) return { updated: false, reason: 'ORG_NOT_FOUND' };
 

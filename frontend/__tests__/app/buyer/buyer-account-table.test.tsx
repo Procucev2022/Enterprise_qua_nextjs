@@ -1,20 +1,32 @@
 import React from 'react';
-import { render, screen, fireEvent, act, within } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import BuyerAccountTable from '@/app/buyer/buyer-account-table';
 import { useApp } from '@/lib/store';
 import { BuyerAccount } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
 
+const MISSING_ADD_FIELDS_MESSAGE =
+  'Complete the required fields: Organization legal name, Corporate email, Mobile number, Contact person name, GSTIN, Sourcing mode, Subscription tier, Account source, Free RFQs remaining (a whole number, 0 or more), At least one major category.';
+
+const minorsFor = (majors: string[]): string[] =>
+  Array.from(
+    new Set(
+      CATEGORY_TAXONOMY_FIXTURE.filter((entry) => majors.includes(entry.majorCategory)).flatMap(
+        (entry) => entry.minorCategories
+      )
+    )
+  );
+
 describe('app/buyer/buyer-account-table.tsx', () => {
   const mockAddBuyerAccount = jest.fn();
   const mockUpdateBuyerAccount = jest.fn();
   const mockDeleteBuyerAccount = jest.fn();
   const mockAlignActiveBuyerAccount = jest.fn();
-  const mockImportPublicBuyerDatabase = jest.fn();
   const mockShowToast = jest.fn();
 
   const mockBuyerAccounts: BuyerAccount[] = [
@@ -89,23 +101,55 @@ describe('app/buyer/buyer-account-table.tsx', () => {
     },
   ];
 
+  const buildAppMock = (overrides: Record<string, unknown> = {}) => ({
+    buyerAccounts: mockBuyerAccounts,
+    activeBuyerAccount: mockBuyerAccounts[0],
+    addBuyerAccount: mockAddBuyerAccount,
+    updateBuyerAccount: mockUpdateBuyerAccount,
+    deleteBuyerAccount: mockDeleteBuyerAccount,
+    alignActiveBuyerAccount: mockAlignActiveBuyerAccount,
+    showToast: mockShowToast,
+    // The category master lives in the store now, read from the database rather
+    // than imported from a bundled categories.json, so a mocked context has to
+    // supply it or the major-category picker reads `undefined`.
+    categoryTaxonomy: CATEGORY_TAXONOMY_FIXTURE,
+    categoryTaxonomyError: null,
+    ...overrides,
+  });
+
+  const selectWithOption = (value: string): HTMLSelectElement => {
+    const match = screen
+      .getAllByRole('combobox')
+      .find((select): select is HTMLSelectElement => select.querySelector(`option[value="${value}"]`) !== null);
+    if (!match) throw new Error(`No select offers the option ${value}`);
+    return match;
+  };
+
+  const fillRequiredAddFields = () => {
+    fireEvent.change(screen.getByPlaceholderText('Legal name of the organization'), {
+      target: { value: 'Reliance Industries Ltd' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('procurement@company.com'), {
+      target: { value: 'CPO@RIL.com' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('+91 XXXXX XXXXX'), {
+      target: { value: '+91 99887 76655' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Full name'), {
+      target: { value: 'Mukesh A' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('15-character GSTIN'), {
+      target: { value: '27aaacr1234a1z1' },
+    });
+    fireEvent.change(selectWithOption('mode_3'), { target: { value: 'mode_3' } });
+    fireEvent.change(selectWithOption('version_3'), { target: { value: 'version_3' } });
+    fireEvent.change(selectWithOption('web_registration'), { target: { value: 'web_registration' } });
+    fireEvent.change(screen.getByPlaceholderText('0 or more'), { target: { value: '3' } });
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
-    (useApp as jest.Mock).mockReturnValue({
-      buyerAccounts: mockBuyerAccounts,
-      activeBuyerAccount: mockBuyerAccounts[0],
-      addBuyerAccount: mockAddBuyerAccount,
-      updateBuyerAccount: mockUpdateBuyerAccount,
-      deleteBuyerAccount: mockDeleteBuyerAccount,
-      alignActiveBuyerAccount: mockAlignActiveBuyerAccount,
-      importPublicBuyerDatabase: mockImportPublicBuyerDatabase,
-      showToast: mockShowToast,
-      // The category master lives in the store now, read from the database rather
-      // than imported from a bundled categories.json, so a mocked context has to
-      // supply it or the major-category picker reads `undefined`.
-      categoryTaxonomy: CATEGORY_TAXONOMY_FIXTURE,
-      categoryTaxonomyError: null,
-    });
+    (useApp as jest.Mock).mockReturnValue(buildAppMock());
   });
 
   it('renders table headers, search input, and buyer account rows', () => {
@@ -120,31 +164,24 @@ describe('app/buyer/buyer-account-table.tsx', () => {
     const searchInput = screen.getByPlaceholderText(/Search by Company Name/i);
     const table = screen.getByRole('table');
 
-    // Search by brand
     fireEvent.change(searchInput, { target: { value: 'Adani Group' } });
     expect(within(table).getByText('Adani Infra Tech')).toBeInTheDocument();
 
-    // Search by email
     fireEvent.change(searchInput, { target: { value: 'procurement@tatasteel.com' } });
     expect(within(table).getByText('Tata Steel Limited')).toBeInTheDocument();
 
-    // Search by GSTIN
     fireEvent.change(searchInput, { target: { value: '27AAACL1234A1Z5' } });
     expect(within(table).getByText('Larsen & Toubro Limited')).toBeInTheDocument();
 
-    // Search by location
     fireEvent.change(searchInput, { target: { value: 'Mundra' } });
     expect(within(table).getByText('Adani Infra Tech')).toBeInTheDocument();
 
-    // Search by industry
     fireEvent.change(searchInput, { target: { value: 'Heavy Engineering' } });
     expect(within(table).getByText('Larsen & Toubro Limited')).toBeInTheDocument();
 
-    // Clear search using Clear Search button
     fireEvent.click(screen.getByLabelText('Clear Search'));
     expect(within(table).getByText('Larsen & Toubro Limited')).toBeInTheDocument();
 
-    // Filter by Source buttons
     fireEvent.click(screen.getByText(/Public DB \(1\)/i));
     expect(within(table).getByText('Tata Steel Limited')).toBeInTheDocument();
 
@@ -155,262 +192,316 @@ describe('app/buyer/buyer-account-table.tsx', () => {
     expect(within(table).getByText('Larsen & Toubro Limited')).toBeInTheDocument();
   });
 
-  it('handles add buyer account modal form workflow with full fields and category toggles', () => {
+  it('offers no public database sync action and makes no connection or sync claim', () => {
     render(<BuyerAccountTable />);
-    // Open add modal
+    expect(screen.queryByText(/Sync Public DB/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sync 3 Public System Buyers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Gateway: Connected/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/100% In Sync/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the active session buyer name, or a dash when no account is active', () => {
+    const { unmount } = render(<BuyerAccountTable />);
+    expect(screen.getByText('Current Session Buyer').parentElement).toHaveTextContent('Larsen & Toubro Limited');
+    unmount();
+
+    (useApp as jest.Mock).mockReturnValue(buildAppMock({ activeBuyerAccount: null }));
+    render(<BuyerAccountTable />);
+    expect(screen.getByText('Current Session Buyer').parentElement).toHaveTextContent('—');
+    expect(screen.getByText('Current Session Buyer').parentElement).not.toHaveTextContent('Larsen');
+  });
+
+  it('starts the add form empty, with no preset plan, categories, industry, or plant location', () => {
+    render(<BuyerAccountTable />);
     fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
-    expect(screen.getByText(/Add \/ Align Existing Public Buyer Account/i)).toBeInTheDocument();
 
-    // Fill form using placeholders
-    fireEvent.change(screen.getByPlaceholderText('e.g. Larsen & Toubro Limited'), {
-      target: { value: 'Reliance Industries Ltd' },
+    expect(screen.getByPlaceholderText('Legal name of the organization')).toHaveValue('');
+    expect(screen.getByPlaceholderText('+91 XXXXX XXXXX')).toHaveValue('');
+    expect(screen.getByPlaceholderText('Chief Procurement Officer (CPO)')).toHaveValue('');
+    expect(screen.getByPlaceholderText('0 or more')).toHaveValue(null);
+    expect(screen.getByPlaceholderText('City or plant, state')).toHaveValue('');
+    expect(selectWithOption('mode_3')).toHaveValue('');
+    expect(selectWithOption('version_3')).toHaveValue('');
+    expect(selectWithOption('web_registration')).toHaveValue('');
+    expect(selectWithOption('EPC & Infrastructure Projects')).toHaveValue('');
+    CATEGORY_TAXONOMY_FIXTURE.slice(0, 3).forEach((entry) => {
+      const chip = screen.getByRole('button', { name: entry.majorCategory });
+      expect(chip.querySelector('svg')).toBeNull();
     });
-    fireEvent.change(screen.getByPlaceholderText('e.g. L&T Heavy Engineering Division'), {
-      target: { value: 'RIL Petro' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('procurement@company.com'), {
-      target: { value: 'cpo@ril.com' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('+91 98201 44820'), {
-      target: { value: '+91 99887 76655' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('e.g. Rajesh Sharma'), {
-      target: { value: 'Mukesh A' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('Chief Procurement Officer (CPO)'), {
-      target: { value: 'Managing Director' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('27AAACL1234F1Z5'), {
-      target: { value: '27AAACR1234A1Z1' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('AAACL1234F'), {
-      target: { value: 'AAACR1234A' },
-    });
+  });
 
-    // Selects in Add modal
-    const modalSelects = screen.getAllByRole('combobox');
-    const indSelect = modalSelects.find((s) => s.querySelector('option[value="EPC & Infrastructure Projects"]'));
-    if (indSelect) fireEvent.change(indSelect, { target: { value: 'EPC & Infrastructure Projects' } });
+  it('submits only the fields the user entered, with minor categories taken from the selection', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
+    fillRequiredAddFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Civil Works' }));
+    fireEvent.click(screen.getByRole('button', { name: /Add Buyer to Database/i }));
 
-    const modeSelect = modalSelects.find((s) => s.querySelector('option[value="mode_3"]'));
-    if (modeSelect) fireEvent.change(modeSelect, { target: { value: 'mode_3' } });
-
-    const planSelect = modalSelects.find((s) => s.querySelector('option[value="version_3"]'));
-    if (planSelect) fireEvent.change(planSelect, { target: { value: 'version_3' } });
-
-    const srcSelect = modalSelects.find((s) => s.querySelector('option[value="web_registration"]'));
-    if (srcSelect) fireEvent.change(srcSelect, { target: { value: 'web_registration' } });
-
-    // Click Category badges in modal to toggle category
-    const catBadges = screen.getAllByRole('button');
-    const toggleableCat = catBadges.find((b) => b.textContent?.includes('Civil Works'));
-    if (toggleableCat) {
-      fireEvent.click(toggleableCat);
-      fireEvent.click(toggleableCat);
-    }
-
-    // Submit form
-    const submitBtn = screen.getByRole('button', { name: /Add Buyer to Database/i });
-    fireEvent.click(submitBtn);
-
-    expect(mockAddBuyerAccount).toHaveBeenCalledWith(
+    expect(mockAddBuyerAccount).toHaveBeenCalledTimes(1);
+    const payload = mockAddBuyerAccount.mock.calls[0][0];
+    const civilMinors = minorsFor(['Civil Works']);
+    expect(payload).toEqual(
       expect.objectContaining({
         organizationName: 'Reliance Industries Ltd',
-        brandName: 'RIL Petro',
         corporateEmail: 'cpo@ril.com',
         contactPerson: 'Mukesh A',
-        contactDesignation: 'Managing Director',
         mobileNumber: '+91 99887 76655',
         gstin: '27AAACR1234A1Z1',
-        panNumber: 'AAACR1234A',
+        industrySector: '',
+        sourcingMode: 'mode_3',
+        subscriptionPlan: 'version_3',
+        remainingFreeRFQs: 3,
+        accountSource: 'web_registration',
         status: 'ACTIVE_VERIFIED',
+        primaryPlantLocation: '',
+        supportedMajorCategories: ['Civil Works'],
+        supportedMinorCategories: civilMinors,
       })
     );
+    expect(civilMinors).toContain('Bricks');
+    expect(civilMinors).not.toContain('Pumps & Accessories');
+    expect(payload).not.toHaveProperty('brandName');
+    expect(payload).not.toHaveProperty('contactDesignation');
+    expect(payload).not.toHaveProperty('panNumber');
+    expect(payload).not.toHaveProperty('cinNumber');
+    expect(mockShowToast).not.toHaveBeenCalled();
   });
 
-  it('handles add buyer account fallback defaults and validation errors', () => {
+  it('derives minor categories from every selected major and nothing else', () => {
     render(<BuyerAccountTable />);
     fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
-
-    // 1. Validation error when orgName is empty
-    fireEvent.change(screen.getByPlaceholderText('e.g. Larsen & Toubro Limited'), {
-      target: { value: '' },
-    });
+    fillRequiredAddFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Civil Works' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Engineering Spares - Mechanical' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Engineering Spares - Mechanical' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Engineering Spares - Electrical' }));
     fireEvent.click(screen.getByRole('button', { name: /Add Buyer to Database/i }));
+
+    const payload = mockAddBuyerAccount.mock.calls[0][0];
+    expect(payload.supportedMajorCategories).toEqual(['Civil Works', 'Engineering Spares - Electrical']);
+    expect(payload.supportedMinorCategories).toEqual(minorsFor(['Civil Works', 'Engineering Spares - Electrical']));
+    expect(payload.supportedMinorCategories).not.toContain('Abrasives');
+  });
+
+  it('lists every missing required field in one validation message and creates nothing', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
+    fireEvent.click(screen.getByRole('button', { name: /Add Buyer to Database/i }));
+
+    expect(mockShowToast).toHaveBeenCalledWith('Validation Error', MISSING_ADD_FIELDS_MESSAGE, 'warning');
+    expect(mockAddBuyerAccount).not.toHaveBeenCalled();
+  });
+
+  it('rejects a free RFQ count that is not a whole number', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
+    fillRequiredAddFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Civil Works' }));
+    fireEvent.change(screen.getByPlaceholderText('0 or more'), { target: { value: '2.5' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add Buyer to Database/i }));
+
     expect(mockShowToast).toHaveBeenCalledWith(
       'Validation Error',
-      'Organization Name, Email, Contact Person, and GSTIN are required.',
+      'Complete the required fields: Free RFQs remaining (a whole number, 0 or more).',
       'warning'
     );
-
-    // 2. Add with public_system and empty categories to test fallbacks
-    fireEvent.change(screen.getByPlaceholderText('e.g. Larsen & Toubro Limited'), {
-      target: { value: 'BHEL Ltd' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('procurement@company.com'), {
-      target: { value: 'procure@bhel.in' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('e.g. Rajesh Sharma'), {
-      target: { value: 'Nalini S' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('27AAACL1234F1Z5'), {
-      target: { value: '07AAACB1234A1Z0' },
-    });
-
-    // Unselect initial 3 categories
-    const catBadges = screen.getAllByRole('button');
-    const mech = catBadges.find((b) => b.textContent?.includes('Engineering Spares - Mechanical'));
-    const elec = catBadges.find((b) => b.textContent?.includes('Engineering Spares - Electrical'));
-    const civil = catBadges.find((b) => b.textContent?.includes('Civil Works'));
-    if (mech) fireEvent.click(mech);
-    if (elec) fireEvent.click(elec);
-    if (civil) fireEvent.click(civil);
-
-    fireEvent.click(screen.getByRole('button', { name: /Add Buyer to Database/i }));
-
-    expect(mockAddBuyerAccount).toHaveBeenCalledWith(
-      expect.objectContaining({
-        organizationName: 'BHEL Ltd',
-        brandName: 'BHEL Ltd',
-        corporateEmail: 'procure@bhel.in',
-        status: 'SYNCED_LEGACY',
-        panNumber: 'AAACB1234A',
-        supportedMajorCategories: ['Engineering Spares - Mechanical'],
-      })
-    );
+    expect(mockAddBuyerAccount).not.toHaveBeenCalled();
   });
 
-  it('handles edit buyer account modal workflow and updates specifications, and cancel', () => {
+  it('closes the add modal on Cancel and on the X button', () => {
     render(<BuyerAccountTable />);
-    // Click Edit on first account
-    const editBtns = screen.getAllByTitle('Edit Account Specifications');
-    fireEvent.click(editBtns[0]);
-    expect(screen.getByText('Edit Buyer Account Specifications')).toBeInTheDocument();
-
-    // Modify fields in edit form
-    const orgInput = screen.getByDisplayValue('Larsen & Toubro Limited');
-    fireEvent.change(orgInput, { target: { value: 'L&T Global Engineering' } });
-    const brandInput = screen.getByDisplayValue('L&T Heavy Engineering');
-    fireEvent.change(brandInput, { target: { value: 'L&T Global Brand' } });
-    const emailInput = screen.getByDisplayValue('procurement@lnt.com');
-    fireEvent.change(emailInput, { target: { value: 'global@lnt.com' } });
-    const phoneInput = screen.getByDisplayValue('+91 98201 44820');
-    fireEvent.change(phoneInput, { target: { value: '+91 98201 00000' } });
-
-    // Save changes
-    const updateBtn = screen.getByRole('button', { name: /Update Specifications/i });
-    fireEvent.click(updateBtn);
-    expect(mockUpdateBuyerAccount).toHaveBeenCalledWith(
-      'buyer-1',
-      expect.objectContaining({
-        organizationName: 'L&T Global Engineering',
-        brandName: 'L&T Global Brand',
-        corporateEmail: 'global@lnt.com',
-        mobileNumber: '+91 98201 00000',
-      })
-    );
-
-    // Open edit modal on buyer-2 (empty brand, empty designation, undefined PAN/CIN)
-    fireEvent.click(editBtns[1]);
-    expect(screen.getByDisplayValue('Tata Steel Limited')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Update Specifications/i }));
-    expect(mockUpdateBuyerAccount).toHaveBeenCalledWith(
-      'buyer-2',
-      expect.objectContaining({
-        organizationName: 'Tata Steel Limited',
-      })
-    );
-  });
-
-  it('handles all modal close buttons (X buttons and cancel buttons)', () => {
-    render(<BuyerAccountTable />);
-
-    // 1. Add Modal X button
     fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
     expect(screen.getByText(/Add \/ Align Existing Public Buyer Account/i)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Close Add Modal'));
     expect(screen.queryByText(/Add \/ Align Existing Public Buyer Account/i)).not.toBeInTheDocument();
 
-    // 2. Sync Modal X button
-    fireEvent.click(screen.getByText(/Sync Public DB/i));
-    expect(screen.getByText(/Sync Public System Buyer Database/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Close Sync Modal'));
-    expect(screen.queryByText(/Sync Public System Buyer Database/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText(/Add \/ Align Existing Public Buyer Account/i)).not.toBeInTheDocument();
+  });
 
-    // 3. Edit Modal X button
-    const editBtns = screen.getAllByTitle('Edit Account Specifications');
-    fireEvent.click(editBtns[0]);
+  it('edit sends only the four fields shown in the dialog', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getAllByTitle('Edit Account Specifications')[0]);
     expect(screen.getByText('Edit Buyer Account Specifications')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Close Edit Modal'));
+
+    fireEvent.change(screen.getByDisplayValue('Larsen & Toubro Limited'), {
+      target: { value: 'L&T Global Engineering' },
+    });
+    fireEvent.change(screen.getByDisplayValue('L&T Heavy Engineering'), {
+      target: { value: 'L&T Global Brand' },
+    });
+    fireEvent.change(screen.getByDisplayValue('procurement@lnt.com'), {
+      target: { value: 'Global@LnT.com' },
+    });
+    fireEvent.change(screen.getByDisplayValue('+91 98201 44820'), {
+      target: { value: '+91 98201 00000' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Update Specifications/i }));
+
+    expect(mockUpdateBuyerAccount).toHaveBeenCalledWith('buyer-1', {
+      organizationName: 'L&T Global Engineering',
+      brandName: 'L&T Global Brand',
+      corporateEmail: 'global@lnt.com',
+      mobileNumber: '+91 98201 00000',
+    });
     expect(screen.queryByText('Edit Buyer Account Specifications')).not.toBeInTheDocument();
   });
 
-  it('handles align session, delete, CSV export, and public DB batch sync workflows and modal cancels', () => {
-    jest.useFakeTimers();
+  it('edit loads an account with no brand as an empty brand and saves the trimmed name', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getAllByTitle('Edit Account Specifications')[1]);
+    expect(screen.getByDisplayValue('Tata Steel Limited')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Update Specifications/i }));
+
+    expect(mockUpdateBuyerAccount).toHaveBeenCalledWith('buyer-2', {
+      organizationName: 'Tata Steel Limited',
+      brandName: '',
+      corporateEmail: 'procurement@tatasteel.com',
+      mobileNumber: '+91 98201 55667',
+    });
+  });
+
+  it('edit requires organization name, email, and mobile before saving', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getAllByTitle('Edit Account Specifications')[0]);
+    fireEvent.change(screen.getByDisplayValue('Larsen & Toubro Limited'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: /Update Specifications/i }));
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Validation Error',
+      'Complete the required fields: Organization legal name.',
+      'warning'
+    );
+    expect(mockUpdateBuyerAccount).not.toHaveBeenCalled();
+  });
+
+  it('closes the edit modal on the X and Cancel buttons', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getAllByTitle('Edit Account Specifications')[0]);
+    fireEvent.click(screen.getByLabelText('Close Edit Modal'));
+    expect(screen.queryByText('Edit Buyer Account Specifications')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTitle('Edit Account Specifications')[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText('Edit Buyer Account Specifications')).not.toBeInTheDocument();
+  });
+
+  it('aligns a session, deletes a record, and exports the master CSV of real rows', () => {
     global.URL.createObjectURL = jest.fn(() => 'blob:mock');
     global.URL.revokeObjectURL = jest.fn();
 
     render(<BuyerAccountTable />);
 
-    // Align active account on second row
-    const alignBtns = screen.getAllByText('Align Session');
-    fireEvent.click(alignBtns[0]);
+    fireEvent.click(screen.getAllByText('Align Session')[0]);
     expect(mockAlignActiveBuyerAccount).toHaveBeenCalledWith('buyer-2');
 
-    // Delete account
-    const deleteBtns = screen.getAllByTitle('Delete Record');
-    fireEvent.click(deleteBtns[0]);
+    fireEvent.click(screen.getAllByTitle('Delete Record')[0]);
     expect(mockDeleteBuyerAccount).toHaveBeenCalledWith('buyer-1');
 
-    // Export Master CSV
     fireEvent.click(screen.getByText('Export Master'));
+    expect(global.URL.createObjectURL).toHaveBeenCalled();
     expect(mockShowToast).toHaveBeenCalledWith('Export Complete', expect.any(String), 'info');
+  });
 
-    // Open sync public database modal
-    fireEvent.click(screen.getByText(/Sync Public DB/i));
-    expect(screen.getByText(/Sync Public System Buyer Database/i)).toBeInTheDocument();
+  it('shows the free RFQ balance of a trial account without a hardcoded limit', () => {
+    render(<BuyerAccountTable />);
+    expect(screen.getByText('2 free RFQs remaining')).toBeInTheDocument();
+    expect(screen.queryByText(/of 5 free RFQs/i)).not.toBeInTheDocument();
+  });
 
-    // Trigger batch sync
-    fireEvent.click(screen.getByText(/Sync 3 Public System Buyers Now/i));
-    act(() => {
-      jest.advanceTimersByTime(1500);
-    });
-    expect(mockImportPublicBuyerDatabase).toHaveBeenCalled();
-
-    // Test cancel on Sync Modal
-    fireEvent.click(screen.getByText(/Sync Public DB/i));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByText(/Sync Public System Buyer Database/i)).not.toBeInTheDocument();
-
-    // Test cancel on Add Modal
-    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByText(/Add \/ Align Existing Public Buyer Account/i)).not.toBeInTheDocument();
-
-    // Test cancel on Edit Modal
-    const editBtns = screen.getAllByTitle('Edit Account Specifications');
-    fireEvent.click(editBtns[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByText('Edit Buyer Account Specifications')).not.toBeInTheDocument();
-
-    jest.useRealTimers();
+  it('shows the legacy label for public-system records and no sync timestamp claim', () => {
+    render(<BuyerAccountTable />);
+    expect(screen.getByText('Legacy Public Record')).toBeInTheDocument();
+    expect(screen.queryByText(/Synced from Public DB/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Last saved:/).length).toBe(3);
   });
 
   it('handles empty filtered accounts and null activeBuyerAccount', () => {
-    (useApp as jest.Mock).mockReturnValue({
-      buyerAccounts: [],
-      activeBuyerAccount: null,
-      addBuyerAccount: mockAddBuyerAccount,
-      updateBuyerAccount: mockUpdateBuyerAccount,
-      deleteBuyerAccount: mockDeleteBuyerAccount,
-      alignActiveBuyerAccount: mockAlignActiveBuyerAccount,
-      importPublicBuyerDatabase: mockImportPublicBuyerDatabase,
-      showToast: mockShowToast,
-      categoryTaxonomy: CATEGORY_TAXONOMY_FIXTURE,
-      categoryTaxonomyError: null,
-    });
+    (useApp as jest.Mock).mockReturnValue(buildAppMock({ buyerAccounts: [], activeBuyerAccount: null }));
 
     render(<BuyerAccountTable />);
     expect(screen.getByText('No buyer accounts matching your query.')).toBeInTheDocument();
+  });
+
+  it('submits the optional brand, designation and PAN, and marks a public-system account as legacy', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
+    fillRequiredAddFields();
+    fireEvent.change(screen.getByPlaceholderText('Brand or division, if different'), {
+      target: { value: 'Reliance Retail' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Chief Procurement Officer (CPO)'), {
+      target: { value: 'Head of Sourcing' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('10-character PAN'), { target: { value: 'aaacr1234a' } });
+    fireEvent.change(screen.getByPlaceholderText('City or plant, state'), { target: { value: 'Jamnagar, GJ' } });
+    fireEvent.change(selectWithOption('public_system'), { target: { value: 'public_system' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Civil Works' }));
+    fireEvent.click(screen.getByRole('button', { name: /Add Buyer to Database/i }));
+
+    expect(mockAddBuyerAccount).toHaveBeenCalledTimes(1);
+    expect(mockAddBuyerAccount.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        brandName: 'Reliance Retail',
+        contactDesignation: 'Head of Sourcing',
+        panNumber: 'AAACR1234A',
+        primaryPlantLocation: 'Jamnagar, GJ',
+        accountSource: 'public_system',
+        status: 'SYNCED_LEGACY',
+      })
+    );
+  });
+
+  it('edit reports a blank mobile number it cannot save without', () => {
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getAllByTitle('Edit Account Specifications')[0]);
+    // A whitespace-only value satisfies the field's required attribute but trims to nothing.
+    fireEvent.change(screen.getByDisplayValue('+91 98201 44820'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: /Update Specifications/i }));
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Validation Error',
+      'Complete the required fields: Mobile number.',
+      'warning'
+    );
+    expect(mockUpdateBuyerAccount).not.toHaveBeenCalled();
+  });
+
+  it('shows dashes for a record with no plant, industry, category list or sync time', () => {
+    const bareBuyer: Partial<BuyerAccount> = {
+      ...mockBuyerAccounts[1],
+      id: 'buyer-bare',
+      organizationName: 'Bare Buyer Ltd',
+      primaryPlantLocation: '',
+      industrySector: '',
+      syncTimestamp: '',
+    };
+    // The record arrives without a category list at all, not an empty one.
+    delete bareBuyer.supportedMajorCategories;
+    (useApp as jest.Mock).mockReturnValue(buildAppMock({ buyerAccounts: [bareBuyer] }));
+
+    render(<BuyerAccountTable />);
+    const row = screen.getByText('Bare Buyer Ltd').closest('tr') as HTMLElement;
+    // Plant location and industry each render a standalone dash.
+    expect(within(row).getAllByText('—')).toHaveLength(2);
+    // The last-saved dash shares its element with the label, so it is matched by its full text.
+    expect(within(row).getByText(/Last saved:/)).toHaveTextContent('Last saved: —');
+  });
+
+  it('explains an empty category master with the error the store reports', () => {
+    (useApp as jest.Mock).mockReturnValue(
+      buildAppMock({ categoryTaxonomy: [], categoryTaxonomyError: 'The category master could not be read.' })
+    );
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
+    expect(screen.getByText('The category master could not be read.')).toBeInTheDocument();
+  });
+
+  it('falls back to the standard message when an empty category master has no error', () => {
+    (useApp as jest.Mock).mockReturnValue(buildAppMock({ categoryTaxonomy: [], categoryTaxonomyError: null }));
+    render(<BuyerAccountTable />);
+    fireEvent.click(screen.getByText(/Add Existing Public Buyer/i));
+    expect(screen.getByText(UI_STRINGS.buyerProfile.taxonomyEmpty)).toBeInTheDocument();
   });
 });

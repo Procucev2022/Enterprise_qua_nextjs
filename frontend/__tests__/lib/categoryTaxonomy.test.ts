@@ -12,8 +12,8 @@ import {
   clearCategoryTaxonomy,
   autoCategorizeItem,
   dominantMajorCategory,
-  getDefaultCategoryTaxonomy,
   KNOWN_KEYWORD_RULES,
+  resolveMinorCategory,
 } from '@/lib/categoryTaxonomy';
 import { MASTER_CATEGORY_TAXONOMY, MASTER_CATEGORY_GROUPS } from '@/lib/categoryTaxonomySeed';
 
@@ -128,7 +128,6 @@ describe('categoryTaxonomy module', () => {
     expect(getMinorCategories('Others – New Product')).toContain('Only Product Expected');
     expect(getMinorCategories('Others – New Service')).toContain('Custom Consulting');
     expect(getCategoryTaxonomy().length).toBeGreaterThan(0);
-    expect(getDefaultCategoryTaxonomy().length).toBeGreaterThan(0);
   });
 
   it('handles duplicate minors across majors properly with first loaded major winning in findMajorForMinor', () => {
@@ -228,5 +227,123 @@ describe('categoryTaxonomy module', () => {
         expect(res.minorCategory).toBe(rule.minor);
       }
     }
+  });
+});
+
+describe('categoryTaxonomy registry is not seeded at import', () => {
+  it('starts empty on first load, so no seed value is returned before the database taxonomy loads', () => {
+    jest.isolateModules(() => {
+      const fresh = require('@/lib/categoryTaxonomy') as typeof import('@/lib/categoryTaxonomy');
+      expect(fresh.isCategoryTaxonomyLoaded()).toBe(false);
+      expect(fresh.getCategoryTaxonomy()).toEqual([]);
+      expect(fresh.getMajorCategories()).toEqual([]);
+      expect(fresh.getMinorCategories('Civil Works')).toEqual([]);
+    });
+  });
+
+  it('does not reach the seed module at runtime', () => {
+    jest.isolateModules(() => {
+      const fresh = require('@/lib/categoryTaxonomy') as typeof import('@/lib/categoryTaxonomy');
+      fresh.setCategoryTaxonomy([{ majorCategory: 'Only Major', minorCategories: ['Only Minor'] }]);
+      expect(fresh.getMajorCategories()).toEqual(['Only Major']);
+      expect(fresh.getMinorCategories('Only Major')).toEqual(['Only Minor']);
+    });
+  });
+});
+
+describe('categoryTaxonomy registry normalisation', () => {
+  afterEach(() => {
+    clearCategoryTaxonomy();
+  });
+
+  it('treats a non-array input as an empty registry', () => {
+    setCategoryTaxonomy(undefined as unknown as Parameters<typeof setCategoryTaxonomy>[0]);
+
+    expect(isCategoryTaxonomyLoaded()).toBe(false);
+  });
+
+  it('skips blank or missing majors and merges duplicate majors into one group', () => {
+    setCategoryTaxonomy([
+      { majorCategory: '  IT  ', minorCategories: [' Laptop ', '', 'Laptop', 'Desktop'] },
+      { majorCategory: 'it', minorCategories: ['Servers'] },
+      { majorCategory: 'Civil Works', minorCategories: undefined as unknown as string[] },
+      { majorCategory: '   ', minorCategories: ['Ignored'] },
+      { majorCategory: '', minorCategories: ['Ignored'] },
+      null as unknown as { majorCategory: string; minorCategories: string[] },
+    ]);
+
+    expect(getMajorCategories()).toEqual(['IT', 'Civil Works']);
+    expect(getMinorCategories('IT')).toEqual(['Laptop', 'Desktop', 'Servers']);
+    expect(getMinorCategories('Civil Works')).toEqual([]);
+  });
+
+  it('maps the legacy new-category names onto the current Others majors', () => {
+    setCategoryTaxonomy([
+      { majorCategory: 'New Category', minorCategories: ['Misc A'] },
+      { majorCategory: 'New Category-Service', minorCategories: ['Misc B'] },
+    ]);
+
+    expect(getMajorCategories()).toEqual(['Others – New Product', 'Others – New Service']);
+  });
+
+  it('returns empty results for blank or unknown lookups', () => {
+    setCategoryTaxonomy([{ majorCategory: 'IT', minorCategories: ['Laptop'] }]);
+
+    expect(getMinorCategories('')).toEqual([]);
+    expect(getMinorCategories('Unknown')).toEqual([]);
+    expect(hasMajorCategory('')).toBe(false);
+    expect(hasMinorCategory('IT', '')).toBe(false);
+    expect(findMajorForMinor('')).toBe('');
+    expect(findMajorForMinor('Nothing')).toBe('');
+  });
+});
+
+describe('resolveMinorCategory', () => {
+  beforeEach(() => {
+    setCategoryTaxonomy(MASTER_CATEGORY_GROUPS);
+  });
+
+  afterEach(() => {
+    setCategoryTaxonomy(MASTER_CATEGORY_GROUPS);
+  });
+
+  it('resolves exact minor category from line item description', () => {
+    expect(resolveMinorCategory('Centrifugal Pump SS316', '', '')).toBe('Pumps & Accessories');
+    expect(resolveMinorCategory('Stainless Steel Ball Valve 2 inch', '', '')).toBe('Hoses, Valves & Fittings');
+    expect(resolveMinorCategory('TMT Steel Rebar 12mm', '', '')).toBe('TMT BARS');
+    expect(resolveMinorCategory('Dell Latitude 5420 Laptop', '', '')).toBe('Laptop');
+    expect(resolveMinorCategory('Schneider 32A MCB Circuit Breaker', '', '')).toBe('Circuit Breakers');
+  });
+
+  it('resolves minor category from specifications when item name is generic', () => {
+    expect(resolveMinorCategory('Industrial Equipment', 'Centrifugal pump high pressure', '')).toBe('Pumps & Accessories');
+    expect(resolveMinorCategory('', 'ball valve 1 inch', '')).toBe('Hoses, Valves & Fittings');
+  });
+
+  it('resolves minor category from departmentOrCategory only when explicitly matching a known Minor Category', () => {
+    expect(resolveMinorCategory('Custom Item', '', 'Networking Equipment')).toBe('Networking Equipment');
+    expect(resolveMinorCategory('Custom Item', '', 'ball valve')).toBe('Hoses, Valves & Fittings');
+    // Does not assign an incorrect minor category when given a major category or arbitrary department
+    expect(resolveMinorCategory('Custom Item', '', 'Civil Works')).toBe('');
+    expect(resolveMinorCategory('Custom Item', '', 'Finance Department')).toBe('');
+    expect(resolveMinorCategory('Custom Item', '', 'Unmapped')).toBe('');
+  });
+
+  it('resolves minor category when taxonomy is not yet loaded', () => {
+    clearCategoryTaxonomy();
+    expect(isCategoryTaxonomyLoaded()).toBe(false);
+    expect(resolveMinorCategory('Industrial Gate Valve', '', '')).toBe('Hoses, Valves & Fittings');
+    expect(resolveMinorCategory('Submersible Pump', '', '')).toBe('Pumps & Accessories');
+    expect(resolveMinorCategory('', 'tmt bar fe500', '')).toBe('TMT BARS');
+  });
+
+  it('does not assign an incorrect category if item is completely unrecognized and returns empty string', () => {
+    expect(resolveMinorCategory('Unknown Gizmo XYZ123', 'Model 999', 'Special Projects')).toBe('');
+    expect(resolveMinorCategory('Miscellaneous Service Charge', '', 'Admin')).toBe('');
+  });
+
+  it('returns empty string when all arguments are empty or no match is found', () => {
+    expect(resolveMinorCategory('', '', '')).toBe('');
+    expect(resolveMinorCategory('Unknown Gizmo XYZ123', 'Model 999', '')).toBe('');
   });
 });

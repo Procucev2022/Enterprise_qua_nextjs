@@ -141,7 +141,15 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       if (modeFilter !== ALL && rfq.sourcingMode !== modeFilter) return false;
       // An RFQ raised before intake tracking existed is treated as web portal,
       // matching how the command center buckets legacy rows.
-      if (sourceFilter !== ALL && (rfq.source || 'web_portal') !== sourceFilter) return false;
+      if (sourceFilter !== ALL) {
+        if (sourceFilter === 'ai_extraction') {
+          if (rfq.source !== 'ai_extraction') return false;
+        } else if (sourceFilter === 'email_gateway') {
+          if (rfq.source !== 'email_gateway' && rfq.source !== 'email_upload') return false;
+        } else if ((rfq.source || 'web_portal') !== sourceFilter) {
+          return false;
+        }
+      }
       if (!term) return true;
       // Persisted RFQs can arrive without every optional collection populated,
       // so each field is coerced before matching.

@@ -6,10 +6,10 @@
 // PostgreSQL so the account can sign in to this workspace.
 //
 // Usage:
-//   node scripts/create-staff.js --role category_manager --email a@b.com \
-//        --phone 9876543210 --password 'Secret@123' [--name "Full Name"] [--org "Company"]
-//   node scripts/create-staff.js --role admin --email a@b.com \
-//        --phone 9876543210 --password 'Secret@123'
+//   node scripts/create-staff.js --role category_manager --email <email> \
+//        --phone <10-digit mobile> --password '<password>' [--name "<full name>"] [--org "<company>"]
+//   node scripts/create-staff.js --role admin --email <email> \
+//        --phone <10-digit mobile> --password '<password>'
 //
 // Connection settings come from DATABASE_URL in backend/.env. Nothing is
 // hardcoded. The script is idempotent: re-running it reports the existing
@@ -60,7 +60,7 @@ async function main() {
   if (missing.length > 0) {
     console.error(`Missing required argument(s): ${missing.map((m) => `--${m}`).join(', ')}`);
     console.error(
-      "Usage: node scripts/create-staff.js --role category_manager|admin --email a@b.com --phone 9876543210 --password 'Secret@123' [--name \"Full Name\"] [--org \"Company\"]"
+      "Usage: node scripts/create-staff.js --role category_manager|admin --email <email> --phone <10-digit mobile> --password '<password>' [--name \"<full name>\"] [--org \"<company>\"]"
     );
     process.exitCode = 1;
     return;

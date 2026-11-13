@@ -8,6 +8,7 @@ import {
   rankProcucevVendorsForV3,
 } from '@/lib/vendorMatching';
 import type { VendorEntry } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 describe('vendorMatching module', () => {
   describe('normalizeCategory', () => {
@@ -327,7 +328,7 @@ describe('vendorMatching module', () => {
     it('returns a neutral score when nothing matches', () => {
       const r = scoreVendorLocation(vendorAt({ location: 'Delhi' }), { location: 'Chennai', pincode: '600001' });
       expect(r.score).toBe(40);
-      expect(r.reason).toMatch(/Nationwide/i);
+      expect(r.reason).toBe(UI_STRINGS.vendorRanking.locationNotConfirmed);
     });
   });
 
@@ -372,11 +373,9 @@ describe('vendorMatching module', () => {
       expect(rankProcucevVendorsForV3(pool, signals, {}, 10)).toHaveLength(10);
     });
 
-    it('falls back to a neutral category baseline when there are no signals yet', () => {
+    it('ranks no vendor when there are no category signals, instead of inventing a baseline score', () => {
       const pool = [vendor({ id: 'proc-x', name: 'Baseline Co' })];
-      const ranked = rankProcucevVendorsForV3(pool, [], {}, 10);
-      expect(ranked).toHaveLength(1);
-      expect(ranked[0].categoryScore).toBeGreaterThan(0);
+      expect(rankProcucevVendorsForV3(pool, [], {}, 10)).toEqual([]);
     });
 
     it('handles V3 tie-breaks and excludes non-matching vendors', () => {
@@ -450,5 +449,90 @@ describe('vendorMatching module', () => {
       expect(ranked[0].matchedMinorCategory).toBe('Centrifugal Pumps');
       expect(ranked[1].hasMinorMatch).toBe(false);
     });
+  });
+});
+
+describe('vendorMatching edge branches', () => {
+  const procucevVendor = (overrides: Partial<VendorEntry>): VendorEntry =>
+    ({
+      id: 'p-default',
+      name: 'Procucev Partner',
+      source: 'procucev_network',
+      contactPerson: 'Contact',
+      phone: '9999999999',
+      email: 'partner@procucev.com',
+      ...overrides,
+    }) as VendorEntry;
+
+  test('extractRfqCategorySignals reads only the category fields that are present', () => {
+    const { rawSignals, signals } = extractRfqCategorySignals({
+      category: 'Valves',
+      lineItems: [{ majorCategory: undefined, minorCategory: '   ', category: 'Gate Valves' }],
+    });
+    expect(rawSignals).toEqual(['Valves', 'Gate Valves']);
+    expect(signals).toHaveLength(2);
+  });
+
+  test('matchVendorAgainstSignals leaves matchedMajor empty when the vendor has no major category and nothing matches', () => {
+    const result = matchVendorAgainstSignals(
+      procucevVendor({ majorCategory: undefined, minorCategories: ['Valves'] }),
+      ['Pumps']
+    );
+    expect(result.isMatch).toBe(false);
+    expect(result.matchedMajor).toBe('');
+  });
+
+  test('matchVendorAgainstSignals matches a shorter vendor category inside a longer buyer category', () => {
+    const result = matchVendorAgainstSignals(
+      procucevVendor({ majorCategory: undefined, minorCategories: ['Pumps'] }),
+      ['Centrifugal Pumps']
+    );
+    expect(result.isMatch).toBe(true);
+    expect(result.matchScore).toBe(92);
+    expect(result.matchedCategories).toEqual(['Pumps']);
+  });
+
+  test('rankProcucevVendorsForV3 puts preferred-minor matches first, then by rating, and tolerates missing minor lists', () => {
+    const vendors = [
+      procucevVendor({ id: 'a', majorCategory: 'Mechanical', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'b', majorCategory: 'Mechanical', minorCategories: ['Valves'] }),
+      procucevVendor({ id: 'c', majorCategory: 'Mechanical', minorCategories: undefined }),
+      procucevVendor({ id: 'd', majorCategory: 'Mechanical', minorCategories: ['Pumps', 'Valves'], rating: 4 }),
+      procucevVendor({ id: 'e', majorCategory: 'Mechanical' }),
+    ];
+    const ranked = rankProcucevVendorsForV3(vendors, ['Mechanical'], {}, 10, ['Pumps']);
+
+    expect(ranked.map((r) => r.vendor.id)).toEqual(['d', 'a', 'b', 'c', 'e']);
+    expect(ranked[0].hasMinorMatch).toBe(true);
+    expect(ranked.find((r) => r.vendor.id === 'b')?.matchedMinorCategory).toBe('Valves');
+    expect(ranked.find((r) => r.vendor.id === 'c')?.matchedMinorCategory).toBeNull();
+  });
+
+  test('getCategoryMatchedProcucevVendors orders by match score, then rating, and keeps unrated vendors after rated ones', () => {
+    const vendors = [
+      procucevVendor({ id: 'x', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'y', majorCategory: 'Pumps', minorCategories: [] }),
+      procucevVendor({ id: 'z', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'w', minorCategories: ['Pumps'], rating: 3 }),
+    ];
+    const results = getCategoryMatchedProcucevVendors(vendors, ['Pumps']);
+    expect(results.map((r) => r.vendor.id)).toEqual(['w', 'x', 'z', 'y']);
+  });
+
+  test('selectVendorsForCategories returns nothing when every signal normalises to empty', () => {
+    expect(selectVendorsForCategories([procucevVendor({ id: 'q', minorCategories: ['Pumps'] })], ['  ', ''])).toEqual([]);
+  });
+
+  test('selectVendorsForCategories skips keyless vendors and does not pick one vendor twice', () => {
+    const vendors = [
+      procucevVendor({ id: 'm1', minorCategories: ['Pumps'], rating: 5 }),
+      procucevVendor({ id: 'm2', majorCategory: 'Pumps', minorCategories: [] }),
+      procucevVendor({ id: 'm3', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'm4', minorCategories: ['Pumps', 'Valves'], rating: 1 }),
+      procucevVendor({ id: 'v1', minorCategories: ['Valves'], rating: 2 }),
+      procucevVendor({ id: '', email: '', minorCategories: ['Valves'] }),
+    ];
+    const selected = selectVendorsForCategories(vendors, ['Pumps', 'Valves'], 10);
+    expect(selected.map((s) => s.vendor.id)).toEqual(['m1', 'v1', 'm4', 'm3', 'm2']);
   });
 });

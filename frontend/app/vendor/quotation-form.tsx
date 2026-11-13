@@ -1,15 +1,23 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { formatFileSize, hasUnlimitedAccess, VENDOR_FREE_CREDITS_LIMIT } from '@/lib/constants';
+import { formatFileSize } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
+import {
+  getPaidVendorPlanPrice,
+  getPaidVendorPlanRfqQuota,
+  paidPlanQuotaCopy,
+  pricePlaceholderLabel,
+  type PaidVendorPlanId,
+} from './vendorPlanPricing';
 import * as XLSX from 'xlsx';
 import {
   ArrowLeft,
@@ -30,6 +38,14 @@ import {
   Search,
   Paperclip,
 } from 'lucide-react';
+
+/**
+ * Sort key for a clarification thread message. A message with no timestamp sorts after every dated
+ * message, because it was recorded without a time and is shown as the most recent.
+ */
+function messageSortTime(timestamp: string | null | undefined): number {
+  return timestamp ? new Date(timestamp).getTime() : Number.MAX_SAFE_INTEGER;
+}
 
 interface QuotationFormProps {
   opportunity?: VendorOpportunity;
@@ -58,27 +74,64 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     updateVendorSubscription,
   } = useApp();
   const [opportunitySearch, setOpportunitySearch] = useState('');
-  const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed'>('all');
+  const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed' | 'direct'>('all');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [pendingPayment, setPendingPayment] = useState<{
     planId: 'connect' | 'select';
     planName: string;
     price: string;
+    billingDurationLabel?: string;
+    breakdown?: {
+      basePrice: string;
+      gstAmount: string;
+    };
   } | null>(null);
 
-  const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    const plan = e.currentTarget.getAttribute('data-plan') as 'premium' | 'connect' | 'select';
+  // Plan prices come from the pricing API. They are fetched when the upgrade dialog opens.
+  const [planPricing, setPlanPricing] = useState<SubscriptionPricingResponse | null>(null);
+  const [planPricingFailed, setPlanPricingFailed] = useState(false);
+  useEffect(() => {
+    if (!showUpgradeModal || planPricing || planPricingFailed) return;
+    let cancelled = false;
+    void fetchSubscriptionPricing().then((config) => {
+      if (cancelled) return;
+      if (config) setPlanPricing(config);
+      else setPlanPricingFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showUpgradeModal, planPricing, planPricingFailed]);
+  const connectPrice = getPaidVendorPlanPrice(planPricing, 'connect');
+  const selectPrice = getPaidVendorPlanPrice(planPricing, 'select');
+  const connectRfqQuota = getPaidVendorPlanRfqQuota(planPricing, 'connect');
+  const selectRfqQuota = getPaidVendorPlanRfqQuota(planPricing, 'select');
+
+  const handleUpgradeClick = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const plan = e.currentTarget.getAttribute('data-plan') as 'premium' | 'connect' | 'select' | null;
     if (!plan) return;
     if (plan === 'premium') {
-      if (updateVendorSubscription) updateVendorSubscription('premium');
+      if (!updateVendorSubscription) return;
+      const saved = await updateVendorSubscription('premium');
+      if (!saved) return;
       showToast('Switched Plan', 'Switched to Premium tier.', 'success');
       setShowUpgradeModal(false);
       return;
     }
-    const planName = plan === 'connect' ? 'Connect Model (Marketplace Access)' : 'Select Model (Catalogue + Scale)';
-    const price = plan === 'connect' ? '₹2 / 3 months' : '₹5 / 3 months';
-    setPendingPayment({ planId: plan, planName, price });
+    const paidPlan: PaidVendorPlanId = plan === 'select' ? 'select' : 'connect';
+    const price = paidPlan === 'connect' ? connectPrice : selectPrice;
+    if (!price) {
+      showToast(UI_STRINGS.vendorWorkspace.pricingUnavailableTitle, UI_STRINGS.vendorWorkspace.pricingUnavailableMessage, 'warning');
+      return;
+    }
+    setPendingPayment({
+      planId: paidPlan,
+      planName: paidPlan === 'connect' ? 'Connect Model (Marketplace Access)' : 'Select Model (Catalogue + Scale)',
+      price: price.totalWithGst,
+      billingDurationLabel: '12 Months (Recommended)',
+      breakdown: { basePrice: price.basePrice, gstAmount: price.gstAmount },
+    });
     setShowUpgradeModal(false);
   };
 
@@ -89,13 +142,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [myVendorName, setMyVendorName] = useState<string>('');
   const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = useState<string | null>(null);
   const [myBuyerId, setMyBuyerId] = useState<string | null>(null);
-  const [freeCreditsRemaining, setFreeCreditsRemaining] = useState<number | null>(null);
   const myVendorRecord = buyerVendors?.find(
     (v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase()
   );
-  const effectiveFreeCredits = (vendorSubscription as string) === 'standard'
-    ? 0
-    : (freeCreditsRemaining ?? myVendorRecord?.freeQuotationCredits ?? vendorFreeCreditsRemaining ?? VENDOR_FREE_CREDITS_LIMIT);
   // isOwnBuyerRfq depends on myAddedByBuyerCompany, which only exists once
   // this fetch resolves — the deep-link auto-open effect below waits on this
   // flag so it doesn't judge a real direct-buyer RFQ as locked just because
@@ -131,9 +180,6 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           setMyVendorName(data.data.name);
           setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || null);
           setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || null);
-          if (data.data.freeQuotationCredits !== undefined) {
-            setFreeCreditsRemaining(Number(data.data.freeQuotationCredits));
-          }
         }
       } catch {
         // Leave myVendorId null — bidding/download actions will surface a
@@ -194,17 +240,32 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         submittedDate: myQuote?.submittedAt ? new Date(myQuote.submittedAt).toLocaleString() : '-',
         status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Quote Submitted',
         submissionMethod: 'Portal Submission',
-        totalPrice: Number(myQuote?.totalPrice) || 0,
+        // Null when the server did not return an amount, so the table shows a dash instead of ₹0.
+        totalPrice: typeof myQuote?.totalPrice === 'number' && Number.isFinite(myQuote.totalPrice) ? myQuote.totalPrice : null,
       };
     });
 
   // Direct-vs-marketplace reflects the real relationship:
   // When a buyer uploads or adds a vendor, the vendor is buyer-mapped and has unlimited quotations for that buyer's direct RFQs (V1).
-  // Network and marketplace sourcing modes (V0, V2, V3) require free credits or subscription plan.
-  const isOwnBuyerRfq = (rfqNumber: string) => {
+  // Network and marketplace sourcing modes (V0, V2, V3) require free credits or subscription plan unless specifically invited.
+  const isOwnBuyerRfq = useCallback((rfqNumber: string) => {
     const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
     const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
     if (!rfq && !rfqRecord) return false;
+
+    // Check if the vendor was explicitly invited/assigned by the buyer
+    const isExplicitlyAssigned = (rfqRecord?.assignedVendors || []).some((v) => {
+      const vEmail = (v.email || '').toLowerCase().trim();
+      const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
+      if (vEmail && sEmail && vEmail === sEmail) return true;
+      const vId = String(v.id || '').toLowerCase().trim();
+      if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
+      const vName = (v.name || '').toLowerCase().trim();
+      if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
+      return false;
+    });
+    if (isExplicitlyAssigned) return true;
+
     const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase();
     if (
       mode === 'mode_0' ||
@@ -212,15 +273,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       mode === 'version_0' ||
       mode === 'mode_3' ||
       mode === 'v3' ||
-      mode === 'version_3' ||
-      mode === 'mode_2' ||
-      mode === 'v2' ||
-      mode === 'version_2'
+      mode === 'version_3'
     ) {
       return false;
     }
-    const buyerName = rfq?.buyer || rfqRecord?.buyerAccountName || (rfqRecord as any)?.buyerCompany;
-    const buyerAccountId = (rfq as any)?.buyerAccountId || rfqRecord?.buyerAccountId;
+    const buyerName = rfq?.buyer || rfqRecord?.buyerAccountName || (rfqRecord as { buyerCompany?: string })?.buyerCompany;
+    const buyerAccountId = (rfq as { buyerAccountId?: string })?.buyerAccountId || rfqRecord?.buyerAccountId;
     if (myAddedByBuyerCompany && buyerName === myAddedByBuyerCompany) return true;
     if (myBuyerId && buyerAccountId === myBuyerId) return true;
     if (myVendorRecord) {
@@ -229,7 +287,27 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (myVendorRecord.buyerAccountId && buyerAccountId === myVendorRecord.buyerAccountId) return true;
     }
     return false;
-  };
+  }, [vendorOpportunities, rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+
+  // Entitlement is decided from store data only: the subscription plan from the backend and
+  // the credit balance from refreshVendorCredits. A balance that has not loaded (null) does not
+  // lock the vendor here; the server still enforces the quota on submit.
+  const isPaidOrUnlimitedVendor =
+    vendorSubscription === 'connect' || vendorSubscription === 'select' || vendorSubscription === 'unlimited';
+  const isRfqLockedForVendor = (rfqNumber: string) =>
+    !isPaidOrUnlimitedVendor && vendorFreeCreditsRemaining === 0 && !isOwnBuyerRfq(rfqNumber);
+
+  const resolveOpportunityCategory = useCallback((opp: VendorOpportunity): string => {
+    const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+    return (
+      opp.majorCategory ||
+      opp.category ||
+      rfqRecord?.category ||
+      rfqRecord?.extractedEntities?.[0]?.majorCategory ||
+      rfqRecord?.extractedEntities?.[0]?.category ||
+      ''
+    ).trim();
+  }, [rfqs]);
 
   // Extract distinct categories available across opportunities
   const availableCategories = useMemo(() => {
@@ -252,43 +330,74 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const totalSubmittedCount = submittedQuotes.length;
   const filteredOpportunities = useMemo(() => {
     const query = opportunitySearch.trim().toLocaleLowerCase();
-    return vendorOpportunities.filter((opp) => {
-      const quote = submittedQuotes.some((item) => item.rfqNumber === opp.rfqNumber);
-      const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
-      if (opportunityStatusFilter === 'submitted' && !quote && opp.status !== 'submitted' && opp.status !== 'under_review') return false;
-      if (opportunityStatusFilter === 'closed' && !isClosed) return false;
-      if (opportunityStatusFilter === 'open' && (isClosed || quote || opp.status === 'submitted')) return false;
+    return vendorOpportunities
+      .filter((opp) => {
+        const quote = submittedQuotes.some((item) => item.rfqNumber === opp.rfqNumber);
+        const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
+        if (opportunityStatusFilter === 'submitted' && !quote && opp.status !== 'submitted' && opp.status !== 'under_review') return false;
+        if (opportunityStatusFilter === 'closed' && !isClosed) return false;
+        if (opportunityStatusFilter === 'open' && (isClosed || quote || opp.status === 'submitted')) return false;
+        if (opportunityStatusFilter === 'direct' && !isOwnBuyerRfq(opp.rfqNumber)) return false;
 
-      const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
-      const oppCat = (opp.majorCategory || opp.category || rfqRecord?.category || rfqRecord?.extractedEntities?.[0]?.majorCategory || '').trim();
+        const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+        const oppCat = resolveOpportunityCategory(opp);
 
-      // Category filter check (multi-category support)
-      if (selectedCategories.length > 0) {
-        const matchesCategory = selectedCategories.some((cat) =>
-          cat.toLowerCase() === oppCat.toLowerCase() ||
-          (rfqRecord?.extractedEntities || []).some(
-            (ent) => (ent.majorCategory || ent.category || '').toLowerCase() === cat.toLowerCase()
-          )
-        );
-        if (!matchesCategory) return false;
-      }
+        // Category filter check (multi-category support):
+        // Filter strictly by the enquiry's resolved category so that choosing a category
+        // (e.g. Civil Works) does not surface RFQs from other categories (e.g. Electrical, IT).
+        if (selectedCategories.length > 0) {
+          const matchesCategory = selectedCategories.some(
+            (cat) => cat.toLowerCase() === oppCat.toLowerCase()
+          );
+          if (!matchesCategory) return false;
+        }
 
-      if (!query) return true;
-      const itemNames = (rfqRecord?.extractedEntities || []).map((item) => item.itemName);
-      return [
-        opp.rfqNumber,
-        opp.title,
-        opp.buyer,
-        opp.status,
-        opp.majorCategory,
-        rfqRecord?.category || '',
-        opp.deliveryLocation,
-        rfqRecord?.deliveryLocation || '',
-        ...itemNames,
-      ]
-        .some((value) => value.toLocaleLowerCase().includes(query));
-    });
-  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories]);
+        if (!query) return true;
+        const itemNames = (rfqRecord?.extractedEntities || []).map((item) => item.itemName);
+        return [
+          opp.rfqNumber,
+          opp.title,
+          opp.buyer,
+          opp.status,
+          opp.majorCategory,
+          rfqRecord?.category || '',
+          opp.deliveryLocation,
+          rfqRecord?.deliveryLocation || '',
+          ...itemNames,
+        ]
+          .some((value) => value.toLocaleLowerCase().includes(query));
+      })
+      .sort((a, b) => {
+        const aHasQuote = submittedQuotes.some((item) => item.rfqNumber === a.rfqNumber) || a.status === 'submitted';
+        const bHasQuote = submittedQuotes.some((item) => item.rfqNumber === b.rfqNumber) || b.status === 'submitted';
+        const aDirect = isOwnBuyerRfq(a.rfqNumber);
+        const bDirect = isOwnBuyerRfq(b.rfqNumber);
+
+        // Sorting priority to prevent vendor's own requests from being buried:
+        // Score 4: Direct client invitation awaiting quote (Highest urgency)
+        // Score 3: Submitted quote (Vendor's active submission tracking)
+        // Score 2: Direct client invitation (closed/other)
+        // Score 0: Generic marketplace / open network enquiry
+        const getPriority = (hasQuote: boolean, isDirect: boolean, opp: VendorOpportunity) => {
+          const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
+          if (isDirect && !hasQuote && !isClosed) return 4;
+          if (hasQuote) return 3;
+          if (isDirect) return 2;
+          return 0;
+        };
+
+        const aScore = getPriority(aHasQuote, aDirect, a);
+        const bScore = getPriority(bHasQuote, bDirect, b);
+
+        if (bScore !== aScore) {
+          return bScore - aScore;
+        }
+
+        const aTime = new Date(a.deadline || 0).getTime();
+        const bTime = new Date(b.deadline || 0).getTime();
+        return bTime - aTime;
+      });
+  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, isOwnBuyerRfq, resolveOpportunityCategory]);
 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
@@ -300,7 +409,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [bidLineItemPrices, setBidLineItemPrices] = useState<Record<string, string>>({});
   const [bidLeadTimeDays, setBidLeadTimeDays] = useState('');
   const [bidWarrantyYears, setBidWarrantyYears] = useState('');
-  const [bidPaymentTerms, setBidPaymentTerms] = useState('45 Days Net');
+  // Blank until the vendor states terms. A default here would be submitted as the vendor's own commercial term.
+  const [bidPaymentTerms, setBidPaymentTerms] = useState('');
   const [bidRemarks, setBidRemarks] = useState('');
   const [bidDocuments, setBidDocuments] = useState<File[]>([]);
   const [uploadedBidDocuments, setUploadedBidDocuments] = useState<RFQQuoteAttachment[]>([]);
@@ -353,36 +463,27 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
         setBidLineItemPrices(newPrices);
         showToast('Excel Imported', `Successfully imported pricing for ${matchedCount} item(s).`, 'success');
-      } catch (err: any) {
-        showToast('Import Failed', err?.message || 'Could not parse the uploaded Excel file.', 'warning');
+      } catch (err: unknown) {
+        showToast(
+          'Import Failed',
+          err instanceof Error && err.message ? err.message : 'Could not parse the uploaded Excel file.',
+          'warning'
+        );
       }
     };
     reader.readAsArrayBuffer(file);
     e.target.value = '';
   };
 
+  // Callers only reach this for an RFQ the table shows as unlocked (or the auto-open effect,
+  // which checks isRfqLockedForVendor first). The server still enforces the quota on submit.
   const openBidForm = (opp: VendorOpportunity) => {
-    const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
-    const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
-      (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
-      vendorSubscription === 'unlimited';
-    const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
-    const locked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
-    if (locked) {
-      setShowUpgradeModal(true);
-      showToast(
-        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastTitle || 'Subscription Required',
-        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastDesc || 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
-        'warning'
-      );
-      return;
-    }
     setBiddingOn(opp);
     setBidUnitPrice('');
     setBidLineItemPrices({});
     setBidLeadTimeDays('');
     setBidWarrantyYears('');
-    setBidPaymentTerms('45 Days Net');
+    setBidPaymentTerms('');
     setBidRemarks('');
     setBidDocuments([]);
     setUploadedBidDocuments([]);
@@ -400,7 +501,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (!inquiryModal || !inquiryMessage.trim()) return;
     setIsInquiring(true);
     try {
-      const vendorName = myVendorName || currentUserSession?.name || 'Vendor Partner';
+      const vendorName = myVendorName || currentUserSession?.name || '';
       const vendorEmail = currentUserSession?.email || null;
 
       const res = await submitRFQInquiry(inquiryModal.id || inquiryModal.rfqNumber, {
@@ -408,22 +509,29 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         vendorName,
         vendorEmail,
       });
+      if (!res.success) {
+        showToast('Inquiry Failed', res.error || 'Could not send your clarification.', 'warning');
+        return;
+      }
 
       addAuditLog(
         `Inquiry / Clarification submitted by ${vendorName} on ${inquiryModal.rfqNumber}: "${inquiryMessage.trim().slice(0, 100)}..."`,
-        inquiryModal.rfqNumber,
-        vendorEmail || undefined
+        inquiryModal.rfqNumber
       );
 
-      if (res.success && res.rfq) {
+      if (res.rfq) {
         adoptCreatedRFQ(res.rfq);
       }
 
       setInquiryMessage('');
       await refreshFromDB();
-      showToast('Clarification Sent', 'Your query has been dispatched to the procurement officer.', 'success');
-    } catch (err: any) {
-      showToast('Inquiry Failed', err?.message || 'Could not dispatch clarification.', 'warning');
+      showToast('Clarification Sent', 'Your clarification was saved for the buyer.', 'success');
+    } catch (err: unknown) {
+      showToast(
+        'Inquiry Failed',
+        err instanceof Error && err.message ? err.message : 'Could not send your clarification.',
+        'warning'
+      );
     } finally {
       setIsInquiring(false);
     }
@@ -451,7 +559,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (vendorOpportunities.length === 0) return;
     autoOpenedRef.current = true;
     const alreadyQuoted = submittedQuotes.some((q) => q.rfqNumber === opportunity.rfqNumber);
-    const locked = !isOwnBuyerRfq(opportunity.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && effectiveFreeCredits <= 0;
+    const locked = isRfqLockedForVendor(opportunity.rfqNumber);
     if (!alreadyQuoted && !locked) {
       openBidForm(opportunity);
     }
@@ -525,6 +633,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       }
     }
 
+    // Lead time is a quote term the buyer compares, so a blank value is not submitted as zero days.
+    const leadTimeText = bidLeadTimeDays.trim();
+    if (!leadTimeText || !Number.isFinite(Number(leadTimeText)) || Number(leadTimeText) < 0) {
+      setSubmitModalError(UI_STRINGS.vendorWorkspace.leadTimeRequiredMessage);
+      showToast('Validation Error', UI_STRINGS.vendorWorkspace.leadTimeRequiredMessage, 'warning');
+      return;
+    }
+
     setIsSubmittingQuote(true);
     try {
       const attachments = [...uploadedBidDocuments];
@@ -565,8 +681,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           unitPrice,
           totalPrice,
           ...(lineItemQuotes ? { lineItemQuotes } : {}),
-          leadTimeDays: Number(bidLeadTimeDays) || 0,
-          warrantyYears: Number(bidWarrantyYears) || 0,
+          leadTimeDays: Number(leadTimeText),
+          // Omitted when the vendor leaves warranty blank, rather than sent as zero years.
+          ...(bidWarrantyYears.trim() ? { warrantyYears: Number(bidWarrantyYears) } : {}),
           paymentTerms: bidPaymentTerms,
           remarks: bidRemarks,
           ...(attachments.length ? { attachments } : {}),
@@ -574,10 +691,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        const errorMsg = data.error || (data.upgradeRequired ? (UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastDesc || 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.') : 'Failed to submit quotation.');
+        const errorMsg = data.error || (data.upgradeRequired
+          ? UI_STRINGS.vendorSubscriptionModal.creditsExhaustedToastDesc
+          : 'Failed to submit quotation.');
         setSubmitModalError(errorMsg);
         if (data.upgradeRequired || res.status === 403) {
-          showToast(UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastTitle || 'Quotation Credits Exhausted', errorMsg, 'warning');
+          showToast(UI_STRINGS.vendorSubscriptionModal.creditsExhaustedToastTitle, errorMsg, 'warning');
           setShowUpgradeModal(true);
         } else {
           showToast('Submission Failed', errorMsg, 'warning');
@@ -585,20 +704,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         return;
       }
 
-      if (data.freeCreditsRemaining !== undefined) {
-        setFreeCreditsRemaining(Number(data.freeCreditsRemaining));
-      } else if (effectiveFreeCredits > 0 && !isOwnBuyerRfq(biddingOn.rfqNumber)) {
-        setFreeCreditsRemaining((prev) => Math.max(0, (prev ?? effectiveFreeCredits) - 1));
-      }
-
+      // The remaining balance is reloaded from the server below; nothing is decremented locally.
       if (data.data && typeof adoptCreatedRFQ === 'function') {
         adoptCreatedRFQ(data.data);
       }
 
       addAuditLog(
         `${myVendorName || currentUserSession?.name || 'Vendor'} submitted a quotation for ${biddingOn.rfqNumber} (Unit Price: ${unitPrice})`,
-        biddingOn.rfqNumber,
-        currentUserSession?.email
+        biddingOn.rfqNumber
       );
       showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully. Buyer details remain confidential for 48 hours in accordance with procurement privacy rules.`, 'success');
       
@@ -609,8 +722,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (typeof refreshRFQs === 'function') await refreshRFQs();
       await refreshFromDB();
       if (onSubmitSuccess) onSubmitSuccess();
-    } catch (err: any) {
-      const msg = err?.message || 'Could not submit the quote. Please check your network and try again.';
+    } catch (err: unknown) {
+      const msg = err instanceof Error && err.message ? err.message : 'Could not submit the quote. Please check your network and try again.';
       setSubmitModalError(msg);
       showToast('Submission Failed', msg, 'warning');
     } finally {
@@ -645,7 +758,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       const data = await res.json();
       if (!res.ok || !data.success) {
         if (data.exhausted || res.status === 403) {
-          showToast('Free Credits Exhausted', data.error || 'You have used all 5 free RFQ download credits. Please upgrade your subscription to download this RFQ.', 'warning');
+          showToast(
+            'Free Credits Exhausted',
+            data.error || UI_STRINGS.vendorSubscriptionModal.subscriptionRequiredToastDesc,
+            'warning'
+          );
           return;
         }
         throw new Error(data.error || 'Could not generate the RFQ specification.');
@@ -675,12 +792,15 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
       addAuditLog(
         `${myVendorName || currentUserSession?.name || 'Vendor'} downloaded RFQ specification for ${opp.rfqNumber}`,
-        opp.rfqNumber,
-        currentUserSession?.email
+        opp.rfqNumber
       );
       showToast('RFQ Downloaded', `RFQ specification for ${opp.rfqNumber} has been downloaded and unlocked.`, 'success');
-    } catch (err: any) {
-      showToast('Download Failed', err?.message || 'Could not download the RFQ specification.', 'warning');
+    } catch (err: unknown) {
+      showToast(
+        'Download Failed',
+        err instanceof Error && err.message ? err.message : 'Could not download the RFQ specification.',
+        'warning'
+      );
     }
   };
 
@@ -721,9 +841,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           <div>
             <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500 dark:text-gray-400">Quotation Credits</div>
             <span className="mt-2 block font-mono text-2xl font-black text-orange-700 dark:text-orange-400">
-              {vendorSubscription === 'connect' || vendorSubscription === 'select'
-                ? `${vendorFreeCreditsRemaining ?? '…'} Credits Left`
-                : `${effectiveFreeCredits} Free Left`}
+              {typeof vendorFreeCreditsRemaining !== 'number'
+                ? UI_STRINGS.vendorWorkspace.notAvailable
+                : vendorSubscription === 'connect' || vendorSubscription === 'select'
+                ? `${vendorFreeCreditsRemaining} Credits Left`
+                : `${vendorFreeCreditsRemaining} Free Left`}
             </span>
           </div>
           <div className="rounded-xl bg-orange-50 p-3 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300">
@@ -790,10 +912,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 onChange={(event) => setOpportunityStatusFilter(event.target.value as typeof opportunityStatusFilter)}
                 className="h-11 w-full rounded-xl border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-gray-950 dark:text-gray-200"
               >
-                <option value="all">All enquiries</option>
-                <option value="open">Awaiting your quote</option>
-                <option value="submitted">Quote submitted</option>
-                <option value="closed">Closed enquiries</option>
+                <option value="all">{UI_STRINGS.vendorQuotationPage?.allEnquiries || 'All enquiries'}</option>
+                <option value="direct">{UI_STRINGS.vendorQuotationPage?.directClientEnquiries || 'Direct client enquiries'}</option>
+                <option value="open">{UI_STRINGS.vendorQuotationPage?.awaitingYourQuote || 'Awaiting your quote'}</option>
+                <option value="submitted">{UI_STRINGS.vendorQuotationPage?.quoteSubmitted || 'Quote submitted'}</option>
+                <option value="closed">{UI_STRINGS.vendorQuotationPage?.closedEnquiries || 'Closed enquiries'}</option>
               </select>
             </label>
           </div>
@@ -818,8 +941,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               {availableCategories.map((cat) => {
                 const isSelected = selectedCategories.includes(cat);
                 const count = vendorOpportunities.filter((opp) => {
-                  const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
-                  return (opp.majorCategory || opp.category || rfqRecord?.category || '').trim() === cat;
+                  return resolveOpportunityCategory(opp).toLowerCase() === cat.toLowerCase();
                 }).length;
                 return (
                   <button
@@ -918,20 +1040,16 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                   null
                 );
                 const parentCompany = getParentCompany(opp.buyer);
-                const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
-                  (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
-                  vendorSubscription === 'unlimited';
                 const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
-                const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
-                const isLocked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+                const isLocked = isRfqLockedForVendor(opp.rfqNumber);
                 
                 // Condition: Buyer details remain hidden for 48 hours after bid submission.
                 // After 48 hours, buyer details automatically become visible.
                 const isUploadedByBuyer = isOwnBuyerRfq(opp.rfqNumber);
                 const isQuoteSubmitted = !!quote || opp.status === 'submitted';
-                const quoteSubmittedAt = (quote as any)?.submittedAt || (quote as any)?.createdAt;
+                const quoteSubmittedAt = quote?.submittedAt || null;
                 const isWithin48h = isQuoteSubmitted && quoteSubmittedAt && (Date.now() - new Date(quoteSubmittedAt).getTime() < 48 * 60 * 60 * 1000);
-                const isBuyerProtected48h = isWithin48h || Boolean((opp as any).buyerDetailsHidden) || Boolean((rfqRecord as any)?.buyerDetailsHidden);
+                const isBuyerProtected48h = Boolean(isWithin48h) || Boolean(opp.buyerDetailsHidden) || Boolean((rfqRecord as { buyerDetailsHidden?: boolean } | undefined)?.buyerDetailsHidden);
                 const canViewBuyerDetails = !isBuyerProtected48h && (isUploadedByBuyer || (isQuoteSubmitted && !isWithin48h));
 
                 const buyerCompanyName = (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany;
@@ -954,10 +1072,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 })();
 
                 return (
-                  <tr key={opp.rfqNumber} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40">
+                  <tr
+                    key={opp.rfqNumber}
+                    className={`transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40 ${
+                      isDirectBuyer ? 'bg-indigo-50/25 dark:bg-indigo-950/15' : ''
+                    }`}
+                  >
                     {/* RFQ Number */}
                     <td data-label="RFQ Number" className="py-3 font-mono font-bold text-slate-900 dark:text-white">
-                      <div>{opp.rfqNumber}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>{opp.rfqNumber}</span>
+                        {isDirectBuyer && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            {UI_STRINGS.vendorQuotationPage?.directClientBadge || 'Direct Client'}
+                          </span>
+                        )}
+                      </div>
                       {versionBadge && (
                         <div className="mt-1">
                           <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${versionBadge.color}`}>
@@ -971,9 +1101,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                     <td data-label="RFQ Details" className="py-3">
                       <div className="font-semibold text-slate-800 dark:text-gray-200">{opp.title}</div>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
-                        {(opp.majorCategory || rfqRecord?.category) && (
+                        {resolveOpportunityCategory(opp) && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-                            {opp.majorCategory || rfqRecord?.category}
+                            {resolveOpportunityCategory(opp)}
                           </span>
                         )}
                         {(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (
@@ -1061,7 +1191,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       {quote ? (
                         <div>
                           <span className="font-bold text-slate-800 dark:text-gray-200">
-                            {quote.totalPrice > 0 ? `₹${quote.totalPrice.toLocaleString('en-IN')}` : 'Quote submitted'}
+                            {quote.totalPrice !== null ? `₹${quote.totalPrice.toLocaleString('en-IN')}` : '—'}
                           </span>
                           <span className="mt-1 block text-[10px] text-slate-500 dark:text-gray-400">
                             {quote.submissionMethod} · {quote.submittedDate}
@@ -1198,7 +1328,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                             senderRole: 'vendor' as const,
                             senderName: inq.vendorName || 'You',
                             message: inq.message,
-                            timestamp: inq.createdAt || new Date().toISOString(),
+                            timestamp: inq.createdAt || null,
                           },
                         ]
                       : []),
@@ -1207,14 +1337,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           {
                             id: `msg-${inq.id}-buyer`,
                             senderRole: 'buyer' as const,
-                            senderName: inq.repliedBy || 'Buyer Procurement Team',
+                            senderName: inq.repliedBy || '',
                             message: inq.reply,
-                            timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
+                            timestamp: inq.repliedAt || inq.createdAt || null,
                           },
                         ]
                       : []),
                   ];
-                }).sort((a: any, b: any) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+                }).sort((a: any, b: any) => messageSortTime(a.timestamp) - messageSortTime(b.timestamp));
 
                 return (
                   <div className="space-y-3">
@@ -1235,11 +1365,13 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                             >
                               <div className="flex items-center gap-1 text-[9px] text-slate-400 px-1">
                                 <span className="font-bold text-slate-600 dark:text-gray-300">
-                                  {isVendorMsg ? `${msg.senderName} (You)` : `${msg.senderName} (Buyer)`}
+                                  {isVendorMsg
+                                    ? (msg.senderName ? `${msg.senderName} (You)` : 'You')
+                                    : (msg.senderName ? `${msg.senderName} (Buyer)` : 'Buyer')}
                                 </span>
                                 <span>•</span>
                                 <span className="mono">
-                                  {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}
+                                  {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
                                 </span>
                               </div>
                               <div
@@ -1613,9 +1745,24 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 </button>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/40 text-xs leading-relaxed">
-                {UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedWarning || '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.'}
-              </div>
+              {vendorFreeCreditsRemaining === 0 && (
+                <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/40 text-xs leading-relaxed">
+                  {UI_STRINGS.vendorSubscriptionModal.creditsExhaustedWarning}
+                </div>
+              )}
+
+              {planPricingFailed && (
+                <div role="alert" className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span>{UI_STRINGS.vendorWorkspace.pricesUnavailableNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPlanPricingFailed(false)}
+                    className="btn btn-secondary btn-xs font-bold shrink-0"
+                  >
+                    {UI_STRINGS.vendorWorkspace.pricesRetryAction}
+                  </button>
+                </div>
+              )}
 
               <div className="space-y-3">
                 {/* Option: Connect */}
@@ -1624,10 +1771,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 }`}>
                   <div>
                     <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                      {UI_STRINGS.vendorSubscriptionModal?.connectTitle || 'Connect Model (₹2 / 3 mo)'}
+                      Connect Model ({connectPrice ? `${connectPrice.basePrice} + ${connectPrice.gstLabel} GST / yr` : pricePlaceholderLabel(planPricingFailed)})
                     </h4>
                     <p className="text-[10px] text-slate-400 mt-0.5">
-                      {UI_STRINGS.vendorSubscriptionModal?.connectDesc || 'Quote and download up to 50 RFQs in 3 months from Marketplace.'}
+                      {paidPlanQuotaCopy('connect', connectRfqQuota)}
                     </p>
                   </div>
                   {vendorSubscription === 'connect' ? (
@@ -1651,10 +1798,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 }`}>
                   <div>
                     <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                      {UI_STRINGS.vendorSubscriptionModal?.selectTitle || 'Select Model (₹5 / 3 mo)'}
+                      Select Model ({selectPrice ? `${selectPrice.basePrice} + ${selectPrice.gstLabel} GST / yr` : pricePlaceholderLabel(planPricingFailed)})
                     </h4>
                     <p className="text-[10px] text-slate-400 mt-0.5">
-                      {UI_STRINGS.vendorSubscriptionModal?.selectDesc || 'Item Catalogue (100 products) + 100 RFQs / 3 months.'}
+                      {paidPlanQuotaCopy('select', selectRfqQuota)}
                     </p>
                   </div>
                   {vendorSubscription === 'select' ? (
@@ -1691,6 +1838,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           planId={pendingPayment?.planId || 'connect'}
           planName={pendingPayment?.planName || ''}
           price={pendingPayment?.price || ''}
+          billingDurationLabel={pendingPayment?.billingDurationLabel || '12 Months (Recommended)'}
+          breakdown={pendingPayment?.breakdown}
           createPaymentLink={createVendorPaymentLink}
         />
       </div>

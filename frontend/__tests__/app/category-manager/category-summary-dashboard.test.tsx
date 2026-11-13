@@ -210,30 +210,31 @@ describe('category-summary-dashboard pure helpers', () => {
         lowestQuote: 1800,
       } as unknown as RFQItem;
 
-      expect(extractQuotesFromRfqs([rfq], []).map(({ quote }) => quote)).toEqual([
+      // Lead time and compliance stay empty when the record does not hold them. No default is substituted.
+      expect(extractQuotesFromRfqs([rfq]).map(({ quote }) => quote)).toEqual([
         { vendorName: 'Legacy Supplier', unitPrice: 0, totalPrice: 0, leadTimeDays: 0, complianceStatus: '', vendorId: undefined },
-        { vendorName: 'Legacy Supplier', unitPrice: 2500, totalPrice: 2500, leadTimeDays: 7, complianceStatus: UI_STRINGS.badges.fullyCompliant, vendorId: undefined },
-        { vendorName: 'Legacy Supplier', unitPrice: 1800, totalPrice: 1800, leadTimeDays: 7, complianceStatus: UI_STRINGS.badges.fullyCompliant, vendorId: undefined },
+        { vendorName: 'Legacy Supplier', unitPrice: 2500, totalPrice: 2500, leadTimeDays: null, complianceStatus: '', vendorId: undefined },
+        { vendorName: 'Legacy Supplier', unitPrice: 1800, totalPrice: 1800, leadTimeDays: null, complianceStatus: '', vendorId: undefined },
       ]);
     });
 
-    it('uses safe quote defaults when legacy responses omit every optional field', () => {
+    it('keeps missing quote fields empty instead of substituting defaults', () => {
       const rfq = {
         ...makeRfq({ category: 'Civil Works', createdAt: '2026-06-01' }),
         quotes: [{}],
       } as unknown as RFQItem;
-      const [result] = extractQuotesFromRfqs([rfq], []);
+      const [result] = extractQuotesFromRfqs([rfq]);
 
       expect(result.quote).toEqual({
-        vendorName: 'Quoted Vendor',
-        unitPrice: 0,
-        totalPrice: 0,
-        leadTimeDays: 7,
-        complianceStatus: UI_STRINGS.badges.fullyCompliant,
+        vendorName: '',
+        unitPrice: null,
+        totalPrice: null,
+        leadTimeDays: null,
+        complianceStatus: '',
         vendorId: undefined,
       });
       const noQuotationData = { ...rfq, quotes: undefined, quotesCount: 0 } as unknown as RFQItem;
-      expect(extractQuotesFromRfqs([noQuotationData], [])).toEqual([]);
+      expect(extractQuotesFromRfqs([noQuotationData])).toEqual([]);
     });
 
     it('extracts real quotes when quotes array is populated', () => {
@@ -256,13 +257,13 @@ describe('category-summary-dashboard pure helpers', () => {
           },
         ],
       });
-      const result = extractQuotesFromRfqs([rfq], []);
+      const result = extractQuotesFromRfqs([rfq]);
       expect(result).toHaveLength(1);
       expect(result[0].quote.vendorName).toBe('Apex Infra');
       expect(result[0].quote.unitPrice).toBe(50000);
     });
 
-    it('synthesizes quotes when quotesCount is set but quotes array is empty', () => {
+    it('adds no quote rows when quotesCount is set but the quotes array is empty', () => {
       const rfq = makeRfq({
         category: 'Civil Works',
         createdAt: '2026-06-01',
@@ -270,16 +271,8 @@ describe('category-summary-dashboard pure helpers', () => {
         assignedVendors: [{ id: 'v-10', name: 'Vendor Ten' }],
         budget: 100000,
       });
-      const vendor: VendorEntry = makeVendor({
-        id: 'v-20',
-        name: 'Vendor Twenty',
-        majorCategory: 'Civil Works',
-        minorCategories: [],
-        rating: 4.5,
-      });
-      const result = extractQuotesFromRfqs([rfq], [vendor]);
-      expect(result).toHaveLength(2);
-      expect(result[0].quote.vendorName).toBe('Vendor Ten');
+      const result = extractQuotesFromRfqs([rfq]);
+      expect(result).toEqual([]);
     });
   });
 
@@ -325,17 +318,15 @@ describe('category-summary-dashboard pure helpers', () => {
       expect(doesBuyerMatchRfq(account, rfq)).toBe(false);
     });
 
-    it('synthesizes quotes with default vendor and pricing when budget and vendors are absent', () => {
+    it('adds no quote rows and no default vendor or price when only a count exists', () => {
       const rfq = makeRfq({
         category: 'Civil Works',
         createdAt: '2026-06-01',
         quotesCount: 1,
         budget: undefined,
       });
-      const result = extractQuotesFromRfqs([rfq], []);
-      expect(result).toHaveLength(1);
-      expect(result[0].quote.vendorName).toBe('Supplier Response #1');
-      expect(result[0].quote.unitPrice).toBe(50000);
+      const result = extractQuotesFromRfqs([rfq]);
+      expect(result).toEqual([]);
     });
 
     it('returns false for unrelated rfq', () => {
@@ -345,8 +336,8 @@ describe('category-summary-dashboard pure helpers', () => {
   });
 
   describe('formatLocation', () => {
-    it('returns National when city is empty', () => {
-      expect(formatLocation(undefined, undefined)).toBe('National');
+    it('returns a dash when city is empty', () => {
+      expect(formatLocation(undefined, undefined)).toBe(UI_STRINGS.dataLoad.emptyCell);
     });
 
     it('returns city, state when both are given', () => {
@@ -442,8 +433,12 @@ describe('CategorySummaryDashboard', () => {
     fireEvent.click(screen.getAllByText(/Quotes Received/i)[0]);
     const quoteRow = screen.getByText('Sparse Quote Supplier').closest('tr');
     expect(quoteRow).not.toBeNull();
-    expect(within(quoteRow as HTMLTableRowElement).getAllByText('₹0')).toHaveLength(2);
-    expect(within(quoteRow as HTMLTableRowElement).getAllByRole('cell')[4]).toHaveTextContent(String(7));
+    expect(within(quoteRow as HTMLTableRowElement).getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
+    // Cells: RFQ number, supplier, unit price, total price, lead time, compliance.
+    // An explicit zero lead time is kept as "0 Days"; the blank compliance status shows the dash.
+    const quoteCells = within(quoteRow as HTMLTableRowElement).getAllByRole('cell');
+    expect(quoteCells[4]).toHaveTextContent('0 Days');
+    expect(quoteCells[5]).toHaveTextContent(UI_STRINGS.dataLoad.emptyCell);
     fireEvent.click(screen.getByText(/Close Breakdown/i));
 
     fireEvent.click(screen.getAllByRole('button', { name: /Details/i })[0]);
@@ -965,23 +960,23 @@ describe('CategorySummaryDashboard', () => {
     it('formats rating correctly with fallback', () => {
       expect(formatRating(4.8)).toBe('4.8');
       expect(formatRating(0)).toBe('0');
-      expect(formatRating(undefined)).toBe('4.5');
-      expect(formatRating(NaN)).toBe('4.5');
+      expect(formatRating(undefined)).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatRating(NaN)).toBe(UI_STRINGS.dataLoad.emptyCell);
     });
 
     it('formats contact person correctly with fallback', () => {
       expect(formatContactPerson('John Doe')).toBe('John Doe');
-      expect(formatContactPerson('   ')).toBe('Sales Coordinator');
-      expect(formatContactPerson('')).toBe('Sales Coordinator');
-      expect(formatContactPerson(undefined)).toBe('Sales Coordinator');
+      expect(formatContactPerson('   ')).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatContactPerson('')).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatContactPerson(undefined)).toBe(UI_STRINGS.dataLoad.emptyCell);
     });
 
     it('formats location correctly with city and state combinations', () => {
       expect(formatLocation('Mumbai', 'Maharashtra')).toBe('Mumbai, Maharashtra');
       expect(formatLocation('Delhi', '')).toBe('Delhi');
-      expect(formatLocation('', 'Karnataka')).toBe('National');
-      expect(formatLocation('', '')).toBe('National');
-      expect(formatLocation(undefined, undefined)).toBe('National');
+      expect(formatLocation('', 'Karnataka')).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatLocation('', '')).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatLocation(undefined, undefined)).toBe(UI_STRINGS.dataLoad.emptyCell);
     });
 
     it('formats contact info with phone and email combinations', () => {

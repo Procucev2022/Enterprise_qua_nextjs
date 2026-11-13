@@ -67,6 +67,8 @@ jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
 jest.mock('@/lib/authClient', () => ({ authClient: { getToken: jest.fn() } }));
 
 const DETAILS = UI_STRINGS.rfqDetails;
+// A random UUID as produced by crypto.randomUUID (version 4, RFC 4122 variant).
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const mockShowToast = jest.fn();
 
 function entity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
@@ -1970,25 +1972,92 @@ function makeInquiry(overrides: any = {}): any {
           expect.objectContaining({ message: 'Is SS316 mandatory for impeller?' })
         );
       });
-      expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+      expect(mockShowToast).toHaveBeenCalledWith(DETAILS.clarificationSentTitle, DETAILS.clarificationSentToBuyer, 'success');
 
-      // Test fallback branch when submitRFQInquiry returns success: false
-      mockSubmitRFQInquiry.mockResolvedValueOnce({ success: false });
-      fireEvent.change(textarea, { target: { value: 'Second fallback query' } });
+      // A rejected send shows the server's error text and keeps the composer text for a retry.
+      mockSubmitRFQInquiry.mockResolvedValueOnce({ success: false, error: 'Inquiry store is locked.' });
+      fireEvent.change(textarea, { target: { value: 'Second rejected query' } });
       fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, 'Inquiry store is locked.', 'warning');
+      });
+      expect(textarea).toHaveValue('Second rejected query');
+
+      // A rejected send with no error text falls back to the UI string.
+      mockSubmitRFQInquiry.mockResolvedValueOnce({ success: false });
+      fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, DETAILS.sendFailedMessage, 'warning');
       });
 
-      // Test exception branch
+      // A thrown error is shown with its own message.
       mockSubmitRFQInquiry.mockRejectedValueOnce(new Error('Vendor offline'));
       fireEvent.change(textarea, { target: { value: 'Third crashing query' } });
       fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Dispatch Failed', 'Vendor offline', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, 'Vendor offline', 'warning');
       });
+    });
+
+    it('sends the vendor question without inventing a name when the session has none', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'vendor',
+        buyerVendors: [],
+        currentUserSession: { id: 'v-anon', email: null, role: 'vendor' },
+      });
+      renderDetails(buildRFQ({ id: 'rfq-anon-vendor', inquiries: [] }), { isVendorView: true });
+
+      const textarea = screen.getByPlaceholderText(/Type your clarification or question to the buyer/i);
+      fireEvent.change(textarea, { target: { value: 'Anonymous question' } });
+      fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+
+      await waitFor(() => {
+        expect(mockSubmitRFQInquiry).toHaveBeenCalledWith('rfq-anon-vendor', {
+          message: 'Anonymous question',
+          vendorName: undefined,
+          vendorEmail: null,
+        });
+      });
+    });
+
+    it('adds the vendor question to the thread only from the server record', async () => {
+      const serverRfq = buildRFQ({
+        id: 'rfq-server-confirmed',
+        inquiries: [
+          {
+            id: 'inq-server-1',
+            rfqNumber: 'RFQ-2026-00462',
+            vendorId: 'v-curr',
+            vendorName: 'Apex Vendor',
+            vendorEmail: 'apex@vendor.com',
+            message: 'Server stored question about torque',
+            status: 'open',
+            createdAt: '2026-09-03T10:00:00Z',
+          },
+        ],
+      });
+      mockSubmitRFQInquiry.mockResolvedValueOnce({ success: true, rfq: serverRfq });
+      const onUpdate = jest.fn();
+      (useApp as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'vendor',
+        buyerVendors: [],
+        currentUserSession: { id: 'v-curr', name: 'Apex Vendor', email: 'apex@vendor.com', role: 'vendor' },
+      });
+      renderDetails(buildRFQ({ id: 'rfq-server-confirmed', inquiries: [] }), { isVendorView: true, onUpdate });
+
+      const textarea = screen.getByPlaceholderText(/Type your clarification or question to the buyer/i);
+      fireEvent.change(textarea, { target: { value: 'Torque question' } });
+      fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledWith(serverRfq));
+      expect(mockShowToast).toHaveBeenCalledWith(DETAILS.clarificationSentTitle, DETAILS.clarificationSentToBuyer, 'success');
     });
 
     it('filters chat channels by pending, answered, and search keyword', () => {
@@ -2076,11 +2145,12 @@ function makeInquiry(overrides: any = {}): any {
           expect.objectContaining({ reply: 'ANSI 150 Class flanged is required.' })
         );
       });
-      expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+      expect(mockShowToast).toHaveBeenCalledWith(DETAILS.clarificationSentTitle, expect.any(String), 'success');
     });
 
-    it('buyer handles fallback optimistic update when reply returns success false', async () => {
-      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false });
+    it('buyer keeps the thread unchanged and shows the server error when a reply is rejected', async () => {
+      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false, error: 'Reply rejected by the server.' });
+      const onUpdate = jest.fn();
 
       renderDetails(
         buildRFQ({
@@ -2096,15 +2166,48 @@ function makeInquiry(overrides: any = {}): any {
               createdAt: '2026-09-03T10:00:00Z',
             },
           ],
-        })
+        }),
+        { onUpdate }
       );
 
       const buyerComposer = screen.getByPlaceholderText(/Type clarification response to Fallback Direct Supplier/i);
-      fireEvent.change(buyerComposer, { target: { value: 'Fallback optimistic message' } });
+      fireEvent.change(buyerComposer, { target: { value: 'Rejected reply text' } });
       fireEvent.keyDown(buyerComposer, { key: 'Enter', shiftKey: false });
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, 'Reply rejected by the server.', 'warning');
+      });
+      expect(mockShowToast).not.toHaveBeenCalledWith(DETAILS.clarificationSentTitle, expect.any(String), 'success');
+      expect(onUpdate).not.toHaveBeenCalled();
+      expect(buyerComposer).toHaveValue('Rejected reply text');
+    });
+
+    it('falls back to the UI string when a rejected reply carries no error text', async () => {
+      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false });
+
+      renderDetails(
+        buildRFQ({
+          inquiries: [
+            {
+              id: 'inq-active-blank',
+              rfqNumber: 'RFQ-2026-00462',
+              vendorId: 'v-act-blank',
+              vendorName: 'Blank Error Supplier',
+              vendorEmail: 'blank@supplier.com',
+              message: 'Clarification on packaging',
+              status: 'open',
+              createdAt: '2026-09-03T10:00:00Z',
+            },
+          ],
+        })
+      );
+
+      const buyerComposer = screen.getByPlaceholderText(/Type clarification response to Blank Error Supplier/i);
+      fireEvent.change(buyerComposer, { target: { value: 'Reply without server text' } });
+      fireEvent.keyDown(buyerComposer, { key: 'Enter', shiftKey: false });
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, DETAILS.sendFailedMessage, 'warning');
       });
     });
 
@@ -2133,7 +2236,7 @@ function makeInquiry(overrides: any = {}): any {
       fireEvent.keyDown(buyerComposer, { key: 'Enter', shiftKey: false });
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Dispatch Failed', 'Network drop on reply', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, 'Network drop on reply', 'warning');
       });
     });
 
@@ -2144,12 +2247,14 @@ function makeInquiry(overrides: any = {}): any {
           assignedVendors: [{ id: 'v-assigned-no-inq', name: 'Fresh Vendor', email: 'fresh@test.com' } as any],
         }),
       });
+      const onUpdate = jest.fn();
 
       renderDetails(
         buildRFQ({
           assignedVendors: [{ id: 'v-assigned-no-inq', name: 'Fresh Vendor', email: 'fresh@test.com' } as any],
           inquiries: [],
-        })
+        }),
+        { onUpdate }
       );
 
       const buyerComposer = screen.getByPlaceholderText(/Type clarification response to Fresh Vendor/i);
@@ -2162,7 +2267,96 @@ function makeInquiry(overrides: any = {}): any {
           expect.objectContaining({ inquiries: expect.any(Array) })
         );
       });
-      expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+      // The request carries a random UUID for the new inquiry and its first message, never a Math.random id.
+      const payload = mockUpdateRFQ.mock.calls[mockUpdateRFQ.mock.calls.length - 1][1];
+      const newInquiry = payload.inquiries[payload.inquiries.length - 1];
+      expect(newInquiry.id).toMatch(UUID_PATTERN);
+      expect(newInquiry.messages[0].id).toMatch(UUID_PATTERN);
+      expect(newInquiry.messages[0].senderName).toBe('Lead Buyer');
+      expect(newInquiry.messages[0]).not.toHaveProperty('senderEmail');
+      expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'rfq-1' }));
+      expect(mockShowToast).toHaveBeenCalledWith(DETAILS.clarificationSentTitle, expect.any(String), 'success');
+    });
+
+    it('buyer new thread shows the server error and adds nothing when the update is rejected', async () => {
+      mockUpdateRFQ.mockResolvedValueOnce({ success: false, reason: 'SERVER', error: 'Inquiry save failed.' });
+      const onUpdate = jest.fn();
+
+      renderDetails(
+        buildRFQ({
+          assignedVendors: [{ id: 'v-rejected-new', name: 'Rejected Vendor', email: 'rejected@test.com' } as any],
+          inquiries: [],
+        }),
+        { onUpdate }
+      );
+
+      const buyerComposer = screen.getByPlaceholderText(/Type clarification response to Rejected Vendor/i);
+      fireEvent.change(buyerComposer, { target: { value: 'Question that fails to save' } });
+      fireEvent.keyDown(buyerComposer, { key: 'Enter', shiftKey: false });
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, 'Inquiry save failed.', 'warning');
+      });
+      expect(onUpdate).not.toHaveBeenCalled();
+      expect(buyerComposer).toHaveValue('Question that fails to save');
+    });
+
+    it('buyer new thread is not written when the session has neither a name nor an email', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'buyer',
+        buyerVendors: [],
+        currentUserSession: { role: 'buyer' },
+      });
+
+      renderDetails(
+        buildRFQ({
+          assignedVendors: [{ id: 'v-anon-buyer', name: 'Anonymous Buyer Target', email: 'anon@test.com' } as any],
+          inquiries: [],
+        })
+      );
+
+      const buyerComposer = screen.getByPlaceholderText(/Type clarification response to Anonymous Buyer Target/i);
+      fireEvent.change(buyerComposer, { target: { value: 'Unattributed question' } });
+      fireEvent.keyDown(buyerComposer, { key: 'Enter', shiftKey: false });
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(
+          DETAILS.sessionIdentityMissingTitle,
+          DETAILS.sessionIdentityMissingMessage,
+          'warning'
+        );
+      });
+      expect(mockUpdateRFQ).not.toHaveBeenCalled();
+    });
+
+    it('buyer new thread uses the session email as the sender label when the session has no name', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'buyer',
+        buyerVendors: [],
+        currentUserSession: { email: 'nameless@procucev.com', role: 'buyer' },
+      });
+      mockUpdateRFQ.mockResolvedValueOnce({ success: true, rfq: buildRFQ({ inquiries: [] }) });
+
+      renderDetails(
+        buildRFQ({
+          assignedVendors: [{ id: 'v-email-only', name: 'Email Label Vendor', email: 'label@test.com' } as any],
+          inquiries: [],
+        })
+      );
+
+      const buyerComposer = screen.getByPlaceholderText(/Type clarification response to Email Label Vendor/i);
+      fireEvent.change(buyerComposer, { target: { value: 'Labelled by email' } });
+      fireEvent.keyDown(buyerComposer, { key: 'Enter', shiftKey: false });
+
+      await waitFor(() => expect(mockUpdateRFQ).toHaveBeenCalled());
+      const payload = mockUpdateRFQ.mock.calls[mockUpdateRFQ.mock.calls.length - 1][1];
+      const newInquiry = payload.inquiries[payload.inquiries.length - 1];
+      expect(newInquiry.repliedBy).toBe('nameless@procucev.com');
+      expect(newInquiry.messages[0].senderName).toBe('nameless@procucev.com');
     });
   });
 
@@ -2207,7 +2401,7 @@ function makeInquiry(overrides: any = {}): any {
           expect.objectContaining({ reply: 'Yes, split delivery is acceptable.' })
         );
       });
-      expect(mockShowToast).toHaveBeenCalledWith('Clarification Answered', expect.any(String), 'success');
+      expect(mockShowToast).toHaveBeenCalledWith(DETAILS.clarificationAnsweredTitle, expect.any(String), 'success');
     });
 
     it('handles fallback and error states in reply modal, and can be cancelled', async () => {
@@ -2222,8 +2416,8 @@ function makeInquiry(overrides: any = {}): any {
         createdAt: '2026-09-03T10:00:00Z',
       };
 
-      // Test fallback when success: false
-      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false });
+      // A rejected reply keeps the dialog open with its text, and nothing is marked answered.
+      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false, error: 'Reply store is read-only.' });
 
       const { unmount } = renderDetails(
         buildRFQ({
@@ -2238,8 +2432,19 @@ function makeInquiry(overrides: any = {}): any {
       fireEvent.click(screen.getByRole('button', { name: /Send Clarification/i }));
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Clarification Answered', expect.any(String), 'success');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.replyFailedTitle, 'Reply store is read-only.', 'warning');
       });
+      expect(screen.getByText(/Answer Vendor Clarification/i)).toBeInTheDocument();
+      expect(replyTextarea).toHaveValue('Fallback split reply');
+
+      // Without error text from the server, the UI string is shown instead.
+      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false });
+      fireEvent.click(screen.getByRole('button', { name: /Send Clarification/i }));
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.replyFailedTitle, DETAILS.replyFailedMessage, 'warning');
+      });
+      expect(mockShowToast).not.toHaveBeenCalledWith(DETAILS.clarificationAnsweredTitle, expect.any(String), 'success');
       unmount();
 
       // Test error catch
@@ -2258,7 +2463,7 @@ function makeInquiry(overrides: any = {}): any {
       fireEvent.click(screen.getByRole('button', { name: /Send Clarification/i }));
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Reply Failed', 'Reply server offline', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.replyFailedTitle, 'Reply server offline', 'warning');
       });
       unmount2();
 
@@ -2387,8 +2592,10 @@ function makeInquiry(overrides: any = {}): any {
         { isVendorView: true }
       );
 
-      expect(screen.getAllByText(/Vendor Partner \(Supplier\)/i).length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText(/Buyer Procurement Team \(Buyer\)/i).length).toBeGreaterThanOrEqual(1);
+      // Missing names are labelled as not recorded. No invented vendor or buyer name is shown.
+      expect(screen.getAllByText(`${DETAILS.nameNotRecorded} (Supplier)`).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(`${DETAILS.nameNotRecorded} (Buyer)`).length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText(/Vendor Partner|Buyer Procurement Team/)).not.toBeInTheDocument();
     });
 
     it('exercises buyer view channel enrichment for contactPerson, phone, and undefined isProcucev', () => {
@@ -2688,7 +2895,6 @@ function makeInquiry(overrides: any = {}): any {
     });
 
     it('exercises useRouter error catch fallback to null', () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const nextNav = require('next/navigation');
       const orig = nextNav.useRouter;
       nextNav.useRouter = () => {
@@ -2947,13 +3153,15 @@ function makeInquiry(overrides: any = {}): any {
       });
       expect(mockOnUpdate).toHaveBeenCalled();
 
-      // Buyer fallback branch with success: false (hits return inq branch for inq-2)
-      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false });
+      // A rejected reply shows the server's error and keeps the composer text. The thread is not changed.
+      mockReplyToRFQInquiry.mockResolvedValueOnce({ success: false, error: 'Reply rejected for inq-2.' });
       fireEvent.change(composer, { target: { value: 'Second fallback message' } });
       fireEvent.keyDown(composer, { key: 'Enter', shiftKey: false });
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, 'Reply rejected for inq-2.', 'warning');
       });
+      expect(composer).toHaveValue('Second fallback message');
+      expect(mockOnUpdate).toHaveBeenCalledTimes(1);
 
       // Empty text no-op
       fireEvent.change(composer, { target: { value: '   ' } });
@@ -2985,14 +3193,16 @@ function makeInquiry(overrides: any = {}): any {
       fireEvent.change(composer, { target: { value: 'Appended question' } });
       fireEvent.keyDown(composer, { key: 'Enter', shiftKey: false });
 
+      // A send the server did not confirm adds nothing to the thread.
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, DETAILS.sendFailedMessage, 'warning');
       });
-      expect(mockOnUpdate).toHaveBeenCalled();
+      expect(mockOnUpdate).not.toHaveBeenCalled();
+      expect(composer).toHaveValue('Appended question');
       unmount();
 
-      // Vendor sends when inquiries is empty (hits line 909: updatedInqs.push new inquiry)
-      mockSubmitRFQInquiry.mockResolvedValueOnce({ success: false });
+      // A success without a returned RFQ still confirms the send, and the thread waits for a refresh.
+      mockSubmitRFQInquiry.mockResolvedValueOnce({ success: true });
       renderDetails(
         buildRFQ({
           inquiries: [],
@@ -3004,8 +3214,9 @@ function makeInquiry(overrides: any = {}): any {
       fireEvent.change(composer2, { target: { value: 'Brand new inquiry from vendor' } });
       fireEvent.keyDown(composer2, { key: 'Enter', shiftKey: false });
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Clarification Sent', expect.any(String), 'success');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.clarificationSentTitle, DETAILS.clarificationSentToBuyer, 'success');
       });
+      expect(mockOnUpdate).not.toHaveBeenCalled();
     });
 
     it('exercises handleSendReply with empty replyMessage, onUpdate with res.rfq, and fallback onUpdate', async () => {
@@ -3072,9 +3283,11 @@ function makeInquiry(overrides: any = {}): any {
         expect(mockReplyToRFQInquiry).toHaveBeenCalledWith(
           'RFQ-2026-00462',
           'inq-rep-full',
-          expect.objectContaining({ reply: 'Yes, split is fine.', repliedBy: 'Procurement Officer' })
+          expect.objectContaining({ reply: 'Yes, split is fine.' })
         );
       });
+      // No session name means no invented replier name is sent.
+      expect(mockReplyToRFQInquiry.mock.calls[0][2].repliedBy).toBeUndefined();
       expect(mockOnUpdate).toHaveBeenCalled();
       unmount();
 
@@ -3093,7 +3306,7 @@ function makeInquiry(overrides: any = {}): any {
       fireEvent.click(screen.getByRole('button', { name: /Send Clarification/i }));
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Reply Failed', 'Failed to dispatch reply.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.replyFailedTitle, DETAILS.replyFailedMessage, 'warning');
       });
     });
 
@@ -3375,8 +3588,8 @@ function makeInquiry(overrides: any = {}): any {
       });
       unmount();
 
-      // Test chat fallback when updateRFQ returns success: false (covers lines 1015-1016)
-      mockUpdateRFQ.mockResolvedValueOnce({ success: false });
+      // A new thread that the server rejects is reported, and the thread is not updated locally.
+      mockUpdateRFQ.mockResolvedValueOnce({ success: false, reason: 'SERVER', error: 'Thread save rejected.' });
       const onUpdateFallback = jest.fn();
       const { unmount: unmount2 } = renderDetails(
         buildRFQ({
@@ -3390,8 +3603,9 @@ function makeInquiry(overrides: any = {}): any {
       fireEvent.click(screen.getByRole('button', { name: /Send/i }));
       await waitFor(() => {
         expect(mockUpdateRFQ).toHaveBeenCalled();
-        expect(onUpdateFallback).toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.sendFailedTitle, 'Thread save rejected.', 'warning');
       });
+      expect(onUpdateFallback).not.toHaveBeenCalled();
       unmount2();
     });
 
@@ -3666,7 +3880,7 @@ function makeInquiry(overrides: any = {}): any {
       );
 
       expect(screen.getByText('Assigned & Invited Suppliers')).toBeInTheDocument();
-      expect(screen.getAllByText('Enterprise Supplier').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(DETAILS.nameNotRecorded).length).toBeGreaterThan(0);
       expect(screen.getAllByText('🔒 Double-Blind').length).toBeGreaterThan(0);
 
       unmount();

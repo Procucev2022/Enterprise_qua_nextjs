@@ -570,7 +570,42 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       expect(screen.getByTestId('ready')).toBeInTheDocument();
     });
 
-    test('addAuditLog handles all 4 role defaults and custom user name', async () => {
+    test('addAuditLog lists only the entry the server stored, with the signed-in user and the server seal', async () => {
+      authClient.setSession(
+        { id: 'usr-1', email: 'buyer@procucev.com', name: 'Buyer', role: 'buyer', orgId: 'org-1', orgName: 'Org' },
+        'test-session-token'
+      );
+      const posted: Array<{ action: string; rfqNumber: string | null }> = [];
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/audit' && init?.method === 'POST') {
+          const body = JSON.parse(init.body || '{}');
+          posted.push(body);
+          if (body.action === 'Refused') {
+            return Promise.resolve({ ok: false, status: 503, statusText: 'Unavailable', json: async () => ({ success: false, error: 'Store unavailable' }) });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            statusText: 'Created',
+            json: async () => ({
+              success: true,
+              data: {
+                id: `aud-${posted.length}`,
+                timestamp: '2026-01-01 00:00:00 UTC',
+                userEmail: 'buyer@procucev.com',
+                action: body.action,
+                rfqNumber: body.rfqNumber,
+                status: 'TAMPER_CHECK_OK',
+                ipAddress: '10.0.0.1',
+                previousHash: '',
+                shaSignature: 'sha256-server',
+              },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: async () => ({ success: true, data: [] }) });
+      }) as unknown as typeof fetch;
+
       render(
         <AppProvider>
           <TestConsumer onReady={(app) => { capturedApp = app; }} />
@@ -578,23 +613,22 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       );
       await waitFor(() => expect(screen.getByTestId('ready')).toBeInTheDocument());
 
-      act(() => {
-        capturedApp?.setCurrentRole('buyer');
-        capturedApp?.addAuditLog('Action Buyer');
-
-        capturedApp?.setCurrentRole('category_manager');
-        capturedApp?.addAuditLog('Action CM');
-
-        capturedApp?.setCurrentRole('vendor');
-        capturedApp?.addAuditLog('Action Vendor');
-
-        capturedApp?.setCurrentRole('admin');
-        capturedApp?.addAuditLog('Action Admin');
-
-        capturedApp?.addAuditLog('Custom User Action', 'RFQ-100', 'custom.user@enterprise.com');
+      await act(async () => {
+        await capturedApp?.addAuditLog('Action Buyer');
+        await capturedApp?.addAuditLog('Refused', 'RFQ-100');
       });
 
-      expect(capturedApp?.auditLogs.length).toBeGreaterThanOrEqual(5);
+      // The client sends only the action and the RFQ number. The actor, IP and seal are the server's.
+      expect(posted).toEqual([
+        { action: 'Action Buyer', rfqNumber: null },
+        { action: 'Refused', rfqNumber: 'RFQ-100' },
+      ]);
+      expect(capturedApp?.auditLogs).toHaveLength(1);
+      expect(capturedApp?.auditLogs[0]).toMatchObject({
+        action: 'Action Buyer',
+        user: 'buyer@procucev.com',
+        shaSignature: 'sha256-server',
+      });
     });
 
     test('updateRFQ handles longer assignedVendors, fallback to changes or empty', async () => {
@@ -870,7 +904,7 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       }
     });
 
-    test('refreshFromDB handles session email matching unlimited vendor, select plan vendor, and unlimited non-vendor', async () => {
+    test('refreshFromDB takes the plan from the vendor record, and leaves it unknown without one', async () => {
       render(
         <AppProvider>
           <TestConsumer onReady={(app) => { capturedApp = app; }} />
@@ -930,7 +964,7 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
 
       expect(capturedApp?.vendorSubscription).toBe('select');
 
-      // 3. Unlimited non-vendor (not in vendors array)
+      // 3. Session with no vendor record. No allow-list email grants a plan, so the plan stays unknown.
       jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
         id: 'u-nonvend',
         email: 'procucevvendor@gmail.com',
@@ -952,7 +986,8 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
         await capturedApp?.refreshFromDB();
       });
 
-      expect(capturedApp?.vendorSubscription).toBe('unlimited');
+      expect(capturedApp?.vendorSubscription).toBeNull();
+      expect(capturedApp?.vendorRfqDownloadsUsed).toBeNull();
     });
 
     test('triggerChannelChaser covers all pending suppliers, name, companyName, and Supplier fallback', async () => {
@@ -996,7 +1031,7 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       expect(screen.getByTestId('ready')).toBeInTheDocument();
     });
 
-    test('addNewRFQ covers customMatchedVendors with various key combinations and duplicates', async () => {
+    test('addNewRFQ posts the RFQ and adopts the record the server returns', async () => {
       render(
         <AppProvider>
           <TestConsumer onReady={(app) => { capturedApp = app; }} />
@@ -1017,25 +1052,14 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
         },
       });
 
-      const customVendors: any = [
-        { id: 'v-1', email: 'v1@test.com' },
-        { id: 'v-2', name: 'Vendor Two' },
-        { id: 'v-3' },
-        {},
-        { id: 'v-1', email: 'v1@test.com' }, // duplicate
-      ];
-
       let created: any;
       await act(async () => {
-        created = await capturedApp?.addNewRFQ(
-          {
-            title: 'Custom Vendors RFQ',
-            category: 'Pumps',
-            sourcingMode: 'mode_1',
-            extractedEntities: [{ itemName: 'Item 1', quantity: 1 } as any],
-          } as any,
-          customVendors
-        );
+        created = await capturedApp?.addNewRFQ({
+          title: 'Custom Vendors RFQ',
+          category: 'Pumps',
+          sourcingMode: 'mode_1',
+          extractedEntities: [{ itemName: 'Item 1', quantity: 1 } as any],
+        } as any);
       });
 
       expect(created?.rfqNumber).toBe('RFQ-CUST-001');

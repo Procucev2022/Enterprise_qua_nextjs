@@ -1,36 +1,8 @@
-const aiChaserService = require('../src/services/aiChaserService');
 const emailService = require('../src/services/emailService');
 const evaluationService = require('../src/services/evaluationService');
 const auditService = require('../src/services/auditService');
 
 describe('Services Deep Branch Unit Tests', () => {
-  test('aiChaserService handles all communication channels and vendor phone formats', () => {
-    const mockRfq = {
-      id: 'rfq-1',
-      rfqNumber: 'RFQ-2026-00421',
-      title: 'Centrifugal Pump',
-      category: 'Mechanical',
-      budget: 50000,
-    };
-    const mockVendor1 = {
-      id: 'v-1',
-      name: 'Apex Supplies',
-      phone: '+919876543210',
-      contactPerson: 'Rajesh',
-    };
-    const mockVendor2 = {
-      id: 'v-2',
-      name: 'Delta Corp',
-      contactPerson: 'Amit',
-    };
-
-    const logs1 = aiChaserService.simulateChaserOutreach(mockRfq, mockVendor1);
-    expect(logs1.length).toBeGreaterThan(0);
-
-    const logs2 = aiChaserService.simulateChaserOutreach(mockRfq, mockVendor2);
-    expect(logs2.length).toBeGreaterThan(0);
-  });
-
   test('emailService onboarding preview gives sign-in guidance without credentials', () => {
     const mockVendor = {
       id: 'v-1',

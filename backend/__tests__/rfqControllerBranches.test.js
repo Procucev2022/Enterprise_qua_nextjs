@@ -165,6 +165,8 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
     test('validateVendorCategories validations, success, and catch block', async () => {
       const next = jest.fn();
+      // The vendor IDs used below are fixtures for real vendor records. Unknown IDs have their own test.
+      const vendorSpy = jest.spyOn(storeService, 'getVendorById').mockImplementation((vid) => ({ id: vid, name: `Vendor ${vid}`, majorCategory: 'Raw Materials' }));
 
       // Invalid vendorIds
       const resBad = mockRes();
@@ -201,6 +203,30 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
       storeService.getRFQByIdAsync.mockRestore();
       storeService.validateAndShortlistVendors.mockRestore();
+      vendorSpy.mockRestore();
+    });
+
+    test('validateVendorCategories refuses vendor IDs that are not in the directory and shortlists nothing', async () => {
+      const next = jest.fn();
+      jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue({ id: 'rfq-1' });
+      jest.spyOn(storeService, 'getVendorById').mockImplementation((vid) => (
+        vid === 'v-real' ? { id: vid, name: 'Real Vendor', majorCategory: 'Raw Materials' } : null
+      ));
+      const shortlistSpy = jest.spyOn(storeService, 'validateAndShortlistVendors');
+      const res = mockRes();
+
+      await rfqController.validateVendorCategories({
+        params: { id: 'rfq-1' },
+        body: { vendorIds: ['v-real', 'v-missing'] },
+        user: { role: 'admin' },
+      }, res, next);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.data.success).toBe(false);
+      expect(res.data.unknownVendorIds).toEqual(['v-missing']);
+      expect(res.data.error).toContain('v-missing');
+      expect(shortlistSpy).not.toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
     });
   });
 
@@ -480,6 +506,8 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       jest.spyOn(mailerService, 'sendRequisitionNotificationEmail').mockResolvedValue(true);
       jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockImplementation(() => { throw new Error('mailer warning'); });
 
+      const priorGatewayAddress = process.env.EMAIL_GATEWAY_ADDRESS;
+      process.env.EMAIL_GATEWAY_ADDRESS = 'intake@procucev.com';
       const resV0 = mockRes();
       await rfqController.createRFQ(
         {
@@ -499,6 +527,40 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         next
       );
       expect(resV0.statusCode).toBe(201);
+
+      // No gateway address configured: the email-gateway RFQ is refused before it is saved.
+      if (priorGatewayAddress === undefined) delete process.env.EMAIL_GATEWAY_ADDRESS;
+      else process.env.EMAIL_GATEWAY_ADDRESS = priorGatewayAddress;
+      const noGatewayCreateSpy = jest.spyOn(storeService, 'createRFQDurably');
+      noGatewayCreateSpy.mockClear();
+      const resNoGateway = mockRes();
+      const savedGatewayAddress = process.env.EMAIL_GATEWAY_ADDRESS;
+      delete process.env.EMAIL_GATEWAY_ADDRESS;
+      try {
+        await rfqController.createRFQ(
+          {
+            body: {
+              title: 'V0 RFQ',
+              category: 'Pumps & Motors',
+              targetDeliveryDate: '2027-10-10',
+              deliveryLocation: 'Navi Mumbai Plant',
+              deliveryPincode: '400701',
+              sourcingMode: 'mode_0',
+              lineItems: [{ itemName: 'Pump' }],
+              source: 'email_gateway',
+              buyerEmail: 'b@test.com',
+            },
+          },
+          resNoGateway,
+          next
+        );
+      } finally {
+        if (savedGatewayAddress !== undefined) process.env.EMAIL_GATEWAY_ADDRESS = savedGatewayAddress;
+      }
+      expect(resNoGateway.statusCode).toBe(503);
+      expect(resNoGateway.data).toMatchObject({ success: false, status: 'not_configured' });
+      expect(noGatewayCreateSpy).not.toHaveBeenCalled();
+      noGatewayCreateSpy.mockRestore();
 
       // V2 resolveProcucevVendorCountFromDB count elevation and error catch
       const createdV2 = {
@@ -2062,9 +2124,12 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       );
       expect(resNoVend.statusCode).toBe(400);
 
-      // triggerBatchChaser and approvePO catch blocks
+      // triggerBatchChaser and approvePO catch blocks. The buyer can reach rfq-1, so the store is called and throws.
+      const chaserBuyerSpy = jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({ id: 'buyer-acc-chaser' });
+      storeService.getRFQByIdAsync.mockResolvedValueOnce({ id: 'rfq-1', buyerAccountId: 'buyer-acc-chaser' });
       jest.spyOn(storeService, 'triggerBatchChaser').mockImplementation(() => { throw new Error('chaser crash'); });
-      await rfqController.triggerBatchChaser({ params: { id: 'rfq-1' }, body: {} }, mockRes(), next);
+      await rfqController.triggerBatchChaser({ params: { id: 'rfq-1' }, body: {}, user: { email: 'buyer@procucev.com', role: 'buyer' } }, mockRes(), next);
+      chaserBuyerSpy.mockRestore();
       expect(next).toHaveBeenCalledWith(expect.any(Error));
 
       jest.spyOn(storeService, 'approvePurchaseOrder').mockImplementation(() => { throw new Error('approve crash'); });
@@ -2230,12 +2295,27 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       await rfqController.downloadRFQ({ params: { id: 'rfq-dl-err' }, user: { role: 'admin' } }, mockRes(), next);
       expect(next).toHaveBeenCalledWith(expect.any(Error));
 
-      // Line 1870: triggerBatchChaser success
-      jest.spyOn(storeService, 'triggerBatchChaser').mockReturnValue({ queuedCount: 3 });
+      // Line 1870: triggerBatchChaser success, for a buyer who owns the RFQ
+      jest.spyOn(storeService, 'triggerBatchChaser').mockResolvedValue({
+        success: true, count: 1, logs: [], sentCount: 1, results: [{ channel: 'sms', status: 'sent', success: true }],
+      });
+      const chaserOwnerSpy = jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({ id: 'buyer-acc-chaser' });
+      storeService.getRFQByIdAsync.mockResolvedValueOnce({ id: 'rfq-chaser-ok', buyerAccountId: 'buyer-acc-chaser' });
       const resChaserOk = mockRes();
-      rfqController.triggerBatchChaser({ params: { id: 'rfq-chaser-ok' }, body: {} }, resChaserOk, next);
+      await rfqController.triggerBatchChaser({ params: { id: 'rfq-chaser-ok' }, body: { channels: ['sms'] }, user: { email: 'buyer@procucev.com', role: 'buyer' } }, resChaserOk, next);
+      chaserOwnerSpy.mockRestore();
       expect(resChaserOk.statusCode).toBe(200);
-      expect(resChaserOk.data.queuedCount).toBe(3);
+      expect(resChaserOk.data.sentCount).toBe(1);
+
+      // A request that names no chaser channel is refused with a 400 and never reaches the store.
+      storeService.getRFQByIdAsync.mockResolvedValueOnce({ id: 'rfq-chaser-ok', buyerAccountId: 'buyer-acc-chaser' });
+      const chaserSpy = jest.spyOn(storeService, 'triggerBatchChaser');
+      chaserSpy.mockClear();
+      const resChaserNoChannels = mockRes();
+      await rfqController.triggerBatchChaser({ params: { id: 'rfq-chaser-ok' }, body: {}, user: { email: 'admin@procucev.com', role: 'admin' } }, resChaserNoChannels, next);
+      expect(resChaserNoChannels.statusCode).toBe(400);
+      expect(resChaserNoChannels.data).toMatchObject({ success: false });
+      expect(chaserSpy).not.toHaveBeenCalled();
 
       // Line 1895: approvePO success
       jest.spyOn(storeService, 'approvePurchaseOrder').mockReturnValue({ success: true, poNumber: 'PO-2026-001' });

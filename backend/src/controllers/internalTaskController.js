@@ -11,10 +11,46 @@ const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSch
 const { logger } = require('../services/loggerService');
 const actionCenterNotificationService = require('../services/actionCenterNotificationService');
 const {
+  AUTH_MESSAGES,
   CREDIT_APPROVER_ROLES,
-  DEFAULT_CREDIT_APPROVER_EMAIL,
+  PERSISTENCE_MESSAGES,
   REGISTRATION_MESSAGES,
 } = require('../config/constants');
+
+/**
+ * Maps task-layer failures to HTTP responses. An unavailable store is 503, a missing
+ * session is 401, and invalid or unrecorded credit data is a 4xx with the reason.
+ */
+function sendTaskError(res, error, fallbackMessage) {
+  if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
+    return res.status(503).json({ success: false, error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE, retryable: true });
+  }
+  if (error?.code === 'ACTOR_REQUIRED') {
+    return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+  }
+  if (['VALIDATION_FAILED', 'APPROVAL_FIELD_REQUIRED', 'IDEMPOTENCY_CONFLICT', 'CREDIT_BALANCE_NOT_RECORDED', 'CREDIT_ACCOUNT_NOT_FOUND'].includes(error?.code)) {
+    return res.status(error.statusCode || 400).json({ success: false, error: error.message });
+  }
+  return res.status(500).json({ success: false, error: fallbackMessage });
+}
+
+/**
+ * Returns the authenticated session user, or sends 401 and returns null.
+ */
+function requireSessionUser(req, res) {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    return null;
+  }
+  return req.user;
+}
+
+/**
+ * Approver mailbox for credit approval notices. Read only from configuration.
+ */
+function configuredApproverEmail() {
+  return process.env.CREDIT_APPROVER_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || null;
+}
 
 /**
  * List internal tasks with database-side filtering, searching, and pagination.
@@ -62,7 +98,7 @@ async function getTasks(req, res) {
     });
   } catch (error) {
     logger.error('Failed to get internal tasks', { error: error.message, stack: error.stack });
-    return res.status(500).json({ success: false, error: 'Internal server error fetching tasks' });
+    return sendTaskError(res, error, 'Internal server error fetching tasks');
   }
 }
 
@@ -79,7 +115,7 @@ async function getSummary(req, res) {
     return res.status(200).json({ success: true, summary });
   } catch (error) {
     logger.error('Failed to get internal tasks summary', { error: error.message });
-    return res.status(500).json({ success: false, error: 'Failed to fetch task metrics' });
+    return sendTaskError(res, error, 'Failed to fetch task metrics');
   }
 }
 
@@ -92,7 +128,7 @@ async function getAssignees(req, res) {
     return res.status(200).json({ success: true, assignees });
   } catch (error) {
     logger.error('Failed to get internal assignees', { error: error.message });
-    return res.status(500).json({ success: false, error: 'Failed to fetch assignees' });
+    return sendTaskError(res, error, 'Failed to fetch assignees');
   }
 }
 
@@ -105,7 +141,7 @@ async function getTaskTypes(req, res) {
     return res.status(200).json({ success: true, taskTypes: types });
   } catch (error) {
     logger.error('Failed to get task types', { error: error.message });
-    return res.status(200).json({ success: true, taskTypes: internalTaskQueries.DEFAULT_TASK_TYPES || [] });
+    return sendTaskError(res, error, 'Failed to load task types.');
   }
 }
 
@@ -127,7 +163,7 @@ async function createTaskType(req, res) {
     return res.status(201).json({ success: true, taskType: created });
   } catch (error) {
     logger.error('Failed to create task type', { error: error.message });
-    return res.status(500).json({ success: false, error: error.message });
+    return sendTaskError(res, error, 'Failed to create task type.');
   }
 }
 
@@ -144,7 +180,7 @@ async function getTaskById(req, res) {
     return res.status(200).json({ success: true, task });
   } catch (error) {
     logger.error('Failed to get task by id', { error: error.message });
-    return res.status(500).json({ success: false, error: 'Failed to fetch task.' });
+    return sendTaskError(res, error, 'Failed to fetch task.');
   }
 }
 
@@ -164,7 +200,8 @@ async function createTask(req, res) {
       return res.status(400).json({ success: false, error: firstError, errors: validation.errors });
     }
 
-    const actor = req.user ?? { name: 'Admin', role: 'admin' };
+    const actor = requireSessionUser(req, res);
+    if (!actor) return;
     const task = await internalTaskQueries.createInternalTask(req.body, actor);
 
     // Notify assigned employee if assigned
@@ -195,16 +232,20 @@ async function createTask(req, res) {
 
     // Notify approver if Credit task in Pending Approval
     if (task && (task.task_category === 'CREDIT_MANAGEMENT' || task.status === 'Pending Approval')) {
+      const approverEmail = configuredApproverEmail();
+      if (!approverEmail) {
+        logger.warn('Credit approval notice not sent: no approver mailbox is configured', { taskId: task.id }, 'INTERNAL_TASK_CONTROLLER');
+      }
       try {
-        await actionCenterNotificationService.dispatchActionCenterCommunication(
+        if (approverEmail) await actionCenterNotificationService.dispatchActionCenterCommunication(
           {
             entityType: 'internal_task',
             entityId: task.id,
             channel: 'EMAIL',
-            recipientEmail: process.env.CREDIT_APPROVER_EMAIL || DEFAULT_CREDIT_APPROVER_EMAIL,
+            recipientEmail: approverEmail,
             recipientName: 'Administrator / Credit Approver',
             subject: `[Approval Required] Credit Request ${task.task_number}`,
-            message: `A new credit allocation/deduction request (${task.task_number}) requires your approval. Target Account: ${task.credit_account_name ?? 'Account'}. Quantity: ${task.credit_quantity ?? 0}. Reason: ${task.credit_reason ?? 'N/A'}.`,
+            message: `A new credit allocation/deduction request (${task.task_number}) requires your approval. Target Account: ${task.credit_account_name || 'Not recorded'}. Quantity: ${task.credit_quantity ?? 'Not recorded'}. Reason: ${task.credit_reason || 'Not recorded'}.`,
           },
           actor
         );
@@ -216,7 +257,7 @@ async function createTask(req, res) {
     return res.status(201).json({ success: true, task });
   } catch (error) {
     logger.error('Failed to create internal task', { error: error.message });
-    return res.status(500).json({ success: false, error: error.message });
+    return sendTaskError(res, error, error.message);
   }
 }
 
@@ -226,7 +267,8 @@ async function createTask(req, res) {
 async function updateTask(req, res) {
   try {
     const { id } = req.params;
-    const actor = req.user ?? { name: 'Admin', role: 'admin' };
+    const actor = requireSessionUser(req, res);
+    if (!actor) return;
 
     const validation = validatePayload('updateInternalTask', req.body);
     if (!validation.isValid) {
@@ -256,16 +298,17 @@ async function updateTask(req, res) {
       return res.status(404).json({ success: false, error: 'Task not found to update.' });
     }
 
-    // Notify requester if status changed
-    if (updated && updated.created_by_user_id) {
+    // Notify the requester only when the task records the requester's email address.
+    const requesterEmail = updated?.raw?.created_by_email || null;
+    if (updated && updated.created_by_user_id && requesterEmail) {
       try {
         await actionCenterNotificationService.dispatchActionCenterCommunication(
           {
             entityType: 'internal_task',
             entityId: updated.id,
             channel: 'EMAIL',
-            recipientEmail: updated.raw?.created_by_email || 'requester@procucev.com',
-            recipientName: updated.created_by_name || 'Requester',
+            recipientEmail: requesterEmail,
+            recipientName: updated.created_by_name || requesterEmail,
             subject: `[Task Status Update] ${updated.task_number}: ${updated.status}`,
             message: `Task ${updated.task_number} ("${updated.title}") status updated to ${updated.status}.`,
           },
@@ -279,7 +322,7 @@ async function updateTask(req, res) {
     return res.status(200).json({ success: true, task: updated });
   } catch (error) {
     logger.error('Failed to update internal task', { error: error.message });
-    return res.status(500).json({ success: false, error: error.message });
+    return sendTaskError(res, error, error.message);
   }
 }
 
@@ -323,7 +366,7 @@ async function approveCreditTask(req, res) {
     });
   } catch (error) {
     logger.error('Failed to approve credit task', { error: error.message });
-    return res.status(500).json({ success: false, error: error.message });
+    return sendTaskError(res, error, error.message);
   }
 }
 
@@ -367,7 +410,7 @@ async function rejectCreditTask(req, res) {
     });
   } catch (error) {
     logger.error('Failed to reject credit task', { error: error.message });
-    return res.status(500).json({ success: false, error: error.message });
+    return sendTaskError(res, error, error.message);
   }
 }
 
@@ -377,7 +420,8 @@ async function rejectCreditTask(req, res) {
 async function addTaskActivity(req, res) {
   try {
     const { id } = req.params;
-    const actor = req.user ?? { name: 'Employee', role: 'employee' };
+    const actor = requireSessionUser(req, res);
+    if (!actor) return;
     const { comment = '', actionType = 'COMMENT' } = req.body;
 
     if (!comment || !comment.trim()) {
@@ -392,7 +436,7 @@ async function addTaskActivity(req, res) {
     return res.status(201).json({ success: true, activity });
   } catch (error) {
     logger.error('Failed to add task activity', { error: error.message });
-    return res.status(500).json({ success: false, error: error.message });
+    return sendTaskError(res, error, error.message);
   }
 }
 
@@ -401,7 +445,8 @@ async function addTaskActivity(req, res) {
  */
 async function checkReminders(req, res) {
   try {
-    const actor = req.user ?? { name: 'Reminder Service', role: 'system' };
+    const actor = requireSessionUser(req, res);
+    if (!actor) return;
     const [tasks, assignees] = await Promise.all([
       internalTaskQueries.getOverdueAndUpcomingTasks(),
       internalTaskQueries.getInternalAssignees(),
@@ -457,7 +502,7 @@ async function checkReminders(req, res) {
     });
   } catch (error) {
     logger.error('Failed to check task reminders', { error: error.message });
-    return res.status(500).json({ success: false, error: error.message });
+    return sendTaskError(res, error, error.message);
   }
 }
 
@@ -471,7 +516,7 @@ async function deleteTask(req, res) {
     return res.status(200).json({ success: true, message: 'Task deleted successfully.' });
   } catch (error) {
     logger.error('Failed to delete task', { error: error.message });
-    return res.status(500).json({ success: false, error: 'Failed to delete task.' });
+    return sendTaskError(res, error, 'Failed to delete task.');
   }
 }
 
@@ -485,7 +530,7 @@ async function searchEntities(req, res) {
     return res.status(200).json({ success: true, entities });
   } catch (error) {
     logger.error('Failed to search entities', { error: error.message });
-    return res.status(500).json({ success: false, error: 'Failed to search entities.' });
+    return sendTaskError(res, error, 'Failed to search entities.');
   }
 }
 
@@ -547,8 +592,8 @@ async function exportTasks(req, res) {
         `"${(task.title || '').replace(/"/g, '""')}"`,
         `"${(task.description || '').replace(/"/g, '""')}"`,
         `"${(task.task_type_name || task.task_type || task.task_type_id || '').replace(/"/g, '""')}"`,
-        task.priority ?? 'Medium',
-        task.status ?? 'Pending',
+        task.priority ?? '',
+        task.status ?? '',
         `"${(task.assigned_to_name || 'Unassigned').replace(/"/g, '""')}"`,
         task.related_entity_type ?? 'GENERAL',
         `"${(task.related_entity_label || '').replace(/"/g, '""')}"`,
@@ -568,7 +613,7 @@ async function exportTasks(req, res) {
     return res.status(200).send(csvContent);
   } catch (error) {
     logger.error('Failed to export tasks', { error: error.message });
-    return res.status(500).json({ success: false, error: 'Failed to export internal tasks.' });
+    return sendTaskError(res, error, 'Failed to export internal tasks.');
   }
 }
 
@@ -638,8 +683,11 @@ async function handleRegistrationAction(req, res) {
     }
     const { action, remarks = '' } = validation.sanitizedData;
 
+    const actor = requireSessionUser(req, res);
+    if (!actor) return;
+
     logger.info('Processing client registration action', { id, action }, 'INTERNAL_TASK_CONTROLLER');
-    const client = await registrationQueries.updateClientRegistrationStatus(id, action, remarks, req.user || {});
+    const client = await registrationQueries.updateClientRegistrationStatus(id, action, remarks, actor);
 
     if (!client) {
       return res.status(404).json({ success: false, error: REGISTRATION_MESSAGES.NOT_FOUND });

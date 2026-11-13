@@ -96,17 +96,30 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
     });
 
     test('getBuyerAccounts and getActiveAccount', async () => {
-      const res = mockRes();
+      const domainQueries = require('../src/db/domainQueries');
       const next = jest.fn();
-      await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-      // getBuyerAccounts error
-      jest.spyOn(storeService, 'getBuyerAccounts').mockImplementation(() => {
-        throw new Error('fail');
-      });
+      // Without configured storage the listing is refused with the persistence error. It is not answered from memory.
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const unavailableRes = mockRes();
+      await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, unavailableRes, next);
+      expect(unavailableRes.status).toHaveBeenCalledWith(503);
+      expect(unavailableRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        code: 'PERSISTENCE_UNAVAILABLE',
+        retryable: true,
+      }));
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce({ accounts: [{ id: 'ba-1' }], activeId: 'ba-1' });
+      const res = mockRes();
       await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
-      expect(next).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: [{ id: 'ba-1' }] }));
+
+      // A failed query is marked as a retryable 503 and forwarded to the error handler.
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockRejectedValueOnce(new Error('query failed'));
+      await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, mockRes(), next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ message: 'query failed', status: 503, retryable: true }));
     });
 
     test('getActiveAccount resolver outcomes and error', async () => {
@@ -516,8 +529,8 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
       expect(resBuyer.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-      // Buyer owning vendor via v-buyer-, v-navin-, v-1788, vm- prefixes
-      for (const testId of ['v-buyer-1', 'v-navin-1', 'v-1788-1', 'vm-1']) {
+      // Buyer owning vendor via the v-buyer-, v-hist- and vm- import prefixes
+      for (const testId of ['v-buyer-1', 'v-hist-1', 'vm-1']) {
         const resB = mockRes();
         const vPrefix = { id: testId, email: `${testId}@test.com` };
         jest.spyOn(storeService, 'getVendorById').mockReturnValue(vPrefix);
@@ -571,7 +584,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resBuyerForbidden.status).toHaveBeenCalledWith(403);
 
       // Deleting non-existent vendor with buyer pattern (idempotent delete)
-      for (const delId of ['v-hist-999', 'v-buyer-999', 'v-navin-999', 'v-1788-999', 'vm-999', 'v-ingest-999', 'v-bulk-999']) {
+      for (const delId of ['v-hist-999', 'v-buyer-999', 'vm-999', 'v-ingest-999', 'v-bulk-999']) {
         const resDelIdempotent = mockRes();
         jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
         await vendorController.deleteVendor(
@@ -1420,7 +1433,9 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(cleared).toBe(true);
 
       const autoRes = await rootResolvers.autoResolveLogErrors({ action: 'CLEAR_STALE_SESSIONS' }, mockContext);
-      expect(autoRes.diagnosedCount).toBe(1);
+      // The count is the real diagnosis of the logs, not a fixed 1.
+      expect(autoRes.diagnosedCount).toBe(autoRes.issues.length);
+      expect(autoRes.remediationsApplied).toHaveLength(1);
 
       const autoResAll = await rootResolvers.autoResolveLogErrors({}, mockContext);
       expect(autoResAll).toBeDefined();

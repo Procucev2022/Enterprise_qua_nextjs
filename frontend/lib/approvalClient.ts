@@ -1,6 +1,9 @@
 import { authClient } from './authClient';
 import { logger } from './logger';
+import { UI_STRINGS, formatString } from './uiStrings';
 import type { ApprovalRequest, ApprovalSummary } from './types';
+
+const RESOURCES = UI_STRINGS.dataLoad.resources;
 
 function logApprovalTransportFailure(operation: string, error: unknown): void {
   logger.error(`${operation} request failed`, {
@@ -28,23 +31,38 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+/** Result of the approval summary request. `summary` is null when it could not be loaded. */
+export interface ApprovalSummaryResult {
+  summary: ApprovalSummary | null;
+  error?: string;
+}
+
 /**
  * Fetch management approval summary counts.
+ * On failure `summary` is null and `error` says why. No counts are substituted.
  */
-export async function fetchApprovalSummary(): Promise<ApprovalSummary> {
+export async function fetchApprovalSummary(): Promise<ApprovalSummaryResult> {
+  const resource = RESOURCES.approvalSummary;
   try {
     const res = await fetch('/api/approvals/summary', { headers: authHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      logApprovalResponseFailure('Approval summary', res.status);
+      return { summary: null, error: formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource, status: res.status }) };
+    }
     const json = await res.json();
-    return json.summary || { pending: 0, approved: 0, rejected: 0, total: 0 };
+    if (!json?.summary) {
+      return { summary: null, error: formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource }) };
+    }
+    return { summary: json.summary };
   } catch (error: unknown) {
     logApprovalTransportFailure('Approval summary', error);
-    return { pending: 0, approved: 0, rejected: 0, total: 0 };
+    return { summary: null, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource }) };
   }
 }
 
 /**
  * Fetch management approval requests matching filters.
+ * On failure `data` is empty and `error` says why.
  */
 export async function fetchApprovals(filters: {
   module?: string;
@@ -56,7 +74,8 @@ export async function fetchApprovals(filters: {
   offset?: number;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
-} = {}): Promise<{ data: ApprovalRequest[]; total: number }> {
+} = {}): Promise<{ data: ApprovalRequest[]; total: number; error?: string }> {
+  const resource = RESOURCES.approvals;
   try {
     const params = new URLSearchParams();
     if (filters.module && filters.module !== 'all') params.set('module', filters.module);
@@ -70,12 +89,18 @@ export async function fetchApprovals(filters: {
     if (filters.sortOrder) params.set('sortOrder', filters.sortOrder);
 
     const res = await fetch(`/api/approvals?${params.toString()}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      logApprovalResponseFailure('Approval list', res.status);
+      return { data: [], total: 0, error: formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource, status: res.status }) };
+    }
     const json = await res.json();
-    return { data: json.data || [], total: json.total || 0 };
+    if (!Array.isArray(json?.data)) {
+      return { data: [], total: 0, error: formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource }) };
+    }
+    return { data: json.data, total: typeof json.total === 'number' ? json.total : json.data.length };
   } catch (error: unknown) {
     logApprovalTransportFailure('Approval list', error);
-    return { data: [], total: 0 };
+    return { data: [], total: 0, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource }) };
   }
 }
 

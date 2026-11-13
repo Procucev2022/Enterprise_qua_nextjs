@@ -36,10 +36,19 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   RFQ_NOTIFICATION_MESSAGES,
   RFQ_NOTIFICATION_ERROR_CODES,
+  CHASER_OUTCOME_STATUS,
+  EMAIL_GATEWAY_CONFIG,
+  AUTH_MESSAGES,
+  RFQ_CREATION_ERRORS,
 } = require('../config/constants');
 
-// A newly created RFQ is awaiting vendor quotations.
-const RFQ_DEFAULT_STATUS = 'Quotes Pending';
+// A number the vendor entered, or null when the field was left out. Zero is a real answer
+// (for example, no warranty) and is kept. A missing value is never replaced by zero.
+function optionalQuoteNumber(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 function trackBackgroundRfqEmail(sendEmail, failureMessage, rfqNumber) {
   const tracked = Promise.resolve()
@@ -577,7 +586,7 @@ async function inviteVendors(req, res, next) {
       return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
     }
     const rfq = await storeService.getRFQByIdAsync(id);
-    const maxInviteLimit = MAX_INVITE_VENDORS_PER_REQUEST || 20;
+    const maxInviteLimit = MAX_INVITE_VENDORS_PER_REQUEST;
     const uniqueVendorIds = Array.from(new Set(vendorIds.filter(Boolean)));
     if (uniqueVendorIds.length === 0) {
       return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
@@ -620,14 +629,25 @@ async function validateVendorCategories(req, res, next) {
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const resolvedVendors = vendorIds.map((vid) => storeService.getVendorById(vid, 'all') || { id: vid }).filter(Boolean);
+    // Every ID must match a real vendor record. An unknown ID is refused, not shortlisted
+    // as an empty stand-in record.
+    const resolvedVendors = vendorIds.map((vid) => storeService.getVendorById(vid, 'all'));
+    const unknownVendorIds = vendorIds.filter((vid, index) => !resolvedVendors[index]).map((vid) => String(vid));
+    if (unknownVendorIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `These vendor IDs are not in the vendor directory: ${unknownVendorIds.join(', ')}.`,
+        unknownVendorIds,
+      });
+    }
     const result = storeService.validateAndShortlistVendors(rfq, resolvedVendors, req.user && req.user.email);
     res.json({
       success: true,
       shortlisted: result.shortlisted,
       excluded: result.excluded,
+      // Only the audit trail is written here. No profile-update email is sent by this call.
       message: result.excluded.length > 0
-        ? `${result.excluded.length} vendor(s) have category mismatches and were excluded from shortlist. Profile update emails sent.`
+        ? `${result.excluded.length} vendor(s) have category mismatches and were excluded from the shortlist.`
         : 'All vendors match RFQ category.',
     });
   } catch (err) {
@@ -665,7 +685,7 @@ async function requestVendorCategoryUpdate(req, res, next) {
     if (!vendor && vendorEmail) {
       vendor = await storeService.getVendorByIdWithDBFallback(vendorEmail, 'all', { fresh: true });
     }
-    const targetEmail = String(vendor ? vendor.email : vendorEmail || '').trim();
+    const targetEmail = String((vendor && vendor.email) || vendorEmail || '').trim();
     if (!targetEmail) {
       return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId is required.' });
     }
@@ -819,8 +839,7 @@ async function getRFQById(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const mode = String(rfq.sourcingMode || '');
-    const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
-    if (!isV1 && (!Array.isArray(rfq.assignedVendors) || rfq.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
+    if ((!Array.isArray(rfq.assignedVendors) || rfq.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
       try {
         rfq = await storeService.autoAssignVendorsFromDB(rfq);
       } catch (assignErr) {
@@ -1029,10 +1048,23 @@ async function createRFQ(req, res, next) {
     const shouldSendBuyerAcknowledgement = Boolean(
       buyerAcknowledgementRecipient && body.source !== 'email_gateway'
     );
-    const shouldSendGatewayNotification = body.source === 'email_gateway' || body.targetGatewayEmail;
-    const gatewayNotificationTarget = shouldSendGatewayNotification && pool.hasStorage()
+    // The gateway notification goes to the request's own target, or to the configured intake
+    // mailbox (EMAIL_GATEWAY_ADDRESS). With neither, nothing is sent and nothing is invented.
+    const shouldSendGatewayNotification = body.source === 'email_gateway' || Boolean(body.targetGatewayEmail);
+    const gatewayRecipient = String(body.targetGatewayEmail || EMAIL_GATEWAY_CONFIG.GATEWAY_ADDRESS || '').trim();
+    if (shouldSendGatewayNotification && !gatewayRecipient) {
+      // Stop before the RFQ is saved. The notification is queued together with the RFQ, so saving
+      // without it would leave a record that the caller was told never went out.
+      logger.warn('RFQ creation stopped: a gateway notification was requested, but no gateway address is configured', { source: body.source }, 'RFQ_CONTROLLER');
+      return res.status(503).json({
+        success: false,
+        status: 'not_configured',
+        error: RFQ_CREATION_ERRORS.GATEWAY_ADDRESS_NOT_CONFIGURED,
+      });
+    }
+    const gatewayNotificationTarget = shouldSendGatewayNotification && gatewayRecipient && pool.hasStorage()
       ? {
-        recipientEmail: String(body.targetGatewayEmail || 'RFQ@procucev.com').trim(),
+        recipientEmail: gatewayRecipient,
         sourceEmail: body.sourceEmail || (req.user && req.user.email) || null,
       }
       : null;
@@ -1068,8 +1100,7 @@ async function createRFQ(req, res, next) {
         logger.warn('Could not apply DB-backed V0 vendor assignment', { error: err.message }, 'RFQ_CONTROLLER');
       }
     } else {
-      const isV1 = createdMode === 'mode_1' || createdMode === 'v1' || createdMode === 'version_1';
-      if (!isV1 && typeof storeService.autoAssignVendorsFromDB === 'function') {
+      if ((!Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
         try {
           finalRFQ = await storeService.autoAssignVendorsFromDB(created);
         } catch (err) {
@@ -1100,12 +1131,11 @@ async function createRFQ(req, res, next) {
       }
     }
 
-    // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
-    if (shouldSendGatewayNotification && !pool.hasStorage()) {
-      const recipientEmail = body.targetGatewayEmail || 'RFQ@procucev.com';
+    // Real notification to the gateway mailbox resolved above. No resolved mailbox means no send.
+    if (shouldSendGatewayNotification && gatewayRecipient && !pool.hasStorage()) {
       trackBackgroundRfqEmail(
         () => mailerService.sendRequisitionNotificationEmail(
-          recipientEmail,
+          gatewayRecipient,
           finalRFQ,
           body.sourceEmail || (req.user && req.user.email)
         ),
@@ -1130,17 +1160,19 @@ async function createRFQ(req, res, next) {
             ? finalRFQ.items
             : [];
 
+        // Stored values only. A field the RFQ does not have stays null. Nothing is filled in.
         const normalizedLineItems = rawEntities.map((it) => ({
-          item_name: it.itemName || it.name || it.item_name || 'Line Item',
-          item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
-          qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
-          uom: it.unit || it.uom || 'Nos',
+          item_name: it.itemName || it.name || it.item_name || null,
+          item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || null,
+          qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : null),
+          uom: it.unit || it.uom || null,
         }));
 
-        const buyerName = req.user?.name || (requestingBuyerAccount && requestingBuyerAccount.companyName) || 'Valued Buyer';
+        const buyerName = req.user?.name || (requestingBuyerAccount && requestingBuyerAccount.companyName) || null;
+        // The real invited count. With no vendor assigned yet, the known network count, else zero.
         const suppliersCount = finalRFQ.assignedVendors && finalRFQ.assignedVendors.length > 0
           ? finalRFQ.assignedVendors.length
-          : (finalRFQ.procucevVendorCount || 5);
+          : (typeof finalRFQ.procucevVendorCount === 'number' ? finalRFQ.procucevVendorCount : 0);
 
         trackBackgroundRfqEmail(
           () => mailerService.sendRfqAcknowledgementEmail({
@@ -1149,7 +1181,7 @@ async function createRFQ(req, res, next) {
             rfqNumber: finalRFQ.rfqNumber,
             rfqTitle: finalRFQ.title,
             category: finalRFQ.category,
-            itemCount: normalizedLineItems.length || 1,
+            itemCount: normalizedLineItems.length,
             deliveryLocation: finalRFQ.deliveryLocation,
             deliveryDate: finalRFQ.targetDeliveryDate,
             requiredBy: finalRFQ.targetDeliveryDate,
@@ -1436,6 +1468,8 @@ async function extractRFQFromDocument(req, res, next) {
       lineItems: extraction.lineItems,
       title: draftTitle,
       category: extraction.category,
+      majorCategory: extraction.majorCategory,
+      minorCategory: extraction.minorCategory,
       estimatedBudget: extraction.estimatedBudget,
       targetDeliveryDate: derivedDeliveryDate,
       source: 'ai_extraction',
@@ -1468,7 +1502,12 @@ async function extractRFQFromDocument(req, res, next) {
       success: true,
       data: draft,
       classification,
-      extraction: { model: extraction.model, deliveryDate: extraction.deliveryDate },
+      extraction: {
+        model: extraction.model,
+        deliveryDate: extraction.deliveryDate,
+        majorCategory: draft.majorCategory,
+        minorCategory: draft.minorCategory,
+      },
     });
   } catch (err) {
     // An expected extraction failure is already reported above as a 422 with a
@@ -2021,9 +2060,10 @@ async function addQuote(req, res, next) {
       vendorCategory: vendorCategory || 'Client List',
       unitPrice,
       totalPrice: totalPrice || unitPrice,
-      leadTimeDays: leadTimeDays || 0,
-      aiMatchScore: 0,
-      warrantyYears: warrantyYears || 0,
+      leadTimeDays: optionalQuoteNumber(leadTimeDays),
+      // No score is computed for a quote submitted through this route, so none is invented here.
+      aiMatchScore: null,
+      warrantyYears: optionalQuoteNumber(warrantyYears),
       complianceStatus: complianceStatus || 'Pending Review',
       paymentTerms: paymentTerms || '',
       remarks: remarks || '',
@@ -2146,17 +2186,61 @@ async function generateEmailPreview(req, res, next) {
   }
 }
 
-function triggerBatchChaser(req, res, next) {
+/**
+ * POST /api/rfqs/:id/batch-chaser
+ *
+ * Status contract. Every outcome returns `count`, `logs`, `results` and `sentCount`, so
+ * a caller can read the status of each channel. The frontend reads `results` and
+ * `sentCount` on a 200, and shows `error` on any other status.
+ * - 200, success:true: at least one channel was accepted by a provider. A partial batch
+ *   stays 200, and the channels that failed are listed in `results`.
+ * - 400, success:false: the request names no chaser channel, or names one that is unsupported or repeated.
+ * - 422, success:false: nothing could be attempted. Either no vendors are assigned, or
+ *   every requested channel was skipped or not configured. `error` says which.
+ * - 503, success:false: a channel was attempted and no provider accepted it. This matches
+ *   the 503 the controller returns when a provider does not confirm a vendor email.
+ * - 403, success:false: the signed-in role may not chase vendors. Only buyers, category
+ *   managers and admins may. Nothing is sent to any provider.
+ * - 404, success:false: the RFQ does not exist, or the caller cannot access it. Both return
+ *   the same message, so an inaccessible RFQ cannot be told apart from a missing one.
+ * - 401, success:false: there is no signed-in user, so the batch cannot be attributed.
+ */
+async function triggerBatchChaser(req, res, next) {
   try {
     const { id } = req.params;
-    const { channels } = req.body;
-    logger.info(`Triggering batch chasers for RFQ ${id}`, { id, channels }, 'RFQ_CONTROLLER');
-    const result = storeService.triggerBatchChaser(id, channels || ['call', 'whatsapp', 'sms']);
+    const { channels } = req.body || {};
+    if (!req.user) {
+      logger.warn(`Batch chaser for RFQ ${id} rejected: no signed-in user`, { id }, 'RFQ_CONTROLLER');
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
+    if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
+      logger.warn(`Batch chaser for RFQ ${id} refused for role ${req.user.role}`, { id, role: req.user.role }, 'RFQ_CONTROLLER');
+      return res.status(403).json({ success: false, error: 'You do not have permission to send batch chasers to vendors.' });
+    }
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      logger.warn(`RFQ not found or out of scope for batch chasers: ${id}`, { id }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.batchChaserChannels, { channels });
+    if (!isValid) {
+      logger.warn(`Batch chaser for RFQ ${id} rejected: payload validation failed`, { id, errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+    logger.info(`Triggering batch chasers for RFQ ${id}`, { id, channels, actor: req.user.email }, 'RFQ_CONTROLLER');
+    const result = await storeService.triggerBatchChaser(id, channels, req.user);
     if (!result) {
       logger.warn(`RFQ not found for batch chasers: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    res.json({ success: true, ...result });
+    if (result.sentCount > 0) {
+      return res.json(result);
+    }
+    const nothingAttempted = result.results.every((row) => (
+      row.status === CHASER_OUTCOME_STATUS.SKIPPED || row.status === CHASER_OUTCOME_STATUS.NOT_CONFIGURED
+    ));
+    logger.warn(`Batch chaser for RFQ ${id} sent nothing`, { id, nothingAttempted, sentCount: result.sentCount }, 'RFQ_CONTROLLER');
+    return res.status(nothingAttempted ? 422 : 503).json(result);
   } catch (err) {
     logger.error(`Error triggering batch chasers for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);

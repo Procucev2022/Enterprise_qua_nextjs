@@ -351,11 +351,10 @@ describe('Backend LoggerService Unit Tests', () => {
     expect(entry.level).toBe('INFO');
   });
 
-  test('streams logs to console and invokes persistToDatabase in non-test environment', async () => {
+  test('streams logs to console and does not persist to database in non-test environment', async () => {
     const prevNodeEnv = process.env.NODE_ENV;
     const pool = require('../src/db/pool');
     const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
-    const storageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -370,84 +369,34 @@ describe('Backend LoggerService Unit Tests', () => {
 
       testLogger.error('Dev error', new Error('Fail'));
       expect(consoleErrorSpy).toHaveBeenCalled();
-      expect(querySpy).toHaveBeenCalled();
+      // Application logs must NOT be stored in the database
+      expect(querySpy).not.toHaveBeenCalled();
 
-      // Test with storage false
-      storageSpy.mockReturnValue(false);
-      testLogger.error('Dev error without storage');
-
-      // Test with all error fields and waitUntil active
-      storageSpy.mockReturnValue(true);
-      const d1Bridge = require('../src/db/d1Bridge');
-      const waitSpy = jest.fn();
-      jest.spyOn(d1Bridge, 'getWaitUntil').mockReturnValue(waitSpy);
-
-      testLogger.error('Dev error with full fields', {
-        errorName: 'CustomErr',
-        url: '/api/test',
-        correlationId: 'c-1',
-        userEmail: 'u@test.com',
-      });
-      expect(waitSpy).toHaveBeenCalled();
+      // persistToDatabase returns a resolved promise and never queries the database
+      const res = await testLogger.persistToDatabase({ id: 'legacy-1', level: 'ERROR' });
+      expect(res).toBeUndefined();
+      expect(querySpy).not.toHaveBeenCalled();
     } finally {
       process.env.NODE_ENV = prevNodeEnv;
       querySpy.mockRestore();
-      storageSpy.mockRestore();
       consoleLogSpy.mockRestore();
       consoleWarnSpy.mockRestore();
       consoleErrorSpy.mockRestore();
     }
   });
 
-  test('persistToDatabase respects D1 overload, self-referential error filter, and rate limiter', () => {
-    const prevNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    const pool = require('../src/db/pool');
-    const d1Bridge = require('../src/db/d1Bridge');
-    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
-    const storageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-
-    try {
-      // 1. Skips when isD1Overloaded is true
-      jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
-      testLogger.persistToDatabase({ id: 'err-ov-1', level: 'ERROR', message: 'Any error' });
-      expect(querySpy).not.toHaveBeenCalled();
-
-      // 2. Skips when entry contains overload or system_error_logs keywords
-      d1Bridge.isD1Overloaded.mockReturnValue(false);
-      testLogger.persistToDatabase({ id: 'err-ov-2', level: 'ERROR', message: 'D1 DB is overloaded' });
-      expect(querySpy).not.toHaveBeenCalled();
-
-      testLogger.persistToDatabase({ id: 'err-ov-3', level: 'ERROR', message: 'Failed table', metadata: { errorMessage: 'no such table: system_error_logs' } });
-      expect(querySpy).not.toHaveBeenCalled();
-
-      // 3. Skips when rate limited
-      LoggerService.resetDbLoggingRateLimit();
-      for (let i = 0; i < 5; i++) {
-        expect(LoggerService.isDbLoggingRateLimited()).toBe(false);
-      }
-      expect(LoggerService.isDbLoggingRateLimited()).toBe(true);
-
-      testLogger.persistToDatabase({ id: 'err-ov-4', level: 'ERROR', message: 'Normal error' });
-      expect(querySpy).not.toHaveBeenCalled();
-
-      LoggerService.resetDbLoggingRateLimit();
-    } finally {
-      process.env.NODE_ENV = prevNodeEnv;
-      querySpy.mockRestore();
-      storageSpy.mockRestore();
-      if (d1Bridge.isD1Overloaded.mockRestore) d1Bridge.isD1Overloaded.mockRestore();
+  test('isDbLoggingRateLimited and resetDbLoggingRateLimit helper methods behave correctly', () => {
+    LoggerService.resetDbLoggingRateLimit();
+    for (let i = 0; i < 5; i++) {
+      expect(LoggerService.isDbLoggingRateLimited()).toBe(false);
     }
+    expect(LoggerService.isDbLoggingRateLimited()).toBe(true);
+    LoggerService.resetDbLoggingRateLimit();
+    expect(LoggerService.isDbLoggingRateLimited()).toBe(false);
   });
 
   test('records database log sink failures to disk and throttles fallback diagnostics', async () => {
     const prevNodeEnv = process.env.NODE_ENV;
-    const pool = require('../src/db/pool');
-    const d1Bridge = require('../src/db/d1Bridge');
-    const querySpy = jest.spyOn(pool, 'query').mockRejectedValue(new Error('Database sink failed for admin@example.com'));
-    const storageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    const overloadSpy = jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(false);
-    const waitUntilSpy = jest.spyOn(d1Bridge, 'getWaitUntil').mockReturnValue(null);
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const initialTime = Date.now();
     let currentTime = initialTime;
@@ -455,7 +404,6 @@ describe('Backend LoggerService Unit Tests', () => {
 
     try {
       process.env.NODE_ENV = 'production';
-      LoggerService.resetDbLoggingRateLimit();
       const sourceEntry = {
         id: 'source-error-1',
         level: 'ERROR',
@@ -464,20 +412,21 @@ describe('Backend LoggerService Unit Tests', () => {
         metadata: {},
       };
 
-      await testLogger.persistToDatabase(sourceEntry);
-      await testLogger.persistToDatabase(sourceEntry);
+      testLogger.reportDatabaseFailure(new Error('Database sink failed for admin@example.com'), sourceEntry);
+      testLogger.reportDatabaseFailure(new Error('Database sink failed for admin@example.com'), sourceEntry);
       expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
 
       currentTime += 60 * 1000 + 1;
-      await testLogger.persistToDatabase(sourceEntry);
-      querySpy.mockImplementationOnce(() => {
-        throw new Error('Synchronous database sink failure');
+      testLogger.reportDatabaseFailure(new Error('Database sink failed for admin@example.com'), sourceEntry);
+      currentTime += 60 * 1000 + 1;
+      testLogger.reportDatabaseFailure(new Error('Synchronous database sink failure'), sourceEntry);
+      currentTime += 60 * 1000 + 1;
+      testLogger.reportDatabaseFailure('Non-error database sink failure', {
+        ...sourceEntry,
+        level: undefined,
+        category: undefined,
+        correlationId: 'sink-correlation-1',
       });
-      currentTime += 60 * 1000 + 1;
-      await testLogger.persistToDatabase(sourceEntry);
-      querySpy.mockRejectedValueOnce('Non-error database sink failure');
-      currentTime += 60 * 1000 + 1;
-      await testLogger.persistToDatabase({ ...sourceEntry, level: undefined, category: undefined, correlationId: 'sink-correlation-1' });
 
       const diagnostics = fs.readFileSync(path.join(testLogsDir, 'error.log'), 'utf8')
         .trim()
@@ -505,13 +454,8 @@ describe('Backend LoggerService Unit Tests', () => {
       expect(JSON.stringify(diagnostics)).not.toContain('admin@example.com');
     } finally {
       process.env.NODE_ENV = prevNodeEnv;
-      querySpy.mockRestore();
-      storageSpy.mockRestore();
-      overloadSpy.mockRestore();
-      waitUntilSpy.mockRestore();
       consoleErrorSpy.mockRestore();
       nowSpy.mockRestore();
-      LoggerService.resetDbLoggingRateLimit();
     }
   });
 
@@ -573,5 +517,58 @@ describe('Backend LoggerService Unit Tests', () => {
 
     // Bare persistToDatabase
     testLogger.persistToDatabase({ id: 'bare-1', level: 'ERROR', category: 'SYS', message: 'Bare error' });
+  });
+
+  test('isLocalEnvironment distinguishes between localhost and Cloudflare environments', () => {
+    const prevWorkers = process.env.CLOUDFLARE_WORKERS;
+    const prevPages = process.env.CF_PAGES;
+    const prevCfEnv = globalThis.__CF_ENV__;
+
+    try {
+      delete process.env.CLOUDFLARE_WORKERS;
+      delete process.env.CF_PAGES;
+      delete globalThis.__CF_ENV__;
+      expect(LoggerService.isLocalEnvironment()).toBe(true);
+
+      // Cloudflare Workers flag
+      process.env.CLOUDFLARE_WORKERS = 'true';
+      expect(LoggerService.isLocalEnvironment()).toBe(false);
+      delete process.env.CLOUDFLARE_WORKERS;
+
+      // Cloudflare Pages flag
+      process.env.CF_PAGES = '1';
+      expect(LoggerService.isLocalEnvironment()).toBe(false);
+      delete process.env.CF_PAGES;
+
+      // Global CF binding
+      globalThis.__CF_ENV__ = { D1: {} };
+      expect(LoggerService.isLocalEnvironment()).toBe(false);
+
+      // Cloudflare environment skips disk operations
+      const cfLogger = new LoggerService({
+        logsDir: testLogsDir,
+        isLocalLoggingEnabled: true,
+      });
+      // writeToDisk should be a no-op under Cloudflare
+      const writeSpy = jest.spyOn(fs, 'appendFileSync');
+      cfLogger.writeToDisk({ level: 'INFO', message: 'Worker log' });
+      expect(writeSpy).not.toHaveBeenCalled();
+      writeSpy.mockRestore();
+
+      // getLogStats and purgeExpiredLogs under Cloudflare
+      const stats = cfLogger.getLogStats();
+      expect(stats.diskLogFiles).toEqual([]);
+      const purge = cfLogger.purgeExpiredLogs();
+      expect(purge.diskFilesPurged).toBe(0);
+    } finally {
+      if (prevWorkers !== undefined) process.env.CLOUDFLARE_WORKERS = prevWorkers;
+      else delete process.env.CLOUDFLARE_WORKERS;
+
+      if (prevPages !== undefined) process.env.CF_PAGES = prevPages;
+      else delete process.env.CF_PAGES;
+
+      if (prevCfEnv !== undefined) globalThis.__CF_ENV__ = prevCfEnv;
+      else delete globalThis.__CF_ENV__;
+    }
   });
 });

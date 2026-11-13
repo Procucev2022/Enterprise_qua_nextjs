@@ -10,7 +10,6 @@ import {
   saveBuyerProfile,
 } from '@/lib/buyerProfileClient';
 import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
-import { getDefaultCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { FORM_SCHEMAS, validateFormData, validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 import { logger } from '@/lib/logger';
@@ -161,22 +160,10 @@ export default function BuyerProfilePage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({});
 
-  // Base taxonomy from backend, or standard default fixture if backend table has 0 rows or is loading
-  const fallbackTaxonomy =
-    categoryTaxonomy && categoryTaxonomy.length > 0
-      ? categoryTaxonomy
-      : getDefaultCategoryTaxonomy();
-  const fallbackTaxonomyRef = useRef(fallbackTaxonomy);
-  fallbackTaxonomyRef.current = fallbackTaxonomy;
-
-  const [taxonomy, setTaxonomy] = useState<MajorMinorCategory[]>(() => fallbackTaxonomy);
-
-  // Sync if store loads category taxonomy dynamically
-  useEffect(() => {
-    if (categoryTaxonomy && categoryTaxonomy.length > 0) {
-      setTaxonomy((prev) => (prev.length === 0 ? categoryTaxonomy : prev));
-    }
-  }, [categoryTaxonomy]);
+  // Category master comes from the fetch in loadProfile, or from the store while the fetch is
+  // pending. Nothing is bundled. When the fetch fails, the picker shows an error instead of a list.
+  const [taxonomy, setTaxonomy] = useState<MajorMinorCategory[]>([]);
+  const [taxonomyFailed, setTaxonomyFailed] = useState(false);
 
   // Request state. `isLoaded` gates saving: without a resolved organisation there
   // is nothing to patch, and submitting would post a form the buyer never saw
@@ -236,11 +223,13 @@ export default function BuyerProfilePage() {
 
     if (taxonomyResult.success && Array.isArray(taxonomyResult.data) && taxonomyResult.data.length > 0) {
       setTaxonomy(taxonomyResult.data);
+      setTaxonomyFailed(false);
     } else {
+      setTaxonomy([]);
+      setTaxonomyFailed(!taxonomyResult.success);
       if (!taxonomyResult.success) {
         showToastRef.current(UI_STRINGS.buyerProfile.loadFailedTitle, taxonomyResult.error || '', 'warning');
       }
-      setTaxonomy((prev) => (prev.length > 0 ? prev : fallbackTaxonomyRef.current));
     }
 
     if (!profileResult.success || !profileResult.data) {
@@ -266,7 +255,7 @@ export default function BuyerProfilePage() {
       profile.panNumber ||
       activeAcc?.panNumber ||
       activeAcc?.pan ||
-      (resolvedGst.length === 15 ? resolvedGst.slice(2, 12).toUpperCase() : '');
+      '';
 
     setCompanyName(profile.companyName || activeAcc?.organizationName || '');
     setBrandName(profile.brandName || activeAcc?.brandName || '');
@@ -324,8 +313,8 @@ export default function BuyerProfilePage() {
     if (!country && activeBuyerAccount.country) setCountry(activeBuyerAccount.country);
     if (!gstNumber && activeBuyerAccount.gstin) setGstNumber(activeBuyerAccount.gstin);
     if (!panNumber) {
-      const derivedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || (activeBuyerAccount.gstin && activeBuyerAccount.gstin.length === 15 ? activeBuyerAccount.gstin.slice(2, 12).toUpperCase() : '');
-      if (derivedPan) setPanNumber(derivedPan);
+      const savedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || '';
+      if (savedPan) setPanNumber(savedPan);
     }
     if (!street) {
       const fallbackStreet = activeBuyerAccount.street || activeBuyerAccount.address1 || (activeBuyerAccount.city && activeBuyerAccount.state ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}` : activeBuyerAccount.city || '');
@@ -344,11 +333,12 @@ export default function BuyerProfilePage() {
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
 
-  const effectiveTaxonomy = taxonomy.length > 0 ? taxonomy : fallbackTaxonomy;
+  // Fetched taxonomy first, then the store copy. Empty when neither has rows.
+  const activeTaxonomy = taxonomy.length > 0 ? taxonomy : (categoryTaxonomy ?? []);
 
   /** Minors of a major, from the taxonomy the database returned. */
   const minorsOf = (majorName: string) =>
-    effectiveTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
+    activeTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
 
   /**
    * Report that a cardinality cap blocked a selection.
@@ -478,7 +468,7 @@ export default function BuyerProfilePage() {
   };
 
   // Filtered Categories based on search
-  const filteredCategories = effectiveTaxonomy.filter((cat) => {
+  const filteredCategories = (taxonomyFailed ? [] : activeTaxonomy).filter((cat) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const matchesMajor = cat.majorCategory.toLowerCase().includes(term);
@@ -916,7 +906,11 @@ export default function BuyerProfilePage() {
           <div className="space-y-2 pt-0.5">
             {filteredCategories.length === 0 && (
               <div className="p-6 text-center text-xs text-slate-500 dark:text-gray-400 bg-slate-50/50 dark:bg-gray-950/40 rounded-xl border border-dashed border-slate-200 dark:border-gray-800">
-                {searchTerm.trim() ? `No categories found matching "${searchTerm}".` : 'No procurement categories available.'}
+                {taxonomyFailed
+                  ? UI_STRINGS.buyerProfile.taxonomyUnavailable
+                  : activeTaxonomy.length === 0
+                    ? UI_STRINGS.buyerProfile.taxonomyEmpty
+                    : `No categories found matching "${searchTerm}".`}
               </div>
             )}
             {filteredCategories.map((cat) => {

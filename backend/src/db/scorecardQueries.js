@@ -2,13 +2,18 @@
 // SCORECARD QUERIES (Cloudflare D1 & PostgreSQL)
 // ==============================================================================
 // Aggregated performance analytics across Operations, Revenue, and Sales pillars
-// for individual and team leaderboard tracking in the Action Center.
+// for internal staff. Staff come from the database (the same source as the internal
+// assignees endpoint), and tasks and tickets are counted only inside the requested
+// date range. A metric the database cannot measure is null. No target, dues, or
+// loan figure is assumed.
 // ==============================================================================
 
-const pool = require('./pool');
 const internalTaskQueries = require('./internalTaskQueries');
 const ticketQueries = require('./ticketQueries');
-const paymentDuesQueries = require('./paymentDuesQueries');
+
+const SCORECARD_ERRORS = Object.freeze({
+  INVALID_CUSTOM_DATE: 'The custom date range needs valid startDate and endDate values.',
+});
 
 function safePercentage(numerator, denominator) {
   const num = Number(numerator) || 0;
@@ -22,7 +27,7 @@ function resolveDateRange(period = 'this_month', customStart, customEnd) {
   let start = new Date(now.getFullYear(), now.getMonth(), 1);
   let end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-  switch (period.toLowerCase()) {
+  switch (String(period).toLowerCase()) {
     case 'today':
       start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
       end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
@@ -62,6 +67,14 @@ function resolveDateRange(period = 'this_month', customStart, customEnd) {
     case 'custom':
       if (customStart) start = new Date(customStart);
       if (customEnd) end = new Date(customEnd);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+        const error = new Error(SCORECARD_ERRORS.INVALID_CUSTOM_DATE);
+        error.code = 'VALIDATION_FAILED';
+        error.statusCode = 400;
+        throw error;
+      }
+      break;
+    default:
       break;
   }
 
@@ -72,13 +85,168 @@ function resolveDateRange(period = 'this_month', customStart, customEnd) {
   };
 }
 
-const DEFAULT_TEAM_MEMBERS = [
-  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
-  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
-  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
-  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
-  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
-];
+/** True when the record's creation time falls inside the date range. */
+function isInDateRange(createdAt, range) {
+  if (!createdAt) return false;
+  const time = new Date(createdAt).getTime();
+  if (Number.isNaN(time)) return false;
+  return time >= new Date(range.startDate).getTime() && time <= new Date(range.endDate).getTime();
+}
+
+/** True when a task or ticket is assigned to the staff member, by name or by user id. */
+function isAssignedTo(record, member) {
+  const recordName = String(record.assigned_to_name || '').toLowerCase();
+  const byName = Boolean(member.name) && recordName === String(member.name).toLowerCase();
+  const byId = Boolean(member.id) && record.assigned_to_user_id === member.id;
+  return byName || byId;
+}
+
+function isCompletedRecord(record) {
+  return record.status === 'Completed';
+}
+
+function buildMemberScore(member, tasks, tickets) {
+  const memberTasks = tasks.filter((t) => isAssignedTo(t, member));
+  const tasksCompleted = memberTasks.filter(isCompletedRecord).length;
+  const tasksAssigned = memberTasks.length;
+  const taskRate = safePercentage(tasksCompleted, tasksAssigned);
+
+  const memberTickets = tickets.filter((t) => isAssignedTo(t, member));
+  const ticketsResolved = memberTickets.filter(isCompletedRecord).length;
+  const ticketsAssigned = memberTickets.length;
+  const ticketRate = safePercentage(ticketsResolved, ticketsAssigned);
+
+  const registrationTasks = memberTasks.filter(
+    (t) =>
+      t.related_entity_type === 'VENDOR' ||
+      t.related_entity_type === 'BUYER' ||
+      (t.task_category || '').toUpperCase().includes('ONBOARDING')
+  );
+  const registrationsCompleted = registrationTasks.filter(isCompletedRecord).length;
+
+  const visitTasks = memberTasks.filter(
+    (t) => (t.title || '').toLowerCase().includes('visit') || (t.description || '').toLowerCase().includes('visit')
+  );
+  const siteVisitsCompleted = visitTasks.filter(isCompletedRecord).length;
+  const siteVisitsPlanned = visitTasks.length;
+  const siteVisitRate = safePercentage(siteVisitsCompleted, siteVisitsPlanned);
+
+  const salesTasks = memberTasks.filter(
+    (t) =>
+      (t.task_category || '').toUpperCase().includes('BUSINESS_DEVELOPMENT') ||
+      (t.task_category || '').toUpperCase().includes('SALES') ||
+      (t.title || '').toLowerCase().includes('lead')
+  );
+  const leadsContacted = salesTasks.filter((t) => t.status === 'Completed' || t.status === 'In Progress').length;
+  const leadToVisitRate = safePercentage(siteVisitsCompleted, leadsContacted);
+  const dealsClosed = salesTasks.filter(
+    (t) => t.status === 'Completed' && (t.title || '').toLowerCase().includes('deal')
+  ).length;
+
+  // Only rates measured from recorded activity count toward the score. The score is
+  // null when the member has no measurable activity in the period.
+  const validMetrics = [taskRate, ticketRate, siteVisitRate].filter((value) => value !== null);
+  const score = validMetrics.length > 0
+    ? Math.round(validMetrics.reduce((sum, value) => sum + value, 0) / validMetrics.length)
+    : null;
+  const performanceStatus = score === null ? null : score >= 75 ? 'On Track' : score >= 40 ? 'Average' : 'Needs Focus';
+
+  return {
+    rank: null,
+    id: member.id,
+    name: member.name,
+    role: member.role || null,
+    email: member.email || null,
+    project: member.project || null,
+    operations: {
+      tasksCompleted,
+      tasksAssigned,
+      taskCompletionRate: taskRate,
+      ticketsResolved,
+      ticketsAssigned,
+      ticketResolutionRate: ticketRate,
+      registrationsCompleted,
+      registrationsTarget: null,
+      registrationAchievementRate: null,
+      siteVisitsCompleted,
+      siteVisitsPlanned,
+      siteVisitAchievementRate: siteVisitRate,
+    },
+    revenue: {
+      totalDues: null,
+      duesCollected: null,
+      pendingDues: null,
+      collectionPercentage: null,
+      loansDisbursed: null,
+      loansTarget: null,
+      loanDisbursementRate: null,
+      loanAmountRealized: null,
+      loanRealizedTarget: null,
+      loanRealizationRate: null,
+    },
+    sales: {
+      leadsContacted,
+      leadsTarget: null,
+      leadContactRate: null,
+      leadToVisitRate,
+      visitToDealRate: null,
+      dealsClosed,
+      dealsTarget: null,
+      dealAchievementRate: null,
+    },
+    score,
+    performanceStatus,
+  };
+}
+
+function valueOrNull(source, key) {
+  return source && source[key] !== undefined ? source[key] : null;
+}
+
+/** Pillar cards for the selected executive. Every value is null when there is no staff member. */
+function buildPillarSummary(source) {
+  const ops = source?.operations;
+  const rev = source?.revenue;
+  const sales = source?.sales;
+  return {
+    operations: {
+      tasksCompleted: valueOrNull(ops, 'tasksCompleted'),
+      tasksAssigned: valueOrNull(ops, 'tasksAssigned'),
+      taskCompletionRate: valueOrNull(ops, 'taskCompletionRate'),
+      ticketsCompleted: valueOrNull(ops, 'ticketsResolved'),
+      ticketsAssigned: valueOrNull(ops, 'ticketsAssigned'),
+      ticketResolutionRate: valueOrNull(ops, 'ticketResolutionRate'),
+      registrations: valueOrNull(ops, 'registrationsCompleted'),
+      registrationsTarget: valueOrNull(ops, 'registrationsTarget'),
+      registrationRate: valueOrNull(ops, 'registrationAchievementRate'),
+      siteVisits: valueOrNull(ops, 'siteVisitsCompleted'),
+      siteVisitsPlanned: valueOrNull(ops, 'siteVisitsPlanned'),
+      siteVisitRate: valueOrNull(ops, 'siteVisitAchievementRate'),
+    },
+    revenue: {
+      duesCollected: valueOrNull(rev, 'duesCollected'),
+      totalDues: valueOrNull(rev, 'totalDues'),
+      pendingDues: valueOrNull(rev, 'pendingDues'),
+      collectionPercentage: valueOrNull(rev, 'collectionPercentage'),
+      loansDisbursed: valueOrNull(rev, 'loansDisbursed'),
+      loansTarget: valueOrNull(rev, 'loansTarget'),
+      loanDisbursementRate: valueOrNull(rev, 'loanDisbursementRate'),
+      loanRealized: valueOrNull(rev, 'loanAmountRealized'),
+      loanRealizedTarget: valueOrNull(rev, 'loanRealizedTarget'),
+      loanRealizationRate: valueOrNull(rev, 'loanRealizationRate'),
+    },
+    sales: {
+      leadsContacted: valueOrNull(sales, 'leadsContacted'),
+      leadsTarget: valueOrNull(sales, 'leadsTarget'),
+      leadContactRate: valueOrNull(sales, 'leadContactRate'),
+      leadToVisitRate: valueOrNull(sales, 'leadToVisitRate'),
+      visitToDealRate: valueOrNull(sales, 'visitToDealRate'),
+      dealsClosed: valueOrNull(sales, 'dealsClosed'),
+      dealsTarget: valueOrNull(sales, 'dealsTarget'),
+      dealAchievementRate: valueOrNull(sales, 'dealAchievementRate'),
+    },
+  };
+}
 
 /**
  * Fetch scorecard metrics for the team or a specific executive.
@@ -93,206 +261,34 @@ async function getScorecardData({
 } = {}) {
   const dateRange = resolveDateRange(period, startDate, endDate);
 
-  // Fetch actual data from tasks, tickets, and existing databases
-  const tasksRes = await internalTaskQueries.getInternalTasks({ limit: 500 });
-  const ticketsRes = await ticketQueries.getTickets({ limit: 500 });
+  const [allTasks, staff, ticketsRes] = await Promise.all([
+    internalTaskQueries.listAllInternalTasks(),
+    internalTaskQueries.getInternalAssignees(),
+    ticketQueries.getTickets({ limit: 500 }),
+  ]);
 
-  const tasks = tasksRes.rows || [];
-  const tickets = ticketsRes.rows || [];
+  const tasks = allTasks.filter((t) => isInDateRange(t.created_at, dateRange));
+  const tickets = (ticketsRes?.rows || []).filter((t) => isInDateRange(t.created_at, dateRange));
 
-  // Map metrics per team member based on actual live tasks, tickets, and activities
-  const teamScores = DEFAULT_TEAM_MEMBERS.map((member, idx) => {
-    // Filter tasks assigned to this executive
-    const memberTasks = tasks.filter(
-      (t) =>
-        (t.assigned_to_name && t.assigned_to_name.toLowerCase().includes(member.name.toLowerCase())) ||
-        t.assigned_to_user_id === member.id
-    );
-    const tasksCompleted = memberTasks.filter((t) => t.status === 'Completed').length;
-    const tasksAssigned = memberTasks.length;
-    const taskRate = safePercentage(tasksCompleted, tasksAssigned);
+  const teamScores = staff.map((member) => buildMemberScore(member, tasks, tickets));
 
-    // Filter tickets assigned to this executive
-    const memberTickets = tickets.filter(
-      (t) =>
-        (t.assigned_to_name && t.assigned_to_name.toLowerCase().includes(member.name.toLowerCase())) ||
-        t.assigned_to_user_id === member.id
-    );
-    const ticketsResolved = memberTickets.filter((t) => t.status === 'Completed').length;
-    const ticketsAssigned = memberTickets.length;
-    const ticketRate = safePercentage(ticketsResolved, ticketsAssigned);
+  // Rank members with a measured score, highest first. Members without a score stay unranked.
+  teamScores
+    .filter((member) => member.score !== null)
+    .sort((a, b) => b.score - a.score)
+    .forEach((member, index) => {
+      member.rank = index + 1;
+    });
 
-    // Real registrations tasks
-    const regTasks = memberTasks.filter(
-      (t) =>
-        t.related_entity_type === 'VENDOR' ||
-        t.related_entity_type === 'BUYER' ||
-        (t.task_category || '').toUpperCase().includes('ONBOARDING')
-    );
-    const registrationsCompleted = regTasks.filter((t) => t.status === 'Completed').length;
-    const registrationsTarget = regTasks.length;
-    const registrationRate = safePercentage(registrationsCompleted, registrationsTarget);
-
-    // Real site visits tasks
-    const visitTasks = memberTasks.filter(
-      (t) =>
-        (t.title || '').toLowerCase().includes('visit') ||
-        (t.description || '').toLowerCase().includes('visit')
-    );
-    const siteVisitsCompleted = visitTasks.filter((t) => t.status === 'Completed').length;
-    const siteVisitsPlanned = visitTasks.length;
-    const siteVisitRate = safePercentage(siteVisitsCompleted, siteVisitsPlanned);
-
-    // Real credit & revenue tasks
-    const creditTasks = memberTasks.filter(
-      (t) =>
-        t.related_entity_type === 'CREDIT' ||
-        t.related_entity_type === 'PAYMENT' ||
-        (t.task_category || '').toUpperCase().includes('CREDIT')
-    );
-    const duesCollected = creditTasks.filter((t) => t.status === 'Completed').length * 50000;
-    const totalDues = creditTasks.length > 0 ? creditTasks.length * 50000 : 0;
-    const pendingDues = Math.max(0, totalDues - duesCollected);
-    const collectionRate = safePercentage(duesCollected, totalDues);
-
-    const loansDisbursed = 0;
-    const loansTarget = 0;
-    const loanDisbursedRate = safePercentage(loansDisbursed, loansTarget);
-
-    const loanAmountRealized = 0;
-    const loanRealizedTarget = 0;
-    const loanRealizedRate = safePercentage(loanAmountRealized, loanRealizedTarget);
-
-    // Real sales & customer acquisition tasks
-    const salesTasks = memberTasks.filter(
-      (t) =>
-        (t.task_category || '').toUpperCase().includes('BUSINESS_DEVELOPMENT') ||
-        (t.task_category || '').toUpperCase().includes('SALES') ||
-        (t.title || '').toLowerCase().includes('lead')
-    );
-    const leadsContacted = salesTasks.filter((t) => t.status === 'Completed' || t.status === 'In Progress').length;
-    const leadsTarget = salesTasks.length;
-    const leadContactRate = safePercentage(leadsContacted, leadsTarget);
-
-    const leadToVisitRate = safePercentage(siteVisitsCompleted, leadsContacted);
-    const visitToDealRate = 0;
-
-    const dealsClosed = salesTasks.filter(
-      (t) => t.status === 'Completed' && (t.title || '').toLowerCase().includes('deal')
-    ).length;
-    const dealsTarget = salesTasks.length;
-    const dealRate = safePercentage(dealsClosed, dealsTarget);
-
-    // Real performance score based on actual activity
-    const validMetrics = [];
-    if (taskRate !== null) validMetrics.push(taskRate);
-    if (ticketRate !== null) validMetrics.push(ticketRate);
-    if (registrationRate !== null) validMetrics.push(registrationRate);
-    if (siteVisitRate !== null) validMetrics.push(siteVisitRate);
-    if (collectionRate !== null) validMetrics.push(collectionRate);
-    if (leadContactRate !== null) validMetrics.push(leadContactRate);
-    if (dealRate !== null) validMetrics.push(dealRate);
-
-    const finalScore = validMetrics.length > 0
-      ? Math.round(validMetrics.reduce((sum, val) => sum + val, 0) / validMetrics.length)
-      : 0;
-
-    const performanceStatus = finalScore >= 75 ? 'On Track' : finalScore >= 40 ? 'Average' : 'Needs Focus';
-
-    return {
-      rank: idx + 1,
-      id: member.id,
-      name: member.name,
-      role: member.role,
-      email: member.email,
-      project: member.project,
-      operations: {
-        tasksCompleted,
-        tasksAssigned,
-        taskCompletionRate: taskRate,
-        ticketsResolved,
-        ticketsAssigned,
-        ticketResolutionRate: ticketRate,
-        registrationsCompleted,
-        registrationsTarget,
-        registrationAchievementRate: registrationRate,
-        siteVisitsCompleted,
-        siteVisitsPlanned,
-        siteVisitAchievementRate: siteVisitRate,
-      },
-      revenue: {
-        totalDues,
-        duesCollected,
-        pendingDues,
-        collectionPercentage: collectionRate,
-        loansDisbursed,
-        loansTarget,
-        loanDisbursementRate: loanDisbursedRate,
-        loanAmountRealized,
-        loanRealizedTarget,
-        loanRealizationRate: loanRealizedRate,
-      },
-      sales: {
-        leadsContacted,
-        leadsTarget,
-        leadContactRate,
-        leadToVisitRate,
-        visitToDealRate,
-        dealsClosed,
-        dealsTarget,
-        dealAchievementRate: dealRate,
-      },
-      score: finalScore,
-      performanceStatus,
-    };
-  });
-
-  // Calculate overall pillar summary cards for the selected view
   let selectedMember = null;
   if (executiveId && executiveId !== 'all') {
-    selectedMember = teamScores.find((m) => m.id === executiveId || m.name.toLowerCase() === executiveId.toLowerCase());
+    const wanted = String(executiveId).toLowerCase();
+    selectedMember = teamScores.find((m) => m.id === executiveId || String(m.name || '').toLowerCase() === wanted) || null;
   }
 
-  const primarySource = selectedMember || teamScores[0];
-
-  const pillarSummary = {
-    operations: {
-      tasksCompleted: primarySource.operations.tasksCompleted,
-      tasksAssigned: primarySource.operations.tasksAssigned,
-      taskCompletionRate: primarySource.operations.taskCompletionRate,
-      ticketsCompleted: primarySource.operations.ticketsResolved,
-      ticketsAssigned: primarySource.operations.ticketsAssigned,
-      ticketResolutionRate: primarySource.operations.ticketResolutionRate,
-      registrations: primarySource.operations.registrationsCompleted,
-      registrationsTarget: primarySource.operations.registrationsTarget,
-      registrationRate: primarySource.operations.registrationAchievementRate,
-      siteVisits: primarySource.operations.siteVisitsCompleted,
-      siteVisitsPlanned: primarySource.operations.siteVisitsPlanned,
-      siteVisitRate: primarySource.operations.siteVisitAchievementRate,
-    },
-    revenue: {
-      duesCollected: primarySource.revenue.duesCollected,
-      totalDues: primarySource.revenue.totalDues,
-      pendingDues: primarySource.revenue.pendingDues,
-      collectionPercentage: primarySource.revenue.collectionPercentage,
-      loansDisbursed: primarySource.revenue.loansDisbursed,
-      loansTarget: primarySource.revenue.loansTarget,
-      loanDisbursementRate: primarySource.revenue.loanDisbursementRate,
-      loanRealized: primarySource.revenue.loanAmountRealized,
-      loanRealizedTarget: primarySource.revenue.loanRealizedTarget,
-      loanRealizationRate: primarySource.revenue.loanRealizationRate,
-    },
-    sales: {
-      leadsContacted: primarySource.sales.leadsContacted,
-      leadsTarget: primarySource.sales.leadsTarget,
-      leadContactRate: primarySource.sales.leadContactRate,
-      leadToVisitRate: primarySource.sales.leadToVisitRate,
-      visitToDealRate: primarySource.sales.visitToDealRate,
-      dealsClosed: primarySource.sales.dealsClosed,
-      dealsTarget: primarySource.sales.dealsTarget,
-      dealAchievementRate: primarySource.sales.dealAchievementRate,
-    },
-  };
+  // A named executive who is not on the team yields no summary, not another member's figures.
+  const executiveRequested = Boolean(executiveId) && executiveId !== 'all';
+  const primarySource = executiveRequested ? selectedMember : (teamScores[0] || null);
 
   return {
     dateRange,
@@ -300,7 +296,7 @@ async function getScorecardData({
     project,
     pillar,
     executiveId,
-    pillarSummary,
+    pillarSummary: buildPillarSummary(primarySource),
     teamScores,
   };
 }
@@ -309,6 +305,4 @@ module.exports = {
   getScorecardData,
   resolveDateRange,
   safePercentage,
-  DEFAULT_TEAM_MEMBERS,
 };
-

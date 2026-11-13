@@ -18,13 +18,51 @@ function parseJsonSafe(val, fallback = null) {
   }
 }
 
-// In-memory fallback collection for tests and headless environments without database
-const memoryTickets = [];
-const memoryActivities = [];
+// Every read and write goes to the database. A missing store or a failed query
+// throws an error, so no ticket is shown or saved from process memory.
+const TICKET_QUERY_ERRORS = Object.freeze({
+  STORAGE_UNAVAILABLE: 'Ticket storage is not configured. Ticket data cannot be read or saved.',
+  FIELD_REQUIRED: 'Ticket {field} is required. Enter the value and retry.',
+  ROW_SET_MISSING: 'The ticket query returned no row set. Retry the request.',
+});
+
+function storageUnavailable(operation) {
+  const error = new Error(TICKET_QUERY_ERRORS.STORAGE_UNAVAILABLE);
+  error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.statusCode = 503;
+  error.operation = operation;
+  return error;
+}
+
+function requireStorage(operation) {
+  if (!pool.hasStorage()) throw storageUnavailable(operation);
+}
+
+function requiredField(value, field) {
+  const text = typeof value === 'string' ? value.trim() : value;
+  if (text === undefined || text === null || text === '') {
+    const error = new Error(TICKET_QUERY_ERRORS.FIELD_REQUIRED.replace('{field}', field));
+    error.code = 'VALIDATION_FAILED';
+    error.statusCode = 400;
+    throw error;
+  }
+  return text;
+}
+
+function requireRowSet(result, operation, { requireOne = false } = {}) {
+  const rows = result && Array.isArray(result.rows) ? result.rows : null;
+  if (!rows || (requireOne && rows.length === 0)) {
+    const error = new Error(TICKET_QUERY_ERRORS.ROW_SET_MISSING);
+    error.code = 'PERSISTENCE_UNAVAILABLE';
+    error.statusCode = 503;
+    error.operation = operation;
+    throw error;
+  }
+  return rows;
+}
 
 function generateTicketNumber() {
-  const rand = Math.floor(10000 + Math.random() * 90000);
-  return `TKT-${rand}`;
+  return `TKT-${crypto.randomInt(10000, 100000)}`;
 }
 
 /**
@@ -42,49 +80,7 @@ async function getTickets({
   limit = 50,
   offset = 0,
 } = {}) {
-  if (!pool.hasStorage()) {
-    let filtered = [...memoryTickets];
-    if (status && status !== 'all') {
-      filtered = filtered.filter((t) => (t.status || '').toLowerCase() === status.toLowerCase());
-    }
-    if (priority && priority !== 'all') {
-      filtered = filtered.filter((t) => (t.priority || '').toLowerCase() === priority.toLowerCase());
-    }
-    if (category && category !== 'all') {
-      filtered = filtered.filter((t) => (t.category || '').toLowerCase() === category.toLowerCase());
-    }
-    if (project && project !== 'all') {
-      filtered = filtered.filter((t) => (t.project || '').toLowerCase() === project.toLowerCase());
-    }
-    if (assignedTo && assignedTo !== 'all') {
-      const q = assignedTo.toLowerCase();
-      filtered = filtered.filter(
-        (t) => (t.assigned_to_name || '').toLowerCase().includes(q) || (t.assigned_to_user_id || '').toLowerCase() === q
-      );
-    }
-    if (dateFrom) {
-      filtered = filtered.filter((t) => new Date(t.created_at) >= new Date(dateFrom));
-    }
-    if (dateTo) {
-      filtered = filtered.filter((t) => new Date(t.created_at) <= new Date(dateTo));
-    }
-    if (search && search.trim()) {
-      const q = search.trim().toLowerCase();
-      filtered = filtered.filter(
-        (t) =>
-          (t.ticket_number || '').toLowerCase().includes(q) ||
-          (t.subject || '').toLowerCase().includes(q) ||
-          (t.description || '').toLowerCase().includes(q) ||
-          (t.customer_name || '').toLowerCase().includes(q) ||
-          (t.customer_email || '').toLowerCase().includes(q)
-      );
-    }
-    const total = filtered.length;
-    const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
-    const safeOffset = Math.max(Number(offset) || 0, 0);
-    const rows = filtered.slice(safeOffset, safeOffset + safeLimit);
-    return { rows, total };
-  }
+  requireStorage('ticket list');
 
   const conditions = [];
   const params = [];
@@ -142,7 +138,7 @@ async function getTickets({
   const countSql = `SELECT count(*) as total FROM tickets ${whereClause}`;
   const d1CountSql = `SELECT count(*) as total FROM tickets ${d1WhereClause}`;
   const countResult = await pool.query(countSql, params, { d1: true, d1Text: d1CountSql });
-  const total = countResult && countResult.rows && countResult.rows[0] ? Number(countResult.rows[0].total) : 0;
+  const total = Number(requireRowSet(countResult, 'ticket count', { requireOne: true })[0].total);
 
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const safeOffset = Math.max(Number(offset) || 0, 0);
@@ -165,7 +161,7 @@ async function getTickets({
   `;
 
   const dataResult = await pool.query(dataSql, dataParams, { d1: true, d1Text: d1DataSql });
-  const rows = (dataResult && dataResult.rows ? dataResult.rows : []).map((row) => ({
+  const rows = requireRowSet(dataResult, 'ticket list').map((row) => ({
     ...row,
     attachments: parseJsonSafe(row.attachments, []),
     metadata: parseJsonSafe(row.metadata, {}),
@@ -179,17 +175,7 @@ async function getTickets({
  * Summary KPI statistics for Tickets.
  */
 async function getTicketSummary() {
-  if (!pool.hasStorage()) {
-    const total = memoryTickets.length;
-    const pending = memoryTickets.filter((t) => t.status === 'Pending').length;
-    const inProgress = memoryTickets.filter((t) => t.status === 'In Progress').length;
-    const escalated = memoryTickets.filter((t) => t.status === 'Escalated').length;
-    const completed = memoryTickets.filter((t) => t.status === 'Completed').length;
-    const criticalCount = memoryTickets.filter(
-      (t) => (t.priority === 'Critical' || t.priority === 'High') && t.status !== 'Completed'
-    ).length;
-    return { total, pending, inProgress, escalated, completed, criticalCount };
-  }
+  requireStorage('ticket summary');
 
   const sql = `
     SELECT
@@ -202,7 +188,7 @@ async function getTicketSummary() {
     FROM tickets
   `;
   const result = await pool.query(sql, [], { d1: true, d1Text: sql });
-  const row = result && result.rows && result.rows[0] ? result.rows[0] : {};
+  const row = requireRowSet(result, 'ticket summary', { requireOne: true })[0];
   return {
     total: Number(row.total || 0),
     pending: Number(row.pending || 0),
@@ -219,14 +205,7 @@ async function getTicketSummary() {
 async function getTicketById(id) {
   if (!id) return null;
 
-  if (!pool.hasStorage()) {
-    const t = memoryTickets.find((x) => x.id === id || x.ticket_number === id);
-    if (!t) return null;
-    const activities = memoryActivities
-      .filter((a) => a.ticket_id === t.id)
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    return { ...t, activities };
-  }
+  requireStorage('ticket lookup');
 
   const sql = 'SELECT * FROM tickets WHERE id = $1 OR ticket_number = $1';
   const result = await pool.query(sql, [id], { d1: true, d1Text: sql });
@@ -241,7 +220,7 @@ async function getTicketById(id) {
 
   const actSql = 'SELECT * FROM ticket_activities WHERE ticket_id = $1 ORDER BY created_at DESC';
   const actResult = await pool.query(actSql, [ticket.id], { d1: true, d1Text: actSql });
-  ticket.activities = (actResult && actResult.rows ? actResult.rows : []).map((a) => ({
+  ticket.activities = requireRowSet(actResult, 'ticket activity lookup').map((a) => ({
     ...a,
     metadata: parseJsonSafe(a.metadata, {}),
   }));
@@ -253,9 +232,18 @@ async function getTicketById(id) {
  * Create a new ticket.
  */
 async function createTicket(data = {}, actor = {}) {
+  // Subject and customer or assignee details come from the caller. Nothing is invented.
+  const subject = requiredField(data.subject, 'subject');
+  const customerName = requiredField(data.customerName || data.customer_name, 'customer name');
+  const customerEmail = requiredField(data.customerEmail || data.customer_email, 'customer email');
+  const customerPhone = requiredField(data.customerPhone || data.customer_phone, 'customer phone');
+  const assignedToName = requiredField(data.assignedToName || data.assigned_to_name, 'assigned to name');
+  requireStorage('ticket create');
+
   const id = `tkt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   const ticketNumber = data.ticket_number || data.ticketNumber || generateTicketNumber();
   const now = new Date().toISOString();
+  const actorName = actor.name || actor.email || null;
 
   const slaHours = Number(data.slaHours || data.sla_hours) || 24;
   let dueDate = data.dueDate || data.due_date;
@@ -267,22 +255,22 @@ async function createTicket(data = {}, actor = {}) {
   const record = {
     id,
     ticket_number: ticketNumber,
-    subject: data.subject || 'Support Ticket',
+    subject,
     description: data.description || '',
     status: data.status || 'Pending',
     priority: data.priority || 'Medium',
-    category: data.category || 'General',
-    project: data.project || 'Procurement Platform',
+    category: data.category || null,
+    project: data.project || null,
     customer_id: data.customerId || data.customer_id || null,
-    customer_name: data.customerName || data.customer_name || 'Enterprise Buyer',
-    customer_email: data.customerEmail || data.customer_email || 'client@procucev.com',
-    customer_phone: data.customerPhone || data.customer_phone || '+919876543210',
+    customer_name: customerName,
+    customer_email: customerEmail,
+    customer_phone: customerPhone,
     assigned_to_user_id: data.assignedToUserId || data.assigned_to_user_id || null,
-    assigned_to_name: data.assignedToName || data.assigned_to_name || 'Category Ops Team',
-    assigned_team: data.assignedTeam || data.assigned_team || 'Operations',
+    assigned_to_name: assignedToName,
+    assigned_team: data.assignedTeam || data.assigned_team || null,
     created_by_user_id: actor.uuid || actor.id || null,
-    created_by_name: actor.name || actor.email || 'System User',
-    last_edited_by_name: actor.name || actor.email || 'System User',
+    created_by_name: actorName,
+    last_edited_by_name: actorName,
     resolved_by_name: null,
     sla_hours: slaHours,
     due_date: dueDate,
@@ -297,24 +285,6 @@ async function createTicket(data = {}, actor = {}) {
     created_at: now,
     updated_at: now,
   };
-
-  if (!pool.hasStorage()) {
-    memoryTickets.unshift(record);
-    const actId = `tact_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
-    memoryActivities.unshift({
-      id: actId,
-      ticket_id: id,
-      action_type: 'CREATED',
-      actor_id: actor.uuid || null,
-      actor_name: actor.name || actor.email || 'System User',
-      from_value: null,
-      to_value: record.status,
-      comment: 'Ticket opened in Action Center.',
-      metadata: {},
-      created_at: now,
-    });
-    return record;
-  }
 
   const sql = `
     INSERT INTO tickets (
@@ -386,7 +356,7 @@ async function createTicket(data = {}, actor = {}) {
     INSERT INTO ticket_activities (id, ticket_id, action_type, actor_id, actor_name, comment, created_at)
     VALUES ($1, $2, 'CREATED', $3, $4, $5, $6)
   `;
-  await pool.query(actSql, [actId, id, actor.uuid || null, actor.name || actor.email || 'System User', 'Ticket opened in Action Center.', now], {
+  await pool.query(actSql, [actId, id, actor.uuid || null, actorName, 'Ticket opened in Action Center.', now], {
     d1: true,
     d1Text: actSql,
   });
@@ -415,46 +385,8 @@ async function updateTicket(id, updates = {}, actor = {}) {
   const dueDate = updates.dueDate || updates.due_date || existing.due_date;
 
   const resolvedAt = status === 'Completed' ? (existing.resolved_at || now) : null;
-  const resolvedByName = status === 'Completed' ? (existing.resolved_by_name || actor.name || actor.email || 'Executive') : null;
-
-  if (!pool.hasStorage()) {
-    const idx = memoryTickets.findIndex((t) => t.id === existing.id);
-    if (idx !== -1) {
-      memoryTickets[idx] = {
-        ...memoryTickets[idx],
-        status,
-        priority,
-        category,
-        project,
-        subject,
-        description,
-        assigned_to_name: assignedToName,
-        assigned_to_user_id: assignedToUserId,
-        assigned_team: assignedTeam,
-        resolution_notes: resolutionNotes,
-        resolved_at: resolvedAt,
-        resolved_by_name: resolvedByName,
-        due_date: dueDate,
-        last_edited_by_name: actor.name || actor.email || existing.last_edited_by_name,
-        updated_at: now,
-      };
-    }
-    if (status !== existing.status) {
-      memoryActivities.unshift({
-        id: `tact_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
-        ticket_id: existing.id,
-        action_type: status === 'Completed' ? 'RESOLVED' : 'STATUS_CHANGE',
-        actor_id: actor.uuid || null,
-        actor_name: actor.name || actor.email || 'Executive',
-        from_value: existing.status,
-        to_value: status,
-        comment: updates.comment || `Status updated from ${existing.status} to ${status}.`,
-        metadata: {},
-        created_at: now,
-      });
-    }
-    return memoryTickets[idx];
-  }
+  const resolvedByName = status === 'Completed' ? (existing.resolved_by_name || actor.name || actor.email || null) : null;
+  requireStorage('ticket update');
 
   const sql = `
     UPDATE tickets
@@ -535,7 +467,7 @@ async function updateTicket(id, updates = {}, actor = {}) {
         existing.id,
         status === 'Completed' ? 'RESOLVED' : 'STATUS_CHANGE',
         actor.uuid || null,
-        actor.name || actor.email || 'Executive',
+        actor.name || actor.email || null,
         existing.status,
         status,
         updates.comment || `Status updated from ${existing.status} to ${status}.`,
@@ -557,34 +489,7 @@ async function escalateTicket(id, { escalatedTo, reason } = {}, actor = {}) {
 
   const now = new Date().toISOString();
   const newLevel = (existing.escalation_level || 0) + 1;
-
-  if (!pool.hasStorage()) {
-    const idx = memoryTickets.findIndex((t) => t.id === existing.id);
-    if (idx !== -1) {
-      memoryTickets[idx] = {
-        ...memoryTickets[idx],
-        status: 'Escalated',
-        escalation_level: newLevel,
-        escalated_to: escalatedTo,
-        escalation_reason: reason,
-        priority: 'Critical',
-        updated_at: now,
-      };
-    }
-    memoryActivities.unshift({
-      id: `tact_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
-      ticket_id: existing.id,
-      action_type: 'ESCALATED',
-      actor_id: actor.uuid || null,
-      actor_name: actor.name || actor.email || 'Executive',
-      from_value: existing.status,
-      to_value: 'Escalated',
-      comment: `Escalated (Level ${newLevel}) to ${escalatedTo}: ${reason}`,
-      metadata: { escalatedTo, reason, level: newLevel },
-      created_at: now,
-    });
-    return memoryTickets[idx];
-  }
+  requireStorage('ticket escalate');
 
   const sql = `
     UPDATE tickets
@@ -610,7 +515,7 @@ async function escalateTicket(id, { escalatedTo, reason } = {}, actor = {}) {
       actId,
       existing.id,
       actor.uuid || null,
-      actor.name || actor.email || 'Executive',
+      actor.name || actor.email || null,
       existing.status,
       `Escalated (Level ${newLevel}) to ${escalatedTo}: ${reason}`,
       JSON.stringify({ escalatedTo, reason, level: newLevel }),
@@ -632,20 +537,7 @@ async function addTicketComment(id, { comment, metadata = {} } = {}, actor = {})
   const now = new Date().toISOString();
   const actId = `tact_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
 
-  if (!pool.hasStorage()) {
-    const act = {
-      id: actId,
-      ticket_id: existing.id,
-      action_type: 'COMMENT',
-      actor_id: actor.uuid || null,
-      actor_name: actor.name || actor.email || 'Executive',
-      comment,
-      metadata,
-      created_at: now,
-    };
-    memoryActivities.unshift(act);
-    return act;
-  }
+  requireStorage('ticket comment');
 
   const sql = `
     INSERT INTO ticket_activities (id, ticket_id, action_type, actor_id, actor_name, comment, metadata, created_at)
@@ -654,24 +546,17 @@ async function addTicketComment(id, { comment, metadata = {} } = {}, actor = {})
   `;
   const result = await pool.query(
     sql,
-    [actId, existing.id, actor.uuid || null, actor.name || actor.email || 'Executive', comment, JSON.stringify(metadata), now],
+    [actId, existing.id, actor.uuid || null, actor.name || actor.email || null, comment, JSON.stringify(metadata), now],
     { d1: true, d1Text: sql }
   );
-  return result && result.rows ? result.rows[0] : null;
+  return requireRowSet(result, 'ticket comment', { requireOne: true })[0];
 }
 
 /**
  * Delete a ticket by ID.
  */
 async function deleteTicket(id) {
-  if (!pool.hasStorage()) {
-    const idx = memoryTickets.findIndex((t) => t.id === id || t.ticket_number === id);
-    if (idx !== -1) {
-      memoryTickets.splice(idx, 1);
-      return true;
-    }
-    return false;
-  }
+  requireStorage('ticket delete');
 
   const sql = 'DELETE FROM tickets WHERE id = $1';
   await pool.query(sql, [id], { d1: true, d1Text: sql });
@@ -688,7 +573,5 @@ module.exports = {
   addTicketComment,
   deleteTicket,
   parseJsonSafe,
-  memoryTickets,
-  memoryActivities,
 };
 

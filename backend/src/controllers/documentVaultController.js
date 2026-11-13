@@ -7,7 +7,7 @@
 
 const documentVaultQueries = require('../db/documentVaultQueries');
 const { logger } = require('../services/loggerService');
-const { DOCUMENT_VAULT_MESSAGES } = require('../config/constants');
+const { AUTH_MESSAGES, DOCUMENT_VAULT_MESSAGES } = require('../config/constants');
 
 function sendControllerError(res, err, fallbackMessage) {
   if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
@@ -16,6 +16,14 @@ function sendControllerError(res, err, fallbackMessage) {
       error: DOCUMENT_VAULT_MESSAGES.STORAGE_UNAVAILABLE,
       retryable: true,
     });
+  }
+
+  if (err?.code === 'VALIDATION_FAILED') {
+    return res.status(400).json({ success: false, error: err.message });
+  }
+
+  if (err?.code === 'ACTOR_REQUIRED') {
+    return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
   }
 
   return res.status(500).json({ success: false, error: fallbackMessage });
@@ -92,6 +100,10 @@ async function getDocumentById(req, res) {
  */
 async function createDocument(req, res) {
   try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
+
     const { documentName, fileName, category } = req.body || {};
 
     if (!documentName || !documentName.trim()) {

@@ -216,7 +216,7 @@ describe('ZOHO_CONFIG', () => {
 
   test('plan amounts add GST and return null for unpayable plans', () => {
     const { computeZohoPlanAmount, computeZohoBuyerPlanAmount } = loadConstants();
-    expect(computeZohoPlanAmount('connect')).toBe(7498.99);
+    expect(computeZohoPlanAmount('connect')).toBe(8848.82);
     expect(computeZohoBuyerPlanAmount('version_1')).toBe(70785.84);
     expect(computeZohoBuyerPlanAmount('version_1', '12_months')).toBe(70785.84);
     expect(computeZohoBuyerPlanAmount('version_1', '6_months')).toBe(38932.92);
@@ -740,5 +740,177 @@ describe('persistence recovery messages', () => {
     const { PERSISTENCE_MESSAGES } = loadConstants();
     expect(PERSISTENCE_MESSAGES.PAYMENT_DUES_DELIVERY_STATUS_FAILED)
       .toContain('Check communication history before retrying.');
+  });
+});
+
+// Environment-only configuration: no built-in mailbox, approver, or recipient
+// addresses. Each case loads config/constants.js in an isolated module registry
+// so the values read at load time reflect the environment set for that case.
+describe('config/constants.js environment-only configuration', () => {
+  const ENV_KEYS = [
+    'SRINU_APPROVER_EMAIL',
+    'SUDHEER_APPROVER_EMAIL',
+    'SRINU_APPROVER_PASSWORD',
+    'SUDHEER_APPROVER_PASSWORD',
+    'APPROVER_PASSWORD',
+    'CREDIT_APPROVER_EMAIL',
+    'ADMIN_NOTIFICATION_EMAIL',
+    'DAILY_RFQ_REPORT_EMAILS',
+    'CATEGORY_MANAGER_DAILY_REPORT_EMAILS',
+    'EMAIL_GATEWAY_ADDRESS',
+    'EMAIL_GATEWAY_USER',
+    'VENDOR_EMAIL_GATEWAY_ADDRESS',
+    'VENDOR_EMAIL_GATEWAY_USER',
+  ];
+  let savedEnv;
+
+  beforeEach(() => {
+    savedEnv = {};
+    for (const key of ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  function loadConstants(overrides = {}) {
+    Object.assign(process.env, overrides);
+    let loaded;
+    jest.isolateModules(() => {
+      loaded = require('../src/config/constants');
+    });
+    return loaded;
+  }
+
+  test('ships no built-in mailbox, approver, or recipient addresses', () => {
+    const constants = loadConstants();
+    expect(constants.getCreditApproverEmail()).toBeNull();
+    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual([null, null]);
+    expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEFAULT_RECIPIENTS');
+    expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('PROD_RECIPIENTS');
+    expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEV_RECIPIENTS');
+    expect(constants.EMAIL_GATEWAY_CONFIG.GATEWAY_ADDRESS).toBe('');
+    expect(constants.VENDOR_EMAIL_GATEWAY_CONFIG.GATEWAY_ADDRESS).toBe('');
+  });
+
+  test('invented defaults for ingestion, buyer profile and phone stay removed, and new errors are set', () => {
+    const constants = loadConstants();
+    expect(constants.RFQ_INGESTION_CONFIG).not.toHaveProperty('DEFAULT_UNIT');
+    expect(constants.RFQ_INGESTION_CONFIG).not.toHaveProperty('DEFAULT_QUANTITY');
+    expect(constants.BUYER_PROFILE_CONFIG).not.toHaveProperty('DEFAULT_ORGANIZATION_TYPE');
+    expect(constants.BUYER_PROFILE_CONFIG).not.toHaveProperty('DEFAULT_COUNTRY');
+    expect(constants.IDENTITY_PHONE_CONFIG).not.toHaveProperty('PLACEHOLDER_NATIONAL_NUMBER');
+    expect(constants.RFQ_CREATION_ERRORS.TITLE_REQUIRED).toContain('title');
+    expect(constants.RFQ_CREATION_ERRORS.GATEWAY_ADDRESS_NOT_CONFIGURED).toContain('EMAIL_GATEWAY_ADDRESS');
+    expect(constants.CHASER_OUTREACH_MESSAGES.NO_CHANNELS_SELECTED).toContain('call, whatsapp or sms');
+  });
+
+  test('removed fabricated roster, passkey, and initiator exports stay removed', () => {
+    const constants = loadConstants();
+    expect(constants).not.toHaveProperty('DEFAULT_INTERNAL_MEMBERS');
+    expect(constants).not.toHaveProperty('DEFAULT_VENDOR_DIRECTORY_PASSKEY');
+    expect(constants).not.toHaveProperty('DEFAULT_CREDIT_APPROVER_EMAIL');
+    expect(constants).not.toHaveProperty('CREDIT_APPROVAL_INITIATORS');
+    expect(constants.AES_CONFIG).not.toHaveProperty('FALLBACK_ALGORITHM');
+    expect(constants.AES_CONFIG.ALGORITHM).toBe('aes-256-gcm');
+  });
+
+  test('reads approver emails, credit approver, recipients, and mailboxes from the environment', () => {
+    const constants = loadConstants({
+      SRINU_APPROVER_EMAIL: 'director@corp.test',
+      SUDHEER_APPROVER_EMAIL: 'manager@corp.test',
+      CREDIT_APPROVER_EMAIL: 'credit@corp.test',
+      DAILY_RFQ_REPORT_EMAILS: 'ops@corp.test, lead@corp.test',
+      EMAIL_GATEWAY_ADDRESS: 'buyer-intake@corp.test',
+      VENDOR_EMAIL_GATEWAY_ADDRESS: 'vendor-intake@corp.test',
+    });
+    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual(['director@corp.test', 'manager@corp.test']);
+    expect(constants.CREDIT_APPROVAL_APPROVERS).toEqual(['Srinu Sir', 'Sudheer Sir']);
+    expect(constants.getCreditApproverEmail()).toBe('credit@corp.test');
+    expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEFAULT_RECIPIENTS');
+    expect(constants.EMAIL_GATEWAY_CONFIG.GATEWAY_ADDRESS).toBe('buyer-intake@corp.test');
+    expect(constants.VENDOR_EMAIL_GATEWAY_CONFIG.GATEWAY_ADDRESS).toBe('vendor-intake@corp.test');
+  });
+
+  test('daily report recipients are not read here, and credit alerts fall back to the admin address', () => {
+    const constants = loadConstants({
+      CATEGORY_MANAGER_DAILY_REPORT_EMAILS: 'cm@corp.test',
+      CREDIT_APPROVER_EMAIL: '   ',
+      ADMIN_NOTIFICATION_EMAIL: 'admin-alerts@corp.test',
+    });
+    expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('PROD_RECIPIENTS');
+    expect(constants.getCreditApproverEmail()).toBe('admin-alerts@corp.test');
+  });
+
+  test('matches approver passwords by exact name or id, never by substring', () => {
+    const constants = loadConstants();
+    process.env.SRINU_APPROVER_PASSWORD = 'srinu-test-secret';
+    expect(constants.isApproverPasswordConfigured('Srinu Sir')).toBe(true);
+    expect(constants.isApproverPasswordConfigured('srinu_sir')).toBe(true);
+    expect(constants.verifyApproverPassword('Srinu Sir', 'srinu-test-secret')).toBe(true);
+    expect(constants.verifyApproverPassword('Srinu Sir', 'wrong-secret')).toBe(false);
+    expect(constants.isApproverPasswordConfigured('Srinivas Mukku')).toBe(false);
+    expect(constants.isApproverPasswordConfigured('Some Srinu Relative')).toBe(false);
+    expect(constants.isApproverPasswordConfigured('Sudheer Sir')).toBe(false);
+  });
+
+  test('accepts only safe characters in a client X-Request-Id', () => {
+    const constants = loadConstants();
+    expect(constants.REQUEST_ID_CONFIG.HEADER_PATTERN.test('abc-123_x:y.z')).toBe(true);
+    expect(constants.REQUEST_ID_CONFIG.HEADER_PATTERN.test('bad id')).toBe(false);
+    expect(constants.REQUEST_ID_CONFIG.HEADER_PATTERN.test('x'.repeat(129))).toBe(false);
+  });
+});
+
+describe('free trial credits, moved message objects and ticket constants', () => {
+  test('BUYER_FREE_TRIAL_RFQ_CREDITS is the one source for the free-trial credit count', () => {
+    const constants = loadConstants();
+    expect(constants.BUYER_FREE_TRIAL_RFQ_CREDITS).toBe(5);
+    const freeTrial = constants.BUYER_SUBSCRIPTION_PLANS.find((plan) => plan.id === 'free_trial');
+    expect(freeTrial.billing).toBe('5 Free RFQ Credits included for V1/V2/V3 + Unlimited V0');
+    expect(constants.RFQ_CREATION_ERRORS.FREE_CREDITS_EXHAUSTED).toContain('Your 5 free trial RFQ credits');
+  });
+
+  test('removes the invented fallback contact, count and RFQ title', () => {
+    const constants = loadConstants();
+    expect(constants).not.toHaveProperty('DEFAULT_LOW_CREDIT_NOTIFICATION');
+    expect(constants.EMAIL_GATEWAY_CONFIG).not.toHaveProperty('DEFAULT_FALLBACK_RFQ_TITLE');
+  });
+
+  test('exports the message objects moved from services with their existing wording', () => {
+    const constants = loadConstants();
+    expect(constants.SMS_MESSAGES.GATEWAY_REJECTED).toBe('SMS gateway rejected the message');
+    expect(constants.ACTION_CENTER_MESSAGES.QUERY_FAILED).toBe(
+      'Action Center communication history could not be loaded from the database.'
+    );
+    expect(constants.DAILY_REPORT_MESSAGES.NO_RECIPIENTS).toContain('DAILY_RFQ_REPORT_EMAILS');
+    expect(constants.TEMPLATE_MESSAGES.NOT_SPECIFIED).toBe('Not specified');
+    expect(constants.MAILER_NOT_SPECIFIED).toBe('Not specified');
+    expect(constants.MAILER_NOT_EVALUATED).toBe('Not evaluated');
+  });
+
+  test('freezes the batch chaser channel list and maps the ticket form aliases', () => {
+    const constants = loadConstants();
+    expect(Object.isFrozen(constants.BATCH_CHASER_CHANNELS)).toBe(true);
+    expect(constants.TICKET_CREATE_FIELD_ALIASES).toEqual({
+      customer_name: 'customerName',
+      customer_email: 'customerEmail',
+      customer_phone: 'customerPhone',
+      assigned_to_name: 'assignedToName',
+    });
+  });
+
+  test('fills ticket message placeholders from the ticket id', () => {
+    const constants = loadConstants();
+    expect(constants.formatMessage(constants.TICKET_MESSAGES.NOT_FOUND, { id: 'tkt-9' })).toBe(
+      'Ticket with ID "tkt-9" was not found.'
+    );
+    expect(constants.formatMessage(constants.TICKET_MESSAGES.DELETED, { id: 'tkt-9' })).toBe('Ticket tkt-9 deleted.');
   });
 });

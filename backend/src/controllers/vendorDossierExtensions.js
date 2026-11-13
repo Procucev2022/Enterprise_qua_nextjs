@@ -3,7 +3,32 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES } = require('../config/constants');
+
+const VENDOR_DOSSIER_ERRORS = Object.freeze({
+  ACTOR_REQUIRED: 'Sign in with a staff account to record this vendor communication. No signed-in user was found on the request.',
+});
+
+/** Display name of the signed-in user, or null when the session carries no identity. */
+function actorDisplayName(user) {
+  return user?.fullName || user?.name || user?.email || null;
+}
+
+/**
+ * Sends a retryable 503 when the store is unavailable, so the caller knows nothing was saved.
+ * Every other error goes to next(err).
+ */
+function sendDossierError(res, next, err) {
+  if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
+    return res.status(503).json({
+      success: false,
+      error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+      code: 'PERSISTENCE_UNAVAILABLE',
+      retryable: true,
+    });
+  }
+  return next(err);
+}
 
 function assertCategoryManagerOrAdmin(req, res) {
   const user = req.user;
@@ -65,7 +90,8 @@ async function getCreditHistory(req, res, next) {
     const creditInfo = storeService.getVendorRfqCredits(vendor.id);
     let transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
 
-    const alloc = creditInfo.freeCreditsAllocated || 5;
+    // The seeded allocation is the vendor's recorded allocation. No recorded allocation seeds 0.
+    const alloc = Number(creditInfo.freeCreditsAllocated ?? 0);
     if (!transactions || transactions.length === 0) {
       await domainQueries.recordCreditTransactionInDB({
         id: `vtx-init-${vendor.id.slice(0, 8)}`,
@@ -156,7 +182,7 @@ async function getCreditHistory(req, res, next) {
       return {
         id: t.id,
         transactionId: t.id,
-        transactionDate: t.created_at || new Date().toISOString(),
+        transactionDate: t.created_at || null,
         transactionType: txType,
         creditSource,
         creditsAdded: isDeduction ? 0 : Math.abs(amt),
@@ -173,7 +199,7 @@ async function getCreditHistory(req, res, next) {
     return res.json({ success: true, summary, transactions: formattedTransactions });
   } catch (err) {
     logger.error('Error fetching vendor credit history', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -192,7 +218,7 @@ async function getVendorCommunications(req, res, next) {
     return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching vendor communications', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -224,6 +250,11 @@ async function recordVendorCommunication(req, res, next) {
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const internalTaskQueries = require('../db/internalTaskQueries');
 
+    const actorName = actorDisplayName(req.user);
+    if (!actorName) {
+      return res.status(401).json({ success: false, error: VENDOR_DOSSIER_ERRORS.ACTOR_REQUIRED });
+    }
+
     const normalizedChannel = (channel || 'EMAIL').toUpperCase();
     const commNotes = [
       callOutcome ? `Call Outcome: ${callOutcome}` : null,
@@ -251,7 +282,7 @@ async function recordVendorCommunication(req, res, next) {
       notificationStatus: deliveryPending ? 'Delivery Pending' : 'Delivered',
       deliveryStatus: deliveryPending ? 'Pending' : 'Delivered',
       acknowledgementStatus: deliveryPending ? 'Delivery Pending' : 'Acknowledgement Pending',
-      communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
+      communicatedBy: actorName,
       notes: commNotes || null,
       metadata: {
         ...(metadata || {}),
@@ -369,7 +400,7 @@ async function recordVendorCommunication(req, res, next) {
     let completedTask = null;
     try {
       const channelLabel = normalizedChannel === 'CALL' ? 'Call' : normalizedChannel === 'WHATSAPP' ? 'WhatsApp' : normalizedChannel === 'SMS' ? 'SMS' : 'Email';
-      const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+      const actor = req.user;
       completedTask = await internalTaskQueries.createInternalTask({
         title: `[${channelLabel} Log / Completed] ${subject || vendorLabel}`,
         description: message || commNotes || 'Vendor communication activity recorded.',
@@ -380,7 +411,7 @@ async function recordVendorCommunication(req, res, next) {
         relatedEntityId: vendor.id,
         relatedEntityLabel: vendorLabel,
         assignedToUserId: actor.uuid || actor.id || null,
-        assignedToName: actor.fullName || actor.name || actor.email || 'Category Manager',
+        assignedToName: actorName,
         dueDate: new Date().toISOString(),
         notes: commNotes || '',
       }, actor);
@@ -391,7 +422,7 @@ async function recordVendorCommunication(req, res, next) {
     let followupTask = null;
     if (nextFollowupDate) {
       try {
-        const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+        const actor = req.user;
         followupTask = await internalTaskQueries.createInternalTask({
           title: `[Follow-up] ${vendorLabel} - ${subject || 'Vendor Follow-up'}`,
           description: followupNotes || `Follow-up needed following ${normalizedChannel} outreach: ${message || ''}`,
@@ -402,7 +433,7 @@ async function recordVendorCommunication(req, res, next) {
           relatedEntityId: vendor.id,
           relatedEntityLabel: vendorLabel,
           assignedToUserId: followupAssigneeId || actor.uuid || actor.id || null,
-          assignedToName: followupAssigneeName || actor.fullName || actor.name || actor.email || 'Category Manager',
+          assignedToName: followupAssigneeName || actorName,
           dueDate: nextFollowupDate,
           notes: followupNotes || '',
         }, actor);
@@ -414,7 +445,7 @@ async function recordVendorCommunication(req, res, next) {
     return res.status(201).json({ success: true, data: deliveryRecord, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording vendor communication', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -435,21 +466,22 @@ async function getVendorPaymentHistory(req, res, next) {
     }
 
     const payments = [];
-    const planName = vendor.subscriptionPlan || 'Preferred Partner';
-    // Subscription state is not proof of a payment; only provider records count.
+    // Subscription state is not proof of a payment; only provider records count. A field the
+    // provider record does not hold is returned as null, never as a made-up value.
     for (const link of links) {
-      const linkDate = link.createdAt || new Date().toISOString();
+      const linkDate = link.createdAt || null;
+      const invoiceNumber = link.invoiceNumber || null;
       payments.push({
         id: link.id,
         paymentId: link.id,
-        invoiceNo: link.invoiceNumber || `SUP-INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
-        invoiceNumber: link.invoiceNumber || `SUP-INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
-        description: `Subscription Renewal: ${link.planId || planName}`,
-        subscriptionPlan: link.planId || planName,
-        amount: Number(link.amount || 0),
-        currency: link.currency || 'INR',
+        invoiceNo: invoiceNumber,
+        invoiceNumber,
+        description: link.planId ? `Subscription payment: ${link.planId}` : 'Subscription payment',
+        subscriptionPlan: link.planId || null,
+        amount: link.amount === undefined || link.amount === null ? null : Number(link.amount),
+        currency: link.currency || null,
         gateway: 'Zoho Payments',
-        paymentMethod: 'Credit Card / NetBanking / UPI',
+        paymentMethod: null,
         status: String(link.status || 'CREATED').toUpperCase(),
         gatewayRef: link.zohoPaymentLinkId || link.id,
         date: linkDate,
@@ -467,14 +499,14 @@ async function getVendorPaymentHistory(req, res, next) {
     for (const p of payments) {
       const st = String(p.status).toUpperCase();
       if (st === 'PAID' || st === 'SUCCESS' || st === 'COMPLETED') {
-        totalPaid += p.amount;
+        totalPaid += p.amount || 0;
         totalSuccessful += 1;
       } else if (st === 'PENDING' || st === 'CREATED' || st === 'IN_PROGRESS') {
         pending += 1;
       } else if (st === 'FAILED' || st === 'EXPIRED') {
         failed += 1;
       } else if (st === 'REFUNDED') {
-        refunded += p.amount;
+        refunded += p.amount || 0;
       }
     }
 
@@ -489,7 +521,7 @@ async function getVendorPaymentHistory(req, res, next) {
     return res.json({ success: true, summary, payments });
   } catch (err) {
     logger.error('Error fetching vendor payment history', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -521,7 +553,8 @@ async function addQuoteCredits(req, res, next) {
     }
 
     const amount = Number(validation.sanitizedData.amount);
-    const reason = validation.sanitizedData.reason || 'Manual quote credit addition by Category Manager';
+    const actor = actorDisplayName(req.user) || 'signed-in user';
+    const reason = validation.sanitizedData.reason || `Manual quote credit addition by ${actor}`;
 
     const currentBalance = vendor.freeQuotationCredits !== undefined
       ? Number(vendor.freeQuotationCredits)
@@ -612,10 +645,6 @@ async function addQuoteCredits(req, res, next) {
       credits: updatedBalance,
     });
 
-    const actor = req.user
-      ? (req.user.fullName || req.user.name || req.user.email || 'Category Manager')
-      : 'Category Manager';
-
     logger.info(`Quote credits added to vendor ${vendor.id}: +${amount} (New Balance: ${updatedBalance}) by ${actor}`, { vendorId: vendor.id, amount }, 'VENDOR_CONTROLLER');
 
     return res.json({
@@ -627,7 +656,7 @@ async function addQuoteCredits(req, res, next) {
     });
   } catch (err) {
     logger.error('Error adding vendor quote credits', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -657,7 +686,13 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, initiatorName, idempotencyKey } = validation.sanitizedData;
+    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+    // The maker is the signed-in user. The request body does not set who submitted the approval.
+    const makerName = actorDisplayName(req.user);
+    if (!makerName) {
+      return res.status(401).json({ success: false, error: VENDOR_DOSSIER_ERRORS.ACTOR_REQUIRED });
+    }
+    const makerRole = req.user?.role || null;
 
     const vendorLabel = vendor.name || vendor.id;
     const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
@@ -678,16 +713,16 @@ async function requestCreditApproval(req, res, next) {
         creditAccountName: vendorLabel,
         creditQuantity: amount,
         creditReason: reason,
-        notes: `Initiated By: ${initiatorName}. Requires review and approval by ${approverName}.`,
+        notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'SELLER',
         relatedEntityId: vendor.id,
         relatedEntityLabel: vendorLabel,
       },
       {
-        fullName: initiatorName,
-        name: initiatorName,
-        email: req.user?.email || 'cm@procucev.com',
-        role: 'category_manager',
+        fullName: makerName,
+        name: makerName,
+        email: req.user?.email || null,
+        role: makerRole,
       },
       {
         module: 'Seller Credit Addition',
@@ -700,8 +735,8 @@ async function requestCreditApproval(req, res, next) {
         amount,
         quantity: amount,
         available_balance: vendor.freeQuotationCredits ?? VENDOR_FREE_CREDITS_LIMIT,
-        maker_name: initiatorName,
-        maker_role: 'Category Manager',
+        maker_name: makerName,
+        maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
         details: taskReason,
@@ -709,8 +744,8 @@ async function requestCreditApproval(req, res, next) {
         history: [
           {
             action: 'SUBMITTED',
-            actor_name: initiatorName,
-            actor_role: 'Category Manager',
+            actor_name: makerName,
+            actor_role: makerRole,
             timestamp: new Date().toISOString(),
             remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
           },
@@ -731,7 +766,7 @@ async function requestCreditApproval(req, res, next) {
     });
   } catch (err) {
     logger.error('Error requesting quote credit approval for seller', err, 'VENDOR_DOSSIER_EXTENSIONS');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 

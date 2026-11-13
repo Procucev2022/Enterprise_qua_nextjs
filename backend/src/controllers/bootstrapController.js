@@ -59,8 +59,8 @@ async function getBootstrap(req, res, next) {
         evaluations: (storeService.evaluations || []).slice(0, 50),
         auditLogs: (storeService.auditLogs || []).slice(0, 50),
         aiFeed: [],
-        systemConfig: storeService.systemConfig,
-        azureHealth: storeService.azureHealth,
+        systemConfig: storeService.getSystemConfig(),
+        azureHealth: storeService.getAzureHealth(),
         vendorCatalogue: [],
       };
     }
@@ -75,6 +75,34 @@ async function getBootstrap(req, res, next) {
     const buyerIdentityValues = [buyerId, ...candidateBuyerIds]
       .filter(Boolean)
       .map((value) => String(value).toLowerCase());
+    const buyerOwnedVendors = (data.vendors || []).filter((vendor) => {
+      const vendorOwnerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      return vendorOwnerValues.some((value) => buyerIdentityValues.includes(value));
+    });
+    const buyerOwnedVendorIdSet = new Set(buyerOwnedVendors.map((v) => v.id).filter(Boolean));
+    const buyerOwnedVendorEmailSet = new Set(
+      buyerOwnedVendors.map((v) => String(v.email || '').toLowerCase()).filter(Boolean)
+    );
+
+    const buyerEvaluations = isBuyer
+      ? evaluations.filter((evaluation) => {
+          const evalBuyerValues = [evaluation.buyerId, evaluation.buyerAccountId]
+            .filter(Boolean)
+            .map((val) => String(val).toLowerCase());
+          if (evalBuyerValues.some((val) => buyerIdentityValues.includes(val))) return true;
+
+          if (buyerOwnedVendors.length > 0) {
+            return (
+              buyerOwnedVendorIdSet.has(evaluation.vendorId) ||
+              (evaluation.email && buyerOwnedVendorEmailSet.has(String(evaluation.email).toLowerCase()))
+            );
+          }
+          return true;
+        })
+      : [];
+
     const vendors = (data.vendors || []).map((vendor) => {
       const isOwnVendor = sessionEmail && String(vendor.email || '').toLowerCase() === sessionEmail;
       const vendorOwnerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
@@ -89,7 +117,7 @@ async function getBootstrap(req, res, next) {
       buyerAccounts: isManagementUser ? data.buyerAccounts : (isBuyer && resolvedBuyerAccount ? [resolvedBuyerAccount] : []),
       activeBuyerAccount: isManagementUser ? data.activeBuyerAccount : (isBuyer ? resolvedBuyerAccount : null),
       vendors,
-      evaluations: isManagementUser || isBuyer ? evaluations : vendorEvaluations,
+      evaluations: isManagementUser ? evaluations : (isBuyer ? buyerEvaluations : vendorEvaluations),
       auditLogs: isManagementUser ? data.auditLogs : [],
       systemConfig: isManagementUser ? data.systemConfig : null,
       azureHealth: isManagementUser ? data.azureHealth : [],

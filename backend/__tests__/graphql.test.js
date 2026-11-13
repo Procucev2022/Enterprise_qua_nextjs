@@ -151,8 +151,8 @@ describe('GraphQL API & Controller Integration Tests', () => {
           action
         }
         systemConfig {
-          maintenanceMode
           aiModel
+          aiTemperature
         }
         dbHealth {
           isConfigured
@@ -334,7 +334,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
   });
 
   test('GET /graphql supports query execution and rejects malformed variables', async () => {
-    const query = 'query { systemConfig { maintenanceMode } }';
+    const query = 'query { systemConfig { aiModel } }';
     const res = await request(app)
       .get(`/graphql?query=${encodeURIComponent(query)}&variables=${encodeURIComponent('{}')}`)
       .set(authHeader('admin'))
@@ -351,20 +351,20 @@ describe('GraphQL API & Controller Integration Tests', () => {
   });
 
   test('GraphQL request complexity, batch count, and body size are bounded', async () => {
-    const tooManyFields = `query { ${Array.from({ length: 51 }, (_, index) => `field${index}: systemConfig { maintenanceMode }`).join(' ')} }`;
+    const tooManyFields = `query { ${Array.from({ length: 51 }, (_, index) => `field${index}: systemConfig { aiModel }`).join(' ')} }`;
     const complexQuery = await request(app)
       .post('/graphql')
       .send({ query: tooManyFields })
       .expect(413);
     expect(complexQuery.body.errors[0].message).toMatch(/complexity limit/i);
 
-    const oversizedBatch = Array.from({ length: 6 }, () => ({ query: 'query { systemConfig { maintenanceMode } }' }));
+    const oversizedBatch = Array.from({ length: 6 }, () => ({ query: 'query { systemConfig { aiModel } }' }));
     const batchResponse = await request(app).post('/graphql').send(oversizedBatch).expect(413);
     expect(batchResponse.body.errors[0].message).toMatch(/at most 5 operations/i);
 
     const malformedVariables = await request(app)
       .post('/graphql')
-      .send({ query: 'query { systemConfig { maintenanceMode } }', variables: 'not-json' })
+      .send({ query: 'query { systemConfig { aiModel } }', variables: 'not-json' })
       .expect(400);
     expect(malformedVariables.body.errors[0].message).toMatch(/valid JSON object/i);
 
@@ -560,7 +560,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
   test('POST /graphql supports batched queries array and handles empty batch validation', async () => {
     // 1. Valid batched queries
     const batchOperations = [
-      { query: 'query { systemConfig { maintenanceMode } }', variables: '{}' },
+      { query: 'query { systemConfig { aiModel } }', variables: '{}' },
       { query: 'query { dbHealth { isConfigured provider } }' },
       { query: 'query { optimizationMetrics { cache { hits misses } } }' },
     ];
@@ -597,7 +597,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
       query CompositeDashboard {
         rfqs(limit: 5) { id rfqNumber title }
         buyerAccounts(limit: 3) { id organizationName }
-        systemConfig { maintenanceMode }
+        systemConfig { aiModel }
         optimizationMetrics {
           cache { activeEntries cacheHitRatio }
           auditing { totalQueriesExecuted }

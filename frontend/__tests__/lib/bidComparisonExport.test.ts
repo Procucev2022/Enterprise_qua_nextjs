@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { downloadBidComparisonExcel, downloadVendorQuotationExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel, downloadMultiSheetWorkbook, buildBidComparisonWorksheet } from '@/lib/bidComparisonExport';
 import type { RFQItem, QuoteComparison, LineItemBid } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('xlsx', () => ({
   utils: {
@@ -110,13 +111,13 @@ describe('downloadBidComparisonExcel and buildBidComparisonWorksheet', () => {
       [1, 'Pump', 2, 'Nos', 500, 1000],
       [2, 'Valve', 5, 'Nos', 50, 250],
       ['', 'BasicAmount', '', '', '', 1250],
-      ['', 'GSTAmount', '', '', '', 225],
-      ['', 'TotalAmount', '', '', '', 1475],
+      ['', 'GSTAmount', '', '', '', ''],
+      ['', 'TotalAmount', '', '', '', ''],
       ['', 'Warranty', '', '', '1 Year(s)', ''],
-      ['', 'Best Price', '', '', 'No', ''],
+      ['', 'Best Price', '', '', UI_STRINGS.dataLoad.emptyCell, ''],
       ['', 'Payment Terms', '', '', 'Net 30', ''],
-      ['', 'Submitted', '', '', 'N/A', ''],
-      ['', 'Remarks', '', '', 'None', ''],
+      ['', 'Submitted', '', '', UI_STRINGS.dataLoad.emptyCell, ''],
+      ['', 'Remarks', '', '', UI_STRINGS.dataLoad.emptyCell, ''],
     ]);
 
     expect(XLSX.write).toHaveBeenCalledWith(
@@ -343,9 +344,10 @@ describe('downloadSingleVendorQuoteExcel', () => {
       quoteWithoutLineItems
     );
 
+    // The unit is left blank when the RFQ line has none, and the quote total is not copied onto each line.
     expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ 'Item Name': 'Spare Part', 'Unit': 'Nos' }),
+        expect.objectContaining({ 'Item Name': 'Spare Part', 'Unit': '', 'Unit Price (INR)': '', 'Total Price (INR)': '' }),
       ]),
       expect.anything()
     );

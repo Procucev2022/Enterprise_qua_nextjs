@@ -1,43 +1,19 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import AuditLog from '@/app/admin/audit-log';
 import InfraControl from '@/app/admin/infra-control';
 import { logger } from '@/lib/logger';
 import type { AuditLogEntry, AuditVerificationReport } from '@/lib/types';
-import { AppProvider } from '@/lib/store';
+import { AppProvider, useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { DB_STATUS_POLL_INTERVAL_MS } from '@/lib/constants';
+import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 
 // Mock global fetch for API calls
 global.fetch = jest.fn();
 
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
-}
-
-/**
- * A URL-aware fetch double for the infrastructure actions.
- *
- * These tests used ordered mockResolvedValueOnce chains, which the provider's own
- * mount-time calls (/api/db/status, /api/bootstrap, /api/rfqs) silently consumed —
- * so the response meant for the button click went to a different request. Routing
- * by URL asserts the behaviour under test rather than the call order.
- */
-function routeInfraFetch(overrides: Record<string, unknown> = {}) {
-  (global.fetch as jest.Mock).mockImplementation((url: string) => {
-    const key = Object.keys(overrides).find((k) => String(url).includes(k));
-    if (key) return Promise.resolve(overrides[key]);
-    // The default reports a connected database: the action buttons are gated on
-    // it, so an unconnected default leaves them disabled and nothing to assert.
-    return Promise.resolve({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        success: true,
-        data: { isConnected: true },
-        health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
-      }),
-    });
-  });
 }
 
 function routeAuditFetch(report: AuditVerificationReport, auditLogs: AuditLogEntry[]) {
@@ -63,6 +39,43 @@ function routeAuditFetch(report: AuditVerificationReport, auditLogs: AuditLogEnt
       }),
     });
   });
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return { ok: status < 400, status, json: async () => body };
+}
+
+/**
+ * A URL-aware fetch double. Each route is matched by a substring of the request
+ * URL, so the order of the provider's own mount-time requests does not matter.
+ * A route set to an Error rejects, which simulates a network failure.
+ */
+function routeInfraFetch(routes: Record<string, ReturnType<typeof jsonResponse> | Error>) {
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    const key = Object.keys(routes).find((route) => String(url).includes(route));
+    const route = key ? routes[key] : jsonResponse({ success: true, data: {} });
+    return route instanceof Error ? Promise.reject(route) : Promise.resolve(route);
+  });
+}
+
+/** Records every toast the store shows, so the tests can assert the text the user sees. */
+function ToastProbe({ onToast }: { onToast: jest.Mock }) {
+  const { toastMessage } = useApp();
+  useEffect(() => {
+    if (toastMessage) onToast(toastMessage);
+  }, [toastMessage, onToast]);
+  return null;
+}
+
+function renderInfra(onNavigate: () => void = jest.fn()) {
+  const onToast = jest.fn();
+  render(
+    <AppProvider>
+      <InfraControl onNavigateToAuditLog={onNavigate} />
+      <ToastProbe onToast={onToast} />
+    </AppProvider>
+  );
+  return { onToast };
 }
 
 describe('Admin Components (AuditLog & InfraControl)', () => {
@@ -356,253 +369,314 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
   });
 
   describe('InfraControl Component', () => {
-    test('renders Azure cloud health, DB telemetry, and test connection action', async () => {
-      const onAudit = jest.fn();
-      renderWithProvider(<InfraControl onNavigateToAuditLog={onAudit} />);
+    const strings = UI_STRINGS.infraControl;
 
-      expect(screen.getByText(/Security, Azure Infrastructure & System Settings/i)).toBeInTheDocument();
-      expect(screen.getByText(/AZURE CLOUD INFRASTRUCTURE HEALTH/i)).toBeInTheDocument();
+    // Shaped like GET /api/db/status: the health fields sit at the top level.
+    const CONNECTED_STATUS = {
+      success: true,
+      isConfigured: true,
+      isConnected: true,
+      provider: 'cloudflare_d1',
+      providerLabel: 'Cloudflare D1',
+      poolStatus: 'ACTIVE (D1 binding)',
+      database: 'enterprise-qua-d1',
+      latencyMs: 12,
+      userCount: 3,
+      vendorCount: 15,
+      rfqCount: 9,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      loadedRecords: { isLoadedFromDatabase: true, buyerAccounts: 6, vendors: 15, rfqs: 12 },
+    };
 
-      const auditBtn = screen.getByRole('button', { name: /Immutable Audit Trail/i });
-      fireEvent.click(auditBtn);
-      expect(onAudit).toHaveBeenCalled();
-
-      // Test connection action (notifies)
-      const testConnBtn = screen.getByRole('button', { name: /Test Connection/i });
-      fireEvent.click(testConnBtn);
-
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/db/status');
-      });
+    // Shaped like GET /api/bootstrap: systemConfig and azureHealth come from the store.
+    const SERVER_SYSTEM_CONFIG = { aiModel: 'test-model-a', aiTemperature: 0.2 };
+    const SERVER_HEALTH_ROW = {
+      service: 'Cloudflare D1 Database',
+      status: 'ONLINE',
+      latency: '12ms',
+      uptime: '—',
+      details: '3 active account(s), 15 vendor(s), 9 RFQ(s).',
+    };
+    const BOOTSTRAP_WITH_CONFIG = jsonResponse({
+      success: true,
+      data: { systemConfig: SERVER_SYSTEM_CONFIG, azureHealth: [SERVER_HEALTH_ROW] },
     });
+    const BOOTSTRAP_EMPTY = jsonResponse({ success: true, data: {} });
 
-    test('handles disconnected database status and fallback states', async () => {
-      // Disconnected with config
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        json: async () => ({
-          success: true,
-          data: {
-            isConfigured: true,
-            isConnected: false,
-            providerLabel: 'Local PostgreSQL',
-            errorMessage: 'Connection refused on port 5432',
-          },
-        }),
-      });
+    const countStatusReads = () => (global.fetch as jest.Mock).mock.calls.filter(([url]) => url === '/api/db/status').length;
 
-      renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
-
-      await waitFor(() => {
-        expect(screen.getByText(/Connection Error/i)).toBeInTheDocument();
-      });
-
-      // Disconnected without config (fallback)
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        json: async () => ({
-          success: true,
-          data: {
-            isConfigured: false,
-            isConnected: false,
-            providerLabel: 'In-Memory State Engine',
-          },
-        }),
-      });
-
-      const testConnBtn = screen.getByRole('button', { name: /Test Connection/i });
-      fireEvent.click(testConnBtn);
-
-      await waitFor(() => {
-        expect(screen.getByText(/In-Memory Fallback Active/i)).toBeInTheDocument();
-      });
-    });
-
-    test('updates AI Engine parameters: model selection, OCR slider, WhatsApp toggle, and escalation interval', async () => {
-      renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
-
-      // Ollama Model select
-      const modelSelect = screen.getByDisplayValue(/Llama 3 \(8B Instruct - Ultra Fast\)/i);
-      fireEvent.change(modelSelect, { target: { value: 'Llama 3.1 (70B Quantized)' } });
-
-      // OCR Threshold slider
-      const slider = screen.getByRole('slider');
-      fireEvent.change(slider, { target: { value: '95' } });
-
-      // WhatsApp Auto-Chaser toggle button
-      const whatsappBtn = screen.getByRole('button', { name: /Enabled \(Active\)|Disabled/i });
-      fireEvent.click(whatsappBtn);
-      fireEvent.click(whatsappBtn);
-
-      // Escalation Interval select
-      const intervalSelect = screen.getByDisplayValue(/24 Hours \(Standard\)/i);
-      fireEvent.change(intervalSelect, { target: { value: '12' } });
-    });
-
-    test('executes run migrations and sync data actions (success & error branches)', async () => {
+    beforeEach(() => {
       routeInfraFetch({
-        '/api/db/init': {
-          json: async () => ({
-            success: true,
-            health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
-            tablesCreated: ['rfqs', 'vendors'],
-            message: 'Schema Initialized',
-          }),
-        },
-        '/api/db/sync': {
-          json: async () => ({
-            success: true,
-            health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
-            message: 'Data Synchronized',
-          }),
-        },
-      });
-
-      renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
-
-      const migrateBtn = screen.getByRole('button', { name: /Run Schema Migrations/i });
-      fireEvent.click(migrateBtn);
-
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith(
-          '/api/db/init',
-          expect.objectContaining({ method: 'POST' })
-        );
-      });
-
-      const syncBtn = screen.getByRole('button', { name: /Sync Data to Postgres/i });
-      fireEvent.click(syncBtn);
-
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith(
-          '/api/db/sync',
-          expect.objectContaining({ method: 'POST' })
-        );
-      });
-
-      // 2. Failure responses (data.success === false)
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          json: async () => ({ success: false, message: 'Schema initialization failed' }),
-        })
-        .mockResolvedValueOnce({
-          json: async () => ({ success: false, message: 'Sync failed: network timeout' }),
-        });
-
-      fireEvent.click(migrateBtn);
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalled();
-      });
-
-      fireEvent.click(syncBtn);
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalled();
-      });
-
-      // 3. Exception thrown (catch branch)
-      (global.fetch as jest.Mock)
-        .mockRejectedValueOnce(new Error('Network error on migrate'))
-        .mockRejectedValueOnce(new Error('Network error on sync'));
-
-      fireEvent.click(migrateBtn);
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalled();
-      });
-
-      fireEvent.click(syncBtn);
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalled();
+        '/api/db/status': jsonResponse(CONNECTED_STATUS),
+        '/api/bootstrap': BOOTSTRAP_WITH_CONFIG,
       });
     });
 
-    test('attaches Authorization header to migrate/sync requests when a session token is present', async () => {
-      const getTokenSpy = jest.spyOn(authClient, 'getToken').mockReturnValue('test-session-token');
+    test('renders infrastructure health, read-only AI configuration and the database status from the server', async () => {
+      renderInfra();
 
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          json: async () => ({
-            success: true,
-            health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
-            tablesCreated: ['rfqs', 'vendors'],
-            message: 'Schema Initialized',
-          }),
-        })
-        .mockResolvedValueOnce({
-          json: async () => ({
-            success: true,
-            health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
-            message: 'Data Synchronized',
-          }),
-        });
-
-      renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
-
-      fireEvent.click(screen.getByRole('button', { name: /Run Schema Migrations/i }));
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/db/init', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer test-session-token' },
-        });
-      });
-
-      fireEvent.click(screen.getByRole('button', { name: /Sync Data to Postgres/i }));
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/db/sync', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer test-session-token' },
-        });
-      });
-
-      getTokenSpy.mockRestore();
+      expect(await screen.findByText(strings.title)).toBeInTheDocument();
+      expect(await screen.findByText(formatString(strings.databaseConnected, { latencyMs: 12 }))).toBeInTheDocument();
+      expect(screen.getByText('Cloudflare D1')).toBeInTheDocument();
+      expect(screen.getByText(SERVER_HEALTH_ROW.service)).toBeInTheDocument();
+      expect(screen.getByText(strings.statusOnline)).toBeInTheDocument();
+      expect(screen.getByText(SERVER_SYSTEM_CONFIG.aiModel)).toBeInTheDocument();
+      expect(screen.getByText('0.2')).toBeInTheDocument();
+      expect(screen.getByText(strings.configReadOnlyNote)).toBeInTheDocument();
+      expect(screen.getByText(strings.loadedVendors).nextSibling).toHaveTextContent('15');
+      expect(global.fetch).toHaveBeenCalledWith('/api/db/status');
     });
 
-    test('opens and closes RBAC modal, Azure Key Vault secrets modal, and triggers database backup snapshot', async () => {
+    test('offers no editable setting and none of the removed actions', async () => {
+      renderInfra();
+      await screen.findByText(formatString(strings.databaseConnected, { latencyMs: 12 }));
+
+      expect(screen.queryByRole('slider')).not.toBeInTheDocument();
+      expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Migrations|Sync Data|Backup|Key Vault|RBAC/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Sub-Procucev|kv-procucev|Llama 3 Active|Multi-Region/i)).not.toBeInTheDocument();
+    });
+
+    test('sends no request to the write or migration endpoints that do not exist', async () => {
+      renderInfra();
+      await screen.findByText(formatString(strings.databaseConnected, { latencyMs: 12 }));
+      const readsBeforeClick = countStatusReads();
+      fireEvent.click(screen.getByRole('button', { name: strings.testConnection }));
+      await waitFor(() => expect(countStatusReads()).toBeGreaterThan(readsBeforeClick));
+
+      const requestedUrls = (global.fetch as jest.Mock).mock.calls.map(([url]) => String(url));
+      expect(requestedUrls.some((url) => url.includes('/api/system-config'))).toBe(false);
+      expect(requestedUrls.some((url) => url.includes('/api/db/init'))).toBe(false);
+      expect(requestedUrls.some((url) => url.includes('/api/db/sync'))).toBe(false);
+    });
+
+    test('marks every value the server did not send as not available', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({
+          success: true,
+          isConfigured: false,
+          isConnected: false,
+          provider: 'not_configured',
+          errorMessage: 'DATABASE_URL is not set.',
+        }),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      renderInfra();
+
+      expect(await screen.findByText(strings.databaseNotConfigured)).toBeInTheDocument();
+      expect(screen.getByText('DATABASE_URL is not set.')).toBeInTheDocument();
+      expect(screen.getByText(strings.healthEmpty)).toBeInTheDocument();
+      expect(screen.getByText(strings.configEmpty)).toBeInTheDocument();
+      expect(screen.getByText(strings.configModelLabel).nextSibling).toHaveTextContent(strings.notAvailable);
+      expect(screen.getByText(strings.configTemperatureLabel).nextSibling).toHaveTextContent(strings.notAvailable);
+      expect(screen.getByText(strings.loadedBuyerAccounts).nextSibling).toHaveTextContent(strings.notAvailable);
+      expect(screen.getByText(strings.loadedVendors).nextSibling).toHaveTextContent(strings.notAvailable);
+      expect(screen.getByText(strings.loadedRfqs).nextSibling).toHaveTextContent(strings.notAvailable);
+    });
+
+    test('shows the server connection error when the database is configured but unreachable', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({
+          success: true,
+          isConfigured: true,
+          isConnected: false,
+          providerLabel: 'Test provider',
+          errorMessage: 'Connection refused on port 5432',
+        }),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      const { onToast } = renderInfra();
+
+      expect(await screen.findByText(strings.databaseConnectionError)).toBeInTheDocument();
+      expect(screen.getByText('Connection refused on port 5432')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: strings.testConnection }));
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith({
+        title: strings.notConnectedToastTitle,
+        description: 'Connection refused on port 5432',
+        type: 'warning',
+      }));
+    });
+
+    test('reports a not-connected database by its provider label when no error message is sent', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({ success: true, isConfigured: false, isConnected: false, providerLabel: 'Test provider' }),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      const { onToast } = renderInfra();
+
+      expect(await screen.findByText(strings.databaseNotConfigured)).toBeInTheDocument();
+      expect(screen.getByText('Test provider')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: strings.testConnection }));
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith({
+        title: strings.notConnectedToastTitle,
+        description: 'Test provider',
+        type: 'warning',
+      }));
+    });
+
+    test('reports a not-connected database as not available when it sends neither a message nor a provider', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({ success: true, isConfigured: false, isConnected: false }),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      const { onToast } = renderInfra();
+
+      expect(await screen.findByText(strings.databaseNotConfigured)).toBeInTheDocument();
+      expect(screen.getByText(strings.databaseTitle).nextSibling).toHaveTextContent(strings.notAvailable);
+
+      fireEvent.click(screen.getByRole('button', { name: strings.testConnection }));
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith({
+        title: strings.notConnectedToastTitle,
+        description: strings.notAvailable,
+        type: 'warning',
+      }));
+    });
+
+    test('shows a visible error and no stale values when the status request is rejected by the server', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({ success: false, error: 'Database migration is required.' }, 503),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      renderInfra();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Database migration is required.');
+      expect(screen.getByText(strings.databaseStatusUnavailable)).toBeInTheDocument();
+      expect(screen.queryByText(formatString(strings.databaseConnected, { latencyMs: 12 }))).not.toBeInTheDocument();
+      expect(screen.getByText(strings.loadedVendors).nextSibling).toHaveTextContent(strings.notAvailable);
+    });
+
+    test('uses the generic status message when a failed response carries no reason', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({ success: false }),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      renderInfra();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(strings.databaseStatusFailed);
+    });
+
+    test('logs the failure and shows the status error when the request throws', async () => {
+      routeInfraFetch({
+        '/api/db/status': new Error('Fatal DB health error'),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      renderInfra();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(strings.databaseStatusFailed);
+      expect(logger.buffer).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          level: 'ERROR',
+          category: 'INFRASTRUCTURE',
+          message: 'Failed to fetch database status',
+          metadata: expect.objectContaining({ error: expect.any(Error) }),
+        }),
+      ]));
+    });
+
+    test('Test Connection clears an earlier error and reports the connected database', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({ success: false, error: 'Database migration is required.' }, 503),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      const { onToast } = renderInfra();
+      expect(await screen.findByRole('alert')).toHaveTextContent('Database migration is required.');
+
+      routeInfraFetch({
+        '/api/db/status': jsonResponse(CONNECTED_STATUS),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      fireEvent.click(screen.getByRole('button', { name: strings.testConnection }));
+
+      expect(await screen.findByText(formatString(strings.databaseConnected, { latencyMs: 12 }))).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith({
+        title: strings.connectedToastTitle,
+        description: formatString(strings.connectedToastMessage, { provider: 'Cloudflare D1', latencyMs: 12 }),
+        type: 'success',
+      }));
+    });
+
+    test('Test Connection reports a failed re-read in place with a warning', async () => {
+      const { onToast } = renderInfra();
+      expect(await screen.findByText(formatString(strings.databaseConnected, { latencyMs: 12 }))).toBeInTheDocument();
+
+      routeInfraFetch({
+        '/api/db/status': new Error('offline'),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      fireEvent.click(screen.getByRole('button', { name: strings.testConnection }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(strings.databaseStatusFailed);
+      expect(screen.getByText(strings.databaseStatusUnavailable)).toBeInTheDocument();
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith({
+        title: strings.statusFailedToastTitle,
+        description: strings.databaseStatusFailed,
+        type: 'warning',
+      }));
+    });
+
+    test('shows connected without a latency figure and keeps an unrecognised health status as received', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse({ success: true, isConfigured: true, isConnected: true }),
+        '/api/bootstrap': jsonResponse({
+          success: true,
+          data: {
+            azureHealth: [{ service: 'Probe row', status: 'DEGRADED', latency: '—', uptime: '—', details: 'Probe detail' }],
+          },
+        }),
+      });
+      const { onToast } = renderInfra();
+
+      expect(await screen.findByText(strings.databaseConnectedNoLatency)).toBeInTheDocument();
+      expect(screen.getByText('DEGRADED')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: strings.testConnection }));
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith({
+        title: strings.connectedToastTitle,
+        description: formatString(strings.connectedToastMessageNoLatency, { provider: strings.notAvailable }),
+        type: 'success',
+      }));
+    });
+
+    test('shows the infrastructure health empty state and no configuration when the server sends neither', async () => {
+      routeInfraFetch({
+        '/api/db/status': jsonResponse(CONNECTED_STATUS),
+        '/api/bootstrap': BOOTSTRAP_EMPTY,
+      });
+      renderInfra();
+
+      expect(await screen.findByText(strings.healthEmpty)).toBeInTheDocument();
+      expect(screen.getByText(strings.configEmpty)).toBeInTheDocument();
+    });
+
+    test('re-reads the database status on the poll interval', async () => {
       jest.useFakeTimers();
-      renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
+      try {
+        renderInfra();
+        await act(async () => {
+          await Promise.resolve();
+        });
+        const readsBeforePoll = countStatusReads();
+        expect(readsBeforePoll).toBeGreaterThanOrEqual(1);
 
-      // Open RBAC Modal
-      const rbacBtn = screen.getByRole('button', { name: /Manage RBAC Permissions/i });
-      fireEvent.click(rbacBtn);
-      expect(screen.getByText(/Azure Active Directory & RBAC Matrix/i)).toBeInTheDocument();
-      // Sync Azure AD Roles
-      const syncAdBtn = screen.getByRole('button', { name: /Sync Azure AD Roles/i });
-      fireEvent.click(syncAdBtn);
-
-      // Open Key Vault Secrets Modal
-      const secretsBtn = screen.getByRole('button', { name: /Azure Key Vault Secrets/i });
-      fireEvent.click(secretsBtn);
-      expect(screen.getByText(/Azure Key Vault Secrets \(kv-procucev-prod\)/i)).toBeInTheDocument();
-      // Close via X button
-      const closeSecretsX = screen.getByText('✕');
-      fireEvent.click(closeSecretsX);
-
-      // Open Key Vault Secrets Modal again and close via Close button
-      fireEvent.click(secretsBtn);
-      const closeSecretsBtn = screen.getByRole('button', { name: /Close/i });
-      fireEvent.click(closeSecretsBtn);
-
-      // Trigger Database Backup Snapshot
-      const backupBtn = screen.getByRole('button', { name: /Database Backup/i });
-      fireEvent.click(backupBtn);
-
-      act(() => {
-        jest.advanceTimersByTime(2000);
-      });
-
-      jest.useRealTimers();
+        await act(async () => {
+          jest.advanceTimersByTime(DB_STATUS_POLL_INTERVAL_MS);
+        });
+        expect(countStatusReads()).toBeGreaterThan(readsBeforePoll);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
-    test('handles fetchDbHealth catch branch when fetch fails', async () => {
-      (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Fatal DB health error'));
-      renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
-      await waitFor(() => {
-        expect(logger.buffer).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            level: 'ERROR',
-            category: 'INFRASTRUCTURE',
-            message: 'Failed to fetch database status',
-            metadata: expect.objectContaining({ error: expect.any(Error) }),
-          }),
-        ]));
-      });
+    test('opens the audit trail from the header button', async () => {
+      const onAudit = jest.fn();
+      renderInfra(onAudit);
+
+      fireEvent.click(screen.getByRole('button', { name: strings.auditTrailButton }));
+      expect(onAudit).toHaveBeenCalled();
     });
   });
 });

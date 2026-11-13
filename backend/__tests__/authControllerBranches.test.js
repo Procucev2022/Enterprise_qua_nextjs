@@ -85,3 +85,61 @@ describe('authController login audit branches', () => {
     );
   });
 });
+
+describe('authController session identity and placeholder fallbacks', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('getClientIp returns null, not a fixed address, when no client address is known', () => {
+    expect(authController.getClientIp({})).toBeNull();
+    expect(authController.getClientIp({ ip: '198.51.100.7' })).toBe('198.51.100.7');
+  });
+
+  test('a logout without a session token names no account, even when the body carries an email', async () => {
+    const audit = jest.spyOn(logger, 'audit').mockImplementation(() => {});
+    const logoutLog = jest.spyOn(loginLogsQueries, 'recordLogoutLog').mockResolvedValue(true);
+    const res = createResponse();
+
+    await authController.logout({ headers: {}, body: { email: 'someone@else.test' } }, res, jest.fn());
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(audit).not.toHaveBeenCalled();
+    expect(logoutLog).not.toHaveBeenCalled();
+  });
+
+  test('a logout with a valid session records the account from the verified token, not the body', async () => {
+    const token = authService.generateSessionToken({ id: 'u-9', email: 'real@session.test', role: 'buyer', name: 'Real' });
+    const logoutLog = jest.spyOn(loginLogsQueries, 'recordLogoutLog').mockResolvedValue(true);
+    jest.spyOn(authService, 'revokeSessionToken').mockResolvedValue(true);
+    const res = createResponse();
+
+    await authController.logout(
+      { headers: { authorization: `Bearer ${token}` }, body: { email: 'spoofed@body.test' } },
+      res,
+      jest.fn()
+    );
+
+    expect(logoutLog).toHaveBeenCalledWith(expect.objectContaining({ email: 'real@session.test' }));
+    expect(logoutLog).not.toHaveBeenCalledWith(expect.objectContaining({ email: 'spoofed@body.test' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  test('a successful login with no company on record stores an empty company, not a placeholder', async () => {
+    const recordLoginLog = jest.spyOn(loginLogsQueries, 'recordLoginLog').mockResolvedValue(true);
+    jest.spyOn(authService, 'authenticateWithPassword').mockResolvedValue({
+      success: true,
+      token: 'token-value',
+      user: { id: 'u-1', name: 'No Org', email: 'noorg@test.com', role: 'buyer', mobile: '9000000000' },
+    });
+    const res = createResponse();
+
+    await authController.login(
+      { body: { email: 'noorg@test.com', password: 'Pass@123', mobile: '9000000000' }, ip: '198.51.100.8' },
+      res,
+      jest.fn()
+    );
+
+    expect(recordLoginLog).toHaveBeenCalledWith(expect.objectContaining({ companyName: '' }));
+  });
+});

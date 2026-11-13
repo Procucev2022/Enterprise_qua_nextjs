@@ -106,9 +106,9 @@ describe('POST /api/vendors/:id/payment-link', () => {
       data: { paymentUrl: 'https://payments.zoho.in/happy', paymentLinkId: expect.any(String), status: 'CREATED' },
     });
     expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
-      expect.objectContaining({ planId: 'connect', email: vendor.email, phone: '+919876543210' })
+      expect.objectContaining({ planId: 'connect', email: vendor.email, phone: '+919876543210', amountInr: 8848.82 })
     );
-    await expect(storeService.getPaymentLinkByZohoId('zoho-happy-1')).resolves.toMatchObject({ vendorId: vendor.id, planId: 'connect' });
+    await expect(storeService.getPaymentLinkByZohoId('zoho-happy-1')).resolves.toMatchObject({ vendorId: vendor.id, planId: 'connect', amount: 8848.82 });
   });
 
   test('normalizes a bare-digit legacy phone to E.164 before calling Zoho', async () => {
@@ -142,6 +142,110 @@ describe('POST /api/vendors/:id/payment-link', () => {
     expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
       expect.objectContaining({ phone: '+919974814444' })
     );
+  });
+
+  test('falls back to identity user mobile when vendor profile phone is blank', async () => {
+    const noPhoneVendor = storeService.addVendor({
+      name: 'No Phone Vendor',
+      email: 'nophone-vendor@example.com',
+      phone: '',
+      majorCategory: 'Payment-Link-Cat',
+    });
+    const token = require('../src/services/authService').generateSessionToken({
+      id: 'usr-nophone-vendor',
+      email: 'nophone-vendor@example.com',
+      name: 'No Phone Vendor',
+      role: 'vendor',
+      orgId: 'o',
+      orgName: 'O',
+    });
+    const identityQueries = require('../src/db/identityQueries');
+    const spy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({
+      email: 'nophone-vendor@example.com',
+      mobile: '+919123456789',
+    });
+    zohoPaymentService.createPaymentLink.mockResolvedValue({
+      zohoPaymentLinkId: 'zoho-id-phone-1',
+      paymentUrl: 'https://payments.zoho.in/id-phone',
+      status: 'CREATED',
+      rawResponse: { payment_links: {} },
+    });
+
+    const res = await request(app)
+      .post(`/api/vendors/${noPhoneVendor.id}/payment-link`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ plan: 'connect' });
+
+    expect(res.statusCode).toBe(200);
+    expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: '+919123456789' })
+    );
+    spy.mockRestore();
+  });
+
+  test('falls back to session user mobile when both vendor phone and identity lookup are unavailable', async () => {
+    const noPhoneVendor = storeService.addVendor({
+      name: 'Session Mobile Vendor',
+      email: 'session-mobile@example.com',
+      phone: '',
+      majorCategory: 'Payment-Link-Cat',
+    });
+    const token = require('../src/services/authService').generateSessionToken({
+      id: 'usr-session-mobile',
+      email: 'session-mobile@example.com',
+      name: 'Session Mobile Vendor',
+      role: 'vendor',
+      orgId: 'o',
+      orgName: 'O',
+      mobile: '9888877777',
+    });
+    const identityQueries = require('../src/db/identityQueries');
+    const spy = jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('DB connection failed'));
+    zohoPaymentService.createPaymentLink.mockResolvedValue({
+      zohoPaymentLinkId: 'zoho-sess-1',
+      paymentUrl: 'https://payments.zoho.in/sess',
+      status: 'CREATED',
+      rawResponse: { payment_links: {} },
+    });
+
+    const res = await request(app)
+      .post(`/api/vendors/${noPhoneVendor.id}/payment-link`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ plan: 'connect' });
+
+    expect(res.statusCode).toBe(200);
+    expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: '+919888877777' })
+    );
+    spy.mockRestore();
+  });
+
+  test('rejects with 400 when no mobile number is available for the account', async () => {
+    const noPhoneVendor = storeService.addVendor({
+      name: 'Completely No Phone Vendor',
+      email: 'completely-nophone@example.com',
+      phone: '',
+      majorCategory: 'Payment-Link-Cat',
+    });
+    const token = require('../src/services/authService').generateSessionToken({
+      id: 'usr-completely-nophone',
+      email: 'completely-nophone@example.com',
+      name: 'Completely No Phone Vendor',
+      role: 'vendor',
+      orgId: 'o',
+      orgName: 'O',
+    });
+    const identityQueries = require('../src/db/identityQueries');
+    const spy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce(null);
+
+    const res = await request(app)
+      .post(`/api/vendors/${noPhoneVendor.id}/payment-link`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ plan: 'connect' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/no mobile number on file/i);
+    spy.mockRestore();
   });
 
   test('returns 502 when Zoho payment-link creation throws', async () => {

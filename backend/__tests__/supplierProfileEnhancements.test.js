@@ -299,19 +299,34 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       );
     });
 
-    test('recordVendorCommunication handles fallback fields, phone recipients, and empty user', async () => {
+    test('recordVendorCommunication handles fallback fields and phone recipients for a named staff user', async () => {
       jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'rec-2' });
       const phoneVendor = { id: 'v-phone', phone: '+919988776655' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(phoneVendor);
 
       const reqNoEmail = {
-        user: { role: 'category_manager' },
+        user: { role: 'category_manager', name: 'Category Manager' },
         params: { id: 'v-phone' },
         body: {},
       };
       const resNoEmail = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await vendorDossierExtensions.recordVendorCommunication(reqNoEmail, resNoEmail, jest.fn());
       expect(resNoEmail.status).toHaveBeenCalledWith(201);
+    });
+
+    test('recordVendorCommunication rejects a session that identifies no user with 401', async () => {
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'rec-none' });
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue({ id: 'v-phone', phone: '+919988776655' });
+
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication({
+        user: { role: 'category_manager' },
+        params: { id: 'v-phone' },
+        body: {},
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(recordSpy).not.toHaveBeenCalled();
     });
 
     test('getVendorCommunications does not infer history from RFQ assignments or quotes', async () => {
@@ -782,7 +797,7 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
       jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'vendor-email-task' });
       const req = {
-        user: { role: 'admin', id: 'admin-without-email' },
+        user: { role: 'admin', id: 'admin-without-email', name: 'Platform Admin' },
         params: { id: 'v-test-1' },
         body: { channel: 'EMAIL', message: 'Details' },
       };

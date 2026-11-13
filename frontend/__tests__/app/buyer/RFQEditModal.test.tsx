@@ -12,7 +12,6 @@ jest.mock('@/lib/rfqClient', () => ({
   classifyLineItems: jest.fn(),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const rfqClient = require('@/lib/rfqClient');
 
 const EDIT = UI_STRINGS.rfqEdit;

@@ -42,8 +42,6 @@ const REPORTED_TABLES = [
   'vendor_catalogue',
   'buyer_accounts',
   'ai_feed',
-  'audit_logs',
-  'audit_chain_state',
   'event_outbox',
   'notifications',
   'vendor_ingestion_sessions',
@@ -54,7 +52,6 @@ const REPORTED_TABLES = [
   'vendor_category_dispatches',
   'vendor_email_dispatch_log',
   'vendor_ingestion_audit',
-  'ai_classification_logs',
   'vendor_directory_sessions',
   'vendor_presence',
   'payment_dues_communications',
@@ -69,14 +66,12 @@ const REPORTED_TABLES = [
   'internal_tasks',
   'internal_task_activities',
   'approvals',
-  'system_error_logs',
   'vendor_categories_indexed',
   'rfq_unlocks',
   'vendor_credit_transactions',
   'buyer_credit_transactions',
   'document_vault',
   'account_documents',
-  'user_login_logs',
 ];
 
 function checksum(content) {
@@ -225,6 +220,17 @@ async function reportRowCounts() {
   }
 }
 
+async function purgeDeprecatedTables(client) {
+  const { DEPRECATED_DATABASE_TABLES } = require('../config/constants');
+  for (const table of DEPRECATED_DATABASE_TABLES) {
+    try {
+      await client.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+    } catch {
+      // Ignore if table does not exist
+    }
+  }
+}
+
 async function migrate({ reportCounts = false, migrationsPath = MIGRATIONS_PATH } = {}) {
   if (!pool.pool) {
     logger.error('PostgreSQL migration cannot run because DATABASE_URL is not configured', {}, 'DATABASE_MIGRATION');
@@ -244,6 +250,7 @@ async function migrate({ reportCounts = false, migrationsPath = MIGRATIONS_PATH 
     const schemaSql = fs.readFileSync(SCHEMA_PATH, 'utf8');
     const migrations = loadMigrations(migrationsPath);
     await applyMigrations(client, schemaSql, migrations);
+    await purgeDeprecatedTables(client);
 
     if (reportCounts) await reportRowCounts();
     logger.info('PostgreSQL migrations completed', {

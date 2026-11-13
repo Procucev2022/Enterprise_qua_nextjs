@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
+import { SOURCING_MODES, formatCurrency, formatIndianDateTime } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Building2,
@@ -23,6 +23,9 @@ interface BuyerConsoleProps {
   onNavigateToMatrix: (rfq: RFQItem) => void;
   onNavigateToEvaluation: () => void;
 }
+
+// Shown wherever a value is not recorded on the buyer account or RFQ.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 // Deterministic decorative avatar color, not a claim about the buyer — picked
 // from the org name so the same account always renders the same color
@@ -54,11 +57,9 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
   const [selectedCompany, setSelectedCompany] = useState<string>('all');
   const [selectedBuyerFilterId, setSelectedBuyerFilterId] = useState<string>('all');
 
-  // Was a hardcoded list of 4 fake buyer profiles, matched to RFQs via
-  // hand-picked RFQ-number lists (with a "default assign anything unmatched
-  // to Rajesh Nair" catch-all). RFQs now carry a real buyerAccountId, stamped
-  // server-side when the RFQ is created, so every metric below is derived
-  // from the real buyer directory and the real RFQs each account created.
+  // Each buyer account's RFQs are matched by buyerAccountId (stamped server-side
+  // when the RFQ is created). Email and organization name are secondary matches.
+  // Every metric below is derived from the buyer directory and those RFQs.
   const compiledBuyers = useMemo(() => {
     return buyerAccounts.map((account) => {
       const rfqsList = rfqs.filter((r) =>
@@ -67,16 +68,14 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
         (r.buyerEmail && account.corporateEmail && r.buyerEmail.toLowerCase() === account.corporateEmail.toLowerCase()) ||
         (r.buyerAccountName && account.organizationName && r.buyerAccountName.toLowerCase() === account.organizationName.toLowerCase())
       );
-      const totalSpend = rfqsList.reduce((sum, r) => {
-        const val = r.budget || (r.quotes && r.quotes.length > 0 ? (r.quotes[0].totalPrice || r.quotes[0].unitPrice || 0) : 0);
-        return sum + (typeof val === 'number' && Number.isFinite(val) ? val : 0);
-      }, 0);
+      // Sourced spend is the budget each RFQ records. Quote prices are not added in.
+      const totalSpend = rfqsList.reduce((sum, r) => sum + (Number.isFinite(r.budget) ? r.budget : 0), 0);
       const activeCount = rfqsList.filter((r) => r.status !== 'PO Generated').length;
       const totalQuotes = rfqsList.reduce((sum, r) => sum + (r.quotesCount || 0), 0);
       const avgQuotesPerRfq = rfqsList.length > 0 ? Math.round((totalQuotes / rfqsList.length) * 10) / 10 : null;
 
-      const displayName = account.contactPerson || 'Unnamed Contact';
-      const displayCompany = account.organizationName || 'Unnamed Organization';
+      const displayName = account.contactPerson || EMPTY_VALUE;
+      const displayCompany = account.organizationName || EMPTY_VALUE;
       const style = avatarStyleFor(displayCompany);
 
       return {
@@ -258,7 +257,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
               <p className="text-[11px] text-slate-400 dark:text-gray-500 py-4 text-center">No buyer accounts found.</p>
             )}
             {compiledBuyers.map((b) => {
-              const spendPercentage = grandTotalSpend > 0 ? ((b.totalSpend / grandTotalSpend) * 100).toFixed(0) : '0';
+              const spendShare = grandTotalSpend > 0 ? ((b.totalSpend / grandTotalSpend) * 100).toFixed(0) : null;
               return (
                 <div key={b.id} className="text-xs">
                   <div className="flex justify-between items-center text-slate-700 dark:text-gray-300 font-semibold mb-1">
@@ -269,13 +268,13 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                       <span>{b.company}</span>
                     </span>
                     <span className="mono font-bold text-slate-900 dark:text-white text-[11px]">
-                      {formatCurrency(b.totalSpend)} ({spendPercentage}% · {b.rfqsList.length} RFQs)
+                      {formatCurrency(b.totalSpend)} ({spendShare === null ? EMPTY_VALUE : `${spendShare}%`} · {b.rfqsList.length} RFQs)
                     </span>
                   </div>
 
                   <div className="flex items-center gap-3">
                     <div className="flex-grow bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
-                      <div className="bg-indigo-650 h-full rounded-full" style={{ width: `${spendPercentage}%` }} />
+                      <div className="bg-indigo-650 h-full rounded-full" style={{ width: `${spendShare ?? 0}%` }} />
                     </div>
                     <span className="text-[9px] mono text-slate-400 dark:text-gray-500 shrink-0">
                       Avg quotes: {b.avgQuotesPerRfq === null ? '—' : b.avgQuotesPerRfq}
@@ -462,6 +461,12 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                 // Some real RFQ rows predate extractedEntities being reliably
                 // set — unguarded .length/.map here threw on render.
                 const lineItems = rfq.extractedEntities || [];
+                const invitedVendorCount = rfq.assignedVendors?.length ?? 0;
+                const followUp = rfq.followUpData;
+                const followUpSummary =
+                  followUp && followUp.totalInvited > 0
+                    ? `Standard bidding. Vendor responses recorded: ${followUp.respondedCount} of ${followUp.totalInvited} invited.`
+                    : 'Standard bidding. No vendor follow-up is recorded for this RFQ yet.';
 
                 return (
                   <div
@@ -553,15 +558,13 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                         {/* 2. Dispatch / Quotes Evaluation Status Card */}
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-[11px] leading-relaxed text-slate-500 dark:text-gray-400">
                           <div>
-                            💡 <strong>Category Control Action</strong>: RFQ was created on <span className="text-slate-800 dark:text-white font-semibold">{rfq.createdAt}</span> via Mode: <strong>{rfqModeObj?.name}</strong>.
+                            💡 <strong>Category Control Action</strong>: RFQ was created on <span className="text-slate-800 dark:text-white font-semibold">{rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : EMPTY_VALUE}</span> via Mode: <strong>{rfqModeObj?.name ?? EMPTY_VALUE}</strong>.
                             {rfq.sourcingMode === 'mode_3' ? (
                               <span className="block mt-1 text-indigo-650 dark:text-indigo-400 font-semibold">
-                                🔒 Version 3 Rule: 10 Recommended Procucev Vendors invited anonymously. Double-blind verification active.
+                                Mode 3 RFQ: {invitedVendorCount} vendor(s) invited on this RFQ.
                               </span>
                             ) : (
-                              <span className="block mt-1">
-                                Standard bidding is open. Chasing follow-up efficacy stands at {rfq.aiScore}%.
-                              </span>
+                              <span className="block mt-1">{followUpSummary}</span>
                             )}
                           </div>
 

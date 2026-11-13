@@ -1,5 +1,6 @@
 import { authClient } from './authClient';
 import { logger } from './logger';
+import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   SupplierCreditSummary,
   SupplierCreditTransaction,
@@ -9,12 +10,34 @@ import type {
   SupplierPaymentTransaction,
 } from './types';
 
+const SUPPLIER_LOG_CATEGORY = 'SUPPLIER_CLIENT';
+
 function authHeaders(): Record<string, string> {
   const token = authClient.getToken();
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+}
+
+/**
+ * Reads a supplier endpoint reply. A non-2xx reply is a failure even when its body
+ * lacks `success: false`, so a rejected request is never returned as a success.
+ */
+async function readSupplierResponse<T extends { success: boolean; error?: string }>(res: Response): Promise<T> {
+  let body: Partial<T> = {};
+  try {
+    body = (await res.json()) as Partial<T>;
+  } catch {
+    body = {};
+  }
+  if (!res.ok) {
+    return { ...body, success: false, error: body.error || formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: res.status }) } as T;
+  }
+  if (typeof body.success !== 'boolean') {
+    return { success: false, error: UI_STRINGS.dataLoad.requestNetworkFailed } as T;
+  }
+  return body as T;
 }
 
 export async function fetchSupplierCreditHistory(vendorId: string): Promise<{
@@ -27,12 +50,10 @@ export async function fetchSupplierCreditHistory(vendorId: string): Promise<{
     const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/credit-history`, {
       headers: authHeaders(),
     });
-    const body = await res.json();
-    return body;
+    return await readSupplierResponse(res);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch credit history';
-    logger.error('Supplier credit history load failed', { error: message }, 'SUPPLIER_CLIENT');
-    return { success: false, error: message };
+    logger.error('Supplier credit history load failed', { error: err instanceof Error ? err.message : 'Network error' }, SUPPLIER_LOG_CATEGORY);
+    return { success: false, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }) };
   }
 }
 
@@ -49,12 +70,10 @@ export async function fetchSupplierCommunications(
     const res = await fetch(url, {
       headers: authHeaders(),
     });
-    const body = await res.json();
-    return body;
+    return await readSupplierResponse(res);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch communications';
-    logger.error('Supplier communications load failed', { error: message }, 'SUPPLIER_CLIENT');
-    return { success: false, error: message };
+    logger.error('Supplier communications load failed', { error: err instanceof Error ? err.message : 'Network error' }, SUPPLIER_LOG_CATEGORY);
+    return { success: false, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }) };
   }
 }
 
@@ -74,12 +93,10 @@ export async function recordSupplierCommunication(
       headers: authHeaders(),
       body: JSON.stringify(payload),
     });
-    const body = await res.json();
-    return body;
+    return await readSupplierResponse(res);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to record communication';
-    logger.error('Supplier communication record failed', { error: message }, 'SUPPLIER_CLIENT');
-    return { success: false, error: message };
+    logger.error('Supplier communication record failed', { error: err instanceof Error ? err.message : 'Network error' }, SUPPLIER_LOG_CATEGORY);
+    return { success: false, error: UI_STRINGS.dataLoad.requestNetworkFailed };
   }
 }
 
@@ -93,12 +110,10 @@ export async function fetchSupplierPaymentHistory(vendorId: string): Promise<{
     const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/payment-history`, {
       headers: authHeaders(),
     });
-    const body = await res.json();
-    return body;
+    return await readSupplierResponse(res);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch payment history';
-    logger.error('Supplier payment history load failed', { error: message }, 'SUPPLIER_CLIENT');
-    return { success: false, error: message };
+    logger.error('Supplier payment history load failed', { error: err instanceof Error ? err.message : 'Network error' }, SUPPLIER_LOG_CATEGORY);
+    return { success: false, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }) };
   }
 }
 
@@ -117,12 +132,10 @@ export async function updateSupplierCategories(
       headers: authHeaders(),
       body: JSON.stringify({ categories }),
     });
-    const body = await res.json();
-    return body;
+    return await readSupplierResponse(res);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to update categories';
-    logger.error('Supplier categories update failed', { error: message }, 'SUPPLIER_CLIENT');
-    return { success: false, error: message };
+    logger.error('Supplier categories update failed', { error: err instanceof Error ? err.message : 'Network error' }, SUPPLIER_LOG_CATEGORY);
+    return { success: false, error: UI_STRINGS.dataLoad.requestNetworkFailed };
   }
 }
 
@@ -135,4 +148,3 @@ const supplierProfileClient = {
 };
 
 export default supplierProfileClient;
-

@@ -475,11 +475,17 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     test.each([
       ['email', { ...payload, email: '' }],
       ['password', { ...payload, password: '' }],
-      ['phone', { ...payload, phone: '' }],
     ])('requires %s', async (_field, badPayload) => {
       await expect(identityQueries.insertBuyerAccount(badPayload)).rejects.toThrow(
-        /email, password and phone are required/
+        /email and password are required/
       );
+    });
+
+    test('accepts a missing phone and stores it empty, never a placeholder number', async () => {
+      const result = await identityQueries.insertBuyerAccount({ ...payload, phone: null });
+      expect(result.created).toBe(true);
+      expect(result.user.mobile).toBe('');
+      expect(JSON.stringify(result)).not.toContain('9999999999');
     });
 
     test('refuses to run when the database is not configured', async () => {
@@ -915,14 +921,13 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       );
     });
 
-    test('findUserByEmailAndPhone checks placeholder phone when 9999999999 requested', async () => {
+    test('findUserByEmailAndPhone never matches a placeholder phone through a fallback lookup', async () => {
       dbPool.pool = { connect: jest.fn() };
-      jest.spyOn(dbPool, 'rows')
-        .mockResolvedValueOnce([]) // not found on primary
-        .mockResolvedValueOnce([{ uuid: 'u-ph', username: 'auto@buyer.com', phone: '9999999999', role_name: 'ClientInitiator' }]);
+      const rowsSpy = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([]);
 
       const user = await identityQueries.findUserByEmailAndPhone('auto@buyer.com', '9999999999');
-      expect(user).toMatchObject({ id: 'u-ph', email: 'auto@buyer.com' });
+      expect(user).toBeNull();
+      expect(rowsSpy).toHaveBeenCalledTimes(1);
     });
 
     test('insertBuyerAccount and insertStaffAccount under D1 path with existing org address update', async () => {

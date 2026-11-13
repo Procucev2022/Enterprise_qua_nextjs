@@ -2,7 +2,8 @@ import type { MajorMinorCategory } from './types';
 
 /**
  * 13 Major Categories and 309 Minor Categories matching the client master taxonomy exactly.
- * For use in test fixtures and seed scripts ONLY.
+ * For seed scripts and tests only. Runtime code must not import this file: the app reads its
+ * taxonomy from the database (fetchCategoryTaxonomy), and the seed must never stand in for it.
  */
 export const MASTER_CATEGORY_TAXONOMY: Record<string, string[]> = {
   "Civil Works": [

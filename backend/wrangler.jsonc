@@ -31,7 +31,6 @@
     "DAILY_RFQ_REPORT_EMAILS": "quateam@procucev.com,veerababu.v@procucev.com",
     "EMAIL_GATEWAY_ENABLED": "true",
     "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
-    "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash",
     "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
     "WHATSAPP_USERNAME": "ProcucevnewWapp",
     "WHATSAPP_FROM_NUMBER": "917090170801",
@@ -124,7 +123,6 @@
         "DAILY_RFQ_REPORT_EMAILS": "veerababu.v@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
-        "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
         "WHATSAPP_FROM_NUMBER": "917090170801",
@@ -195,7 +193,6 @@
         "DAILY_RFQ_REPORT_EMAILS": "quateam@procucev.com,veerababu.v@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
-        "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
         "WHATSAPP_FROM_NUMBER": "917090170801",
@@ -264,7 +261,6 @@
         "DAILY_RFQ_REPORT_EMAILS": "quateam@procucev.com,veerababu.v@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
-        "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
         "WHATSAPP_FROM_NUMBER": "917090170801",
@@ -333,7 +329,6 @@
         "DAILY_RFQ_REPORT_EMAILS": "veerababu.v@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
-        "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
         "WHATSAPP_FROM_NUMBER": "917090170801",
@@ -386,8 +381,8 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "enterprise-qua-d1",
-          "database_id": "6d7e68be-0e96-47be-b8c7-69aae903adf1"
+          "database_name": "enterprise-qua-d1-prod-clone",
+          "database_id": "3e7bf79b-c24d-406d-9d66-b42d56e4c5ad"
         }
       ],
       "r2_buckets": [

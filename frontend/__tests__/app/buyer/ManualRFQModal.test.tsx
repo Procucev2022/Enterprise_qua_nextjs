@@ -8,6 +8,7 @@ import type {
   RFQAttachment,
   RFQExtractionResult,
   RFQItem,
+  SourcingMode,
 } from '@/lib/types';
 
 const mockPush = jest.fn();
@@ -55,7 +56,6 @@ jest.mock('@/lib/store', () => ({
   })),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { useApp } = require('@/lib/store');
 
 // Reading a File is jsdom's business, not this dialog's: the request builder is
@@ -68,7 +68,6 @@ jest.mock('@/lib/documentExtraction', () => ({
   })),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const rfqClient = require('@/lib/rfqClient');
 const validationSchemas = require('@/lib/validationSchemas');
 
@@ -142,6 +141,9 @@ function fillDelivery() {
 }
 
 const clickSave = () => fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+/** Nothing is preselected, so a test that saves picks the sourcing mode it is about. */
+const chooseMode = (mode: SourcingMode) => fireEvent.click(screen.getByTestId(`manual-mode-${mode}`));
 
 /** One extracted line item, in the shape the extraction endpoint returns. */
 function extractedEntity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
@@ -396,6 +398,7 @@ describe('ManualRFQModal: saving', () => {
     renderModal();
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalledTimes(1));
@@ -423,6 +426,7 @@ describe('ManualRFQModal: saving', () => {
     renderModal();
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('The RFQ could not be saved.'));
@@ -441,6 +445,7 @@ describe('ManualRFQModal: saving', () => {
     renderModal();
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() =>
@@ -469,6 +474,7 @@ describe('ManualRFQModal: saving', () => {
     renderModal();
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(screen.getByText(/RFQ Created & Forwarded to Category Manager/i)).toBeInTheDocument());
@@ -534,6 +540,7 @@ describe('ManualRFQModal: supporting documents', () => {
 
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -555,6 +562,7 @@ describe('ManualRFQModal: header and item fields', () => {
     });
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -572,6 +580,7 @@ describe('ManualRFQModal: header and item fields', () => {
       target: { value: 'SS316 impeller, 415V' },
     });
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -591,7 +600,7 @@ describe('ManualRFQModal: header and item fields', () => {
 });
 
 describe('ManualRFQModal: sourcing mode', () => {
-  it('starts on the first mode and switches on selection', async () => {
+  it('starts with no mode chosen and switches on selection', async () => {
     (useApp as jest.Mock).mockReturnValue({
       buyerVendors: [],
       activeBuyerAccount: { subscriptionPlan: 'version_3' },
@@ -599,7 +608,8 @@ describe('ManualRFQModal: sourcing mode', () => {
     renderModal();
     const mode1 = screen.getByLabelText(/(Mode 1|Version 1)/i);
     const mode3 = screen.getByLabelText(/(Mode 3|Version 3)/i);
-    expect(mode1).toBeChecked();
+    expect(mode1).not.toBeChecked();
+    expect(mode3).not.toBeChecked();
 
     fireEvent.click(mode3);
     expect(mode3).toBeChecked();
@@ -610,6 +620,21 @@ describe('ManualRFQModal: sourcing mode', () => {
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_3');
+  });
+
+  it('blocks save and shows the sourcing-mode message when no mode is chosen', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'version_3' },
+    });
+    renderModal();
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    expect(rfqClient.createRFQ).not.toHaveBeenCalled();
+    // Shown under the mode cards and in the submit banner.
+    expect(screen.getAllByText(MANUAL.sourcingModeRequired).length).toBeGreaterThanOrEqual(2);
   });
 
   it('unlocks all 3 modes for a free_trial buyer', async () => {
@@ -643,11 +668,12 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(screen.getAllByText('LOCKED')).toHaveLength(2);
 
     fireEvent.click(mode2);
-    expect(mode1).toBeChecked();
+    expect(mode1).not.toBeChecked();
     expect(mode2).not.toBeChecked();
 
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_1');
@@ -906,6 +932,7 @@ describe('ManualRFQModal: extraction from an attached document', () => {
     );
 
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -919,6 +946,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
   it('shows the empty-roster state and blocks dispatch when the buyer has no uploaded vendors for Version 1', async () => {
     (useApp as jest.Mock).mockReturnValue({ buyerVendors: [] });
     renderModal();
+    chooseMode('mode_1');
 
     expect(screen.getByText('No Private Vendors Uploaded Yet')).toBeInTheDocument();
     expect(screen.getByText('0 Suppliers Found')).toBeInTheDocument();
@@ -945,13 +973,14 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           source: 'historical_purchase_dump',
           majorCategory: categoriesData[0].majorCategory,
         },
-        // No name/email/phone/contactPerson: exercises every fallback.
+        // No name/email/phone/contactPerson: the payload carries an empty name, never an invented one.
         { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory },
         // Not buyer-uploaded: must be excluded from both the preview and the payload.
         { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory },
       ],
     });
     renderModal();
+    chooseMode('mode_1');
 
     expect(screen.getByText('2 Suppliers Found')).toBeInTheDocument();
     expect(screen.getByText(/1\. Apex Industrial Dynamics/)).toBeInTheDocument();
@@ -976,7 +1005,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       },
       {
         id: 'v-hist-2',
-        name: 'Enterprise Vendor',
+        name: '',
         email: null,
         contactPerson: null,
         phone: null,
@@ -1025,6 +1054,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     // which the IT vendor above does not cover at all.
     fillRow();
     fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => {
@@ -1270,6 +1300,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       fillRow();
       fillDelivery();
+      chooseMode('mode_0');
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
       await waitFor(() => {
         expect(screen.getByText('RFQ Created & Forwarded to Category Manager')).toBeInTheDocument();
@@ -1392,6 +1423,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Switch to Mismatch category tab
       const mismatchTab = await screen.findByRole('button', { name: /Mismatch/i });
@@ -1609,6 +1641,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Toolbar search input
       const searchInput = screen.getByPlaceholderText(/Search suppliers by name/i);
@@ -1746,6 +1779,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       renderModal();
       fillRow();
       fillDelivery();
+      chooseMode('mode_1');
 
       // Submit with only mismatched vendor in candidate pool
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1776,6 +1810,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       renderModal();
       fillRow();
       fillDelivery();
+      chooseMode('mode_1');
 
       // Attach file (first upload fails, keeping file in pendingFilesRef)
       const pendingFile = new File(['contract body'], 'pending_contract.pdf', { type: 'application/pdf' });
@@ -1890,6 +1925,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Switch to mismatch tab
       const mismatchTab = await screen.findByRole('button', { name: /Mismatch/i });
@@ -2104,6 +2140,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       const { unmount } = renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Mode 1: With RFQ category set to Civil Works, matched count is 0
       // Click "View all 3 private vendors →" button
@@ -2144,7 +2181,9 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Switch to Mode 3
       const mode3Card = screen.getByTestId('manual-mode-mode_3');
       fireEvent.click(mode3Card);
-      expect(screen.getByText('General Industrial')).toBeInTheDocument();
+      // The vendor with no category shows the not-recorded placeholder, not an invented category.
+      expect(screen.queryByText('General Industrial')).not.toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThanOrEqual(1);
       unmount();
 
       // Mode 2 when no category signals on RFQ (categoryFetchSignals.length === 0)
@@ -2318,6 +2357,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       renderModal();
       fillRow();
       fillDelivery();
+      chooseMode('mode_1');
 
       // Click vendor card for v1 (which has no name, so card displays contactPerson)
       const v1Card = screen.getByText(/Alpha Contact Person/i).closest('div[class*="cursor-pointer"]') as HTMLElement;
@@ -2353,6 +2393,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       renderModal();
       fillRow();
       fillDelivery();
+      chooseMode('mode_1');
 
       // Attach document so pendingFilesRef has files
       const file1 = new File(['file 1 body'], 'failed_upload.pdf', { type: 'application/pdf' });
@@ -2386,6 +2427,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       renderModal();
       fillRow();
       fillDelivery();
+      chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
 
@@ -2412,6 +2454,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       renderModal();
       fillRow();
       fillDelivery();
+      chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
 
@@ -2438,6 +2481,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       renderModal();
       fillRow();
       fillDelivery();
+      chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
 

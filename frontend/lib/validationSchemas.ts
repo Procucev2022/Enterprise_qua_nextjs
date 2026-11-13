@@ -29,6 +29,25 @@ export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
  * +91 / 0 / 91.
  */
 export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
+
+/**
+ * Exact 10-digit Indian mobile number: exactly 10 numeric digits starting with 6, 7, 8, or 9.
+ */
+export const EXACT_10_DIGIT_MOBILE_PATTERN = /^[6-9]\d{9}$/;
+
+/**
+ * Normalizes input to at most 10 numeric digits, stripping non-numeric characters
+ * and trimming common Indian country code prefixes (+91, 91, 0) when entered.
+ */
+export function sanitize10DigitMobile(value: string): string {
+  let val = String(value || '').replace(/\D/g, '');
+  if (val.length === 11 && val.startsWith('0')) {
+    val = val.slice(1);
+  } else if (val.length === 12 && val.startsWith('91')) {
+    val = val.slice(2);
+  }
+  return val.slice(0, 10);
+}
 export const PROCUCEV_EMAIL_PATTERN = /^[a-zA-Z0-9._%+-]+@procucev\.com$/i;
 export const PROCUCEV_EMAIL_MESSAGE = 'Must be a valid Procucev corporate email address ending in @procucev.com';
 export const OTP_CODE_PATTERN = /^\d{6}$/;
@@ -354,6 +373,18 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     action: { required: true, message: 'Action is required.' },
   },
 
+  buyerRegistrationForm: {
+    fullName: { required: true, minLength: 1, message: 'Full Name is required.' },
+    companyName: { required: true, minLength: 1, message: 'Company Name is required.' },
+    gstNumber: { required: true, pattern: GSTIN_PATTERN, message: UI_STRINGS.auth.gstinInvalid },
+    pincode: { required: true, pattern: /^[1-9][0-9]{5}$/, message: 'PIN Code must be 6 digits and cannot start with 0.' },
+    city: { required: true, minLength: 1, message: 'City is required.' },
+    state: { required: true, minLength: 1, message: 'State is required.' },
+    email: { required: true, pattern: EMAIL_PATTERN, message: UI_STRINGS.auth.emailInvalid },
+    mobile: { required: true, pattern: EXACT_10_DIGIT_MOBILE_PATTERN, message: UI_STRINGS.auth.mobileInvalid },
+    password: { required: true, minLength: PASSWORD_MIN_LENGTH, message: UI_STRINGS.auth.passwordTooShort },
+  },
+
   extendRFQ: {
     hours: {
       required: true,
@@ -467,6 +498,12 @@ export interface PostOfficeDetail {
 
 export interface PincodeValidationResult {
   isValid: boolean;
+  /**
+   * True when the postal records service could not be reached or returned an unusable answer.
+   * The PIN is then neither confirmed nor rejected. `isValid` is false, so it is not accepted,
+   * and `message` asks the user to try again.
+   */
+  unverified?: boolean;
   message?: string;
   postOffices?: PostOfficeDetail[];
 }
@@ -516,7 +553,7 @@ export async function validatePincode(
     });
 
     if (!response.ok) {
-      return { isValid: true }; // Network fallback
+      return { isValid: false, unverified: true, message: UI_STRINGS.pincodeVerification.unverified };
     }
 
     const data = await response.json();
@@ -526,150 +563,36 @@ export async function validatePincode(
         postOffices: data[0].PostOffice || [],
       };
     } else if (!Array.isArray(data)) {
-      return { isValid: true };
+      return { isValid: false, unverified: true, message: UI_STRINGS.pincodeVerification.unverified };
     } else {
       return {
         isValid: false,
-        message: 'PIN Code is not found or invalid in postal records.',
+        message: UI_STRINGS.pincodeVerification.notFound,
       };
     }
   } catch (error) {
-    return { isValid: true }; // Network fallback
+    return { isValid: false, unverified: true, message: UI_STRINGS.pincodeVerification.unverified };
   } finally {
     if (timeout) clearTimeout(timeout);
   }
 }
 
-const CITY_PREFIX_MAP: Record<string, string> = {
-  '4007': 'Navi Mumbai, Maharashtra',
-  '400': 'Mumbai, Maharashtra',
-  '411': 'Pune, Maharashtra',
-  '440': 'Nagpur, Maharashtra',
-  '110': 'New Delhi, Delhi',
-  '560': 'Bengaluru, Karnataka',
-  '600': 'Chennai, Tamil Nadu',
-  '700': 'Kolkata, West Bengal',
-  '500': 'Hyderabad, Telangana',
-  '380': 'Ahmedabad, Gujarat',
-  '390': 'Vadodara, Gujarat',
-  '395': 'Surat, Gujarat',
-  '302': 'Jaipur, Rajasthan',
-  '226': 'Lucknow, Uttar Pradesh',
-  '201': 'Noida, Uttar Pradesh',
-  '122': 'Gurugram, Haryana',
-  '160': 'Chandigarh, Punjab',
-  '800': 'Patna, Bihar',
-  '751': 'Bhubaneswar, Odisha',
-  '781': 'Guwahati, Assam',
-  '682': 'Kochi, Kerala',
-  '695': 'Thiruvananthapuram, Kerala',
-  '641': 'Coimbatore, Tamil Nadu',
-  '530': 'Visakhapatnam, Andhra Pradesh',
-  '452': 'Indore, Madhya Pradesh',
-  '462': 'Bhopal, Madhya Pradesh',
-};
-
-const STATE_PREFIX_MAP: Record<string, string> = {
-  '11': 'Delhi, Delhi',
-  '12': 'Haryana',
-  '13': 'Haryana',
-  '14': 'Punjab',
-  '15': 'Punjab',
-  '16': 'Chandigarh',
-  '17': 'Himachal Pradesh',
-  '18': 'Jammu and Kashmir',
-  '19': 'Jammu and Kashmir',
-  '20': 'Uttar Pradesh',
-  '21': 'Uttar Pradesh',
-  '22': 'Uttar Pradesh',
-  '23': 'Uttar Pradesh',
-  '24': 'Uttar Pradesh',
-  '25': 'Uttar Pradesh',
-  '26': 'Uttar Pradesh',
-  '27': 'Uttar Pradesh',
-  '28': 'Uttar Pradesh',
-  '30': 'Rajasthan',
-  '31': 'Rajasthan',
-  '32': 'Rajasthan',
-  '33': 'Rajasthan',
-  '34': 'Rajasthan',
-  '36': 'Gujarat',
-  '37': 'Gujarat',
-  '38': 'Gujarat',
-  '39': 'Gujarat',
-  '40': 'Maharashtra',
-  '41': 'Maharashtra',
-  '42': 'Maharashtra',
-  '43': 'Maharashtra',
-  '44': 'Maharashtra',
-  '45': 'Madhya Pradesh',
-  '46': 'Madhya Pradesh',
-  '47': 'Madhya Pradesh',
-  '48': 'Madhya Pradesh',
-  '49': 'Chhattisgarh',
-  '50': 'Telangana',
-  '51': 'Andhra Pradesh',
-  '52': 'Andhra Pradesh',
-  '53': 'Andhra Pradesh',
-  '56': 'Karnataka',
-  '57': 'Karnataka',
-  '58': 'Karnataka',
-  '59': 'Karnataka',
-  '60': 'Tamil Nadu',
-  '61': 'Tamil Nadu',
-  '62': 'Tamil Nadu',
-  '63': 'Tamil Nadu',
-  '64': 'Tamil Nadu',
-  '67': 'Kerala',
-  '68': 'Kerala',
-  '69': 'Kerala',
-  '70': 'West Bengal',
-  '71': 'West Bengal',
-  '72': 'West Bengal',
-  '73': 'West Bengal',
-  '74': 'West Bengal',
-  '75': 'Odisha',
-  '76': 'Odisha',
-  '77': 'Odisha',
-  '78': 'Assam',
-  '80': 'Bihar',
-  '81': 'Bihar',
-  '82': 'Bihar',
-  '83': 'Bihar',
-  '84': 'Bihar',
-  '85': 'Bihar',
-};
-
 /**
- * Returns a fallback city and state for valid Indian PIN codes when postal network API is unreachable.
- */
-export function getFallbackLocationForPincode(pincode: string): string {
-  const pin = (pincode || '').trim();
-  if (pin.length < 2) return '';
-  if (pin.startsWith('4007')) return CITY_PREFIX_MAP['4007'];
-  const prefix3 = pin.slice(0, 3);
-  if (CITY_PREFIX_MAP[prefix3]) {
-    return CITY_PREFIX_MAP[prefix3];
-  }
-  const prefix2 = pin.slice(0, 2);
-  return STATE_PREFIX_MAP[prefix2] || '';
-}
-
-/**
- * Resolves a city and state location string from postal validation post offices or fallback mapping.
+ * City and state from the postal office records returned for a PIN code.
+ *
+ * Returns '' when no office record is available, so the caller leaves the location blank.
+ * The location is never guessed from the PIN digits. An office whose Pincode matches the
+ * requested PIN is preferred over the first record.
  */
 export function resolveLocationFromPostalResult(
   pincode: string,
   offices?: PostOfficeDetail[]
 ): string {
-  if (offices && offices.length > 0) {
-    const po = offices[0];
-    const city = po.District || po.Division || po.Circle || po.Name || '';
-    const state = po.State || '';
-    const formatted = [city, state].filter(Boolean).join(', ');
-    if (formatted) return formatted;
-  }
-  return getFallbackLocationForPincode(pincode);
+  if (!offices || offices.length === 0) return '';
+  const office = offices.find((candidate) => candidate.Pincode === pincode) ?? offices[0];
+  const city = office.District || office.Division || office.Circle || office.Name || '';
+  const state = office.State || '';
+  return [city, state].filter(Boolean).join(', ');
 }
 
 /** Public vendor directory search/filter query parameter limits. */
@@ -785,14 +708,16 @@ export const SELLER_ADD_QUOTE_CREDITS_SCHEMA = {
   reason: { maxLength: 1000 },
 } as const;
 
-/** Buyer Credit Approval Request validation schema */
+/**
+ * Buyer credit approval request limits. Approver and initiator names are not listed here,
+ * so no person's name is hardcoded in the validation rules.
+ */
 export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
   amount: { min: 1 },
-  approverName: {
-    allowed: ['Srinu Sir', 'Sudheer Sir'] as const,
-  },
-  initiatorName: {
-    allowed: ['Govardhan', 'Krishna', 'Chandhan'] as const,
-  },
   reason: { maxLength: 1000 },
+} as const;
+
+/** Request Vendor Evaluation validation schema */
+export const REQUEST_VENDOR_EVALUATION_SCHEMA = {
+  notes: { maxLength: 1000 },
 } as const;

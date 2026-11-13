@@ -9,6 +9,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "jest --maxWorkers=50%",
+    "test:changed": "jest --onlyChanged --passWithNoTests",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage --maxWorkers=50% --json --outputFile=coverage/test-results.json && node scripts/verify-coverage.cjs",
     "check:coverage": "node scripts/verify-coverage.cjs",

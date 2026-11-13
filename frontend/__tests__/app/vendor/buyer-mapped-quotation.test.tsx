@@ -111,6 +111,27 @@ describe('Buyer-Mapped Vendor Access & Unlimited Quotation in QuotationForm', ()
     global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
 
+      // The backend credit balance the store reads: no free credits left.
+      if (url.endsWith('/api/vendors/rfq-credits')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              success: true,
+              data: {
+                vendorId: MOCK_MAPPED_VENDOR.id,
+                freeCreditsAllocated: 5,
+                freeCreditsUsed: 5,
+                freeCreditsRemaining: 0,
+                isSubscribed: false,
+                subscriptionPlan: 'premium',
+                unlockedRfqIds: [],
+              },
+            }),
+        } as Response);
+      }
+
       // Vendor record lookup
       if (url.includes('/api/vendors/')) {
         return Promise.resolve({
@@ -215,10 +236,11 @@ describe('Buyer-Mapped Vendor Access & Unlimited Quotation in QuotationForm', ()
       expect(screen.getByRole('heading', { name: /Submit Quotation/i })).toBeInTheDocument();
     });
 
-    // Enter Unit Price
+    // Enter Unit Price and the required lead time
     const priceInput = screen.getByPlaceholderText(/e\.g\. 25000/i);
     await act(async () => {
       fireEvent.change(priceInput, { target: { value: '120000' } });
+      fireEvent.change(screen.getByPlaceholderText('e.g. 14'), { target: { value: '21' } });
     });
 
     // Submit Quotation button in modal

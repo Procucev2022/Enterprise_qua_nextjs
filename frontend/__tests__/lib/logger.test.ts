@@ -1,4 +1,4 @@
-import { logger, ClientLogger } from '@/lib/logger';
+import { logger, ClientLogger, nextLogEntryId } from '@/lib/logger';
 
 describe('Frontend Client Logger Unit Tests', () => {
   beforeEach(() => {
@@ -143,5 +143,39 @@ describe('Frontend Client Logger Unit Tests', () => {
     testLogger.isRemoteSyncEnabled = false;
     const entry = testLogger.info('Sync disabled log');
     expect(entry.message).toBe('Sync disabled log');
+  });
+
+  describe('nextLogEntryId', () => {
+    const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+
+    afterEach(() => {
+      if (originalCrypto) {
+        Object.defineProperty(globalThis, 'crypto', originalCrypto);
+      } else {
+        Reflect.deleteProperty(globalThis, 'crypto');
+      }
+    });
+
+    test('uses the platform UUID when crypto.randomUUID is available', () => {
+      Object.defineProperty(globalThis, 'crypto', {
+        configurable: true,
+        value: { randomUUID: () => '3f2b8c1e-6a4d-4b7e-9c2a-1d2e3f4a5b6c' },
+      });
+      expect(nextLogEntryId(1700000000000)).toBe('flog-3f2b8c1e-6a4d-4b7e-9c2a-1d2e3f4a5b6c');
+    });
+
+    test('falls back to a unique per-session sequence when randomUUID is unavailable', () => {
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+      const first = nextLogEntryId(1700000000000);
+      const second = nextLogEntryId(1700000000000);
+      expect(first.startsWith('flog-1700000000000-')).toBe(true);
+      expect(second.startsWith('flog-1700000000000-')).toBe(true);
+      expect(first).not.toBe(second);
+    });
+
+    test('falls back when no crypto object exists at all', () => {
+      Reflect.deleteProperty(globalThis, 'crypto');
+      expect(nextLogEntryId(42)).toMatch(/^flog-42-\d+$/);
+    });
   });
 });

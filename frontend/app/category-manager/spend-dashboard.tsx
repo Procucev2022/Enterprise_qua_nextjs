@@ -4,60 +4,61 @@ import React from 'react';
 import { useApp } from '@/lib/store';
 import { rfqsInWindow, growthPercentFor, GrowthBadge } from './category-summary-dashboard';
 import {
-  TrendingUp,
-  Clock,
-  MessageSquare,
-  ShieldCheck,
-  PieChart,
-  BarChart3,
-  ArrowUpRight,
   ArrowLeft,
-  Sparkles,
-  Zap,
-  FileText,
+  BarChart3,
   Download,
+  FileText,
   Layers,
-  Phone,
-  Smartphone,
   Mail,
-  CheckCircle2,
+  MessageSquare,
+  Phone,
+  PieChart,
+  Smartphone,
   Users,
+  Zap,
 } from 'lucide-react';
 
-import type { RFQItem, AuditLogEntry } from '@/lib/types';
+import type { AuditLogEntry, RFQFollowUpBreakdown, RFQItem } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 const QUARTER_DAYS = 90;
+
+// Shown wherever a figure cannot be computed from the records, for example a
+// rate with no invitations behind it. Never a substitute number.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 interface ModeMetrics {
   rfqs: RFQItem[];
   downloads: number;
-  efficiency: number;
-  ratio: string;
+  efficiency: number | null;
+  ratio: number | null;
 }
 
 export function normalizeModeToken(token: string): string {
   return token.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
 }
 
-export function calculateTurnaround(modeRfqs: RFQItem[], defaultFallback: string): string {
-  if (modeRfqs.length === 0) return '—';
+/**
+ * Average days from RFQ creation to each vendor quote submission. A quote or
+ * RFQ without a valid timestamp is left out. Returns a dash when no pair of
+ * timestamps is usable.
+ */
+export function calculateTurnaround(modeRfqs: RFQItem[]): string {
+  if (modeRfqs.length === 0) return EMPTY_VALUE;
   const durations: number[] = [];
   modeRfqs.forEach((r) => {
-    const created = new Date(r.createdAt || 0).getTime();
-    if (r.quotes && r.quotes.length > 0) {
-      r.quotes.forEach((q) => {
-        const sub = new Date(q.submittedAt || 0).getTime();
-        if (sub > created && !Number.isNaN(sub) && !Number.isNaN(created)) {
-          durations.push((sub - created) / (1000 * 60 * 60 * 24));
-        }
-      });
-    }
+    const created = r.createdAt ? new Date(r.createdAt).getTime() : Number.NaN;
+    if (Number.isNaN(created)) return;
+    (r.quotes || []).forEach((q) => {
+      const submitted = q.submittedAt ? new Date(q.submittedAt).getTime() : Number.NaN;
+      if (!Number.isNaN(submitted) && submitted > created) {
+        durations.push((submitted - created) / (1000 * 60 * 60 * 24));
+      }
+    });
   });
-  if (durations.length > 0) {
-    const avg = durations.reduce((a, b) => a + b, 0) / durations.length;
-    return `${avg.toFixed(1)} Days`;
-  }
-  return defaultFallback;
+  if (durations.length === 0) return EMPTY_VALUE;
+  const avg = durations.reduce((a, b) => a + b, 0) / durations.length;
+  return `${avg.toFixed(1)} Days`;
 }
 
 export function calculateModeMetrics(rfqs: RFQItem[], auditLogs: AuditLogEntry[], modeToken: string): ModeMetrics {
@@ -75,10 +76,27 @@ export function calculateModeMetrics(rfqs: RFQItem[], auditLogs: AuditLogEntry[]
   }).length;
   const invited = modeRfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
   const responded = modeRfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
-  const efficiency = invited > 0 ? Number(((responded / invited) * 100).toFixed(1)) : 0;
-  const ratio = modeRfqs.length > 0 ? (downloads / modeRfqs.length).toFixed(1) : '0.0';
+  const efficiency = invited > 0 ? Number(((responded / invited) * 100).toFixed(1)) : null;
+  const ratio = modeRfqs.length > 0 ? Number((downloads / modeRfqs.length).toFixed(1)) : null;
 
   return { rfqs: modeRfqs, downloads, efficiency, ratio };
+}
+
+/** Adds up one numeric follow-up counter across every RFQ. A missing counter adds nothing. */
+function sumFollowUp(
+  followUps: RFQFollowUpBreakdown[],
+  pick: (followUp: RFQFollowUpBreakdown) => number | undefined
+): number {
+  return followUps.reduce((sum, followUp) => sum + (pick(followUp) || 0), 0);
+}
+
+/** Share of attempts that got a response, or null when no attempts were recorded. */
+function rateOf(hits: number, total: number): number | null {
+  return total > 0 ? (hits / total) * 100 : null;
+}
+
+function formatRate(rate: number | null): string {
+  return rate === null ? EMPTY_VALUE : `${rate.toFixed(1)}%`;
 }
 
 interface SpendDashboardProps {
@@ -96,34 +114,32 @@ export default function SpendDashboard({
 }: SpendDashboardProps) {
   const { rfqs, auditLogs } = useApp();
 
-  // Real quarter-scoped RFQ count and quarter-over-quarter growth, reusing
-  // the same real-data helpers category-summary-dashboard.tsx already
-  // established — this card previously showed a hardcoded 48.
+  // Quarter-scoped RFQ count and quarter-over-quarter growth, from the same
+  // helpers category-summary-dashboard.tsx uses.
   const totalRfqsRaised = rfqsInWindow(rfqs, QUARTER_DAYS, 0).length;
   const rfqGrowth = growthPercentFor(rfqs, QUARTER_DAYS);
   const avgRfqsPerDay = (totalRfqsRaised / QUARTER_DAYS).toFixed(1);
 
-  // Real download count, from the audit-log entries the vendor download
-  // actions already write (quotation-form.tsx / opportunity-feed.tsx) —
-  // previously a hardcoded 312.
+  // Downloads are counted from the audit-log entries the vendor download
+  // actions write (quotation-form.tsx / opportunity-feed.tsx).
   const totalRfqsDownloaded = auditLogs.filter((l) => /downloaded RFQ specification/.test(l.action)).length;
   const avgDownloadsPerDay = (totalRfqsDownloaded / QUARTER_DAYS).toFixed(1);
-  const avgDownloadsPerRfq = totalRfqsRaised > 0 ? (totalRfqsDownloaded / totalRfqsRaised).toFixed(1) : '0.0';
+  const avgDownloadsPerRfq = totalRfqsRaised > 0 ? (totalRfqsDownloaded / totalRfqsRaised).toFixed(1) : EMPTY_VALUE;
 
-  // Real average vendors invited per RFQ (assignedVendors is the only real
-  // "vendors associated with this RFQ" set) — previously a hardcoded 6.5.
+  // Average vendors invited per RFQ. assignedVendors is the only list of
+  // vendors associated with an RFQ.
   const avgVendorsPerRfq =
     rfqs.length > 0
       ? (rfqs.reduce((sum, r) => sum + (r.assignedVendors?.length || 0), 0) / rfqs.length).toFixed(1)
-      : '0.0';
+      : EMPTY_VALUE;
 
-  // Real vendor response rate, mirroring kanban-board.tsx's existing
-  // vendorsInvited/vendorsResponded computation from followUpData
-  const vendorsInvited = rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
-  const vendorsResponded = rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
-  const vendorResponseRate = vendorsInvited > 0 ? ((vendorsResponded / vendorsInvited) * 100).toFixed(1) : '0.0';
+  // Vendor response rate across every RFQ's recorded follow-up counts.
+  const followUps = rfqs.flatMap((r) => (r.followUpData ? [r.followUpData] : []));
+  const vendorsInvited = sumFollowUp(followUps, (f) => f.totalInvited);
+  const vendorsResponded = sumFollowUp(followUps, (f) => f.respondedCount);
+  const vendorResponseRate = formatRate(rateOf(vendorsResponded, vendorsInvited));
 
-  // Real live Mode performance breakdown from actual rfqs and auditLogs
+  // Sourcing mode breakdown, computed from the RFQs and audit logs of each mode.
   const m1 = calculateModeMetrics(rfqs, auditLogs, 'MODE 1');
   const m2 = calculateModeMetrics(rfqs, auditLogs, 'MODE 2');
   const m3 = calculateModeMetrics(rfqs, auditLogs, 'MODE 3');
@@ -137,11 +153,9 @@ export default function SpendDashboard({
       badgeColor: '#4f46e5',
       rfqsRaised: m1.rfqs.length,
       rfqsDownloaded: m1.downloads,
-      downloadRatio: `${m1.ratio} downloads / RFQ`,
+      downloadRatio: m1.ratio === null ? EMPTY_VALUE : `${m1.ratio.toFixed(1)} downloads / RFQ`,
       followUpEfficiency: m1.efficiency,
-      avgTurnaround: calculateTurnaround(m1.rfqs, '3.6 Days'),
-      primaryChaser: 'Voice Bot Call + WhatsApp',
-      conversionRate: m1.efficiency,
+      avgTurnaround: calculateTurnaround(m1.rfqs),
     },
     {
       id: 'mode-2',
@@ -151,11 +165,9 @@ export default function SpendDashboard({
       badgeColor: '#0284c7',
       rfqsRaised: m2.rfqs.length,
       rfqsDownloaded: m2.downloads,
-      downloadRatio: `${m2.ratio} downloads / RFQ`,
+      downloadRatio: m2.ratio === null ? EMPTY_VALUE : `${m2.ratio.toFixed(1)} downloads / RFQ`,
       followUpEfficiency: m2.efficiency,
-      avgTurnaround: calculateTurnaround(m2.rfqs, '4.4 Days'),
-      primaryChaser: 'WhatsApp + 24h Email',
-      conversionRate: m2.efficiency,
+      avgTurnaround: calculateTurnaround(m2.rfqs),
     },
     {
       id: 'mode-3',
@@ -165,17 +177,66 @@ export default function SpendDashboard({
       badgeColor: '#9333ea',
       rfqsRaised: m3.rfqs.length,
       rfqsDownloaded: m3.downloads,
-      downloadRatio: `${m3.ratio} downloads / RFQ`,
+      downloadRatio: m3.ratio === null ? EMPTY_VALUE : `${m3.ratio.toFixed(1)} downloads / RFQ`,
       followUpEfficiency: m3.efficiency,
-      avgTurnaround: calculateTurnaround(m3.rfqs, '4.8 Days'),
-      primaryChaser: 'SMS + 24h Email Reminder',
-      conversionRate: m3.efficiency,
+      avgTurnaround: calculateTurnaround(m3.rfqs),
     },
   ];
 
-  const mode1Share = totalRfqsDownloaded > 0 ? ((m1.downloads / totalRfqsDownloaded) * 100).toFixed(1) : '0.0';
-  const mode2Share = totalRfqsDownloaded > 0 ? ((m2.downloads / totalRfqsDownloaded) * 100).toFixed(1) : '0.0';
-  const mode3Share = totalRfqsDownloaded > 0 ? ((m3.downloads / totalRfqsDownloaded) * 100).toFixed(1) : '0.0';
+  const shareOfDownloads = (downloads: number): string | null =>
+    totalRfqsDownloaded > 0 ? ((downloads / totalRfqsDownloaded) * 100).toFixed(1) : null;
+  const mode1Share = shareOfDownloads(m1.downloads);
+  const mode2Share = shareOfDownloads(m2.downloads);
+  const mode3Share = shareOfDownloads(m3.downloads);
+
+  // Recorded follow-up attempts and responses per channel, summed across RFQs.
+  // A channel with no recorded attempts shows a dash rather than a rate.
+  const channelRows = [
+    {
+      id: 'whatsapp',
+      label: 'WhatsApp replies',
+      Icon: MessageSquare,
+      hits: sumFollowUp(followUps, (f) => f.whatsappStats?.replied),
+      total: sumFollowUp(followUps, (f) => f.whatsappStats?.total),
+      panelClass: 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/30',
+      textClass: 'text-emerald-800 dark:text-emerald-300',
+      valueClass: 'text-emerald-700 dark:text-emerald-400',
+      barClass: 'bg-emerald-600',
+    },
+    {
+      id: 'calls',
+      label: 'Voice call connections',
+      Icon: Phone,
+      hits: sumFollowUp(followUps, (f) => f.callStats?.connected),
+      total: sumFollowUp(followUps, (f) => f.callStats?.total),
+      panelClass: 'bg-purple-50/60 dark:bg-purple-950/20 border-purple-200 dark:border-purple-500/30',
+      textClass: 'text-purple-800 dark:text-purple-300',
+      valueClass: 'text-purple-700 dark:text-purple-400',
+      barClass: 'bg-purple-600',
+    },
+    {
+      id: 'email',
+      label: 'Email opens',
+      Icon: Mail,
+      hits: sumFollowUp(followUps, (f) => f.emailStats?.opened),
+      total: sumFollowUp(followUps, (f) => f.emailStats?.total),
+      panelClass: 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-200 dark:border-amber-500/30',
+      textClass: 'text-amber-800 dark:text-amber-300',
+      valueClass: 'text-amber-700 dark:text-amber-400',
+      barClass: 'bg-amber-500',
+    },
+    {
+      id: 'sms',
+      label: 'SMS link clicks',
+      Icon: Smartphone,
+      hits: sumFollowUp(followUps, (f) => f.smsStats?.clicked),
+      total: sumFollowUp(followUps, (f) => f.smsStats?.total),
+      panelClass: 'bg-sky-50/60 dark:bg-cyan-950/20 border-sky-200 dark:border-cyan-500/30',
+      textClass: 'text-sky-800 dark:text-cyan-300',
+      valueClass: 'text-sky-700 dark:text-cyan-400',
+      barClass: 'bg-sky-500',
+    },
+  ];
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
@@ -189,7 +250,7 @@ export default function SpendDashboard({
         </button>
       </div>
 
-      {/* Top KPI Metric Cards (Non-Spend) */}
+      {/* Top KPI Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* RFQs Received */}
         <button
@@ -268,7 +329,7 @@ export default function SpendDashboard({
             <span>Vendor Response Rate</span>
             <Zap size={16} className="text-amber-500 dark:text-amber-400" />
           </div>
-          <p className="text-3xl font-extrabold text-amber-600 dark:text-amber-400 mono mt-2">{vendorResponseRate}%</p>
+          <p className="text-3xl font-extrabold text-amber-600 dark:text-amber-400 mono mt-2">{vendorResponseRate}</p>
           <div className="mt-1 text-[11px] text-slate-500 dark:text-gray-400">
             Vendors who responded to outreach
           </div>
@@ -306,7 +367,7 @@ export default function SpendDashboard({
                     {mode.modeCode}
                   </span>
                   <span className="text-[11px] font-bold text-slate-500 dark:text-gray-400">
-                    SLA: <strong className="text-slate-900 dark:text-white">{mode.avgTurnaround}</strong>
+                    Avg turnaround: <strong className="text-slate-900 dark:text-white">{mode.avgTurnaround}</strong>
                   </span>
                 </div>
                 <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">{mode.title}</h4>
@@ -333,20 +394,17 @@ export default function SpendDashboard({
 
                 <div className="space-y-1 pt-1">
                   <div className="flex justify-between items-center text-[11px]">
-                    <span className="font-bold text-slate-700 dark:text-gray-300">Follow-Up Efficiency (&lt;24h)</span>
-                    <span className="font-black text-emerald-600 dark:text-emerald-400 mono">{mode.followUpEfficiency}%</span>
+                    <span className="font-bold text-slate-700 dark:text-gray-300">Follow-Up Response Rate</span>
+                    <span className="font-black text-emerald-600 dark:text-emerald-400 mono">
+                      {mode.followUpEfficiency === null ? EMPTY_VALUE : `${mode.followUpEfficiency}%`}
+                    </span>
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                     <div
                       className="bg-emerald-500 h-full rounded-full transition-all"
-                      style={{ width: `${mode.followUpEfficiency}%` }}
+                      style={{ width: `${mode.followUpEfficiency ?? 0}%` }}
                     />
                   </div>
-                </div>
-
-                <div className="text-[10px] text-slate-500 dark:text-gray-400 pt-1 flex items-center justify-between">
-                  <span>Chaser Channel:</span>
-                  <span className="font-bold text-indigo-600 dark:text-indigo-300 truncate max-w-[170px]">{mode.primaryChaser}</span>
                 </div>
               </div>
             </div>
@@ -354,7 +412,7 @@ export default function SpendDashboard({
         </div>
       </div>
 
-      {/* Multi-Channel Follow-Up Efficacy & Breakdown */}
+      {/* Download share and channel response breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Sourcing Engine RFQ Download Share */}
         <div className="glass-panel p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
@@ -371,10 +429,12 @@ export default function SpendDashboard({
                 <span className="flex items-center gap-1.5 font-bold">
                   <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 inline-block" /> Mode 1 (Private Client Roster)
                 </span>
-                <span className="mono text-slate-900 dark:text-white font-bold">{m1.downloads} Downloads ({mode1Share}%)</span>
+                <span className="mono text-slate-900 dark:text-white font-bold">
+                  {m1.downloads} Downloads ({mode1Share === null ? EMPTY_VALUE : `${mode1Share}%`})
+                </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                <div className="bg-indigo-600 h-full rounded-full" style={{ width: `${mode1Share}%` }} />
+                <div className="bg-indigo-600 h-full rounded-full" style={{ width: `${mode1Share ?? 0}%` }} />
               </div>
             </div>
 
@@ -383,10 +443,12 @@ export default function SpendDashboard({
                 <span className="flex items-center gap-1.5 font-bold">
                   <span className="w-2.5 h-2.5 rounded-full bg-sky-500 inline-block" /> Mode 2 (Hybrid Base Network)
                 </span>
-                <span className="mono text-slate-900 dark:text-white font-bold">{m2.downloads} Downloads ({mode2Share}%)</span>
+                <span className="mono text-slate-900 dark:text-white font-bold">
+                  {m2.downloads} Downloads ({mode2Share === null ? EMPTY_VALUE : `${mode2Share}%`})
+                </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                <div className="bg-sky-500 h-full rounded-full" style={{ width: `${mode2Share}%` }} />
+                <div className="bg-sky-500 h-full rounded-full" style={{ width: `${mode2Share ?? 0}%` }} />
               </div>
             </div>
 
@@ -395,76 +457,48 @@ export default function SpendDashboard({
                 <span className="flex items-center gap-1.5 font-bold">
                   <span className="w-2.5 h-2.5 rounded-full bg-purple-600 inline-block" /> Mode 3 (360° AI Evaluated Roster)
                 </span>
-                <span className="mono text-slate-900 dark:text-white font-bold">{m3.downloads} Downloads ({mode3Share}%)</span>
+                <span className="mono text-slate-900 dark:text-white font-bold">
+                  {m3.downloads} Downloads ({mode3Share === null ? EMPTY_VALUE : `${mode3Share}%`})
+                </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                <div className="bg-purple-600 h-full rounded-full" style={{ width: `${mode3Share}%` }} />
+                <div className="bg-purple-600 h-full rounded-full" style={{ width: `${mode3Share ?? 0}%` }} />
               </div>
             </div>
           </div>
         </div>
 
-        {/* AI Multi-Channel Chaser Conversion Efficacy */}
+        {/* Recorded follow-up responses by channel */}
         <div className="glass-panel p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
             <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <BarChart3 size={16} className="text-emerald-600 dark:text-emerald-400" /> Multi-Channel Follow-Up Conversion Rate
             </h3>
-            <span className="text-[11px] text-slate-500 dark:text-gray-400">Response &lt;24h</span>
+            <span className="text-[11px] text-slate-500 dark:text-gray-400">Recorded attempts</span>
           </div>
 
           <div className="space-y-3 text-xs">
-            {/* Channel 1: WhatsApp */}
-            <div className="p-2.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-500/30">
-              <div className="flex justify-between items-center mb-1">
-                <span className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                  <MessageSquare size={13} /> 💬 WhatsApp Business Bot
-                </span>
-                <span className="text-sm font-extrabold text-emerald-700 dark:text-emerald-400 mono">{vendorResponseRate}%</span>
-              </div>
-              <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${vendorResponseRate}%` }} />
-              </div>
-            </div>
-
-            {/* Channel 2: AI Voice Bot */}
-            <div className="p-2.5 rounded-xl bg-purple-50/60 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-500/30">
-              <div className="flex justify-between items-center mb-1">
-                <span className="font-bold text-purple-800 dark:text-purple-300 flex items-center gap-1.5">
-                  <Phone size={13} /> 📞 AI Autonomous Voice Agent Calls
-                </span>
-                <span className="text-sm font-extrabold text-purple-700 dark:text-purple-400 mono">{m1.efficiency}%</span>
-              </div>
-              <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-purple-600 h-full rounded-full" style={{ width: `${m1.efficiency}%` }} />
-              </div>
-            </div>
-
-            {/* Channel 3: 24h Email Reminder */}
-            <div className="p-2.5 rounded-xl bg-amber-50/60 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-500/30">
-              <div className="flex justify-between items-center mb-1">
-                <span className="font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
-                  <Mail size={13} /> ✉️ 24-Hour Email Reminder Escalation
-                </span>
-                <span className="text-sm font-extrabold text-amber-700 dark:text-amber-400 mono">{m2.efficiency}%</span>
-              </div>
-              <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-amber-500 h-full rounded-full" style={{ width: `${m2.efficiency}%` }} />
-              </div>
-            </div>
-
-            {/* Channel 4: SMS Direct */}
-            <div className="p-2.5 rounded-xl bg-sky-50/60 dark:bg-cyan-950/20 border border-sky-200 dark:border-cyan-500/30">
-              <div className="flex justify-between items-center mb-1">
-                <span className="font-bold text-sky-800 dark:text-cyan-300 flex items-center gap-1.5">
-                  <Smartphone size={13} /> 📱 Automated SMS Direct Alerts
-                </span>
-                <span className="text-sm font-extrabold text-sky-700 dark:text-cyan-400 mono">{m3.efficiency}%</span>
-              </div>
-              <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-sky-500 h-full rounded-full" style={{ width: `${m3.efficiency}%` }} />
-              </div>
-            </div>
+            {channelRows.map((channel) => {
+              const rate = rateOf(channel.hits, channel.total);
+              return (
+                <div key={channel.id} className={`p-2.5 rounded-xl border ${channel.panelClass}`}>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className={`font-bold flex items-center gap-1.5 ${channel.textClass}`}>
+                      <channel.Icon size={13} /> {channel.label}
+                    </span>
+                    <span className={`text-sm font-extrabold mono ${channel.valueClass}`}>{formatRate(rate)}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-gray-400">
+                    {channel.total > 0
+                      ? `${channel.hits} of ${channel.total} recorded attempts`
+                      : 'No attempts recorded for this channel'}
+                  </div>
+                  <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
+                    <div className={`${channel.barClass} h-full rounded-full`} style={{ width: `${rate ?? 0}%` }} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

@@ -1,837 +1,726 @@
 const request = require('supertest');
 const app = require('../src/app');
 const approvalQueries = require('../src/db/approvalQueries');
+const approvalController = require('../src/controllers/approvalController');
 const pool = require('../src/db/pool');
-const { authHeader } = require('./testHelpers');
-const { resetD1HttpClientCache } = require('../src/db/d1Bridge');
+const internalTaskQueries = require('../src/db/internalTaskQueries');
+const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
 const { logger } = require('../src/services/loggerService');
+const { APPROVAL_MESSAGES } = require('../src/config/constants');
+const { authHeader } = require('./testHelpers');
 
-const initialMemoryApprovals = JSON.parse(JSON.stringify(approvalQueries.memoryApprovals));
-const TEST_APPROVER_PASSWORD = 'test-only-approver-secret';
-const originalApproverPassword = process.env.APPROVER_PASSWORD;
-const withApprovalCredentials = (payload = {}) => ({
-  password: TEST_APPROVER_PASSWORD,
-  approverName: 'Srinu Sir',
-  ...payload,
-});
+const APPROVER_NAME = 'Sudheer Sir';
+const APPROVER_PASSWORD = 'approver-test-password';
+
+function withApprovalCredentials(body) {
+  return { ...body, approverName: APPROVER_NAME, password: APPROVER_PASSWORD };
+}
+
+function approvalRow(overrides = {}) {
+  return {
+    id: 'appr-db-1',
+    request_number: 'REQ-DB-1',
+    module: 'Credit Notes',
+    project: 'Tata',
+    applicant_name: 'Ravi Kumar',
+    applicant_email: 'ravi@example.com',
+    value_impact: 'Rs 5000',
+    maker_name: 'Maker One',
+    maker_role: 'buyer',
+    status: 'Pending',
+    details: '',
+    approver_name: null,
+    approver_remarks: null,
+    assigned_approver: 'Sudheer Sir',
+    raw: JSON.stringify({ request_type: 'Credit Notes', assigned_approver: 'Sudheer Sir', amount: 5000, history: [] }),
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+const UNAVAILABLE = { code: 'PERSISTENCE_UNAVAILABLE' };
 
 describe('Approvals API & Controller', () => {
+  let previousPassword;
+
+  beforeAll(() => {
+    previousPassword = process.env.SUDHEER_APPROVER_PASSWORD;
+    process.env.SUDHEER_APPROVER_PASSWORD = APPROVER_PASSWORD;
+  });
+
+  afterAll(() => {
+    if (previousPassword === undefined) delete process.env.SUDHEER_APPROVER_PASSWORD;
+    else process.env.SUDHEER_APPROVER_PASSWORD = previousPassword;
+  });
+
+  let querySpy;
+  let transactionSpy;
+
   beforeEach(() => {
     jest.restoreAllMocks();
-    process.env.APPROVER_PASSWORD = TEST_APPROVER_PASSWORD;
-    approvalQueries.memoryApprovals.splice(
-      0,
-      approvalQueries.memoryApprovals.length,
-      ...JSON.parse(JSON.stringify(initialMemoryApprovals))
-    );
-  });
-
-  afterEach(() => {
-    delete globalThis.__CF_ENV__;
-    delete process.env.CLOUDFLARE_ACCOUNT_ID;
-    delete process.env.CLOUDFLARE_D1_DATABASE_ID;
-    delete process.env.CLOUDFLARE_API_TOKEN;
-    if (originalApproverPassword === undefined) delete process.env.APPROVER_PASSWORD;
-    else process.env.APPROVER_PASSWORD = originalApproverPassword;
-    resetD1HttpClientCache();
-  });
-
-  test('approval builder supplies defaults when called without input or actor', () => {
-    const prepared = approvalQueries.prepareApprovalCreate();
-
-    expect(prepared.item).toMatchObject({
-      module: 'Buyer Credit Addition',
-      request_type: 'Buyer Credit Addition',
-      maker_name: 'Category Manager',
-      maker_role: 'Category Manager',
-      status: 'Pending',
-      internal_task_id: null,
-    });
-    expect(prepared.statement.text).toContain('INSERT INTO approvals');
-    expect(prepared.statement.params[0]).toBe(prepared.item.id);
-  });
-
-  test('looks up an approval by id in memory or configured storage and reports lookup failures', async () => {
-    expect(await approvalQueries.getApprovalById('')).toBeNull();
-
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-    expect(await approvalQueries.getApprovalById('appr-cred-101')).toMatchObject({ id: 'appr-cred-101' });
-    expect(await approvalQueries.getApprovalById('missing-approval')).toBeNull();
-
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(pool, 'query')
-      .mockResolvedValueOnce({ rows: [{
-        id: 'approval-db-lookup',
-        request_number: 'REQ-LOOKUP-1',
-        module: 'Seller Credit Addition',
-        raw: JSON.stringify({ seller_id: 'seller-lookup', internal_task_id: 'task-lookup' }),
-      }] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockRejectedValueOnce(new Error('approval lookup offline'));
-    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    // Any query or transaction a test does not script fails loudly.
+    querySpy = jest.spyOn(pool, 'query').mockRejectedValue(new Error('Unexpected pool.query call in this test.'));
+    transactionSpy = jest.spyOn(pool, 'withTransaction').mockRejectedValue(new Error('Unexpected transaction in this test.'));
+    jest.spyOn(logger, 'error').mockImplementation(() => {});
+    jest.spyOn(logger, 'warn').mockImplementation(() => {});
+  });
 
-    try {
-      await expect(approvalQueries.getApprovalById('approval-db-lookup')).resolves.toMatchObject({
-        id: 'approval-db-lookup',
-        seller_id: 'seller-lookup',
+  function runInTransaction(client) {
+    transactionSpy.mockImplementation((callback) => callback({ query: client }));
+  }
+
+  describe('prepareApprovalCreate', () => {
+    it.each([
+      [{}, {}, 'Approval module is required.'],
+      [{ module: 'Credit Notes' }, {}, 'Approval applicant name is required.'],
+      [{ module: 'Credit Notes', applicant_name: 'Ravi' }, {}, 'Approval applicant email is required.'],
+      [{ module: 'Credit Notes', applicant_name: 'Ravi', applicant_email: 'r@x.com' }, {}, 'Approval maker name is required.'],
+      [
+        { module: 'Credit Notes', applicant_name: 'Ravi', applicant_email: 'r@x.com' },
+        { fullName: 'Asha' },
+        'Approval assigned approver is required.',
+      ],
+    ])('rejects a missing required field with the matching message (case %#)', (data, actor, message) => {
+      expect(() => approvalQueries.prepareApprovalCreate(data, actor)).toThrow(message);
+    });
+
+    it('builds the insert with the actor as maker and a submitted history entry, and no invented values', () => {
+      const prepared = approvalQueries.prepareApprovalCreate({
+        module: 'Credit Notes',
+        applicant_name: 'Ravi Kumar',
+        applicant_email: 'ravi@example.com',
+        assigned_approver: 'Sudheer Sir',
+        amount: '5000',
+        raw: { source: 'test' },
+      }, { fullName: 'Asha Rao', role: 'buyer' });
+
+      expect(prepared.item).toMatchObject({
+        module: 'Credit Notes',
+        request_type: 'Credit Notes',
+        project: null,
+        value_impact: null,
+        maker_name: 'Asha Rao',
+        maker_role: 'buyer',
+        status: 'Pending',
+        details: '',
+        amount: 5000,
+        quantity: null,
+        internal_task_id: null,
+        buyer_id: null,
+        seller_id: null,
+      });
+      expect(prepared.item.request_number).toMatch(/^REQ-[0-9A-F]{12}$/);
+      expect(prepared.item.history).toEqual([expect.objectContaining({
+        action: 'SUBMITTED',
+        actor_name: 'Asha Rao',
+        actor_role: 'buyer',
+        remarks: 'Submitted for managerial approval (Sudheer Sir).',
+      })]);
+      expect(prepared.statement.text).toContain('INSERT INTO approvals');
+      expect(prepared.statement.params).toHaveLength(14);
+      expect(prepared.statement.params[0]).toBe(prepared.item.id);
+      expect(JSON.parse(prepared.statement.params[11])).toMatchObject({ request_type: 'Credit Notes', source: 'test' });
+    });
+
+    it('keeps supplied identifiers, history, and attachments', () => {
+      const history = [{ action: 'CUSTOM', timestamp: '2026-01-02T00:00:00.000Z' }];
+      const prepared = approvalQueries.prepareApprovalCreate({
+        id: 'appr-fixed',
+        request_number: 'REQ-FIXED',
+        request_type: 'Discounts',
+        module: 'Discounts',
+        applicant_name: 'Ravi',
+        applicant_email: 'r@x.com',
+        maker_name: 'Maker',
+        assigned_approver: 'Sudheer Sir',
+        history,
+        attachments: [{ name: 'quote.pdf' }],
+      }, {});
+
+      expect(prepared.item).toMatchObject({ id: 'appr-fixed', request_number: 'REQ-FIXED', history, attachments: [{ name: 'quote.pdf' }] });
+    });
+  });
+
+  describe('getApprovalById', () => {
+    it('returns null for a missing id without querying storage', async () => {
+      await expect(approvalQueries.getApprovalById('')).resolves.toBeNull();
+      expect(querySpy).not.toHaveBeenCalled();
+    });
+
+    it('fails closed with PERSISTENCE_UNAVAILABLE when storage is not configured', async () => {
+      pool.hasStorage.mockReturnValue(false);
+
+      await expect(approvalQueries.getApprovalById('appr-db-1')).rejects.toMatchObject(UNAVAILABLE);
+    });
+
+    it('hydrates the stored approval, reading linkage fields from the raw payload', async () => {
+      querySpy.mockResolvedValueOnce({
+        rows: [approvalRow({
+          raw: JSON.stringify({
+            request_type: 'Credit Notes',
+            internal_task_id: 'task-lookup',
+            buyer_id: 'buyer-1',
+            seller_id: 'seller-1',
+            history: [{ action: 'SUBMITTED' }],
+          }),
+        })],
+      });
+
+      const approval = await approvalQueries.getApprovalById('appr-db-1');
+
+      expect(approval).toMatchObject({
+        id: 'appr-db-1',
+        module: 'Credit Notes',
         internal_task_id: 'task-lookup',
+        buyer_id: 'buyer-1',
+        seller_id: 'seller-1',
+        assigned_approver: 'Sudheer Sir',
+        history: [{ action: 'SUBMITTED' }],
       });
+      expect(querySpy).toHaveBeenCalledWith('SELECT * FROM approvals WHERE id = $1 LIMIT 1', ['appr-db-1'], expect.any(Object));
+    });
+
+    it('returns null when no row matches', async () => {
+      querySpy.mockResolvedValueOnce({ rows: [] });
+
       await expect(approvalQueries.getApprovalById('missing-db-approval')).resolves.toBeNull();
-      await expect(approvalQueries.getApprovalById('failed-db-approval')).rejects.toMatchObject({
-        code: 'PERSISTENCE_UNAVAILABLE',
+    });
+
+    it('fails closed with the cause when the lookup query fails', async () => {
+      const cause = new Error('lookup failed');
+      querySpy.mockRejectedValueOnce(cause);
+
+      await expect(approvalQueries.getApprovalById('failed-db-approval')).rejects.toMatchObject({ ...UNAVAILABLE, cause });
+    });
+  });
+
+  describe('getApprovalSummary', () => {
+    it('fails closed when storage is not configured', async () => {
+      pool.hasStorage.mockReturnValue(false);
+
+      await expect(approvalQueries.getApprovalSummary()).rejects.toMatchObject(UNAVAILABLE);
+    });
+
+    it('reads the aggregate counts from the database row', async () => {
+      querySpy.mockResolvedValueOnce({ rows: [{ total: '4', pending: '2', approved: '1', rejected: '1' }] });
+
+      await expect(approvalQueries.getApprovalSummary()).resolves.toEqual({
+        total: 4, pending: 2, approved: 1, rejected: 1,
       });
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Management approval persistence operation failed'), expect.objectContaining({
-        operation: 'get-approval-by-id',
-      }), 'APPROVAL_PERSISTENCE');
-    } finally {
-      errorSpy.mockRestore();
-    }
-  });
-
-  test('GET /api/approvals/summary returns approval summary metrics', async () => {
-    const res = await request(app).get('/api/approvals/summary').set(authHeader('category_manager'));
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.summary.total).toBeGreaterThanOrEqual(1);
-    expect(res.body.summary.pending).toBeDefined();
-  });
-
-  test('GET /api/approvals filters by module, status, project, and search', async () => {
-    const res = await request(app)
-      .get('/api/approvals?module=Credit Notes&status=Pending&project=Tata&search=9041&limit=5&offset=0')
-      .set(authHeader('admin'));
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(Array.isArray(res.body.data)).toBe(true);
-  });
-
-  test('POST /api/approvals/:id/action validates and processes approval or rejection', async () => {
-    // Missing action
-    const failRes = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .set(authHeader('admin'))
-      .send({});
-    expect(failRes.status).toBe(400);
-
-    // 404 case
-    const notFoundRes = await request(app)
-      .post('/api/approvals/appr-missing-999/action')
-      .set(authHeader('admin'))
-      .send(withApprovalCredentials({ action: 'APPROVE' }));
-    expect(notFoundRes.status).toBe(404);
-
-    // Success approval
-    const okRes = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .set(authHeader('admin'))
-      .set('x-user-name', 'Sudheer Kangala')
-      .send(withApprovalCredentials({ action: 'APPROVE', remarks: 'Granted 100 extra free credits for RFQs.', approverName: 'Srinu Sir' }));
-    expect(okRes.status).toBe(200);
-    expect(okRes.body.success).toBe(true);
-    expect(okRes.body.data.status).toBe('Approved');
-
-    // Success rejection
-    const rejectRes = await request(app)
-      .post('/api/approvals/appr-acct-102/action')
-      .set(authHeader('category_manager'))
-      .set('x-user-name', 'Sudheer Kangala')
-      .send(withApprovalCredentials({ action: 'REJECT', remarks: 'Invalid business documentation.' }));
-    expect(rejectRes.status).toBe(200);
-    expect(rejectRes.body.data.status).toBe('Rejected');
-  });
-
-  test('handles 500 error catch branches gracefully', async () => {
-    jest.spyOn(approvalQueries, 'getApprovalSummary').mockRejectedValue(new Error('Summary error'));
-    const sumErr = await request(app).get('/api/approvals/summary').set(authHeader('admin'));
-    expect(sumErr.status).toBe(500);
-
-    jest.spyOn(approvalQueries, 'getApprovals').mockRejectedValue(new Error('List error'));
-    const listErr = await request(app).get('/api/approvals').set(authHeader('admin'));
-    expect(listErr.status).toBe(500);
-
-    jest.spyOn(approvalQueries, 'processApprovalAction').mockRejectedValue(new Error('Process error'));
-    const actErr = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .set(authHeader('admin'))
-      .send(withApprovalCredentials({ action: 'APPROVE' }));
-    expect(actErr.status).toBe(500);
-  });
-
-  test('approval endpoints reject anonymous and non-approver roles', async () => {
-    const anonymousSummary = await request(app).get('/api/approvals/summary');
-    const buyerList = await request(app).get('/api/approvals').set(authHeader('buyer'));
-    const anonymousAction = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .send({ action: 'APPROVE' });
-    const vendorAction = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .set(authHeader('vendor'))
-      .send({ action: 'APPROVE' });
-
-    expect(anonymousSummary.status).toBe(401);
-    expect(buyerList.status).toBe(403);
-    expect(anonymousAction.status).toBe(401);
-    expect(vendorAction.status).toBe(403);
-  });
-
-  test('processApprovalAction keeps the no-database demo path deterministic and audits the decision', async () => {
-    const auditSpy = jest.spyOn(require('../src/services/loggerService').logger, 'audit');
-    const updated = await approvalQueries.processApprovalAction(
-      'appr-trial-104',
-      withApprovalCredentials({ action: 'APPROVE', remarks: 'Extended 30 days' }),
-      { uuid: 'operator-1', name: 'Admin', email: 'admin@procucev.com' }
-    );
-    expect(updated).toMatchObject({
-      status: 'Approved',
-      approver_id: 'operator-1',
-      approver_name: 'Admin',
-      approver_remarks: 'Extended 30 days',
     });
-    expect(auditSpy).toHaveBeenCalledWith(
-      expect.stringContaining('approved'),
-      'admin@procucev.com',
-      expect.objectContaining({ approvalId: 'appr-trial-104' }),
-      'REQ-TRL-6320'
-    );
-    await expect(approvalQueries.processApprovalAction(
-      'appr-trial-104', withApprovalCredentials({ action: 'REJECT' }), {}
-    )).rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
-  });
 
-  test('database summary and filtered list use durable query results', async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    const querySpy = jest.spyOn(pool, 'query')
-      .mockResolvedValueOnce({ rows: [
-        { status: 'Pending', count: '2' }, { status: 'Approved', count: '1' },
-      ] })
-      .mockResolvedValueOnce({ rows: [{ id: 'db-approval-1', status: 'Pending', total: '4' }] });
+    it('counts legacy status rows when the result carries per-status counts', async () => {
+      querySpy.mockResolvedValueOnce({
+        rows: [{ status: 'Pending', count: '3' }, { status: 'approved', count: 2 }, { status: 'Other', count: 9 }],
+      });
 
-    await expect(approvalQueries.getApprovalSummary()).resolves.toEqual({
-      pending: 2, approved: 1, rejected: 0, total: 3,
+      await expect(approvalQueries.getApprovalSummary()).resolves.toEqual({
+        pending: 3, approved: 2, rejected: 0, total: 5,
+      });
     });
-    const listed = await approvalQueries.getApprovals({
-      module: 'Credit Notes', status: 'Pending', project: 'Tata', search: '9041', limit: 5, offset: 2,
+
+    it('fails closed with PERSISTENCE_UNAVAILABLE when the summary query fails', async () => {
+      querySpy.mockRejectedValueOnce(new Error('database offline'));
+
+      await expect(approvalQueries.getApprovalSummary()).rejects.toMatchObject(UNAVAILABLE);
     });
-    expect(listed).toMatchObject({
-      rows: [{ id: 'db-approval-1', status: 'Pending' }],
-      total: 4,
+  });
+
+  describe('getApprovals', () => {
+    it('fails closed when storage is not configured', async () => {
+      pool.hasStorage.mockReturnValue(false);
+
+      await expect(approvalQueries.getApprovals()).rejects.toMatchObject(UNAVAILABLE);
     });
-    expect(querySpy.mock.calls[1][0]).toContain('COUNT(*) OVER()');
-    expect(querySpy.mock.calls[1][1]).toEqual(['credit notes', 'pending', '%tata%', '%9041%', 5, 2]);
+
+    it('pushes the module, status, project, approver, and search filters into the query and clamps paging', async () => {
+      querySpy.mockResolvedValueOnce({ rows: [{ ...approvalRow(), total: '1' }] });
+
+      const result = await approvalQueries.getApprovals({
+        module: 'Credit Notes',
+        status: 'Pending',
+        project: 'Tata',
+        search: '9041',
+        assigned_approver: 'sudheer',
+        limit: 500,
+        offset: -3,
+        sortBy: 'module',
+        sortOrder: 'asc',
+      });
+
+      const [sql, params] = querySpy.mock.calls[0];
+      expect(sql).toContain('lower(module) = $1');
+      expect(sql).toContain('lower(status) = $2');
+      expect(sql).toContain("lower(coalesce(project, '')) LIKE $3");
+      expect(sql).toContain("lower(coalesce(assigned_approver, '')) LIKE $4");
+      expect(sql).toContain('ORDER BY module ASC');
+      expect(params.slice(0, 4)).toEqual(['credit notes', 'pending', '%tata%', '%sudheer%']);
+      expect(params.slice(-2)).toEqual([200, 0]);
+      expect(result.total).toBe(1);
+      expect(result.rows[0]).toMatchObject({ id: 'appr-db-1', request_number: 'REQ-DB-1' });
+      expect(result.rows[0]).not.toHaveProperty('total');
+    });
+
+    it('falls back to the created_at sort for an unknown sort field and treats "all" as no filter', async () => {
+      querySpy.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ total: '0' }] });
+
+      await approvalQueries.getApprovals({ sortBy: 'drop_table', module: 'all', status: 'all', project: 'all' });
+
+      expect(querySpy.mock.calls[0][0]).toContain('ORDER BY created_at DESC');
+      expect(querySpy.mock.calls[0][1]).toEqual([50, 0]);
+    });
+
+    it('runs a count query when the page is empty and reports that total', async () => {
+      querySpy
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ total: '8' }] });
+
+      await expect(approvalQueries.getApprovals({ offset: 100 })).resolves.toEqual({ rows: [], total: 8 });
+      expect(querySpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports a total of zero when the count query returns no row', async () => {
+      querySpy
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      await expect(approvalQueries.getApprovals()).resolves.toEqual({ rows: [], total: 0 });
+    });
+
+    it('fails closed with PERSISTENCE_UNAVAILABLE when the list query fails', async () => {
+      querySpy.mockRejectedValueOnce(new Error('database offline'));
+
+      await expect(approvalQueries.getApprovals()).rejects.toMatchObject(UNAVAILABLE);
+    });
   });
 
-  test('database list runs a count query for an empty page and wraps read failures', async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    const querySpy = jest.spyOn(pool, 'query')
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ total: '8' }] });
-    await expect(approvalQueries.getApprovals({ offset: 100 })).resolves.toEqual({ rows: [], total: 8 });
-    expect(querySpy).toHaveBeenCalledTimes(2);
+  describe('createApproval', () => {
+    it('fails closed when storage is not configured', async () => {
+      pool.hasStorage.mockReturnValue(false);
 
-    querySpy.mockRejectedValueOnce(new Error('database offline'));
-    await expect(approvalQueries.getApprovalSummary()).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+      await expect(approvalQueries.createApproval({ module: 'Credit Notes' }, {})).rejects.toMatchObject(UNAVAILABLE);
+    });
+
+    it('inserts the prepared approval and returns the stored item', async () => {
+      querySpy.mockResolvedValueOnce({ rows: [] });
+
+      const item = await approvalQueries.createApproval({
+        module: 'Credit Notes',
+        applicant_name: 'Ravi',
+        applicant_email: 'ravi@example.com',
+        assigned_approver: 'Sudheer Sir',
+      }, { fullName: 'Asha' });
+
+      expect(querySpy).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO approvals'), expect.any(Array), expect.any(Object));
+      expect(item).toMatchObject({ module: 'Credit Notes', maker_name: 'Asha', status: 'Pending' });
+    });
+
+    it('fails closed with the cause when the insert fails', async () => {
+      const cause = new Error('insert failed');
+      querySpy.mockRejectedValueOnce(cause);
+
+      await expect(approvalQueries.createApproval({
+        module: 'Credit Notes',
+        applicant_name: 'Ravi',
+        applicant_email: 'ravi@example.com',
+        assigned_approver: 'Sudheer Sir',
+      }, { name: 'Asha' })).rejects.toMatchObject({ ...UNAVAILABLE, cause });
+    });
   });
 
-  test('PostgreSQL approval decisions and audit events commit in one transaction', async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    const saved = {
-      id: 'db-approval-1', request_number: 'REQ-DB-1', module: 'Credit Notes',
-      status: 'Approved', approver_name: 'Admin',
-    };
-    const clientQuery = jest.fn()
-      .mockResolvedValueOnce({ rows: [{ ...saved, status: 'Pending' }] })
-      .mockResolvedValueOnce({ rows: [saved] })
-      .mockResolvedValueOnce({ rows: [{ id: 'event-1' }] });
-    const transactionSpy = jest.spyOn(pool, 'withTransaction')
-      .mockImplementation((callback) => callback({ query: clientQuery }));
+  describe('processApprovalAction', () => {
+    const actor = { uuid: 'approver-1', name: 'Sudheer Sir', email: 'sudheer@example.com', role: 'admin' };
+    const body = { action: 'APPROVE', remarks: 'Extended 30 days', password: APPROVER_PASSWORD, approverName: APPROVER_NAME };
 
-    await expect(approvalQueries.processApprovalAction(
-      'REQ-DB-1', withApprovalCredentials({ action: 'APPROVE', remarks: 'Approved' }),
-      { uuid: 'admin-1', name: 'Admin', email: 'admin@example.com' }
-    )).resolves.toEqual(saved);
-    expect(transactionSpy).toHaveBeenCalledTimes(1);
-    expect(clientQuery.mock.calls[0][0]).toContain('FOR UPDATE');
-    expect(clientQuery.mock.calls[1][0]).toContain('RETURNING *');
-    expect(clientQuery.mock.calls[2][0]).toContain('INSERT INTO management_approval_events');
-  });
+    it('requires an identified actor before any storage work', async () => {
+      await expect(approvalQueries.processApprovalAction('appr-1', body, {})).rejects.toMatchObject({
+        code: 'ACTOR_REQUIRED',
+      });
+      expect(transactionSpy).not.toHaveBeenCalled();
+    });
 
-  test('PostgreSQL rejects missing or already decided records without writing an event', async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
-    jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback({
-      query: jest.fn().mockResolvedValueOnce({ rows: [] }),
-    }));
-    await expect(approvalQueries.processApprovalAction('missing', withApprovalCredentials({ action: 'REJECT' }))).resolves.toBeNull();
+    it('fails closed when storage is not configured', async () => {
+      pool.hasStorage.mockReturnValue(false);
 
-    const clientQuery = jest.fn().mockResolvedValueOnce({ rows: [{ id: 'db-1', status: 'Approved' }] });
-    pool.withTransaction.mockImplementation((callback) => callback({ query: clientQuery }));
-    await expect(approvalQueries.processApprovalAction('db-1', withApprovalCredentials({ action: 'REJECT' })))
-      .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
-    expect(clientQuery).toHaveBeenCalledTimes(1);
-  });
+      await expect(approvalQueries.processApprovalAction('appr-1', body, actor)).rejects.toMatchObject(UNAVAILABLE);
+    });
 
-  test('D1 approval decision batches the update and event atomically', async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    const saved = { id: 'd1-approval-1', request_number: 'REQ-D1-1', status: 'Rejected' };
-    const prepared = [];
-    const db = {
-      prepare: (sql) => ({
-        bind: (...params) => {
-          const statement = { sql, params };
-          prepared.push(statement);
-          return statement;
-        },
-      }),
-      batch: jest.fn().mockResolvedValue([
+    it('refuses an approver whose password is not configured', async () => {
+      await expect(approvalQueries.processApprovalAction('appr-1', { ...body, approverName: 'Unknown Approver' }, actor))
+        .rejects.toMatchObject({ code: 'APPROVER_PASSWORD_NOT_CONFIGURED', statusCode: 503 });
+    });
+
+    it('refuses a wrong approver password', async () => {
+      await expect(approvalQueries.processApprovalAction('appr-1', { ...body, password: 'wrong' }, actor))
+        .rejects.toMatchObject({ code: 'APPROVER_PASSWORD_INVALID', statusCode: 401 });
+    });
+
+    it('decides a PostgreSQL management approval inside one transaction and writes its audit event', async () => {
+      const current = { id: 'appr-pg-1', request_number: 'REQ-PG-1', status: 'Pending' };
+      const saved = { ...current, status: 'Approved', approver_name: 'Sudheer Sir' };
+      const client = jest.fn()
+        .mockResolvedValueOnce({ rows: [current] })
+        .mockResolvedValueOnce({ rows: [saved] })
+        .mockResolvedValueOnce({ rows: [] });
+      runInTransaction(client);
+      const auditSpy = jest.spyOn(logger, 'audit');
+
+      const result = await approvalQueries.processApprovalAction('REQ-PG-1', body, actor);
+
+      expect(result).toEqual(saved);
+      expect(client).toHaveBeenCalledTimes(3);
+      expect(client.mock.calls[1][1]).toEqual(expect.arrayContaining(['Approved', 'approver-1', 'Sudheer Sir']));
+      expect(client.mock.calls[2][0]).toContain('INSERT INTO management_approval_events');
+      expect(auditSpy).toHaveBeenCalledWith('Management approval approved', 'sudheer@example.com', expect.objectContaining({
+        approvalId: 'appr-pg-1',
+        requestNumber: 'REQ-PG-1',
+      }), 'REQ-PG-1');
+    });
+
+    it('refuses a PostgreSQL management approval that was already decided', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [{ id: 'appr-pg-2', status: 'Approved' }] }));
+
+      await expect(approvalQueries.processApprovalAction('appr-pg-2', { ...body, action: 'REJECT' }, actor))
+        .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
+    });
+
+    it('falls through to the approvals table when no management approval matches, and returns null when neither has the id', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      querySpy.mockResolvedValueOnce({ rows: [] });
+
+      await expect(approvalQueries.processApprovalAction('missing', { ...body, action: 'REJECT' }, actor)).resolves.toBeNull();
+    });
+
+    it('fails closed with the cause when the PostgreSQL transaction fails', async () => {
+      const cause = new Error('transaction failed');
+      transactionSpy.mockRejectedValueOnce(cause);
+
+      await expect(approvalQueries.processApprovalAction('appr-1', body, actor)).rejects.toMatchObject({ ...UNAVAILABLE, cause });
+    });
+
+    it('decides a Worker D1 management approval in one batch and returns the saved row', async () => {
+      const saved = { id: 'd1-appr-1', request_number: 'REQ-D1-1', status: 'Rejected', approver_name: 'Sudheer Sir' };
+      const batch = jest.fn().mockResolvedValue([
         { results: [saved], meta: { changes: 1 } },
-        { results: [{ id: 'event-d1-1' }], meta: { changes: 1 } },
-      ]),
-    };
-    globalThis.__CF_ENV__ = { DB: db };
+        { results: [{ id: 'event-1' }], meta: { changes: 1 } },
+      ]);
+      const previousEnv = globalThis.__CF_ENV__;
+      globalThis.__CF_ENV__ = {
+        DB: {
+          prepare: (sql) => ({ bind: (...params) => ({ sql, params }) }),
+          batch,
+        },
+      };
 
-    await expect(approvalQueries.processApprovalAction(
-      'REQ-D1-1', withApprovalCredentials({ action: 'REJECT', remarks: 'Declined' }), { name: 'Manager' }
-    )).resolves.toEqual(saved);
-    expect(db.batch).toHaveBeenCalledTimes(1);
-    expect(prepared).toHaveLength(2);
-    expect(prepared[0].sql).toContain('UPDATE management_approvals');
-    expect(prepared[1].sql).toContain('INSERT INTO management_approval_events');
-    expect(prepared[0].params[5]).toBe(prepared[1].params[0]);
+      try {
+        await expect(approvalQueries.processApprovalAction('REQ-D1-1', {
+          ...body, action: 'REJECT', remarks: 'Declined',
+        }, actor)).resolves.toEqual(saved);
+        expect(batch).toHaveBeenCalledTimes(1);
+      } finally {
+        if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = previousEnv;
+      }
+    });
+
+    it('distinguishes a missing and an already decided Worker D1 approval, and fails closed on a batch error', async () => {
+      const previousEnv = globalThis.__CF_ENV__;
+      const batch = jest.fn()
+        .mockResolvedValueOnce([{ results: [], meta: { changes: 0 } }, { results: [], meta: { changes: 0 } }])
+        .mockResolvedValueOnce([{ results: [], meta: { changes: 0 } }, { results: [], meta: { changes: 0 } }])
+        .mockRejectedValueOnce(new Error('D1 offline'));
+      globalThis.__CF_ENV__ = {
+        DB: { prepare: (sql) => ({ bind: (...params) => ({ sql, params }) }), batch },
+      };
+
+      try {
+        // Missing: no management row matches, so the approvals table is consulted and has no row.
+        querySpy
+          .mockResolvedValueOnce({ rows: [] })
+          .mockResolvedValueOnce({ rows: [] });
+        await expect(approvalQueries.processApprovalAction('missing', body, actor)).resolves.toBeNull();
+
+        // Already decided: the management row exists but is no longer pending.
+        querySpy.mockResolvedValueOnce({ rows: [approvalRow({ status: 'Approved' })] });
+        await expect(approvalQueries.processApprovalAction('d1-decided', body, actor))
+          .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
+
+        // Batch failure: the error is reported as unavailable, not as a decision.
+        await expect(approvalQueries.processApprovalAction('d1-fail', body, actor)).rejects.toMatchObject(UNAVAILABLE);
+      } finally {
+        if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = previousEnv;
+      }
+    });
+
+    it('decides a generic approval, records history, and notifies the requester', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      const dispatchSpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication')
+        .mockResolvedValue({});
+      const saved = approvalRow({ status: 'Rejected', approver_name: 'Sudheer Sir', approver_remarks: 'Declined' });
+      querySpy
+        .mockResolvedValueOnce({ rows: [approvalRow()] })
+        .mockResolvedValueOnce({ rows: [saved] });
+
+      const result = await approvalQueries.processApprovalAction('REQ-DB-1', {
+        ...body, action: 'REJECT', remarks: 'Declined',
+      }, actor);
+
+      expect(result).toMatchObject({ id: 'appr-db-1', status: 'Rejected' });
+      const updateParams = querySpy.mock.calls[1][1];
+      expect(updateParams[0]).toBe('Rejected');
+      expect(JSON.parse(updateParams[4]).history).toEqual([expect.objectContaining({ action: 'REJECTED', actor_name: 'Sudheer Sir' })]);
+      expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+        entityType: 'approval',
+        recipientEmail: 'ravi@example.com',
+        channel: 'EMAIL',
+      }), actor);
+    });
+
+    it('warns instead of notifying when the approval holds no requester email', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      const dispatchSpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication');
+      querySpy
+        .mockResolvedValueOnce({ rows: [approvalRow({ applicant_email: null })] })
+        .mockResolvedValueOnce({ rows: [approvalRow({ applicant_email: null, status: 'Approved' })] });
+
+      await approvalQueries.processApprovalAction('REQ-DB-1', body, actor);
+
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no requester email'), expect.any(Object), 'APPROVAL_QUERIES');
+    });
+
+    it('logs a requester notification failure without failing the decision', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication')
+        .mockRejectedValue(new Error('mail offline'));
+      querySpy
+        .mockResolvedValueOnce({ rows: [approvalRow()] })
+        .mockResolvedValueOnce({ rows: [approvalRow({ status: 'Approved' })] });
+
+      await expect(approvalQueries.processApprovalAction('REQ-DB-1', body, actor)).resolves.toMatchObject({ status: 'Approved' });
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('requester notification failed'), expect.any(Object), 'APPROVAL_QUERIES');
+    });
+
+    it('synchronizes the linked credit task when a generic approval is approved', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      const approveSpy = jest.spyOn(internalTaskQueries, 'approveCreditTask').mockResolvedValue({});
+      const linked = approvalRow({
+        raw: JSON.stringify({ request_type: 'Credit Notes', internal_task_id: 'task-link-1', history: [] }),
+      });
+      querySpy
+        .mockResolvedValueOnce({ rows: [linked] })
+        .mockResolvedValueOnce({ rows: [{ ...linked, status: 'Approved' }] });
+
+      await approvalQueries.processApprovalAction('REQ-DB-1', body, actor);
+
+      expect(approveSpy).toHaveBeenCalledWith('task-link-1', actor, 'Extended 30 days');
+    });
+
+    it('logs a credit task synchronization failure after the approval is saved', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      jest.spyOn(internalTaskQueries, 'rejectCreditTask').mockRejectedValue(new Error('task offline'));
+      const linked = approvalRow({
+        raw: JSON.stringify({ request_type: 'Credit Notes', internal_task_id: 'task-link-2', history: [] }),
+      });
+      querySpy
+        .mockResolvedValueOnce({ rows: [linked] })
+        .mockResolvedValueOnce({ rows: [{ ...linked, status: 'Rejected' }] });
+
+      await expect(approvalQueries.processApprovalAction('REQ-DB-1', { ...body, action: 'REJECT' }, actor))
+        .resolves.toMatchObject({ status: 'Rejected' });
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('internal credit task synchronization failed'), expect.any(Object), 'APPROVAL_QUERIES');
+    });
+
+    it('reports a conflict when the generic approval changed before the update', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      querySpy
+        .mockResolvedValueOnce({ rows: [approvalRow()] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [approvalRow({ status: 'Approved' })] });
+
+      await expect(approvalQueries.processApprovalAction('REQ-DB-1', body, actor))
+        .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
+    });
+
+    it('returns null when the generic approval disappears before the update', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      querySpy
+        .mockResolvedValueOnce({ rows: [approvalRow()] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      await expect(approvalQueries.processApprovalAction('REQ-DB-1', body, actor)).resolves.toBeNull();
+    });
+
+    it('refuses an already decided generic approval before writing', async () => {
+      runInTransaction(jest.fn().mockResolvedValueOnce({ rows: [] }));
+      querySpy.mockResolvedValueOnce({ rows: [approvalRow({ status: 'Approved' })] });
+
+      await expect(approvalQueries.processApprovalAction('REQ-DB-1', body, actor))
+        .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
+      expect(querySpy).toHaveBeenCalledTimes(1);
+    });
   });
 
-  test('D1 approval distinguishes missing and already decided rows and fails closed on batch errors', async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    const db = {
-      prepare: (sql) => ({ bind: (...params) => ({ sql, params }) }),
-      batch: jest.fn().mockResolvedValue([{ results: [], meta: { changes: 0 } }, { results: [], meta: { changes: 0 } }]),
-    };
-    globalThis.__CF_ENV__ = { DB: db };
-    const readSpy = jest.spyOn(pool, 'query')
-      .mockResolvedValue({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: 'd1-1', status: 'Approved' }] });
-    await expect(approvalQueries.processApprovalAction('d1-1', withApprovalCredentials({ action: 'REJECT' })))
-      .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
-    readSpy.mockResolvedValueOnce({ rows: [] });
-    await expect(approvalQueries.processApprovalAction('missing', withApprovalCredentials({ action: 'REJECT' }))).resolves.toBeNull();
-
-    db.batch.mockRejectedValueOnce(new Error('D1 offline'));
-    await expect(approvalQueries.processApprovalAction('d1-1', withApprovalCredentials({ action: 'REJECT' })))
-      .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+  describe('approvalController', () => {
+    it('extracts the actor from the authenticated session only', () => {
+      expect(approvalController.extractActor({})).toBeNull();
+      expect(approvalController.extractActor({ user: {} })).toBeNull();
+      expect(approvalController.extractActor({ user: { uuid: 'u1', fullName: 'Asha', email: 'a@x.com', role: 'admin' } }))
+        .toEqual({ uuid: 'u1', name: 'Asha', email: 'a@x.com', role: 'admin' });
+      expect(approvalController.extractActor({ user: { id: 'i1' } }))
+        .toEqual({ uuid: 'i1', name: null, email: null, role: null });
+      expect(approvalController.extractActor({ user: { name: 'Only Name' } }))
+        .toEqual({ uuid: null, name: 'Only Name', email: null, role: null });
+      expect(approvalController.extractActor({ headers: { 'x-user-name': 'Spoofed' } })).toBeNull();
+    });
   });
 
-  test('approval controller surfaces storage and decision conflicts as actionable statuses', async () => {
-    jest.spyOn(approvalQueries, 'getApprovalSummary').mockRejectedValue({ code: 'PERSISTENCE_UNAVAILABLE' });
-    const unavailable = await request(app).get('/api/approvals/summary').set(authHeader('admin'));
-    expect(unavailable.status).toBe(503);
-    expect(unavailable.body.retryable).toBe(true);
+  describe('HTTP routes', () => {
+    it('rejects anonymous and non-approver requests before the handlers run', async () => {
+      const anonymousSummary = await request(app).get('/api/approvals/summary');
+      const buyerList = await request(app).get('/api/approvals').set(authHeader('buyer'));
+      const anonymousAction = await request(app).post('/api/approvals/appr-cred-101/action').send({ action: 'APPROVE' });
+      const vendorAction = await request(app)
+        .post('/api/approvals/appr-cred-101/action')
+        .set(authHeader('vendor'))
+        .send({ action: 'APPROVE' });
 
-    const actionSpy = jest.spyOn(approvalQueries, 'processApprovalAction')
-      .mockRejectedValue({ code: 'APPROVAL_ALREADY_DECIDED' });
-    const conflict = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .set(authHeader('admin'))
-      .send(withApprovalCredentials({ action: 'APPROVE' }));
-    expect(conflict.status).toBe(409);
-    expect(conflict.body.retryable).toBe(false);
-    actionSpy.mockRestore();
+      expect(anonymousSummary.status).toBe(401);
+      expect(buyerList.status).toBe(403);
+      expect(anonymousAction.status).toBe(401);
+      expect(vendorAction.status).toBe(403);
+    });
+
+    it('returns the summary metrics from the query layer', async () => {
+      const summary = { total: 3, pending: 2, approved: 1, rejected: 0 };
+      jest.spyOn(approvalQueries, 'getApprovalSummary').mockResolvedValueOnce(summary);
+
+      const res = await request(app).get('/api/approvals/summary').set(authHeader('category_manager'));
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, summary });
+    });
+
+    it('answers 503 with a retryable message when the summary storage is unavailable', async () => {
+      jest.spyOn(approvalQueries, 'getApprovalSummary').mockRejectedValueOnce(Object.assign(new Error('down'), UNAVAILABLE));
+
+      const res = await request(app).get('/api/approvals/summary').set(authHeader('admin'));
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ success: false, error: APPROVAL_MESSAGES.DATABASE_UNAVAILABLE, retryable: true });
+    });
+
+    it('answers 500 for an unexpected summary failure', async () => {
+      jest.spyOn(approvalQueries, 'getApprovalSummary').mockRejectedValueOnce(new Error('Summary error'));
+
+      const res = await request(app).get('/api/approvals/summary').set(authHeader('admin'));
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to retrieve approval summary statistics.');
+    });
+
+    it('passes the list filters and paging from the query string to the query layer', async () => {
+      const listSpy = jest.spyOn(approvalQueries, 'getApprovals').mockResolvedValueOnce({ rows: [approvalRow()], total: 1 });
+
+      const res = await request(app)
+        .get('/api/approvals?module=Credit%20Notes&status=Pending&project=Tata&search=9041&limit=5&offset=2')
+        .set(authHeader('admin'));
+
+      expect(res.status).toBe(200);
+      expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({
+        module: 'Credit Notes',
+        status: 'Pending',
+        project: 'Tata',
+        search: '9041',
+        limit: 5,
+        offset: 2,
+      }));
+      expect(res.body).toEqual(expect.objectContaining({ success: true, total: 1, limit: 5, offset: 2 }));
+      expect(res.body.data).toHaveLength(1);
+    });
+
+    it('answers 500 when the list query fails', async () => {
+      jest.spyOn(approvalQueries, 'getApprovals').mockRejectedValueOnce(new Error('List error'));
+
+      const res = await request(app).get('/api/approvals').set(authHeader('admin'));
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to retrieve approval requests.');
+    });
+
+    it('rejects an action payload without an action with a field-level validation error', async () => {
+      const res = await request(app)
+        .post('/api/approvals/appr-cred-101/action')
+        .set(authHeader('admin'))
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation failed on approval action payload.');
+    });
+
+    it('answers 404 when the approval does not exist', async () => {
+      jest.spyOn(approvalQueries, 'processApprovalAction').mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .post('/api/approvals/appr-missing-999/action')
+        .set(authHeader('admin'))
+        .send(withApprovalCredentials({ action: 'APPROVE' }));
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Approval request "appr-missing-999" not found.');
+    });
+
+    it('processes an approval for the authenticated approver and returns the decided row', async () => {
+      const decided = approvalRow({ status: 'Approved' });
+      const actionSpy = jest.spyOn(approvalQueries, 'processApprovalAction').mockResolvedValueOnce(decided);
+
+      const res = await request(app)
+        .post('/api/approvals/appr-db-1/action')
+        .set(authHeader('admin'))
+        .set('x-user-name', 'Spoofed Name')
+        .send(withApprovalCredentials({ action: 'APPROVE', remarks: 'Approved' }));
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, data: decided });
+      const [id, payload, actor] = actionSpy.mock.calls[0];
+      expect(id).toBe('appr-db-1');
+      expect(payload).toEqual(expect.objectContaining({ action: 'APPROVE', approverName: APPROVER_NAME, remarks: 'Approved' }));
+      expect(actor.name).not.toBe('Spoofed Name');
+    });
+
+    it.each([
+      ['ACTOR_REQUIRED', 401, undefined],
+      ['APPROVAL_ALREADY_DECIDED', 409, APPROVAL_MESSAGES.ALREADY_DECIDED],
+      ['APPROVER_PASSWORD_INVALID', 401, APPROVAL_MESSAGES.PASSWORD_INVALID],
+      ['APPROVER_PASSWORD_NOT_CONFIGURED', 503, APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE],
+      ['PERSISTENCE_UNAVAILABLE', 503, APPROVAL_MESSAGES.DATABASE_UNAVAILABLE],
+    ])('maps the %s query error to HTTP %i', async (code, status, message) => {
+      jest.spyOn(approvalQueries, 'processApprovalAction').mockRejectedValueOnce(Object.assign(new Error('x'), { code }));
+
+      const res = await request(app)
+        .post('/api/approvals/appr-db-1/action')
+        .set(authHeader('admin'))
+        .send(withApprovalCredentials({ action: 'APPROVE' }));
+
+      expect(res.status).toBe(status);
+      expect(res.body.success).toBe(false);
+      if (message) expect(res.body.error).toBe(message);
+    });
+
+    it('answers 500 for an unexpected action failure', async () => {
+      jest.spyOn(approvalQueries, 'processApprovalAction').mockRejectedValueOnce(new Error('Process error'));
+
+      const res = await request(app)
+        .post('/api/approvals/appr-db-1/action')
+        .set(authHeader('admin'))
+        .send(withApprovalCredentials({ action: 'APPROVE' }));
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to process approval action.');
+    });
   });
-
-  test('approval actions require a configured secret and reject invalid approver credentials', async () => {
-    const constants = require('../src/config/constants');
-    expect(constants.isApproverPasswordConfigured('Srinu Sir')).toBe(true);
-    expect(constants.verifyApproverPassword('Srinu Sir', TEST_APPROVER_PASSWORD)).toBe(true);
-    expect(constants.verifyApproverPassword('Srinu Sir', 'incorrect')).toBe(false);
-    expect(constants.verifyApproverPassword('Unknown Approver', TEST_APPROVER_PASSWORD)).toBe(false);
-
-    const badPassword = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .set(authHeader('admin'))
-      .send(withApprovalCredentials({ action: 'APPROVE', password: 'incorrect' }));
-    expect(badPassword.status).toBe(401);
-
-    delete process.env.APPROVER_PASSWORD;
-    const unconfigured = await request(app)
-      .post('/api/approvals/appr-cred-101/action')
-      .set(authHeader('admin'))
-      .send(withApprovalCredentials({ action: 'APPROVE' }));
-    expect(unconfigured.status).toBe(503);
-    process.env.APPROVER_PASSWORD = TEST_APPROVER_PASSWORD;
-  });
-
-  test('approvalController directly tests extractActor branches and query variations', async () => {
-    const approvalController = require('../src/controllers/approvalController');
-    const resetCreditApproval = () => {
-      const creditApproval = approvalQueries.memoryApprovals.find((item) => item.id === 'appr-cred-101');
-      creditApproval.status = 'Pending';
-    };
-
-    // 1. req.user with uuid, fullName, email, role
-    let jsonResult = null;
-    const resMock = { json: (val) => { jsonResult = val; return resMock; }, status: () => resMock };
-    resetCreditApproval();
-    await approvalController.processAction(
-      {
-        params: { id: 'appr-cred-101' },
-        body: withApprovalCredentials({ action: 'APPROVE', remarks: 'Good' }),
-        user: { uuid: 'u-123', fullName: 'Director John', email: 'john@x.com', role: 'superadmin' },
-      },
-      resMock
-    );
-    expect(jsonResult.success).toBe(true);
-
-    // 2. req.user with id, name, without email/role
-    resetCreditApproval();
-    await approvalController.processAction(
-      {
-        params: { id: 'appr-cred-101' },
-        body: withApprovalCredentials({ action: 'REJECT' }),
-        user: { id: 'u-456', name: 'Manager Mary' },
-      },
-      resMock
-    );
-    expect(jsonResult.success).toBe(true);
-
-    // 3. req.user with only email
-    resetCreditApproval();
-    await approvalController.processAction(
-      {
-        params: { id: 'appr-cred-101' },
-        body: withApprovalCredentials({ action: 'APPROVE' }),
-        user: { email: 'ops@x.com' },
-      },
-      resMock
-    );
-    expect(jsonResult.success).toBe(true);
-
-    // 4. req.user empty
-    resetCreditApproval();
-    await approvalController.processAction(
-      {
-        params: { id: 'appr-cred-101' },
-        body: withApprovalCredentials({ action: 'APPROVE' }),
-        user: {},
-      },
-      resMock
-    );
-    expect(jsonResult.success).toBe(true);
-
-    // Authenticated route handlers normally set req.user, while internal direct callers can supply headers.
-    resetCreditApproval();
-    await approvalController.processAction(
-      {
-        params: { id: 'appr-cred-101' },
-        body: withApprovalCredentials({ action: 'APPROVE' }),
-        headers: { 'x-user-name': 'Manual Reviewer', 'x-user-email': 'manual@example.com' },
-      },
-      resMock
-    );
-    expect(jsonResult.success).toBe(true);
-
-    resetCreditApproval();
-    await approvalController.processAction(
-      { params: { id: 'appr-cred-101' }, body: withApprovalCredentials({ action: 'APPROVE' }), headers: {} },
-      resMock
-    );
-    expect(jsonResult.success).toBe(true);
-
-    // 5. getApprovals with no params
-    await approvalController.getApprovals({ query: {} }, resMock);
-    expect(jsonResult.success).toBe(true);
-    await approvalController.getApprovals({ query: { limit: '10', offset: '3' } }, resMock);
-    expect(jsonResult.limit).toBe(10);
-    expect(jsonResult.offset).toBe(3);
-
-    // 6. getApprovals search branches in approvalQueries
-    await approvalQueries.getApprovals();
-    await approvalQueries.getApprovals({ module: 'all', status: 'all', project: 'all', search: '' });
-    await approvalQueries.getApprovals({ project: 'JSW Steel Energy' });
-    await approvalQueries.getApprovals({ search: 'REQ-CR-9041' });
-    await approvalQueries.getApprovals({ limit: null, offset: null });
-    const s1 = await approvalQueries.getApprovals({ search: 'Tata Steel Procurement' });
-    expect(s1.rows.length).toBeGreaterThanOrEqual(1);
-    const s2 = await approvalQueries.getApprovals({ search: 'buyer@tatasteel.com' });
-    expect(s2.rows.length).toBeGreaterThanOrEqual(1);
-    const s3 = await approvalQueries.getApprovals({ search: 'Navin Chaudhary' });
-    expect(s3.rows.length).toBeGreaterThanOrEqual(1);
-    const s4 = await approvalQueries.getApprovals({ search: 'Credits Allocation' });
-    expect(s4.rows.length).toBeGreaterThanOrEqual(1);
-    const s5 = await approvalQueries.getApprovals({ module: null, status: null, project: null });
-    expect(s5.rows.length).toBeGreaterThanOrEqual(1);
-
-    // Sparse item to cover null-coalescing branches
-    approvalQueries.memoryApprovals.push({ id: 'appr-sparse-1' });
-    await approvalQueries.getApprovals({ module: 'Credit Notes', status: 'Pending', project: 'Tata', search: 'sparse' });
-    await approvalQueries.getApprovals({ search: 'unmatched-xyz' });
-    approvalQueries.memoryApprovals.pop();
-
-    // 7. processApprovalAction variations
-    resetCreditApproval();
-    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: '' }));
-    resetCreditApproval();
-    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), { email: 'only@x.com' });
-    resetCreditApproval();
-    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), {});
-
-    // 8. test limit and offset numeric branches in controller
-    await approvalController.getApprovals({ query: { limit: '10', offset: '5' } }, resMock);
-    expect(jsonResult.limit).toBe(10);
-    expect(jsonResult.offset).toBe(5);
-  });
-
-  test('approvalQueries with pool.hasStorage() covers SQL query, hydration, createApproval, and internal task linkage', async () => {
-    const internalTaskQueries = require('../src/db/internalTaskQueries');
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-
-    // 1. getApprovals with SQL storage
-    const fakeRow = {
-      id: 'appr-db-1',
-      request_number: 'REQ-DB-001',
-      module: 'Buyer Credit Addition',
-      project: 'Project Alpha',
-      applicant_name: 'Alpha Buyer',
-      applicant_email: 'buyer@alpha.com',
-      value_impact: '₹1,00,000 (50 Credits)',
-      maker_name: 'Manager Bob',
-      maker_role: 'Category Specialist',
-      approver_name: 'Srinu Sir',
-      status: 'Pending',
-      details: 'Quarterly top up',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      raw: JSON.stringify({
-        request_type: 'Buyer Credit Addition',
-        amount: 100000,
-        quantity: 50,
-        available_balance: 10,
-        assigned_approver: 'Srinu Sir',
-        internal_task_id: 'tsk-credit-1',
-        buyer_id: 'b-alpha-1',
-        history: [{ action: 'SUBMITTED', timestamp: new Date().toISOString() }],
-        attachments: [{ name: 'file.pdf', url: '/f.pdf' }],
-      }),
-    };
-
-    const querySpy = jest.spyOn(pool, 'query')
-      .mockResolvedValueOnce({ rows: [{ ...fakeRow, total: '1' }] });
-
-    const sqlApprovals = await approvalQueries.getApprovals({
-      module: 'Buyer Credit Addition',
-      status: 'Pending',
-      project: 'Project Alpha',
-      assigned_approver: 'Srinu Sir',
-      search: 'Alpha',
-      sortBy: 'module',
-      sortOrder: 'asc',
-      limit: 10,
-      offset: 0,
-    });
-    expect(sqlApprovals.total).toBe(1);
-    expect(sqlApprovals.rows[0].request_number).toBe('REQ-DB-001');
-    expect(sqlApprovals.rows[0].amount).toBe(100000);
-
-    // Total == 0 branch
-    querySpy
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ total: '0' }] });
-    const emptySql = await approvalQueries.getApprovals({ module: 'Packages' });
-    expect(emptySql.total).toBe(0);
-
-    // Database read errors fail closed instead of returning stale memory data.
-    querySpy.mockRejectedValueOnce(new Error('SQL failure in getApprovals'));
-    await expect(approvalQueries.getApprovals()).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
-
-    // 2. createApproval with storage
-    querySpy.mockResolvedValueOnce({ rowCount: 1 });
-    const createdItem = await approvalQueries.createApproval({
-      request_type: 'Buyer Credit Addition',
-      project: 'Tata Steel',
-      applicant_name: 'Tata Steel',
-      amount: 50000,
-      quantity: 20,
-      internal_task_id: 'task-link-99',
-      buyer_id: 'buyer-99',
-      attachments: [{ name: 'doc.pdf' }],
-      history: [{ action: 'SUBMITTED' }],
-    }, { name: 'Maker', role: 'Executive' });
-    expect(createdItem.id).toBeDefined();
-
-    // A configured database error must not return a phantom in-memory approval.
-    const insertError = new Error('Insert table missing');
-    const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
-    querySpy.mockRejectedValueOnce(insertError);
-    await expect(approvalQueries.createApproval({
-      applicant_name: 'Safe',
-    })).rejects.toMatchObject({
-      code: 'PERSISTENCE_UNAVAILABLE',
-      cause: insertError,
-    });
-    expect(approvalQueries.memoryApprovals.some((approval) => approval.applicant_name === 'Safe')).toBe(false);
-    expect(errorLogSpy).toHaveBeenCalledWith(
-      'Management approval persistence operation failed',
-      expect.objectContaining({ error: insertError, operation: 'create-approval' }),
-      'APPROVAL_PERSISTENCE'
-    );
-
-    // 3. processApprovalAction with database record and internal task linkage
-    jest.spyOn(internalTaskQueries, 'approveCreditTask').mockResolvedValue({ success: true });
-    jest.spyOn(internalTaskQueries, 'rejectCreditTask').mockResolvedValue({ success: true });
-
-    // Database record found inside the PostgreSQL transaction (APPROVE with internal task).
-    const transactionSpy = jest.spyOn(pool, 'withTransaction');
-    const approvedRow = { ...fakeRow, status: 'Approved' };
-    const rejectedRow = { ...fakeRow, status: 'Rejected' };
-    const transactionFor = () => (callback) => callback({
-      query: jest.fn().mockResolvedValueOnce({ rows: [] }),
-    });
-    transactionSpy.mockImplementationOnce(transactionFor());
-    querySpy
-      .mockResolvedValueOnce({ rows: [fakeRow] })
-      .mockResolvedValueOnce({ rows: [approvedRow] });
-    const approvedDb = await approvalQueries.processApprovalAction('appr-db-1', {
-      action: 'APPROVE',
-      remarks: 'Approved in DB',
-      password: TEST_APPROVER_PASSWORD,
-      approverName: 'Srinu Sir',
-    }, { name: 'Director' });
-    expect(approvedDb.status).toBe('Approved');
-    expect(internalTaskQueries.approveCreditTask).toHaveBeenCalledWith(
-      'tsk-credit-1',
-      expect.objectContaining({ name: 'Director' }),
-      'Approved in DB'
-    );
-
-    // Database record found (REJECT with internal task)
-    transactionSpy.mockImplementationOnce(transactionFor());
-    querySpy
-      .mockResolvedValueOnce({ rows: [fakeRow] })
-      .mockResolvedValueOnce({ rows: [rejectedRow] });
-    const rejectedDb = await approvalQueries.processApprovalAction('appr-db-1', {
-      action: 'REJECT',
-      remarks: 'Rejected in DB',
-      password: TEST_APPROVER_PASSWORD,
-      approverName: 'Srinu Sir',
-    }, { name: 'Director' });
-    expect(rejectedDb.status).toBe('Rejected');
-    expect(internalTaskQueries.rejectCreditTask).toHaveBeenCalledWith(
-      'tsk-credit-1',
-      expect.objectContaining({ name: 'Director' }),
-      'Rejected in DB'
-    );
-
-    // Database record with internal task error (non-fatal)
-    jest.spyOn(internalTaskQueries, 'approveCreditTask').mockRejectedValueOnce(new Error('Internal task sync err'));
-    transactionSpy.mockImplementationOnce(transactionFor());
-    querySpy
-      .mockResolvedValueOnce({ rows: [fakeRow] })
-      .mockResolvedValueOnce({ rows: [approvedRow] });
-    const safeSync = await approvalQueries.processApprovalAction('appr-db-1', {
-      action: 'APPROVE',
-      password: TEST_APPROVER_PASSWORD,
-      approverName: 'Srinu Sir',
-    }, { name: 'Director' });
-    expect(safeSync.status).toBe('Approved');
-
-    // A durable miss must not act on a stale in-memory approval.
-    transactionSpy.mockImplementationOnce(transactionFor());
-    querySpy.mockResolvedValueOnce({ rows: [] });
-    await expect(approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({
-      action: 'APPROVE',
-    }))).resolves.toBeNull();
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: '' }));
-    approvalQueries.memoryApprovals.find((item) => item.id === 'appr-cred-101').status = 'Pending';
-    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), { email: 'only@x.com' });
-    approvalQueries.memoryApprovals.find((item) => item.id === 'appr-cred-101').status = 'Pending';
-    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), {});
-  });
-
-  test('approvalQueries exhaustive branch coverage for memory filtering, hydration, and actions', async () => {
-    await approvalQueries.createApproval({
-      request_number: 'REQ-FILTER-1',
-      applicant_name: 'Filter Applicant One',
-      applicant_email: 'filter1@test.com',
-      maker_name: 'Maker Alpha',
-      project: 'Filter Project',
-      value_impact: '999 INR',
-      details: 'Special search token unique_detail_token',
-      assigned_approver: 'Specific Approver X',
-      approver_name: 'Specific Approver X',
-      status: 'Pending',
-    });
-
-    await approvalQueries.createApproval({
-      request_number: 'REQ-FILTER-2',
-      applicant_name: 'Filter Applicant Two',
-      applicant_email: 'filter2@test.com',
-      maker_name: 'Maker Beta',
-      project: 'Filter Project',
-      value_impact: '888 INR',
-      details: 'Other detail',
-      assigned_approver: 'Other Person',
-      approver_name: 'Specific Approver X',
-      status: 'Approved',
-    });
-
-    const approverRes = await approvalQueries.getApprovals({ assigned_approver: 'Specific Approver X' });
-    expect(approverRes.rows.length).toBeGreaterThanOrEqual(1);
-
-    const searchNumber = await approvalQueries.getApprovals({ search: 'REQ-FILTER-1' });
-    expect(searchNumber.rows.length).toBeGreaterThanOrEqual(1);
-    const searchEmail = await approvalQueries.getApprovals({ search: 'filter1@test.com' });
-    expect(searchEmail.rows.length).toBeGreaterThanOrEqual(1);
-    const searchMaker = await approvalQueries.getApprovals({ search: 'Maker Alpha' });
-    expect(searchMaker.rows.length).toBeGreaterThanOrEqual(1);
-    const searchProject = await approvalQueries.getApprovals({ search: 'Filter Project' });
-    expect(searchProject.rows.length).toBeGreaterThanOrEqual(1);
-    const searchImpact = await approvalQueries.getApprovals({ search: '999 INR' });
-    expect(searchImpact.rows.length).toBeGreaterThanOrEqual(1);
-    const searchApprover = await approvalQueries.getApprovals({ search: 'Specific Approver X' });
-    expect(searchApprover.rows.length).toBeGreaterThanOrEqual(1);
-    const searchDetail = await approvalQueries.getApprovals({ search: 'unique_detail_token' });
-    expect(searchDetail.rows.length).toBeGreaterThanOrEqual(1);
-
-    const sortEqualRes = await approvalQueries.getApprovals({
-      project: 'Filter Project',
-      sortBy: 'project',
-      sortOrder: 'asc',
-    });
-    expect(sortEqualRes.rows.length).toBeGreaterThanOrEqual(2);
-
-    const sortDescRes = await approvalQueries.getApprovals({
-      sortBy: 'value_impact',
-      sortOrder: 'desc',
-    });
-    expect(sortDescRes.rows.length).toBeGreaterThanOrEqual(1);
-
-    const sortAscRes = await approvalQueries.getApprovals({
-      sortBy: 'value_impact',
-      sortOrder: 'asc',
-    });
-    expect(sortAscRes.rows.length).toBeGreaterThanOrEqual(1);
-
-    const allFiltersRes = await approvalQueries.getApprovals({
-      module: 'all',
-      project: 'all',
-      status: 'all',
-    });
-    expect(allFiltersRes.rows.length).toBeGreaterThanOrEqual(1);
-
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-    const notFoundAction = await approvalQueries.processApprovalAction('totally-missing-id', withApprovalCredentials({ action: 'APPROVE' }));
-    expect(notFoundAction).toBeNull();
-
-    const nonCredit = await approvalQueries.createApproval({
-      module: 'General Hardware',
-      request_type: 'General Hardware',
-      project: 'Hardware',
-      internal_task_id: null,
-      buyer_id: null,
-    });
-    const processedNonCredit = await approvalQueries.processApprovalAction(nonCredit.id, {
-      action: 'APPROVE',
-      remarks: 'Standard hardware signoff',
-      password: TEST_APPROVER_PASSWORD,
-      approverName: 'Srinu Sir',
-    });
-    expect(processedNonCredit.status).toBe('Approved');
-
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(pool, 'withTransaction').mockRejectedValueOnce(new Error('Update failed'));
-    await expect(approvalQueries.processApprovalAction(nonCredit.id, {
-      action: 'REJECT',
-      remarks: 'Rejected hardware signoff',
-      password: TEST_APPROVER_PASSWORD,
-      approverName: 'Srinu Sir',
-    })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
-
-    // Database getSummary branch coverage
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(pool, 'query').mockResolvedValueOnce({
-      rows: [{ total: '10', pending: '4', approved: '5', rejected: '1' }],
-    });
-    const dbSummary = await approvalQueries.getApprovalSummary();
-    expect(dbSummary.total).toBe(10);
-    expect(dbSummary.pending).toBe(4);
-
-    jest.spyOn(pool, 'query').mockResolvedValueOnce({ rows: [] });
-    const emptySummary = await approvalQueries.getApprovalSummary();
-    expect(emptySummary.total).toBe(0);
-
-    jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Summary error'));
-    await expect(approvalQueries.getApprovalSummary()).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
-
-    // Database getApprovals with minimal row hydration
-    const minimalRow = {
-      id: 'appr-min-1',
-      request_number: null,
-      module: null,
-      project: null,
-      applicant_name: null,
-      applicant_email: null,
-      value_impact: null,
-      maker_name: null,
-      maker_role: null,
-      status: null,
-      details: null,
-      approver_name: null,
-      approver_remarks: null,
-      created_at: null,
-      updated_at: null,
-      raw: '{}',
-    };
-    const minimalRowStringRaw = {
-      id: 'appr-min-2',
-      raw: '{"amount": 100}',
-    };
-    const minimalRowObjectRaw = {
-      id: 'appr-min-3',
-      raw: { amount: 200 },
-    };
-
-    jest.spyOn(pool, 'query').mockResolvedValueOnce({ rows: [
-      { ...minimalRow, total: '3' },
-      { ...minimalRowStringRaw, total: '3' },
-      { ...minimalRowObjectRaw, total: '3' },
-    ] });
-
-    const dbMinimal = await approvalQueries.getApprovals({
-      status: 'pending',
-      project: 'General',
-      assigned_approver: 'Approver',
-      search: 'term',
-      sortBy: 'request_number',
-      sortOrder: 'desc',
-    });
-    expect(dbMinimal.rows.length).toBe(3);
-    expect(dbMinimal.rows[0].module).toBe('Buyer Credit Addition');
-    expect(dbMinimal.rows[0].status).toBe('Pending');
-
-    // Credit addition without internal task id and with null history
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-    const creditNoTask = await approvalQueries.createApproval({
-      module: 'Buyer Credit Addition',
-      internal_task_id: null,
-      history: null,
-    });
-    creditNoTask.history = null;
-    const approvedNoTask = await approvalQueries.processApprovalAction(creditNoTask.id, {
-      action: 'APPROVE',
-      password: TEST_APPROVER_PASSWORD,
-      approverName: 'Srinu Sir',
-    });
-    expect(approvedNoTask.status).toBe('Approved');
-    expect(approvedNoTask.history.length).toBe(1);
-    expect(approvalQueries.hydrateApprovalRow(null)).toBeNull();
-    const h1 = approvalQueries.hydrateApprovalRow({ id: 'h1' });
-    expect(h1.status).toBe('Pending');
-    expect(h1.maker_name).toBe('Category Manager');
-    const h2 = approvalQueries.hydrateApprovalRow({ id: 'h2', raw: '{"request_type": "Custom Type", "amount": 42}' });
-    expect(h2.request_type).toBe('Custom Type');
-    expect(h2.amount).toBe(42);
-    const h3 = approvalQueries.hydrateApprovalRow({ id: 'h3', raw: 'invalid-json' });
-    expect(h3.id).toBe('h3');
-
-
-  });
-
 });

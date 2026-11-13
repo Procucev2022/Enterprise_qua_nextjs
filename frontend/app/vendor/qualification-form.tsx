@@ -2,7 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
-import { VendorEvaluationRecord, QuestionEvaluationItem } from '@/lib/types';
+import { authClient } from '@/lib/authClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import type { QuestionEvaluationItem, VendorEntry, VendorEvaluationRecord } from '@/lib/types';
 import {
   FileCheck,
   Award,
@@ -49,6 +51,12 @@ interface QuestionFormState {
   options: { label: string; value: number }[];
 }
 
+/**
+ * Stored with each self-assessment in place of an automated action. Saving the record
+ * does not dispatch RFQs or change any roster, so the record must not say that it did.
+ */
+const SELF_ASSESSMENT_SYSTEM_ACTION = 'Self-assessment recorded. No RFQ dispatch was triggered by this submission.';
+
 const MODULE_TABS = [
   { id: 'M1', code: 'Module 1', name: 'Commercial Terms', weight: 25, activeColor: 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30' },
   { id: 'M2', code: 'Module 2', name: 'Technical Capabilities', weight: 15, activeColor: 'bg-sky-600 text-white shadow-md shadow-sky-600/30' },
@@ -64,24 +72,24 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     addAuditLog,
     addFeedItem,
     showToast,
-    vendorSubscription,
-    isVendorEvaluationFeeWaived,
     setVendorSelfEvaluationCompleted,
     setVendorSelfEvaluationScore,
     currentUserSession,
   } = useApp();
 
-  // This evaluation record was always attributed to a hardcoded 'v-1' / 'Apex
-  // Supplies Ltd.' regardless of who actually took the survey. Load the real
-  // logged-in vendor's own record so the evaluation is attributed correctly.
-  const [myVendorRecord, setMyVendorRecord] = useState<any>(null);
+  // The evaluation is attributed to the logged-in vendor. This loads that vendor's own
+  // record, so the saved identity is the real one and not a fixed placeholder.
+  const [myVendorRecord, setMyVendorRecord] = useState<VendorEntry | null>(null);
   useEffect(() => {
     let cancelled = false;
     async function loadMyVendorRecord() {
       const email = currentUserSession?.email;
       if (!email) return;
       try {
-        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        const token = authClient.getToken();
+        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled && data.success && data.data) setMyVendorRecord(data.data);
@@ -374,7 +382,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
   const isFirstTab = currentTabIndex === 0;
   const isLastTab = currentTabIndex === MODULE_TABS.length - 1;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Was previously possible to submit a full 24-question evaluation with
@@ -392,107 +400,90 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
 
     setSubmitting(true);
 
-    setTimeout(async () => {
-      const questionItems: QuestionEvaluationItem[] = Object.values(qState).map(q => ({
-        refId: q.refId,
-        pillarId: q.pillarId,
-        pillarName: q.pillarName,
-        criteria: q.criteria,
-        attachmentName: q.attachmentName,
-        // Never actually verified — see the honest "Not OCR-Verified" badge
-        // rendered for each question below.
-        attachmentVerified: false,
-        score: q.score,
-        weightedScore: q.weightedScore,
-        remarks: q.remarks
-      }));
+    const questionItems: QuestionEvaluationItem[] = Object.values(qState).map((q) => ({
+      refId: q.refId,
+      pillarId: q.pillarId,
+      pillarName: q.pillarName,
+      criteria: q.criteria,
+      attachmentName: q.attachmentName,
+      // Never actually verified — see the honest "Not OCR-Verified" badge
+      // rendered for each question below.
+      attachmentVerified: false,
+      score: q.score,
+      weightedScore: q.weightedScore,
+      remarks: q.remarks,
+    }));
 
-      const record: VendorEvaluationRecord = {
-        id: `eval-${Date.now()}`,
-        vendorId: myVendorRecord?.id || '',
-        vendorName: myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor',
-        contactPerson: myVendorRecord?.contactPerson || currentUserSession?.name || '',
-        email: currentUserSession?.email || myVendorRecord?.email || '',
-        phone: myVendorRecord?.phone || '',
-        category: myVendorRecord?.majorCategory || 'Uncategorized',
-        submissionDate: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
-        status: currentStatus,
-        overallScore: totalScorePercent,
-        systemAction:
-          totalScorePercent >= 80
-            // "Verified via AI OCR engine" was a false claim — this app has no
-            // OCR/document-verification backend (see the honest disclosure
-            // badge on each attachment below); a file being attached is not
-            // the same as its contents being checked.
-            ? 'AUTOMATIC DIRECT RFQ DISPATCH TO VENDOR INBOX. 24/24 mandatory attachments received (not independently verified). Vendor added to Mode 3 active bidding roster.'
-            : totalScorePercent >= 65
-            ? 'RFQ DISPATCH HELD. System triggered Corrective Action Plan (CAPA) or requested document clarification.'
-            : 'EXCLUDED FROM ACTIVE RFQ DISPATCH. Re-audit option unlocked after 90 days.',
-        moduleScores: {
-          commercial: { score: getPillarTotal('M1').avg, maxScore: 5, weight: 25, weightedScore: getPillarTotal('M1').weighted, remarks: qState['M1-Q1'].remarks },
-          technical: { score: getPillarTotal('M2').avg, maxScore: 5, weight: 15, weightedScore: getPillarTotal('M2').weighted, remarks: qState['M2-Q1'].remarks },
-          quality: { score: getPillarTotal('M3').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M3').weighted, remarks: qState['M3-Q1'].remarks },
-          delivery: { score: getPillarTotal('M4').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M4').weighted, remarks: qState['M4-Q1'].remarks },
-          financial: { score: getPillarTotal('M5').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M5').weighted, remarks: qState['M5-Q1'].remarks },
-          governance: { score: getPillarTotal('M6').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M6').weighted, remarks: qState['M6-Q1'].remarks },
-        },
-        documents: Object.values(qState).map((q, idx) => ({
-          id: `doc-${q.refId}`,
-          name: q.attachmentName,
-          type: q.criteria,
-          uploadDate: new Date().toISOString().substring(0, 10),
-          // A filename being attached was previously labeled "Verified" —
-          // this app has no real document-verification backend, so an
-          // attached file is only ever "Pending Review", never confirmed.
-          verified: false,
-          status: q.attachmentName ? 'Pending Review' : 'Missing'
-        })),
-        questionBreakdown: questionItems
-      };
+    const record: VendorEvaluationRecord = {
+      id: `eval-${Date.now()}`,
+      vendorId: myVendorRecord?.id || '',
+      vendorName: myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor',
+      contactPerson: myVendorRecord?.contactPerson || currentUserSession?.name || '',
+      email: currentUserSession?.email || myVendorRecord?.email || '',
+      phone: myVendorRecord?.phone || '',
+      category: myVendorRecord?.majorCategory || '',
+      submissionDate: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
+      status: currentStatus,
+      overallScore: totalScorePercent,
+      systemAction: SELF_ASSESSMENT_SYSTEM_ACTION,
+      moduleScores: {
+        commercial: { score: getPillarTotal('M1').avg, maxScore: 5, weight: 25, weightedScore: getPillarTotal('M1').weighted, remarks: qState['M1-Q1'].remarks },
+        technical: { score: getPillarTotal('M2').avg, maxScore: 5, weight: 15, weightedScore: getPillarTotal('M2').weighted, remarks: qState['M2-Q1'].remarks },
+        quality: { score: getPillarTotal('M3').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M3').weighted, remarks: qState['M3-Q1'].remarks },
+        delivery: { score: getPillarTotal('M4').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M4').weighted, remarks: qState['M4-Q1'].remarks },
+        financial: { score: getPillarTotal('M5').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M5').weighted, remarks: qState['M5-Q1'].remarks },
+        governance: { score: getPillarTotal('M6').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M6').weighted, remarks: qState['M6-Q1'].remarks },
+      },
+      documents: Object.values(qState).map((q) => ({
+        id: `doc-${q.refId}`,
+        name: q.attachmentName,
+        type: q.criteria,
+        uploadDate: new Date().toISOString().substring(0, 10),
+        // A filename being attached was previously labeled "Verified" —
+        // this app has no real document-verification backend, so an
+        // attached file is only ever "Pending Review", never confirmed.
+        verified: false,
+        status: q.attachmentName ? 'Pending Review' : 'Missing',
+      })),
+      questionBreakdown: questionItems,
+    };
 
-      // Was fire-and-forget: this screen showed "success", marked the vendor
-      // as evaluated, and navigated away regardless of whether the backend
-      // actually accepted the submission. Now the whole success path is
-      // gated on a real, confirmed response.
-      const saved = await addVendorEvaluation(record);
-      if (!saved) {
-        setSubmitting(false);
-        showToast(
-          'Submission Failed',
-          'Could not save your qualification evaluation. Please try again.',
-          'warning'
-        );
-        return;
-      }
-
-      addAuditLog(
-        `Mode 3 Vendor Qualification Survey submitted by ${record.vendorName}. Score: ${totalScorePercent}% (${currentStatus})`,
-        undefined,
-        record.email
-      );
-
-      addFeedItem(
-        `Mode 3 Qualification Score: ${totalScorePercent}%`,
-        `${record.vendorName} scored ${totalScorePercent}% in Mode 3 AI Evaluation. Status: ${currentStatus}. ${record.systemAction}`,
-        'scoring',
-        undefined,
-        record.vendorName
-      );
-
-      setSubmitting(false);
-      setVendorSelfEvaluationCompleted(true);
-      setVendorSelfEvaluationScore(totalScorePercent);
-      setEvaluationResult(record);
-      onSuccess(record);
-
+    // The evaluation is saved through the real endpoint. Success is shown only when
+    // that call confirms the save. The server stores the record as sent and does not
+    // dispatch RFQs, so no dispatch is reported here.
+    const saved = await addVendorEvaluation(record);
+    setSubmitting(false);
+    if (!saved) {
       showToast(
-        `AI Evaluation Complete (${totalScorePercent}%)`,
-        currentStatus === 'PREFERRED ENTERPRISE SUPPLIER'
-          ? 'Congratulations! You are unlocked as a Preferred Enterprise Supplier. Active RFQs dispatched to your inbox.'
-          : 'Evaluation submitted. Review detailed score breakdown below.',
-        totalScorePercent >= 80 ? 'success' : 'warning'
+        'Submission Failed',
+        'Could not save your qualification evaluation. Please try again.',
+        'warning'
       );
-    }, 1200);
+      return;
+    }
+
+    addAuditLog(
+      `Mode 3 Vendor Qualification Survey submitted by ${record.vendorName}. Score: ${totalScorePercent}% (${currentStatus})`
+    );
+
+    void addFeedItem(
+      `Mode 3 Qualification Score: ${totalScorePercent}%`,
+      `${record.vendorName} scored ${totalScorePercent}% in Mode 3 AI Evaluation. Status: ${currentStatus}.`,
+      'scoring',
+      undefined,
+      record.vendorName
+    );
+
+    setVendorSelfEvaluationCompleted(true);
+    setVendorSelfEvaluationScore(totalScorePercent);
+    setEvaluationResult(record);
+    onSuccess(record);
+
+    showToast(
+      `AI Evaluation Complete (${totalScorePercent}%)`,
+      `Your evaluation was saved. Status: ${currentStatus}.`,
+      totalScorePercent >= 80 ? 'success' : 'warning'
+    );
   };
 
   const activeQuestions = Object.values(qState).filter(q => q.pillarId === activeTab);
@@ -506,10 +497,9 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
             <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
               ⭐ Premium Vendor: 360-Degree AI Self-Evaluation
             </h1>
-            <span className="badge badge-emerald">Multi-Buyer Certified</span>
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Complete your 360° AI Self-Evaluation (Commercial, Technical, Quality, Delivery, Financial & ESG) to get certified and receive RFQs from all enterprise buyers.
+            Complete your 360° AI Self-Evaluation (Commercial, Technical, Quality, Delivery, Financial & ESG). {UI_STRINGS.vendorWorkspace.evaluationSavedNotice}
           </p>
         </div>
         <button onClick={onBack} className="btn btn-secondary btn-sm">
@@ -547,35 +537,6 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
         </div>
       </div>
 
-      {/* Infra & AI Evaluation Fee Banner ($5 or $0 with Connect/Select) */}
-      <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between gap-3 text-xs flex-wrap">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 flex items-center justify-center font-black">
-            💳
-          </div>
-          <div>
-            <span className="font-bold text-slate-900 dark:text-white">
-              360° AI Self-Evaluation Infrastructure Fee:
-            </span>{' '}
-            {isVendorEvaluationFeeWaived ? (
-              <span className="text-emerald-700 dark:text-emerald-300 font-bold">
-                $0 FREE (100% Waived under your active {vendorSubscription === 'connect' ? 'Connect' : 'Select'} Tier)
-              </span>
-            ) : (
-              <span className="text-amber-800 dark:text-amber-300 font-bold">
-                $5 Nominal Fee (Towards Cloud Infrastructure & AI Compute Costs) • Fee is $0 if you take any subscription (Connect or Select)
-              </span>
-            )}
-          </div>
-        </div>
-
-        {!isVendorEvaluationFeeWaived && (
-          <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 bg-white dark:bg-gray-800 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800">
-            Cost = $0 with Connect / Select Plan
-          </span>
-        )}
-      </div>
-
       {/* ── MODULE TABS BAR ── */}
       <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-sm overflow-x-auto">
         {MODULE_TABS.map((tab, idx) => {
@@ -585,7 +546,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id)}
               className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
                 isSelected
                   ? tab.activeColor
@@ -711,14 +672,6 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
                           }}
                         />
                       </label>
-                      <button
-                        type="button"
-                        disabled={!q.attachmentName}
-                        onClick={() => showToast('Not Available', 'This is a demo evidence-attachment step — there is no real document verification behind it.', 'info')}
-                        className="btn btn-ghost btn-xs text-[9px] text-indigo-600 dark:text-indigo-400 font-bold disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Re-scan Document
-                      </button>
                     </div>
                   </div>
 
