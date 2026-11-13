@@ -62,16 +62,20 @@ async function enqueueWithRetry(event, operation) {
       throw new Error('Event-outbox enqueue returned no persisted state.');
     } catch (error) {
       lastError = error;
-      logger.error('Failed to record a background event for retry', {
+      const attemptFields = {
         error,
         eventType: event.eventType,
         outboxId: event.id,
         operation,
         enqueueAttempt: attempt,
         enqueueAttempts: EVENT_OUTBOX_ENQUEUE_ATTEMPTS,
-      }, 'EVENT_OUTBOX');
+      };
+      // Only the final failure is an error. Earlier attempts are retried, so they log as warnings.
       if (attempt < EVENT_OUTBOX_ENQUEUE_ATTEMPTS) {
+        logger.warn('Failed to record a background event for retry', attemptFields, 'EVENT_OUTBOX');
         await delay(EVENT_OUTBOX_ENQUEUE_RETRY_MS * attempt);
+      } else {
+        logger.error('Failed to record a background event after every enqueue attempt', attemptFields, 'EVENT_OUTBOX');
       }
     }
   }
@@ -107,7 +111,7 @@ async function persistWithOutboxFallback({ eventType, idempotencyKey, payload, w
       }, 'EVENT_OUTBOX');
       return { persisted: null };
     }
-    logger.error('Background event persistence failed; queuing a retry', {
+    logger.warn('Background event persistence failed; queuing a retry', {
       error,
       eventType,
       outboxId: id,

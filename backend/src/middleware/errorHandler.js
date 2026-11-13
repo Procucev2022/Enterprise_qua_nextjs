@@ -1,9 +1,13 @@
 const { logger } = require('../services/loggerService');
 const { D1_OVERLOAD_CONFIG } = require('../config/constants');
-const { isD1OverloadError } = require('../db/d1Bridge');
+const { isD1OverloadError, isRetryableD1Error } = require('../db/d1Bridge');
 
 /**
  * Global API Error Handling Middleware with Structured Logging
+ *
+ * 4xx responses are expected outcomes (validation, permissions, business rules), so they log
+ * at WARN without a stack trace. 5xx responses log at ERROR with the stack trace. The raw error
+ * name, message and code are always logged, even though the response text may be generic.
  */
 function errorHandler(err, req, res, next) {
   const requestedStatus = err.statusCode || err.status;
@@ -23,20 +27,27 @@ function errorHandler(err, req, res, next) {
 
   // Structured Error Logging with fallback
   try {
-    logger.error(
-      `API Error ${statusCode}: ${message}`,
-      {
-        statusCode,
-        method: req.method,
-        url: requestPath,
-        requestId: req.requestId,
-        errorName: err.name,
-        errorMessage: message,
-        stack: err.stack,
-        ipAddress: req.ip || req.connection?.remoteAddress,
-      },
-      'GLOBAL_ERROR_HANDLER'
-    );
+    const isServerError = statusCode >= 500;
+    const logMeta = {
+      statusCode,
+      method: req.method,
+      url: requestPath,
+      requestId: req.requestId,
+      errorName: err.name,
+      errorCode: err.code,
+      errorMessage: err.message,
+      clientMessage: message,
+      databaseOverloaded,
+      retryable: databaseOverloaded || isRetryableD1Error(err),
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      ...(isServerError ? { stack: err.stack } : {}),
+    };
+    const summary = `API Error ${statusCode}: ${message}`;
+    if (isServerError) {
+      logger.error(summary, logMeta, 'GLOBAL_ERROR_HANDLER');
+    } else {
+      logger.warn(summary, logMeta, 'GLOBAL_ERROR_HANDLER');
+    }
   } catch (loggingError) {
     // Keep a minimal safe signal if the shared logger itself is unavailable.
     console.error('[GLOBAL_ERROR_HANDLER] Structured logging failed', {

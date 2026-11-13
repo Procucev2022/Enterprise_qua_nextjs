@@ -5685,3 +5685,9 @@ Keep pushing the changes directly in the "test-v3" branch for now. as soon as an
 create account is not working
 ```
 ---
+### Prompt 193
+**Timestamp**: 2026-11-13T12:31:10+05:30
+```text
+Still a lot of errors, please check logs. logs-2026-11-13T06_28_23.364Z.json Also I am assuming we have all details to fix the errors being logged in the logs csv file, make sure to have or enabled proper error logging or information so that we have all details for solving an error.
+```
+---

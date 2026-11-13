@@ -57,18 +57,23 @@ import {
   RFQ_MODE_LABELS,
   formatCurrency,
   STORE_MESSAGES,
+  AI_FEED_VIEWER_ROLES,
+  REQUEST_ID_HEADER,
 } from './constants';
 
 function logApiResponseFailure(
   message: string,
-  response: Pick<Response, 'status' | 'statusText'>,
+  response: Pick<Response, 'status' | 'statusText'> & Partial<Pick<Response, 'headers'>>,
   category: string,
   metadata: Record<string, unknown> = {}
 ): void {
+  // The backend echoes its request id in X-Request-Id. Recording it lets the failed call be matched to the server's log lines.
+  const requestId = response.headers?.get(REQUEST_ID_HEADER);
   logger.log('ERROR', message, {
     ...metadata,
     status: response.status,
     statusText: response.statusText,
+    ...(requestId ? { requestId } : {}),
   }, category);
 }
 
@@ -775,18 +780,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const isCM = currentRole === 'category_manager' || currentRole === 'admin';
       let result = isCM ? await fetchAllRFQs({ limit: 500 }) : await fetchRFQList({ limit: 500 });
-      if (!result.success && isCM) {
+      // A 401 has just cleared the session. Retrying now would send the request with no token.
+      if (!result.success && isCM && result.reason !== 'UNAUTHORIZED') {
         result = await fetchRFQList({ limit: 500 });
       }
       if (!result.success) {
-        logger.log('ERROR', 'Failed to load RFQs', { error: result.error }, 'RFQ_STORE');
-        if (result.reason === 'UNAUTHORIZED' || (result.error && result.error.includes('Session has been logged out'))) {
+        const sessionEnded = result.reason === 'UNAUTHORIZED' || (result.error && result.error.includes('Session has been logged out'));
+        if (sessionEnded) {
+          // An expired session is expected, so it is not logged as a load failure.
+          logger.log('WARN', 'RFQ list not loaded because the session ended', { reason: result.reason }, 'RFQ_STORE');
           authClient.setSession(null, null);
           setCurrentUserSession(null);
           setRfqs([]);
           setVendorOpportunities([]);
           setSessionCache('rfqs', []);
           loadedEntitiesRef.current.rfqs = false;
+        } else {
+          logger.log('ERROR', 'Failed to load RFQs', { error: result.error }, 'RFQ_STORE');
         }
         return;
       }
@@ -994,6 +1004,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAiFeedError(null);
       setSessionCache('aiFeed', []);
       loadedEntitiesRef.current.aiFeed = false;
+      return;
+    }
+    // Roles outside the feed's audience are not asked for it. The endpoint answers them with a 403
+    // by design, so that is not a failure. An empty feed is the correct answer for this role.
+    if (!AI_FEED_VIEWER_ROLES.includes(currentRole)) {
+      setAiFeed([]);
+      setAiFeedError(null);
+      setSessionCache('aiFeed', []);
+      loadedEntitiesRef.current.aiFeed = true;
       return;
     }
     try {
