@@ -5755,3 +5755,9 @@ Remove entire 4th AI category join page in image 1
 invite 25 vendors for submitting quotations per each unique minor category. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at gmtrfq@procucev.com,quateam@procucev.com,anshul.goel@procucev.com
 ```
 ---
+### Prompt 202
+**Timestamp**: 2026-11-13T19:40:37+05:30 (the exact send time was not recorded; logged when this request was picked up. A screenshot of the Buyer Initial Setup wizard was attached.)
+```text
+Remove entire 4th AI category join page as mentioned in image below
+```
+---
