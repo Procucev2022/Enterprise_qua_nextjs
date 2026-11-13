@@ -133,26 +133,26 @@ describe('RFQ invitations follow the minor category', () => {
   });
 
   describe('which vendors an RFQ reaches', () => {
-    test('the candidate pool and a mode_2 assignment contain only the vendor carrying the minor', () => {
+    test('the candidate pool holds only the vendor carrying the minor, while a mode_2 assignment fills the minor first and tops up from the parent major', () => {
       expect(storeService.candidateVendorsForRFQ(bearingRfq()).map((v) => v.id)).toEqual(['v-minor']);
       const created = createQuietRfq({ sourcingMode: 'mode_2', id: 'rfq-minor-m2', rfqNumber: 'RFQ-MINOR-M2' });
-      expect(created.assignedVendors.map((v) => v.id)).toEqual(['v-minor']);
+      expect(created.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major', 'v-other', 'v-accessory']);
     });
 
-    test('a mode_2 RFQ with no vendor carrying the minor gets no major-level fallback', () => {
+    test('a mode_2 RFQ with no vendor carrying the minor is filled from the parent major', () => {
       storeService.vendors = procucevVendors().filter((vendor) => vendor.id !== 'v-minor');
       const created = createQuietRfq({ sourcingMode: 'mode_2', id: 'rfq-minor-none', rfqNumber: 'RFQ-MINOR-NONE' });
-      expect(created.assignedVendors).toEqual([]);
+      expect(created.assignedVendors.map((v) => v.id)).toEqual(['v-major', 'v-other', 'v-accessory']);
     });
 
-    test('a V0 RFQ is assigned only the in-memory vendors carrying the minor', () => {
+    test('a V0 RFQ is assigned the in-memory vendor carrying the minor, topped up from the parent major', () => {
       const created = createQuietRfq({ sourcingMode: 'mode_0', id: 'rfq-minor-v0-mem', rfqNumber: 'RFQ-MINOR-V0-MEM' });
-      expect(created.assignedVendors.map((v) => v.id)).toEqual(['v-minor']);
+      expect(created.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major', 'v-other', 'v-accessory']);
     });
 
-    test('a mode_3 RFQ counts only the vendors carrying the minor', () => {
+    test('a mode_3 RFQ counts the minor vendor and the parent-major top-up', () => {
       const created = createQuietRfq({ sourcingMode: 'mode_3', id: 'rfq-minor-m3', rfqNumber: 'RFQ-MINOR-M3' });
-      expect(created.procucevVendorCount).toBe(1);
+      expect(created.procucevVendorCount).toBe(4);
     });
 
     test('explicit vendors on a minor-level RFQ that do not carry the minor are dropped', () => {
@@ -229,15 +229,16 @@ describe('RFQ invitations follow the minor category', () => {
       });
     });
 
-    test('a V0 RFQ with a minor takes its vendors from the minor lookup under the parent major, never from the directory page', async () => {
+    test('a V0 RFQ with a minor takes its minor vendors from the minor lookup and its top-up from the parent major, never from the directory page', async () => {
       storeService.vendors = [];
       const created = createQuietRfq({ sourcingMode: 'mode_0', id: 'rfq-minor-v0-db', rfqNumber: 'RFQ-MINOR-V0-DB' });
       const minorLookup = jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([
-        vendorById('v-major'),
         vendorById('v-minor'),
+      ]);
+      const majorLookup = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([
+        vendorById('v-major'),
         vendorById('v-accessory'),
       ]);
-      const majorLookup = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB');
       const pageLookup = jest.spyOn(domainQueries, 'getVendorsPageFromDB');
 
       const updated = await storeService.augmentV0AssignmentsFromDB(created);
@@ -247,15 +248,16 @@ describe('RFQ invitations follow the minor category', () => {
         expect.arrayContaining([MAJOR.toLowerCase()]),
         expect.any(Number)
       );
-      expect(majorLookup).not.toHaveBeenCalled();
+      expect(majorLookup).toHaveBeenCalledWith(expect.arrayContaining([MAJOR.toLowerCase()]), expect.any(Number));
       expect(pageLookup).not.toHaveBeenCalled();
-      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor']);
+      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major', 'v-accessory']);
     });
 
     test('a V0 RFQ with a minor and no matching vendor is routed to the Category Manager, with no directory fallback', async () => {
       storeService.vendors = [];
       const created = createQuietRfq({ sourcingMode: 'mode_0', id: 'rfq-minor-v0-none', rfqNumber: 'RFQ-MINOR-V0-NONE' });
-      jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([vendorById('v-major')]);
+      jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([]);
+      jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
       const pageLookup = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
         rows: [{ id: 'v-random', name: 'Random Vendor', source: 'procucev_network' }],
         total: 1,
@@ -278,6 +280,7 @@ describe('RFQ invitations follow the minor category', () => {
         assignedVendors: [{ id: 'v-major', name: 'Major Only Co', email: 'major@minor-invite.test', source: 'procucev_network' }],
       });
       jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([vendorById('v-major')]);
+      jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
       const updateSpy = jest.spyOn(storeService, 'updateRFQDurably');
 
       const updated = await storeService.augmentV0AssignmentsFromDB(created);
@@ -286,7 +289,7 @@ describe('RFQ invitations follow the minor category', () => {
       expect(updateSpy).not.toHaveBeenCalled();
     });
 
-    test('a V0 RFQ with a minor falls back to the in-memory minor match when the lookup fails', async () => {
+    test('a V0 RFQ with a minor falls back to the in-memory minor and major candidates when the lookup fails', async () => {
       storeService.vendors = [];
       const created = createQuietRfq({ sourcingMode: 'mode_0', id: 'rfq-minor-v0-err', rfqNumber: 'RFQ-MINOR-V0-ERR' });
       storeService.vendors = procucevVendors();
@@ -300,12 +303,13 @@ describe('RFQ invitations follow the minor category', () => {
         expect.objectContaining({ rfqNumber: 'RFQ-MINOR-V0-ERR' }),
         'STORE_SERVICE'
       );
-      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor']);
+      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major', 'v-other', 'v-accessory']);
     });
 
-    test('a mode_2 RFQ auto-assigns from the database only the vendors carrying the minor', async () => {
+    test('a mode_2 RFQ auto-assigns from the database the vendor carrying the minor first, topped up from the parent major', async () => {
       storeService.vendors = [];
       jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([]);
+      jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
       const lookup = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
         vendorById('v-major'),
         vendorById('v-minor'),
@@ -315,12 +319,13 @@ describe('RFQ invitations follow the minor category', () => {
       const updated = await storeService.autoAssignVendorsFromDB(created, { deferChasers: true });
 
       expect(lookup).toHaveBeenCalledWith(['bearings & accessories', 'bearings & accessori'], expect.any(Number));
-      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor']);
+      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major']);
     });
 
-    test('a mode_2 RFQ whose database matches all lack the minor is left unassigned', async () => {
+    test('a mode_2 RFQ whose database matches lack the minor is topped up from the parent major', async () => {
       storeService.vendors = [];
       jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([]);
+      jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
       jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
         vendorById('v-major'),
         vendorById('v-other'),
@@ -329,18 +334,17 @@ describe('RFQ invitations follow the minor category', () => {
 
       const updated = await storeService.autoAssignVendorsFromDB(created, { deferChasers: true });
 
-      expect(updated).toBe(created);
-      expect(updated.assignedVendors).toEqual([]);
+      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-major', 'v-other']);
     });
 
-    test('a mode_1 RFQ is not filled from the buyer roster by a vendor carrying another minor', async () => {
+    test('a mode_1 RFQ with no roster vendor carrying the minor is topped up from the buyer roster under the parent major', async () => {
       storeService.vendors = [];
       jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([vendorById('v-other')]);
       const created = createQuietRfq({ sourcingMode: 'mode_1', id: 'rfq-minor-m1-db', rfqNumber: 'RFQ-MINOR-M1-DB' });
 
       const updated = await storeService.autoAssignVendorsFromDB(created, { deferChasers: true });
 
-      expect(updated.assignedVendors).toEqual([]);
+      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-other']);
     });
 
     test('the candidate lookup narrows the database rows to the minor', async () => {

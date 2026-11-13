@@ -1361,23 +1361,39 @@ const RFQ_ATTACHMENT_CONFIG = {
 // Configurable via environment variables (default: 5):
 // - MAX_CLIENT_VENDORS_PER_CATEGORY
 // - MAX_PROCUCEV_VENDORS_PER_CATEGORY
-function getEnvNumber(key, fallback = 5) {
-  let val = undefined;
+/** The raw value of an environment variable: a Cloudflare Worker binding first, then process.env. Undefined when unset or blank. */
+function readEnvValue(key) {
   if (
     typeof globalThis !== 'undefined' &&
     globalThis.__CF_ENV__ &&
     globalThis.__CF_ENV__[key] !== undefined &&
     globalThis.__CF_ENV__[key] !== ''
   ) {
-    val = globalThis.__CF_ENV__[key];
-  } else if (typeof process !== 'undefined' && process.env && process.env[key] !== undefined && process.env[key] !== '') {
-    val = process.env[key];
+    return globalThis.__CF_ENV__[key];
   }
+  if (typeof process !== 'undefined' && process.env && process.env[key] !== undefined && process.env[key] !== '') {
+    return process.env[key];
+  }
+  return undefined;
+}
+
+function getEnvNumber(key, fallback = 5) {
+  const val = readEnvValue(key);
   if (val !== undefined && val !== null) {
     const num = Number(val);
     if (!Number.isNaN(num) && num > 0) return num;
   }
   return fallback;
+}
+
+/**
+ * Comma-separated list from an environment variable. Blank entries are dropped. Returns a copy of
+ * `fallback` when the variable is unset or has no usable entry.
+ */
+function getEnvList(key, fallback = []) {
+  const raw = readEnvValue(key);
+  const items = raw === undefined ? [] : String(raw).split(',').map((item) => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : [...fallback];
 }
 
 const MAX_INVITE_VENDORS_PER_REQUEST = 20;
@@ -1393,6 +1409,40 @@ const VENDOR_ASSIGNMENT_LIMITS = {
     return getEnvNumber('TARGET_VENDORS_PER_MINOR_CATEGORY', 25);
   },
 };
+
+// Each minor category of an RFQ is filled to the per-minor target from its own vendors, then from the
+// vendors under its parent major. These limits shape the database lookups behind that fill.
+// OVERFETCH_FACTOR reads more rows than the target, so the location and rating ranking has room to choose.
+// MAX_ROWS caps a single lookup at the bound the major-category lookup already uses.
+const RFQ_MINOR_INVITE_LOOKUP = Object.freeze({
+  OVERFETCH_FACTOR: 2,
+  MAX_ROWS: PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT,
+});
+
+// Recipients of the alert sent when an RFQ's minor category has fewer network vendors than the target.
+// RFQ_MINOR_SHORTFALL_ALERT_EMAILS (comma-separated) replaces the default list. A blank value keeps it.
+const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = Object.freeze([
+  'gmtrfq@procucev.com',
+  'quateam@procucev.com',
+  'anshul.goel@procucev.com',
+]);
+
+const RFQ_MINOR_SHORTFALL_ALERT = Object.freeze({
+  get RECIPIENTS() {
+    return getEnvList('RFQ_MINOR_SHORTFALL_ALERT_EMAILS', RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS);
+  },
+  MESSAGES: Object.freeze({
+    SUBJECT: '[Action Required] RFQ {rfqNumber}: minor category vendor shortfall',
+    HEADLINE: 'Minor category vendor shortfall',
+    INTRO: 'RFQ {rfqNumber} ({title}) invites {target} network vendors for each minor category. The minor categories below have fewer network vendors than that target, so the rest of the invite list is filled from the parent major category.',
+    TABLE_MINOR: 'Minor category',
+    TABLE_MAJOR: 'Parent major category',
+    TABLE_FOUND: 'Minor vendors found',
+    TABLE_FILLED: 'Added from major category',
+    TEXT_LINE: '- {minorCategory} (major: {majorCategory}): {minorMatched} of {target} minor vendors found, {majorFilled} added from the major category',
+    ACTION: 'Onboard or map more vendors to these minor categories so future RFQs reach the target.',
+  }),
+});
 
 // ==============================================================================
 // EMAIL-TO-RFQ INGESTION
@@ -3643,6 +3693,8 @@ module.exports = {
   VENDOR_PRESENCE_MAX_IDENTIFIERS,
   VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH,
   VENDOR_ASSIGNMENT_LIMITS,
+  RFQ_MINOR_INVITE_LOOKUP,
+  RFQ_MINOR_SHORTFALL_ALERT,
   MAX_INVITE_VENDORS_PER_REQUEST,
   RFQ_MODES,
   RFQ_MODE_LABELS,

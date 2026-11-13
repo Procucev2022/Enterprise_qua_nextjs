@@ -5743,3 +5743,15 @@ After creating an RFQ, RFQ invitations seems like going to vendors based on majo
 ```
 
 ---
+### Prompt 200
+**Timestamp**: 2026-11-13T18:50:18+05:30 (approximate: logged at this step; the exact send time was not recorded, and this prompt was sent before Prompt 201. A screenshot of the ingestion wizard was attached.)
+```text
+Remove entire 4th AI category join page in image 1
+```
+---
+### Prompt 201
+**Timestamp**: 2026-11-13T18:50:18+05:30 (approximate: logged at this step; the exact send time was not recorded)
+```text
+invite 25 vendors for submitting quotations per each unique minor category. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at gmtrfq@procucev.com,quateam@procucev.com,anshul.goel@procucev.com
+```
+---

@@ -7,8 +7,10 @@ const {
   UNAUTHORIZED_BUYER_NOTIFICATION,
   RFQ_ACKNOWLEDGEMENT_NOTIFICATION,
   RFQ_NOT_CREATED_NOTIFICATION,
+  RFQ_MINOR_SHORTFALL_ALERT,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   VENDOR_FREE_CREDITS_LIMIT,
+  formatMessage,
 } = require('../config/constants');
 const {
   buildEmail1_RfqCreatedAccountAutoCreated,
@@ -1098,6 +1100,73 @@ function buildRfqInviteEmail(to, context = {}) {
 
 async function sendRfqInviteEmail(to, context) {
   return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email');
+}
+
+// ── RFQ minor category shortfall → Procucev team ─────────────────────────────
+
+/**
+ * Alert for an RFQ whose minor categories had fewer network vendors than the target.
+ * `shortfalls` is the list storeService.planMinorInvites returns, one entry per short minor.
+ */
+function buildRfqMinorShortfallEmail({ recipients = [], rfq = {}, shortfalls = [] } = {}) {
+  const safeRfq = rfq || {};
+  const items = Array.isArray(shortfalls) ? shortfalls : [];
+  const copy = RFQ_MINOR_SHORTFALL_ALERT.MESSAGES;
+  const rfqNumber = safeRfq.rfqNumber || MAILER_NOT_SPECIFIED;
+  const title = safeRfq.title || MAILER_NOT_SPECIFIED;
+  const target = items.length > 0 ? items[0].target : 0;
+  const intro = formatMessage(copy.INTRO, { rfqNumber, title, target });
+
+  const rows = items
+    .map((item) => `
+          <tr>
+            <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; color: #0f172a; font-weight: 600;">${escapeHtml(item.minorCategory || MAILER_NOT_SPECIFIED)}</td>
+            <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; color: #475569;">${escapeHtml(item.majorCategory || MAILER_NOT_SPECIFIED)}</td>
+            <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; color: #0f172a; text-align: right;">${escapeHtml(`${item.minorMatched} of ${item.target}`)}</td>
+            <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; color: #0f172a; text-align: right;">${escapeHtml(item.majorFilled)}</td>
+          </tr>`)
+    .join('');
+
+  const inner = `
+    <p>${escapeHtml(intro)}</p>
+    <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin: 18px 0;">
+      <thead>
+        <tr style="background: #f8fafc; color: #475569; text-align: left;">
+          <th style="padding: 8px 12px;">${copy.TABLE_MINOR}</th>
+          <th style="padding: 8px 12px;">${copy.TABLE_MAJOR}</th>
+          <th style="padding: 8px 12px; text-align: right;">${copy.TABLE_FOUND}</th>
+          <th style="padding: 8px 12px; text-align: right;">${copy.TABLE_FILLED}</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p>${escapeHtml(copy.ACTION)}</p>
+  `;
+
+  return {
+    from: fromAddress(),
+    to: (Array.isArray(recipients) ? recipients : []).filter(Boolean).join(', '),
+    subject: formatMessage(copy.SUBJECT, { rfqNumber }),
+    text: [
+      intro,
+      ...items.map((item) => formatMessage(copy.TEXT_LINE, {
+        minorCategory: item.minorCategory || MAILER_NOT_SPECIFIED,
+        majorCategory: item.majorCategory || MAILER_NOT_SPECIFIED,
+        minorMatched: item.minorMatched,
+        target: item.target,
+        majorFilled: item.majorFilled,
+      })),
+      '',
+      copy.ACTION,
+    ].join('\n'),
+    html: wrapEmail('PROCUCEV ENTERPRISE', copy.HEADLINE, inner),
+  };
+}
+
+async function sendRfqMinorShortfallEmail(params = {}) {
+  const message = buildRfqMinorShortfallEmail(params);
+  if (!message.to) return { sent: false, success: false, status: 'skipped', reason: 'no recipients configured' };
+  return deliver(message, 'RFQ minor category shortfall alert');
 }
 
 // ── Vendor quote acknowledgement → vendor ────────────────────────────────────
@@ -2788,6 +2857,8 @@ module.exports = {
   sendRfqInviteEmail,
   sendQuoteReceivedEmail,
   buildRfqInviteEmail,
+  buildRfqMinorShortfallEmail,
+  sendRfqMinorShortfallEmail,
   isBuyerUploadedVendor,
   buildQuoteReceivedEmail,
   sendRequisitionNotificationEmail,

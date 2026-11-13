@@ -1102,9 +1102,14 @@ async function createRFQ(req, res, next) {
         logger.warn('Could not apply DB-backed V0 vendor assignment', { error: err.message }, 'RFQ_CONTROLLER');
       }
     } else {
-      if ((!Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
+      // Mode 2 and Mode 3 top up from the database on every create, so each minor reaches its target
+      // even when the in-memory pass already assigned some vendors. Mode 1 keeps the original rule:
+      // only when nothing is assigned, so an explicit roster list is never topped up.
+      const createdIsV1 = createdMode === 'mode_1' || createdMode === 'v1' || createdMode === 'version_1';
+      const needsTopUp = !createdIsV1 || !Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0;
+      if (needsTopUp && typeof storeService.autoAssignVendorsFromDB === 'function') {
         try {
-          finalRFQ = await storeService.autoAssignVendorsFromDB(created);
+          finalRFQ = await storeService.autoAssignVendorsFromDB(created, { notifyShortfall: true });
         } catch (err) {
           logger.warn('Could not apply DB-backed vendor auto-assignment', { error: err.message }, 'RFQ_CONTROLLER');
         }

@@ -166,13 +166,19 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
 
       jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockRejectedValue(new Error('DB failure'));
       jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('Fallback DB failure'));
-      jest.spyOn(storeService, 'candidateVendorsForRFQ').mockReturnValue([
+      // 'Hardware' is a taxonomy minor, so this RFQ is minor-level and reads every visible in-memory vendor.
+      const originalVendors = storeService.vendors;
+      storeService.vendors = [
         { id: 'v-mem', name: 'Memory Vendor', category: 'Hardware', majorCategory: 'Hardware', source: 'procucev_network' },
-      ]);
+      ];
       jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (updatedRfq) => updatedRfq);
 
-      const updated = await storeService.autoAssignVendorsFromDB(rfq);
-      expect(updated.assignedVendors.some((v) => v.id === 'v-mem')).toBe(true);
+      try {
+        const updated = await storeService.autoAssignVendorsFromDB(rfq);
+        expect(updated.assignedVendors.some((v) => v.id === 'v-mem')).toBe(true);
+      } finally {
+        storeService.vendors = originalVendors;
+      }
     });
 
     test('returns unmodified if no candidate matches exist in DB or memory', async () => {
