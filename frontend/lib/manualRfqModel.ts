@@ -25,7 +25,6 @@ import {
   hasMajorCategory,
   hasMinorCategory,
   autoCategorizeItem,
-  getDefaultMinorForMajor,
   findMajorForMinor,
 } from './categoryTaxonomy';
 import { PINCODE_PATTERN, isDummyPincode } from './validationSchemas';
@@ -59,7 +58,6 @@ export const MANUAL_ENTRY_CONFIDENCE = 0;
 // constants at import time: the master is fetched from the database now, so it is
 // not available when this module is first evaluated.
 
-const DEFAULT_SOURCING_MODE: SourcingMode = 'mode_1';
 const TITLE_MIN_LENGTH = 3;
 const TITLE_MAX_LENGTH = 200;
 const LOCATION_MIN_LENGTH = 3;
@@ -88,13 +86,14 @@ export function createEmptyManualRFQForm(): ManualRFQForm {
   return {
     title: '',
     majorCategory: '',
+    minorCategory: '',
     estimatedBudget: null,
     targetDeliveryDate: '',
     deliveryLocation: '',
     deliveryPincode: '',
     lineItems: [createEmptyManualRFQLineItem()],
     attachments: [],
-    sourcingMode: DEFAULT_SOURCING_MODE,
+    sourcingMode: null,
   };
 }
 
@@ -200,7 +199,12 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
   } else if (!PINCODE_PATTERN.test(pincode)) {
     formErrors.deliveryPincode = MANUAL.deliveryPincodeInvalid;
   } else if (isDummyPincode(pincode)) {
-    formErrors.deliveryPincode = MANUAL.deliveryPincodeDummy || 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.';
+    formErrors.deliveryPincode = MANUAL.deliveryPincodeDummy;
+  }
+
+  // The buyer chooses the sourcing mode. Nothing is preselected for them, so an unchosen mode blocks dispatch.
+  if (form.sourcingMode === null) {
+    formErrors.sourcingMode = MANUAL.sourcingModeRequired;
   }
 
   // Optional, but a negative ceiling is meaningless rather than merely absent.
@@ -209,7 +213,7 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
   }
 
   if (form.targetDeliveryDate && isPastDateString(form.targetDeliveryDate)) {
-    formErrors.targetDeliveryDate = MANUAL.targetDateCannotBePast || 'Target date cannot be earlier than today.';
+    formErrors.targetDeliveryDate = MANUAL.targetDateCannotBePast;
   }
 
   if (items.length === 0) {
@@ -275,12 +279,18 @@ export function toRFQCreatePayload(
     vendorCategory?: 'Client List' | 'Procucev Network';
     majorCategory?: string | null;
     minorCategories?: string[] | null;
-    source?: string | null;
+    city?: string | null;
+    state?: string | null;
     location?: string | null;
+    pincode?: string | null;
     matchScore?: number | null;
   }>,
   source?: RFQSource
 ): RFQCreatePayload {
+  // Validation refuses a form with no chosen mode, so reaching this point without one is a caller error.
+  if (form.sourcingMode === null) {
+    throw new Error(MANUAL.sourcingModeRequired);
+  }
   const items = form.lineItems.map(toExtractedEntity);
   const leading = items[0];
 
@@ -292,7 +302,9 @@ export function toRFQCreatePayload(
     // Taken from the leading row rather than the header field: validation
     // guarantees every row carries a major category, so this is always set.
     category: clean(form.majorCategory) || (leading ? leading.majorCategory : ''),
-    sourcingMode: form.sourcingMode || 'mode_2',
+    majorCategory: clean(form.majorCategory) || (leading ? leading.majorCategory : ''),
+    minorCategory: clean(form.minorCategory) || (leading ? leading.minorCategory : ''),
+    sourcingMode: form.sourcingMode,
     status: MANUAL.defaultStatus,
     source: source || 'manual_entry',
     // Zero rather than null: the column is NOT NULL, and zero is rendered as
