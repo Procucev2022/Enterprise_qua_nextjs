@@ -2678,7 +2678,7 @@ Price INR 5000
       VENDOR_EMAIL_GATEWAY_ENABLED: 'true',
       VENDOR_EMAIL_GATEWAY_HOST: 'imap.gmail.com',
       VENDOR_EMAIL_GATEWAY_USER: 'srinu20252026@gmail.com',
-      VENDOR_EMAIL_GATEWAY_PASSWORD: 'oycrikpkvnjirwgo',
+      VENDOR_EMAIL_GATEWAY_PASSWORD: 'test-vendor-gateway-password',
     };
 
     const vendorSampleRfq = {
@@ -2882,10 +2882,30 @@ Hello team, sending catalog.
     });
 
     test('getStatus surfaces vendor gateway status', async () => {
-      const status = await emailGatewayService.getStatus();
-      expect(status.vendorGateway).toBeDefined();
-      expect(status.vendorGateway.gatewayAddress).toBe(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com');
-      expect(status.vendorGateway.mailboxUser).toBe(process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com');
+      const saved = { ...process.env };
+      delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      Object.assign(process.env, VENDOR_ENV);
+      try {
+        const status = await emailGatewayService.getStatus();
+        expect(status.vendorGateway).toBeDefined();
+        expect(status.vendorGateway.gatewayAddress).toBe(VENDOR_ENV.VENDOR_EMAIL_GATEWAY_USER);
+        expect(status.vendorGateway.mailboxUser).toBe(VENDOR_ENV.VENDOR_EMAIL_GATEWAY_USER);
+      } finally {
+        process.env = saved;
+      }
+    });
+
+    test('getStatus reports no vendor gateway address when the gateway is not configured', async () => {
+      const saved = { ...process.env };
+      delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      delete process.env.VENDOR_EMAIL_GATEWAY_USER;
+      try {
+        const status = await emailGatewayService.getStatus();
+        expect(status.vendorGateway.gatewayAddress).toBeNull();
+        expect(status.vendorGateway.mailboxUser).toBeNull();
+      } finally {
+        process.env = saved;
+      }
     });
 
     test('pollVendorOnce handles unreadable message and already-processed message via the Gmail API', async () => {

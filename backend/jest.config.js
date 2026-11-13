@@ -11,6 +11,8 @@ module.exports = {
   moduleNameMapper: {
     '^cloudflare:node$': '<rootDir>/__tests__/fixtures/cloudflareNode.mjs',
     '^cloudflare:workers$': '<rootDir>/__tests__/fixtures/cloudflareWorkers.mjs',
+    // Keeps the developer's gitignored backend/.env out of every test process. See the stub for details.
+    '^dotenv$': '<rootDir>/__tests__/fixtures/dotenvStub.js',
   },
   setupFiles: ['<rootDir>/jest.setup.js'],
   collectCoverageFrom: [

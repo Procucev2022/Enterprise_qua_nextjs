@@ -5641,3 +5641,15 @@ In the Buyer flow, Existing Evaluation: When the buyer requests a vendor review,
 ```
 
 ---
+
+### Prompt 188
+
+**Timestamp**: 2026-11-13T06:41:09+05:30
+
+```text
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/451
+
+Please check PR checks & fix them: some failure. Why these failed & not detected & fixed in local code change while using kiro or anitgravity or any other AI assisted model or at pre-commit time. How to make sure this doesn't re-occur.
+```
+
+---
