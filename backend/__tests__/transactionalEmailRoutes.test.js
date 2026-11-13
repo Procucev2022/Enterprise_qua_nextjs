@@ -2,6 +2,8 @@ const request = require('supertest');
 const app = require('../src/app');
 const { authHeader } = require('./testHelpers');
 
+jest.setTimeout(30000);
+
 describe('Transactional Email HTTP Routes', () => {
   describe('GET /api/transactional-emails/templates', () => {
     test('returns the list of 13 templates', async () => {

@@ -40,8 +40,18 @@ jest.doMock('fs', () => ({
 }));
 
 afterAll(() => {
-  if (fs.existsSync(inquiryTestFile)) fs.unlinkSync(inquiryTestFile);
-  fs.rmdirSync(inquiryTestDirectory);
+  try {
+    if (fs.existsSync(inquiryTestFile)) fs.unlinkSync(inquiryTestFile);
+    if (fs.existsSync(inquiryTestDirectory)) {
+      if (typeof fs.rmSync === 'function') {
+        fs.rmSync(inquiryTestDirectory, { recursive: true, force: true });
+      } else {
+        fs.rmdirSync(inquiryTestDirectory);
+      }
+    }
+  } catch (error) {
+    // Ignore cleanup error if temp dir already cleaned up
+  }
 });
 
 const pool = require('../../src/db/pool');

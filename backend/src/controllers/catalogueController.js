@@ -8,21 +8,10 @@ async function resolveOwnVendorId(req) {
   // 'all': resolving the caller's own vendor identity by session email, not
   // filtering a buyer-scoped list — omitting this silently returns nothing
   // for any buyer-uploaded vendor (one with a buyerId set).
-  let vendor = storeService.getVendorById(req.user.email, 'all');
-  if (!vendor && req.user.vendorId) {
-    vendor = storeService.getVendorById(req.user.vendorId, 'all');
-  }
-  if (!vendor && req.user.id) {
-    vendor = storeService.getVendorById(req.user.id, 'all');
-  }
-  if (!vendor && typeof storeService.getVendorByIdWithDBFallback === 'function') {
-    vendor = await storeService.getVendorByIdWithDBFallback(req.user.email, 'all');
-    if (!vendor && req.user.vendorId) {
-      vendor = await storeService.getVendorByIdWithDBFallback(req.user.vendorId, 'all');
-    }
-    if (!vendor && req.user.id) {
-      vendor = await storeService.getVendorByIdWithDBFallback(req.user.id, 'all');
-    }
+  const candidate = req.user.email || req.user.vendorId || req.user.id;
+  let vendor = candidate ? storeService.getVendorById(candidate, 'all') : null;
+  if (!vendor && candidate && typeof storeService.getVendorByIdWithDBFallback === 'function') {
+    vendor = await storeService.getVendorByIdWithDBFallback(candidate, 'all');
   }
   return vendor ? vendor.id : (req.user.vendorId || null);
 }

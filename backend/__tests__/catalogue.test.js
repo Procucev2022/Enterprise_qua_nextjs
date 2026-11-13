@@ -155,4 +155,124 @@ describe('Vendor Item SKU Catalogue API', () => {
     const failRes = await request(app).delete('/api/catalogue/invalid-prod-id').set(authHeader('vendor'));
     expect(failRes.statusCode).toBe(404);
   });
+
+  describe('catalogueController full branch and error handling coverage', () => {
+    test('POST /api/catalogue rejects negative unit price, lead time or MOQ', async () => {
+      const res1 = await request(app)
+        .post('/api/catalogue')
+        .set(authHeader('vendor'))
+        .send({ name: 'Neg Price', sku: 'SKU-NEG-1', unitPrice: -10 });
+      expect(res1.statusCode).toBe(400);
+
+      const res2 = await request(app)
+        .post('/api/catalogue')
+        .set(authHeader('vendor'))
+        .send({ name: 'Neg Lead', sku: 'SKU-NEG-2', unitPrice: 100, leadTimeDays: -5 });
+      expect(res2.statusCode).toBe(400);
+
+      const res3 = await request(app)
+        .post('/api/catalogue')
+        .set(authHeader('vendor'))
+        .send({ name: 'Neg MOQ', sku: 'SKU-NEG-3', unitPrice: 100, moq: 0 });
+      expect(res3.statusCode).toBe(400);
+    });
+
+    test('admin can add, update and delete catalogue items', async () => {
+      const addRes = await request(app)
+        .post('/api/catalogue')
+        .set(authHeader('admin'))
+        .send({
+          name: 'Admin Pipe',
+          sku: 'SKU-ADMIN-PIPE',
+          unitPrice: 500,
+          vendorId: 'v-001',
+        });
+      expect(addRes.statusCode).toBe(201);
+      const adminItemId = addRes.body.data.id;
+
+      const updateRes = await request(app)
+        .put(`/api/catalogue/${adminItemId}`)
+        .set(authHeader('admin'))
+        .send({ unitPrice: 550 });
+      expect(updateRes.statusCode).toBe(200);
+
+      const delRes = await request(app)
+        .delete(`/api/catalogue/${adminItemId}`)
+        .set(authHeader('admin'));
+      expect(delRes.statusCode).toBe(200);
+    });
+
+    test('handles deleteCatalogueProductDurably returning false', async () => {
+      const getSpy = jest.spyOn(storeService, 'getCatalogueProductByIdDurably').mockResolvedValue({ id: 'prod-ghost', vendorId: 'v-001' });
+      const delSpy = jest.spyOn(storeService, 'deleteCatalogueProductDurably').mockResolvedValue(false);
+      try {
+        const res = await request(app)
+          .delete('/api/catalogue/prod-ghost')
+          .set(authHeader('admin'));
+        expect(res.statusCode).toBe(404);
+        expect(res.body.error).toMatch(/already removed/i);
+      } finally {
+        getSpy.mockRestore();
+        delSpy.mockRestore();
+      }
+    });
+
+    test('resolveOwnVendorId covers fallback and vendorId on user', async () => {
+      const tokenWithVendorId = authService.generateSessionToken({
+        id: 'usr-fallback',
+        email: 'fallback-vendor@test.com',
+        role: 'vendor',
+        vendorId: 'v-custom-fallback',
+      });
+
+      const getFallbackSpy = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue({ id: 'v-custom-fallback' });
+      const getSpy = jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      try {
+        const res = await request(app)
+          .post('/api/catalogue')
+          .set({ Authorization: `Bearer ${tokenWithVendorId}` })
+          .send({ name: 'Fallback Item', sku: 'SKU-FB-1', unitPrice: 200 });
+        expect([201, 409]).toContain(res.statusCode);
+      } finally {
+        getFallbackSpy.mockRestore();
+        getSpy.mockRestore();
+      }
+    });
+
+    test('error handling in catalogue endpoints propagates to error handler', async () => {
+      const getSpy = jest.spyOn(storeService, 'getVendorCatalogueDurably').mockRejectedValue(new Error('DB Boom get'));
+      const addSpy = jest.spyOn(storeService, 'addProductToCatalogueDurably').mockRejectedValue(new Error('DB Boom add'));
+      const updateSpy = jest.spyOn(storeService, 'updateCatalogueProductDurably').mockRejectedValue(new Error('DB Boom update'));
+      const delSpy = jest.spyOn(storeService, 'deleteCatalogueProductDurably').mockRejectedValue(new Error('DB Boom delete'));
+      const getProductSpy = jest.spyOn(storeService, 'getCatalogueProductByIdDurably').mockResolvedValue({ id: 'prod-err', vendorId: 'v-001' });
+
+      try {
+        const resGet = await request(app).get('/api/catalogue?limit=10');
+        expect(resGet.statusCode).toBe(500);
+
+        const resAdd = await request(app)
+          .post('/api/catalogue')
+          .set(authHeader('admin'))
+          .send({ name: 'Err Item', sku: 'SKU-ERR-1', unitPrice: 100, vendorId: 'v-001' });
+        expect(resAdd.statusCode).toBe(500);
+
+        const resUpdate = await request(app)
+          .put('/api/catalogue/prod-err')
+          .set(authHeader('admin'))
+          .send({ unitPrice: 200 });
+        expect(resUpdate.statusCode).toBe(500);
+
+        const resDel = await request(app)
+          .delete('/api/catalogue/prod-err')
+          .set(authHeader('admin'));
+        expect(resDel.statusCode).toBe(500);
+      } finally {
+        getSpy.mockRestore();
+        addSpy.mockRestore();
+        updateSpy.mockRestore();
+        delSpy.mockRestore();
+        getProductSpy.mockRestore();
+      }
+    });
+  });
 });
