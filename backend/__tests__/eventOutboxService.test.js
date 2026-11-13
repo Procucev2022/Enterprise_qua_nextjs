@@ -97,7 +97,7 @@ describe('background event retry outbox', () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(eventOutboxQueries, 'enqueueEventOutboxInDB').mockResolvedValue({ id: 'retry-event', status: 'pending' });
     jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([]);
-    const loggerSpy = jest.spyOn(logger, 'error');
+    const loggerSpy = jest.spyOn(logger, 'warn');
 
     await expect(eventOutboxService.persistWithOutboxFallback({
       eventType: EVENT_OUTBOX_TYPES.NOTIFICATION,
@@ -121,7 +121,7 @@ describe('background event retry outbox', () => {
       .mockRejectedValueOnce(new Error('temporary database outage'))
       .mockResolvedValueOnce({ id: 'retry-event', status: 'pending' });
     jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([]);
-    const loggerSpy = jest.spyOn(logger, 'error');
+    const loggerSpy = jest.spyOn(logger, 'warn');
 
     await expect(eventOutboxService.persistWithOutboxFallback({
       eventType: EVENT_OUTBOX_TYPES.AI_FEED,
@@ -138,6 +138,7 @@ describe('background event retry outbox', () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(eventOutboxQueries, 'enqueueEventOutboxInDB').mockResolvedValue(null);
     const loggerSpy = jest.spyOn(logger, 'error');
+    const warnSpy = jest.spyOn(logger, 'warn');
 
     await expect(eventOutboxService.persistWithOutboxFallback({
       eventType: EVENT_OUTBOX_TYPES.AI_FEED,
@@ -147,7 +148,9 @@ describe('background event retry outbox', () => {
       write: jest.fn().mockRejectedValue(new Error('initial write failure')),
     })).rejects.toThrow('Event-outbox enqueue returned no persisted state.');
     expect(eventOutboxQueries.enqueueEventOutboxInDB).toHaveBeenCalledTimes(3);
-    expect(loggerSpy).toHaveBeenCalledTimes(4);
+    // Two attempts warn that they will be retried, the queued-retry notice warns, and only the final attempt is an error.
+    expect(warnSpy).toHaveBeenCalledTimes(3);
+    expect(loggerSpy).toHaveBeenCalledTimes(1);
   });
 
   test('continues after the immediate dispatch attempt fails so scheduled recovery can retry', async () => {

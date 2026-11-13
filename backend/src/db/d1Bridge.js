@@ -27,6 +27,7 @@
 // ==============================================================================
 
 const { logger } = require('../services/loggerService');
+const { D1_RETRY_CONFIG } = require('../config/constants');
 
 /** Returns the D1 binding (env.DB) when running on Workers with it configured, else null. */
 function getD1Binding() {
@@ -253,6 +254,39 @@ function isD1OverloadError(err) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Whether a failed D1 attempt is retried. An overload is never retried: the database has already
+ * spent its budget for the current window, and each retry spends more of that budget.
+ */
+function shouldRetryD1Attempt(err, attempts) {
+  return attempts < D1_RETRY_CONFIG.MAX_ATTEMPTS
+    && isRetryableD1Error(err)
+    && !isD1OverloadError(err);
+}
+
+function d1RetryBackoffMs(attempts) {
+  return D1_RETRY_CONFIG.BACKOFF_BASE_MS * attempts + Math.floor(Math.random() * D1_RETRY_CONFIG.BACKOFF_JITTER_MS);
+}
+
+/** Records how many attempts a failed query used, so its log line shows the retry pressure. */
+function annotateD1Attempts(err, attempts) {
+  if (err && typeof err === 'object') err.d1Attempts = attempts;
+  return err;
+}
+
+/**
+ * 1-based positions of the parameters that are `undefined`. D1 rejects those with
+ * "Type 'undefined' not supported", and the position names the placeholder that needs a value.
+ */
+function findUndefinedParameterIndexes(params) {
+  if (!Array.isArray(params)) return [];
+  const indexes = [];
+  params.forEach((value, index) => {
+    if (value === undefined) indexes.push(index + 1);
+  });
+  return indexes;
+}
+
 let _d1OverloadUntil = 0;
 const D1_OVERLOAD_COOLDOWN_MS = 15000;
 
@@ -281,7 +315,7 @@ async function queryD1(db, text, params = []) {
   const boundParams = expandD1Params(text, params);
   const bound = boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   let attempts = 0;
-  const maxAttempts = isErrorLog ? 1 : 3;
+  const maxAttempts = isErrorLog ? 1 : D1_RETRY_CONFIG.MAX_ATTEMPTS;
   let result;
   while (attempts < maxAttempts) {
     try {
@@ -295,11 +329,11 @@ async function queryD1(db, text, params = []) {
       if (isErrorLog) {
         return { rows: [], rowCount: 0 };
       }
-      if (attempts < maxAttempts && isRetryableD1Error(err)) {
-        await sleep(250 * attempts + Math.floor(Math.random() * 100));
+      if (shouldRetryD1Attempt(err, attempts)) {
+        await sleep(d1RetryBackoffMs(attempts));
         continue;
       }
-      throw err;
+      throw annotateD1Attempts(err, attempts);
     }
   }
   const rawMeta = result && result.meta && typeof result.meta === 'object' ? result.meta : {};
@@ -355,7 +389,7 @@ async function batchD1(db, statements) {
     return boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   });
   let attempts = 0;
-  const maxAttempts = 3;
+  const maxAttempts = D1_RETRY_CONFIG.MAX_ATTEMPTS;
   let results;
   while (attempts < maxAttempts) {
     try {
@@ -366,11 +400,11 @@ async function batchD1(db, statements) {
       if (isRetryableD1Error(err)) {
         markD1Overloaded();
       }
-      if (attempts < maxAttempts && isRetryableD1Error(err)) {
-        await sleep(250 * attempts + Math.floor(Math.random() * 100));
+      if (shouldRetryD1Attempt(err, attempts)) {
+        await sleep(d1RetryBackoffMs(attempts));
         continue;
       }
-      throw err;
+      throw annotateD1Attempts(err, attempts);
     }
   }
   return results.map((result) => {
@@ -409,6 +443,7 @@ module.exports = {
   getWaitUntil,
   isRetryableD1Error,
   isD1OverloadError,
+  findUndefinedParameterIndexes,
   isD1Overloaded,
   markD1Overloaded,
   resetD1OverloadState,

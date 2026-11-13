@@ -1094,6 +1094,15 @@ export function formatFileSize(bytes: number): string {
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
+/**
+ * Roles the backend lets read the AI activity feed (GET /api/ai-feed). Any other role gets a 403,
+ * so the store does not request the feed for them.
+ */
+export const AI_FEED_VIEWER_ROLES: readonly UserRole[] = ['admin', 'category_manager', 'buyer'];
+
+/** Response header carrying the backend request id, copied into failed-request log entries. */
+export const REQUEST_ID_HEADER = 'x-request-id';
+
 /** URL prefix that scopes each role's workspace, used to guard route access. */
 export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
   buyer: '/buyer',

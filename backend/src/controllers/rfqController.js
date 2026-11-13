@@ -1222,7 +1222,10 @@ async function createRFQ(req, res, next) {
       consumedFreeTrial,
     });
   } catch (err) {
-    logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
+    // A 4xx is a rule the caller broke (for example, exhausted free credits). The error handler
+    // answers it, so it is logged here as a warning rather than an error.
+    const isClientError = Number.isInteger(err?.statusCode) && err.statusCode >= 400 && err.statusCode < 500;
+    logger[isClientError ? 'warn' : 'error']('Error creating RFQ', err, 'RFQ_CONTROLLER');
     next(err);
   }
 }

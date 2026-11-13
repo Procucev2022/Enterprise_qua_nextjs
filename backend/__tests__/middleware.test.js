@@ -107,19 +107,22 @@ describe('Middleware Unit Tests', () => {
     const originalEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
 
+    const warnSpy = jest.spyOn(structuredLogger, 'warn').mockImplementation(() => undefined);
     errorHandler(Object.assign(new Error('request entity too large'), { status: 413 }), req, res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(413);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'request entity too large' }));
-    expect(errorSpy).toHaveBeenCalledWith(
+    expect(warnSpy).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ url: '/graphql', requestId: 'request-test-1' }),
+      expect.objectContaining({ url: '/graphql', requestId: 'request-test-1', statusCode: 413 }),
       'GLOBAL_ERROR_HANDLER'
     );
-    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('private-value');
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('private-value');
     expect(consoleSpy).not.toHaveBeenCalled();
 
     consoleSpy.mockRestore();
+    warnSpy.mockRestore();
     errorSpy.mockRestore();
     process.env.NODE_ENV = originalEnv;
   });
@@ -152,6 +155,7 @@ describe('Middleware Unit Tests', () => {
   test('uses a safe client-error message when the status and request path are sparse', () => {
     const { logger: structuredLogger } = require('../src/services/loggerService');
     const errorSpy = jest.spyOn(structuredLogger, 'error').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn(structuredLogger, 'warn').mockImplementation(() => undefined);
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
     const originalEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
@@ -160,7 +164,7 @@ describe('Middleware Unit Tests', () => {
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Request failed.' }));
-    expect(errorSpy).toHaveBeenCalledWith(
+    expect(warnSpy).toHaveBeenCalledWith(
       'API Error 400: Request failed.',
       expect.objectContaining({ url: '', statusCode: 400 }),
       'GLOBAL_ERROR_HANDLER'

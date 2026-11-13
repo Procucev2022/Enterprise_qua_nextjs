@@ -183,9 +183,21 @@ describe('d1Bridge', () => {
       expect(result).toEqual({ rows: [{ id: 1 }] });
     });
 
-    it('retries on D1 DB overloaded error and returns successful result on subsequent attempt', async () => {
+    it('does not retry a D1 overload, so the caller gets the failure at once', async () => {
+      const overload = new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window');
+      const all = jest.fn().mockRejectedValue(overload);
+      const prepare = jest.fn().mockReturnValue({ all });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      await expect(queryD1(db, 'select * from t')).rejects.toBe(overload);
+      expect(all).toHaveBeenCalledTimes(1);
+      expect(overload.d1Attempts).toBe(1);
+    });
+
+    it('retries a transient D1 error that is not an overload and returns the next result', async () => {
       const all = jest.fn()
-        .mockRejectedValueOnce(new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window'))
+        .mockRejectedValueOnce(new Error('D1 storage temporarily unavailable'))
         .mockResolvedValueOnce({ results: [{ id: 42 }] });
       const prepare = jest.fn().mockReturnValue({ all });
       const db = { prepare };
@@ -206,14 +218,33 @@ describe('d1Bridge', () => {
       expect(all).toHaveBeenCalledTimes(1);
     });
 
-    it('throws error when retry limit is exhausted on repeated overload errors', async () => {
+    it('stops after the first attempt for an overload, however the error repeats', async () => {
       const all = jest.fn().mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
       const prepare = jest.fn().mockReturnValue({ all });
       const db = { prepare };
 
       const { queryD1 } = require('../src/db/d1Bridge');
       await expect(queryD1(db, 'select * from t')).rejects.toThrow('overloaded');
+      expect(all).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives up after the configured attempts when a transient error keeps repeating', async () => {
+      const failure = new Error('D1 storage temporarily unavailable');
+      const all = jest.fn().mockRejectedValue(failure);
+      const prepare = jest.fn().mockReturnValue({ all });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      await expect(queryD1(db, 'select * from t')).rejects.toBe(failure);
       expect(all).toHaveBeenCalledTimes(3);
+      expect(failure.d1Attempts).toBe(3);
+    });
+
+    it('reports the 1-based positions of undefined bind values', () => {
+      const { findUndefinedParameterIndexes } = require('../src/db/d1Bridge');
+      expect(findUndefinedParameterIndexes(['a', undefined, null, 0, undefined])).toEqual([2, 5]);
+      expect(findUndefinedParameterIndexes(['a'])).toEqual([]);
+      expect(findUndefinedParameterIndexes(undefined)).toEqual([]);
     });
 
     it('drops system_error_logs queries when D1 is overloaded', async () => {
@@ -484,9 +515,21 @@ describe('d1Bridge', () => {
       expect(bind).toHaveBeenCalledWith('plan', 'owner-id', 'link-id', 'link-id');
     });
 
-it('retries batch on D1 DB overloaded error and succeeds on subsequent attempt', async () => {
+it('does not retry a batch that hits a D1 overload', async () => {
+      const overload = new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window');
+      const batchMock = jest.fn().mockRejectedValue(overload);
+      const prepareMock = jest.fn().mockReturnValue({});
+      const db = { prepare: prepareMock, batch: batchMock };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      await expect(batchD1(db, [{ text: 'insert into t (id) values (1)' }])).rejects.toBe(overload);
+      expect(batchMock).toHaveBeenCalledTimes(1);
+      expect(overload.d1Attempts).toBe(1);
+    });
+
+    it('retries a transient batch failure that is not an overload and succeeds', async () => {
       const batchMock = jest.fn()
-        .mockRejectedValueOnce(new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window'))
+        .mockRejectedValueOnce(new Error('D1 storage temporarily unavailable'))
         .mockResolvedValueOnce([
           { results: [{ id: 1 }], meta: { changes: 1 } },
         ]);
@@ -499,14 +542,16 @@ it('retries batch on D1 DB overloaded error and succeeds on subsequent attempt',
       expect(results).toEqual([{ rows: [{ id: 1 }], rowCount: 1 }]);
     });
 
-    it('throws error when batchD1 exhausts retries on overload', async () => {
-      const batchMock = jest.fn().mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+    it('gives up on a batch after the configured attempts when a transient error repeats', async () => {
+      const failure = new Error('D1 storage temporarily unavailable');
+      const batchMock = jest.fn().mockRejectedValue(failure);
       const prepareMock = jest.fn().mockReturnValue({});
       const db = { prepare: prepareMock, batch: batchMock };
 
       const { batchD1 } = require('../src/db/d1Bridge');
-      await expect(batchD1(db, [{ text: 'insert into t (id) values (1)' }])).rejects.toThrow('overloaded');
+      await expect(batchD1(db, [{ text: 'insert into t (id) values (1)' }])).rejects.toBe(failure);
       expect(batchMock).toHaveBeenCalledTimes(3);
+      expect(failure.d1Attempts).toBe(3);
     });
 
     it('handles batch results that already have rows/rowCount (HTTP client)', async () => {

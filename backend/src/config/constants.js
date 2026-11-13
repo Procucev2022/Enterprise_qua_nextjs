@@ -369,6 +369,8 @@ const DATABASE_QUERY_LOGGING = Object.freeze({
   SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
   D1_SUCCESS_SAMPLE_RATE_DEFAULT: 0.01,
   D1_HIGH_READ_ROWS_THRESHOLD_DEFAULT: 1000,
+  // Failed and slow query log lines carry a preview of the SQL template, cut to this length.
+  SQL_PREVIEW_MAX_CHARS: 300,
 });
 const DATABASE_QUERY_CACHE = Object.freeze({
   VENDOR_PAGE_COUNT_TTL_MS: 30 * 1000,
@@ -401,6 +403,13 @@ const GRAPHQL_CONFIG = Object.freeze({
 const D1_OVERLOAD_CONFIG = Object.freeze({
   RETRY_AFTER_SECONDS: 15,
   MESSAGE: 'The database is busy handling other requests. Please retry in a few seconds.',
+});
+// Transient D1 failures other than an overload are retried with a short, jittered backoff.
+// An overload is never retried: a retry spends the same per-window budget that caused it.
+const D1_RETRY_CONFIG = Object.freeze({
+  MAX_ATTEMPTS: 3,
+  BACKOFF_BASE_MS: 250,
+  BACKOFF_JITTER_MS: 100,
 });
 const STORE_HYDRATION_CONFIG = Object.freeze({
   // Frontend log ingestion never reads the store, so it must not wait for a load.
@@ -3535,6 +3544,7 @@ module.exports = {
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
   D1_OVERLOAD_CONFIG,
+  D1_RETRY_CONFIG,
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   QUALIFICATION_PILLARS,
