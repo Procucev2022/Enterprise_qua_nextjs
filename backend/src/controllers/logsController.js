@@ -42,6 +42,9 @@ function createLog(req, res, next) {
     const logMetadata = {
       ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
       ...(stackTrace ? { stackTrace } : {}),
+      // The actor comes from the verified session token, never from the request body. The
+      // frontend strips userEmail from the body, so audit lines would otherwise lose it.
+      ...(req.user && req.user.email ? { actorEmail: req.user.email } : {}),
     };
     const logEntry = logger.log(level || 'INFO', message, logMetadata, category || 'FRONTEND');
     res.status(201).json({ success: true, data: logEntry });

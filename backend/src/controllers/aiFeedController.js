@@ -1,6 +1,5 @@
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
-const { validatePayload } = require('../config/validationSchemas');
 
 /**
  * Which AI feed / follow-up alerts a caller may see.
@@ -71,72 +70,7 @@ async function getAIFeed(req, res, next) {
   }
 }
 
-async function createFeedItem(req, res, next) {
-  try {
-    const user = req.user;
-    if (!user || !['buyer', 'admin', 'category_manager'].includes(user.role)) {
-      return res.status(user ? 403 : 401).json({ success: false, error: 'An authorized session is required to create a feed item.' });
-    }
-
-    const { isValid, errors, sanitizedData } = validatePayload('createAIFeedItem', req.body || {});
-    if (!isValid) {
-      logger.warn('Rejected invalid AI feed item', { fields: Object.keys(errors), role: user.role }, 'AI_FEED_CONTROLLER');
-      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
-    }
-
-    const { title, message, type, channel, recipient, rfqNumber, channelDetails } = sanitizedData;
-    let rfq = rfqNumber ? storeService.getRFQById(rfqNumber) : null;
-    if (rfqNumber && !rfq) {
-      return res.status(404).json({ success: false, error: 'The referenced RFQ was not found.' });
-    }
-
-    let buyerAccountId = null;
-    if (user.role === 'buyer') {
-      const account = await storeService.getBuyerAccountByEmail(user.email);
-      buyerAccountId = (account && account.id) || user.orgId || user.sub || null;
-      if (!buyerAccountId) {
-        return res.status(403).json({ success: false, error: 'A verified buyer account is required to create feed activity.' });
-      }
-      if (rfq && rfq.buyerAccountId !== buyerAccountId) {
-        logger.warn('Buyer attempted to attach feed activity to an RFQ outside their account', {
-          buyerAccountId,
-          rfqNumber,
-        }, 'AI_FEED_CONTROLLER');
-        return res.status(404).json({ success: false, error: 'The referenced RFQ was not found.' });
-      }
-      if (sanitizedData.buyerAccountId && sanitizedData.buyerAccountId !== buyerAccountId) {
-        logger.warn('Ignored client supplied buyer account on AI feed item', {
-          buyerAccountId,
-          requestedBuyerAccountId: sanitizedData.buyerAccountId,
-        }, 'AI_FEED_CONTROLLER');
-      }
-    } else {
-      buyerAccountId = sanitizedData.buyerAccountId || (rfq && rfq.buyerAccountId) || null;
-      if (rfq && buyerAccountId && rfq.buyerAccountId !== buyerAccountId) {
-        return res.status(400).json({ success: false, error: 'The feed item account must match the referenced RFQ account.' });
-      }
-    }
-
-    logger.info('Creating AI feed alert', { title, type, channel, buyerAccountId, rfqNumber }, 'AI_FEED_CONTROLLER');
-    const created = await storeService.addAIFeedItemDurably({
-      title,
-      message,
-      type,
-      channel,
-      recipient,
-      rfqNumber,
-      channelDetails,
-      buyerAccountId,
-    });
-    res.status(201).json({ success: true, data: created });
-  } catch (err) {
-    logger.error('Error creating AI feed item', err, 'AI_FEED_CONTROLLER');
-    next(err);
-  }
-}
-
 module.exports = {
   getAIFeed,
-  createFeedItem,
   resolveAiFeedReadScope,
 };

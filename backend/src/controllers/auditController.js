@@ -1,6 +1,5 @@
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
-const { validatePayload } = require('../config/validationSchemas');
 
 function getAuditLogs(req, res, next) {
   try {
@@ -11,35 +10,6 @@ function getAuditLogs(req, res, next) {
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: logs });
   } catch (err) {
     logger.error('Error fetching audit logs', err, 'AUDIT_CONTROLLER');
-    next(err);
-  }
-}
-
-async function createAuditLog(req, res, next) {
-  try {
-    if (!req.user || !req.user.email) {
-      return res.status(401).json({ success: false, error: 'An authenticated user identity is required to create an audit event.' });
-    }
-
-    const { isValid, errors, sanitizedData } = validatePayload('auditLogEntry', req.body || {});
-    if (!isValid) {
-      logger.warn('Rejected invalid audit event payload', {
-        fields: Object.keys(errors),
-        role: req.user.role,
-        requestId: req.id || req.requestId || null,
-      }, 'AUDIT_CONTROLLER');
-      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
-    }
-
-    const entry = await storeService.addAuditLogDurably({
-      userEmail: req.user.email,
-      action: sanitizedData.action,
-      rfqNumber: sanitizedData.rfqNumber || null,
-      ipAddress: req.ip || null,
-    });
-    res.status(201).json({ success: true, data: entry });
-  } catch (err) {
-    logger.error('Error creating audit log entry', err, 'AUDIT_CONTROLLER');
     next(err);
   }
 }
@@ -57,6 +27,5 @@ async function verifyIntegrity(req, res, next) {
 
 module.exports = {
   getAuditLogs,
-  createAuditLog,
   verifyIntegrity,
 };

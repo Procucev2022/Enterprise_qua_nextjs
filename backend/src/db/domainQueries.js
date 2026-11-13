@@ -307,10 +307,12 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
     conditions.push(`lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`);
+    // No lower() on D1: lower() does not change NULL-ness, and the lower() form let the planner
+    // pick the 0025 expression indexes over idx_vendors_public_created_at (see migration 0032).
     d1Conditions.push(`(
       (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
-      AND lower(json_extract(raw,'$.buyerId')) IS NULL
-      AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL
+      AND json_extract(raw,'$.buyerId') IS NULL
+      AND json_extract(raw,'$.buyerAccountId') IS NULL
     )`);
   }
   if (scopedBuyerId) {
@@ -2214,6 +2216,20 @@ async function upsertPaymentLinkInDB(link) {
 // ── Chaser Queue ─────────────────────────────────────────────────────────────
 // Persists pending chaser dispatches so they survive process restarts.
 
+const CHASER_JOB_INSERT_SQL = `INSERT INTO chaser_queue
+       (id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone, vendor_email,
+        vendor_contact_person, rfq_title, channel, status, fire_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
+     ON CONFLICT (id) DO NOTHING`;
+
+function chaserJobParams(job) {
+  return [
+    job.id, job.rfqNumber, job.rfqId, job.vendorId, job.vendorName,
+    job.vendorPhone || null, job.vendorEmail || null, job.vendorContactPerson || null,
+    job.rfqTitle || null, job.channel, job.fireAt,
+  ];
+}
+
 /**
  * Write a new pending chaser job.
  * @param {object} job  { id, rfqNumber, rfqId, vendorId, vendorName, vendorPhone, vendorEmail,
@@ -2221,23 +2237,30 @@ async function upsertPaymentLinkInDB(link) {
  */
 async function insertChaserJobInDB(job) {
   if (!pool.hasStorage()) return null;
-  const {
-    id, rfqNumber, rfqId, vendorId, vendorName,
-    vendorPhone, vendorEmail, vendorContactPerson,
-    rfqTitle, channel, fireAt,
-  } = job;
-  await pool.query(
-    `INSERT INTO chaser_queue
-       (id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone, vendor_email,
-        vendor_contact_person, rfq_title, channel, status, fire_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
-     ON CONFLICT (id) DO NOTHING`,
-    [id, rfqNumber, rfqId, vendorId, vendorName,
-     vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
-     rfqTitle || null, channel, fireAt],
-    { d1: true }
-  );
+  await pool.query(CHASER_JOB_INSERT_SQL, chaserJobParams(job), { d1: true });
   return job;
+}
+
+/**
+ * Write several pending chaser jobs in one D1 batch. Scheduling one RFQ used to send one write per
+ * vendor channel. Each D1 write counts as a Worker subrequest, and a large RFQ could reach the
+ * subrequest limit. A batch is one subrequest whatever its row count.
+ * @param {object[]} jobs Same shape as insertChaserJobInDB.
+ * @returns {Promise<object[]>} The jobs that were written.
+ */
+async function insertChaserJobsInDB(jobs) {
+  if (!pool.hasStorage() || !Array.isArray(jobs) || jobs.length === 0) return [];
+  const d1 = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
+  if (!d1) {
+    const saved = [];
+    for (const job of jobs) saved.push(await insertChaserJobInDB(job));
+    return saved;
+  }
+  await d1Bridge.batchD1(
+    d1,
+    jobs.map((job) => ({ text: CHASER_JOB_INSERT_SQL, params: chaserJobParams(job) }))
+  );
+  return jobs;
 }
 
 /** Mark a chaser job as fired. */
@@ -2953,6 +2976,7 @@ module.exports = {
   getPaymentLinkByZohoIdFromDB,
   upsertPaymentLinkInDB,
   insertChaserJobInDB,
+  insertChaserJobsInDB,
   markChaserJobFiredInDB,
   markChaserJobFailedInDB,
   cancelChaserJobsForRFQInDB,
