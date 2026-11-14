@@ -78,6 +78,28 @@ function extensionDurationFailure(days) {
     : { success: false, reason: 'VALIDATION', error: Object.values(check.errors)[0] };
 }
 
+/**
+ * Epoch milliseconds for a stored RFQ time. Stored times are ISO 8601 or the "YYYY-MM-DD HH:mm UTC"
+ * form that createRFQ writes, and both are read as UTC. Returns null when the value cannot be read.
+ */
+function parseStoredRfqTime(value) {
+  if (!value) return null;
+  const ms = Date.parse(String(value));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Closing time of an RFQ in epoch milliseconds. A stored closingDeadline wins: createRFQ sets it and the
+ * one-time extension rewrites it. An RFQ stored before closingDeadline existed closes
+ * RFQ_AUTO_CLOSE_AFTER_MS after its creation time. Returns null when neither time can be read.
+ */
+function rfqClosingMs(rfq) {
+  const stored = parseStoredRfqTime(rfq && rfq.closingDeadline);
+  if (stored !== null) return stored;
+  const created = parseStoredRfqTime(rfq && rfq.createdAt);
+  return created === null ? null : created + RFQ_AUTO_CLOSE_AFTER_MS;
+}
+
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
 // same cap the bootstrap payload already applies (MAX_BOOTSTRAP_VENDORS
 // below), reused here rather than invented separately: this.vendors is one
@@ -3802,11 +3824,11 @@ class StoreService {
       }
     } else {
       closedList = this.rfqs.reduce((closed, rfq, index) => {
-        const createdMs = rfq?.createdAt ? new Date(rfq.createdAt).getTime() : 0;
+        const closingMs = rfqClosingMs(rfq);
         if (
           rfq &&
-          createdMs > 0 &&
-          nowMs - createdMs >= RFQ_AUTO_CLOSE_AFTER_MS &&
+          closingMs !== null &&
+          nowMs >= closingMs &&
           rfq.status !== 'Closed' &&
           rfq.status !== 'PO Generated' &&
           !rfq.poFinalised &&
@@ -4140,6 +4162,14 @@ class StoreService {
       rfqData.buyerEmail ||
       (resolvedBuyer ? resolvedBuyer.corporateEmail : (rfqData.raisedByEmail || rfqData.sourceEmail || null));
 
+    const createdAt = rfqData.createdAt || new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
+    // Closing is creation time plus RFQ_AUTO_CLOSE_AFTER_MS. It is stored here so the buyer screen, the
+    // closure sweep and the one-time extension read the same value. Neither the deadline nor the target
+    // delivery date in the request sets it, because the closure sweep has never used either one.
+    const closingDeadline = new Date(
+      (parseStoredRfqTime(createdAt) ?? Date.now()) + RFQ_AUTO_CLOSE_AFTER_MS
+    ).toISOString();
+
     const newRFQ = {
       id,
       rfqNumber,
@@ -4148,7 +4178,8 @@ class StoreService {
       // Mechanical' used to be substituted here, which silently mis-filed the RFQ
       // and routed it to the wrong vendor pool.
       category: rfqData.category || null,
-      createdAt: rfqData.createdAt || new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+      createdAt,
+      closingDeadline,
       deadline: rfqData.deadline
         ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
         : (rfqData.targetDeliveryDate
@@ -5207,13 +5238,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     if (durationFailure) return durationFailure;
     const extHours = Number(days) * EXTENSION_HOURS_PER_DAY;
 
-    const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
-    let baseMs = Date.now();
-    if (currentDeadlineStr && !isNaN(Date.parse(currentDeadlineStr))) {
-      baseMs = Math.max(Date.parse(currentDeadlineStr), Date.now());
-    } else if (rfq.createdAt && !isNaN(Date.parse(rfq.createdAt))) {
-      baseMs = Math.max(new Date(rfq.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000, Date.now());
-    }
+    // The extension is added to the closing time the RFQ has now, or to the current time when that has passed.
+    const baseMs = Math.max(rfqClosingMs(rfq) ?? 0, Date.now());
 
     const newDeadlineMs = baseMs + extHours * 60 * 60 * 1000;
     const newDeadlineIso = new Date(newDeadlineMs).toISOString();
@@ -5264,13 +5290,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     if (durationFailure) return durationFailure;
     const extHours = Number(days) * EXTENSION_HOURS_PER_DAY;
     const now = new Date();
-    const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
-    let baseMs = now.getTime();
-    if (currentDeadlineStr && !isNaN(Date.parse(currentDeadlineStr))) {
-      baseMs = Math.max(Date.parse(currentDeadlineStr), now.getTime());
-    } else if (rfq.createdAt && !isNaN(Date.parse(rfq.createdAt))) {
-      baseMs = Math.max(new Date(rfq.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000, now.getTime());
-    }
+    // Same base as extendRFQ: the current closing time, or now when that has already passed.
+    const baseMs = Math.max(rfqClosingMs(rfq) ?? 0, now.getTime());
     const newDeadlineIso = new Date(baseMs + extHours * 60 * 60 * 1000).toISOString();
     const updates = {
       closingDeadline: newDeadlineIso,

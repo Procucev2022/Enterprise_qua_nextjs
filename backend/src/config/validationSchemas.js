@@ -512,7 +512,9 @@ const VALIDATION_SCHEMAS = {
   //
   // Ownership fields are absent on purpose. rfqNumber, rfqId, buyer identity and
   // createdAt are not editable, and the query layer whitelists columns as well, so
-  // sending them here changes nothing.
+  // sending them here changes nothing. The closing time and extension fields
+  // (closingDeadline, isExtended, extensionHours, extendedAt) are absent too: only
+  // the extension endpoint writes them.
   updateRFQ: {
     title: { type: 'string', required: false, minLength: 3, maxLength: 200 },
     category: { type: 'string', required: false, minLength: 2 },
@@ -535,10 +537,6 @@ const VALIDATION_SCHEMAS = {
     },
     targetDeliveryDate: { type: 'string', required: false },
     deadline: { type: 'string', required: false },
-    closingDeadline: { type: 'string', required: false },
-    isExtended: { type: 'boolean', required: false },
-    extensionHours: { type: 'number', required: false },
-    extendedAt: { type: 'string', required: false },
     extractedEntities: { type: 'array', required: false },
     attachments: { type: 'array', required: false },
     assignedVendors: { type: 'array', required: false },

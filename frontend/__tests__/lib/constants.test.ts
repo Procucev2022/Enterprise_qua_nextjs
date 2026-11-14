@@ -33,6 +33,8 @@ import {
   extensionDaysFromHours,
   formatExtensionDayCount,
   calculateExtendedDeadline,
+  resolveRfqClosingDeadline,
+  RFQ_AUTO_CLOSE_HOURS,
 } from '@/lib/constants';
 
 
@@ -448,17 +450,42 @@ describe('normalizePoDate', () => {
       expect(new Date(extended).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
     });
 
-    it('calculates deadline extension from baseCreatedAt when deadline is not provided', () => {
-      const createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
-      const extended = calculateExtendedDeadline(undefined, 1, createdAt);
-      expect(new Date(extended).getTime()).toBeGreaterThan(Date.now());
+    it('extends from now when the closing time has already passed', () => {
+      const before = Date.now();
+      const extended = calculateExtendedDeadline('2020-01-01T00:00:00.000Z', 2);
+      const extendedMs = new Date(extended).getTime();
+      expect(extendedMs).toBeGreaterThanOrEqual(before + 2 * 24 * 60 * 60 * 1000);
+      expect(extendedMs).toBeLessThanOrEqual(Date.now() + 2 * 24 * 60 * 60 * 1000);
     });
 
-    it('calculates deadline extension from current time when neither deadline nor createdAt is provided', () => {
+    it('extends from now when there is no closing time', () => {
       const before = Date.now();
       const extended = calculateExtendedDeadline(undefined, 1);
       const extendedMs = new Date(extended).getTime();
-      expect(extendedMs).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000 - 1000);
+      expect(extendedMs).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000);
+      expect(extendedMs).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000);
+    });
+
+    it('uses the stored closing time when there is one', () => {
+      expect(resolveRfqClosingDeadline({
+        closingDeadline: '2026-11-16T02:19:00.000Z',
+        createdAt: '2026-11-14 02:19 UTC',
+      })).toBe('2026-11-16T02:19:00.000Z');
+    });
+
+    it('closes 48 hours after creation when no closing time is stored, whatever the target date is', () => {
+      // A record raised 14 Nov 2026 at 07:49 am IST with a target delivery date of 09 Dec 2026.
+      const rfq = { createdAt: '2026-11-14 02:19 UTC', deadline: '2026-12-09' };
+      const closing = resolveRfqClosingDeadline(rfq);
+
+      expect(RFQ_AUTO_CLOSE_HOURS).toBe(48);
+      expect(closing).toBe(new Date(Date.parse('2026-11-14T02:19:00Z') + 48 * 60 * 60 * 1000).toISOString());
+      expect(closing).toBe('2026-11-16T02:19:00.000Z');
+    });
+
+    it('returns null when neither a closing time nor a creation time can be read', () => {
+      expect(resolveRfqClosingDeadline({})).toBeNull();
+      expect(resolveRfqClosingDeadline({ createdAt: 'not-a-date', closingDeadline: 'not-a-date' })).toBeNull();
     });
 
     it('accepts only whole days inside the range', () => {

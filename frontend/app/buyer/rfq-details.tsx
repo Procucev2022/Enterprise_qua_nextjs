@@ -14,6 +14,7 @@ import {
   extensionDaysFromHours,
   formatExtensionDayCount,
   parseExtensionDays,
+  resolveRfqClosingDeadline,
   stepExtensionDays,
   formatCurrency,
   formatFileSize,
@@ -540,8 +541,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       const result = await extendRFQ(activeRfq.id, extensionDays);
       if (result.success) {
         setLocalRfq(result.rfq);
-        const deadlineStr = result.rfq.closingDeadline || result.rfq.deadline || '';
-        const formattedDeadline = deadlineStr ? formatIndianDateTime(deadlineStr) : '';
+        const closingIso = resolveRfqClosingDeadline(result.rfq);
+        const formattedDeadline = closingIso ? formatIndianDateTime(closingIso) : '';
         showToast(
           DETAILS.extensionSuccessTitle,
           formatString(DETAILS.extensionSuccessMessage, {
@@ -1450,9 +1451,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span>
               <span className="inline-flex items-center gap-1.5 mono">
                 <Clock size={12} className="text-slate-400 shrink-0" />
-                {activeRfq.closingDeadline || activeRfq.deadline
-                  ? formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline)
-                  : DETAILS.unsetValue}
+                {formatIndianDateTime(resolveRfqClosingDeadline(activeRfq) ?? undefined) || DETAILS.unsetValue}
               </span>
               {activeRfq.isExtended && (
                 <span className="block text-[10px] font-semibold text-amber-700 dark:text-amber-400 mt-0.5">
@@ -3121,7 +3120,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.currentDeadlineLabel}</span>
                 <span className="mono font-semibold text-slate-700 dark:text-gray-300">
-                  {formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline || activeRfq.createdAt)}
+                  {formatIndianDateTime(resolveRfqClosingDeadline(activeRfq) ?? undefined)}
                 </span>
               </div>
               <div className="flex justify-between items-center pt-2 border-t border-slate-200 dark:border-gray-700">
@@ -3129,7 +3128,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 <span className="mono font-bold text-amber-600 dark:text-amber-400">
                   {extensionDays === null
                     ? formatString(DETAILS.revisedDeadlineUnavailable, { min: EXTENSION_MIN_DAYS, max: EXTENSION_MAX_DAYS })
-                    : formatIndianDateTime(calculateExtendedDeadline(activeRfq.closingDeadline || activeRfq.deadline, extensionDays))}
+                    : formatIndianDateTime(calculateExtendedDeadline(resolveRfqClosingDeadline(activeRfq), extensionDays))}
                 </span>
               </div>
             </div>

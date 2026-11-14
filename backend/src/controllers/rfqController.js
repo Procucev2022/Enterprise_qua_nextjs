@@ -387,6 +387,11 @@ function scopedRfqList(scope) {
 // edit, or a malicious body could hand an RFQ to another buyer or fabricate
 // quotes — storeService.updateRFQ merges whatever object it's given, with
 // no column whitelist of its own.
+//
+// The closing time and the one-time extension record (closingDeadline, isExtended, extensionHours,
+// extendedAt) are written only by the extension endpoint. Closure follows closingDeadline, so a plain
+// edit that could set these fields could keep an RFQ open indefinitely, or clear the extension flags
+// and extend again.
 const RFQ_UPDATABLE_FIELDS = [
   'title',
   'category',
@@ -397,10 +402,6 @@ const RFQ_UPDATABLE_FIELDS = [
   'deliveryLocation',
   'deliveryPincode',
   'deadline',
-  'closingDeadline',
-  'isExtended',
-  'extensionHours',
-  'extendedAt',
   'extractedEntities',
   'attachments',
   'inquiries',

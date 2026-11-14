@@ -10,6 +10,7 @@ import type {
   UserRole,
   OrganizationType,
   SourcingMode,
+  RFQItem,
 } from './types';
 import { UI_STRINGS, formatString } from './uiStrings';
 import { EXTENSION_MIN_DAYS, EXTENSION_MAX_DAYS, isWholeExtensionDays } from './validationSchemas';
@@ -995,6 +996,8 @@ export function formatIndianDate(value?: string): string {
   }).format(new Date(parsed));
 }
 
+const MS_PER_HOUR = 60 * 60 * 1000;
+
 /** Hours in one day. A closing-deadline extension is stored in hours, so day counts convert through this. */
 export const EXTENSION_HOURS_PER_DAY = 24;
 
@@ -1002,25 +1005,32 @@ export const EXTENSION_HOURS_PER_DAY = 24;
 export const DEFAULT_EXTENSION_DAYS = 1;
 
 /**
- * Calculates a revised RFQ deadline extended by a whole number of days.
- * If the current deadline is in the past, extensions are measured from now.
+ * Hours from creation to automatic closing. Mirrors RFQ_AUTO_CLOSE_AFTER_MS in the backend constants,
+ * which the closure sweep uses for RFQs stored before a closing time was saved.
  */
-export function calculateExtendedDeadline(
-  currentDeadline?: string,
-  days: number = DEFAULT_EXTENSION_DAYS,
-  baseCreatedAt?: string
-): string {
-  let baseMs: number;
-  if (currentDeadline && !Number.isNaN(Date.parse(currentDeadline))) {
-    baseMs = Math.max(new Date(currentDeadline).getTime(), Date.now());
-  } else if (baseCreatedAt && !Number.isNaN(Date.parse(baseCreatedAt))) {
-    const createdMs = new Date(baseCreatedAt).getTime();
-    const default7Days = createdMs + 7 * 24 * 60 * 60 * 1000;
-    baseMs = Math.max(default7Days, Date.now());
-  } else {
-    baseMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  }
-  return new Date(baseMs + days * EXTENSION_HOURS_PER_DAY * 60 * 60 * 1000).toISOString();
+export const RFQ_AUTO_CLOSE_HOURS = 48;
+
+/**
+ * The closing time of an RFQ as an ISO instant. The stored closingDeadline is used when present. That
+ * covers every RFQ created since closing times were saved, and every RFQ extended since. Other RFQs close
+ * RFQ_AUTO_CLOSE_HOURS after creation, which is when the backend sweep closes them. Returns null when
+ * neither time can be read.
+ */
+export function resolveRfqClosingDeadline(rfq: Partial<Pick<RFQItem, 'closingDeadline' | 'createdAt'>>): string | null {
+  const stored = parseRfqTimestamp(rfq.closingDeadline);
+  if (stored !== null) return new Date(stored).toISOString();
+  const created = parseRfqTimestamp(rfq.createdAt);
+  if (created === null) return null;
+  return new Date(created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR).toISOString();
+}
+
+/**
+ * The closing time after a one-time extension of a whole number of days, as an ISO instant. The days are
+ * added to the current closing time, or to now when that time has already passed.
+ */
+export function calculateExtendedDeadline(currentClosing: string | null | undefined, days: number = DEFAULT_EXTENSION_DAYS): string {
+  const baseMs = Math.max(parseRfqTimestamp(currentClosing) ?? 0, Date.now());
+  return new Date(baseMs + days * EXTENSION_HOURS_PER_DAY * MS_PER_HOUR).toISOString();
 }
 
 /** The day count typed into the dialog, or null when it is blank, fractional or outside the range. */

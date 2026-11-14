@@ -5829,3 +5829,9 @@ Currently, the popup appears on every login. Please fix the condition: show this
 change this +24 and +48 to give calender and timer how many days buyer want can change this
 ```
 ---
+### Prompt 211
+**Timestamp**: 2026-11-14T10:21:59+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the RFQ details page for RFQ261411297419 was attached.)
+```text
+sir please check this closing dateline timestamp and create rfq tiime stamp should match created at 07:49 am closing 5:30 am default 48 hours
+```
+---

@@ -1020,13 +1020,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       const [sql, params, options] = querySpy.mock.calls[0];
       expect(sql).toContain("status = 'Closed'");
-      expect(sql).toContain("raw->>'createdAt' <= $1");
+      expect(sql).toContain("raw->>'closingDeadline' <= $1");
+      expect(sql).toContain("replace(substr(raw->>'createdAt', 1, 16), ' ', 'T') <= $3");
       expect(sql).toContain("raw->>'poFinalised'");
       expect(options.d1Text).toContain('json_patch(raw, $2)');
-      expect(options.d1Text).toContain("json_extract(raw, '$.createdAt') <= $1");
+      expect(options.d1Text).toContain("json_extract(raw, '$.closingDeadline') <= $1");
+      expect(options.d1Text).toContain("replace(substr(json_extract(raw, '$.createdAt'), 1, 16), ' ', 'T') <= $3");
+      // $1 is the closing-time comparison (now), $2 the closure patch, $3 the minute key of the 48-hour cutoff.
       expect(params).toEqual([
-        '2026-01-01T00:00:00.000Z',
+        '2026-01-03T00:00:00.000Z',
         JSON.stringify({ status: 'Closed', closedAt: '2026-01-03T00:00:00.000Z', closedReason: 'expired' }),
+        '2026-01-01T00:00',
       ]);
     });
 

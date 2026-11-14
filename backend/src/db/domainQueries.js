@@ -1421,9 +1421,16 @@ async function upsertRFQInDB(rfq) {
 }
 
 /**
- * Atomically close RFQs that have been open for at least 48 hours.
- * The eligibility predicate and status transition share one statement so
- * concurrent schedulers cannot both dispatch closure side effects.
+ * Atomically close RFQs whose closing time has passed. An RFQ with a stored closingDeadline closes when
+ * that time arrives, so a one-time extension keeps it open. An RFQ stored before closingDeadline existed
+ * closes 48 hours after its createdAt, which is the moment cutoffIso marks.
+ *
+ * createdAt is stored to the minute as "YYYY-MM-DD HH:mm UTC", so it is compared as a minute key against
+ * the cutoff. A plain text comparison against the ISO cutoff put an RFQ created on the cutoff's day before
+ * the cutoff, because a space sorts before "T", and closed it up to a day early.
+ *
+ * The eligibility predicate and status transition share one statement so concurrent schedulers cannot
+ * both dispatch closure side effects.
  */
 async function closeExpiredRFQsInDB(cutoffIso, closedAtIso, closeReason) {
   if (!pool.hasStorage()) return [];
@@ -1432,25 +1439,38 @@ async function closeExpiredRFQsInDB(cutoffIso, closedAtIso, closeReason) {
     closedAt: closedAtIso,
     closedReason: closeReason,
   });
+  const createdCutoffKey = String(cutoffIso).slice(0, 16);
   const result = await pool.query(
     `UPDATE rfqs
      SET status = 'Closed', raw = raw || $2::jsonb, updated_at = now()
-     WHERE COALESCE(raw->>'createdAt', '') <> ''
-       AND raw->>'createdAt' <= $1
-       AND COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
+     WHERE COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
        AND COALESCE(raw->>'poFinalised', 'false') <> 'true'
        AND COALESCE(raw->>'poNumber', '') = ''
+       AND (
+         (COALESCE(raw->>'closingDeadline', '') <> '' AND raw->>'closingDeadline' <= $1)
+         OR (
+           COALESCE(raw->>'closingDeadline', '') = ''
+           AND COALESCE(raw->>'createdAt', '') <> ''
+           AND replace(substr(raw->>'createdAt', 1, 16), ' ', 'T') <= $3
+         )
+       )
      RETURNING raw`,
-    [cutoffIso, closurePatch],
+    [closedAtIso, closurePatch, createdCutoffKey],
     {
       d1: true,
       d1Text: `UPDATE rfqs
        SET status = 'Closed', raw = json_patch(raw, $2), updated_at = CURRENT_TIMESTAMP
-       WHERE COALESCE(json_extract(raw, '$.createdAt'), '') <> ''
-         AND json_extract(raw, '$.createdAt') <= $1
-         AND COALESCE(json_extract(raw, '$.status'), status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
+       WHERE COALESCE(json_extract(raw, '$.status'), status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
          AND COALESCE(json_extract(raw, '$.poFinalised'), 0) NOT IN (1, 'true')
          AND COALESCE(json_extract(raw, '$.poNumber'), '') = ''
+         AND (
+           (COALESCE(json_extract(raw, '$.closingDeadline'), '') <> '' AND json_extract(raw, '$.closingDeadline') <= $1)
+           OR (
+             COALESCE(json_extract(raw, '$.closingDeadline'), '') = ''
+             AND COALESCE(json_extract(raw, '$.createdAt'), '') <> ''
+             AND replace(substr(json_extract(raw, '$.createdAt'), 1, 16), ' ', 'T') <= $3
+           )
+         )
        RETURNING raw`,
     }
   );

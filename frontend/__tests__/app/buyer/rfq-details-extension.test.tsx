@@ -91,6 +91,27 @@ describe('RFQ details extension dialog (whole days)', () => {
     jest.clearAllMocks();
   });
 
+  it('shows the 48-hour closing time for an RFQ stored without one, not its target delivery date', () => {
+    // Stored before closing times were saved: the deadline field holds the target delivery date.
+    const legacyRfq = {
+      ...OPEN_RFQ,
+      closingDeadline: undefined,
+      deadline: '2099-12-09',
+      createdAt: '2099-11-14 02:19 UTC',
+    } as unknown as RFQItem;
+    renderDetails(legacyRfq);
+
+    const closing = formatIndianDateTime('2099-11-16T02:19:00.000Z');
+    expect(screen.getByText(closing)).toBeInTheDocument();
+    expect(screen.queryByText(formatIndianDateTime('2099-12-09'))).not.toBeInTheDocument();
+
+    const dialog = openExtendDialog();
+    expect(within(dialog).getByText(closing)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(formatIndianDateTime(calculateExtendedDeadline('2099-11-16T02:19:00.000Z', 1)))
+    ).toBeInTheDocument();
+  });
+
   it('starts on one day and shows the matching calendar date and hint', () => {
     renderDetails();
     const dialog = openExtendDialog();

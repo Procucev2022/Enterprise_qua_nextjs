@@ -84,14 +84,16 @@ describe('RFQ Extension Feature (whole days, strictly one-time)', () => {
       expect(res.reason).toBe('INVALID_STATUS');
     });
 
-    test('extends an open RFQ with a deadline by the number of days the buyer chose', () => {
-      const baseDate = new Date(Date.now() + 5 * DAY_MS);
+    test('extends the 48-hour closing time set at creation, not a deadline sent with the request', () => {
+      const sentDeadline = new Date(Date.now() + 5 * DAY_MS);
       const created = storeService.createRFQ({
         rfqNumber: `RFQ-EXT-3D-${Date.now()}`,
         title: 'Open RFQ for a three-day extension test',
         status: 'Open',
-        deadline: baseDate.toISOString(),
+        deadline: sentDeadline.toISOString(),
       });
+      expect(created.closingDeadline).toBeDefined();
+      expect(new Date(created.closingDeadline).getTime()).not.toBe(sentDeadline.getTime());
 
       const result = storeService.extendRFQ(created.id, {
         days: 3,
@@ -103,7 +105,8 @@ describe('RFQ Extension Feature (whole days, strictly one-time)', () => {
       expect(result.rfq.extensionHours).toBe(72);
       expect(result.rfq.extendedByEmail).toBe(TEST_USERS.buyer.email);
       expect(result.rfq.extendedAt).toBeDefined();
-      expect(new Date(result.rfq.closingDeadline).getTime()).toBe(baseDate.getTime() + 3 * DAY_MS);
+      expect(new Date(result.rfq.closingDeadline).getTime())
+        .toBe(new Date(created.closingDeadline).getTime() + 3 * DAY_MS);
     });
 
     test('rejects a second extension attempt on the same RFQ', () => {
@@ -136,14 +139,13 @@ describe('RFQ Extension Feature (whole days, strictly one-time)', () => {
       }
     });
 
-    test('extends an open RFQ without an existing deadline by two days from its creation or from now', () => {
+    test('extends an RFQ without a sent deadline by two days from its 48-hour closing time', () => {
       const created = storeService.createRFQ({
         rfqNumber: `RFQ-EXT-2D-${Date.now()}`,
         title: 'Open RFQ without initial deadline',
         status: 'Open',
       });
 
-      const before = Date.now();
       const result = storeService.extendRFQ(created.id, {
         days: 2,
         userEmail: TEST_USERS.buyer.email,
@@ -152,8 +154,8 @@ describe('RFQ Extension Feature (whole days, strictly one-time)', () => {
       expect(result.success).toBe(true);
       expect(result.rfq.isExtended).toBe(true);
       expect(result.rfq.extensionHours).toBe(48);
-      const extendedDeadlineMs = new Date(result.rfq.closingDeadline).getTime();
-      expect(extendedDeadlineMs).toBeGreaterThanOrEqual(before + 2 * DAY_MS - 5000);
+      expect(new Date(result.rfq.closingDeadline).getTime())
+        .toBe(new Date(created.closingDeadline).getTime() + 2 * DAY_MS);
     });
   });
 
