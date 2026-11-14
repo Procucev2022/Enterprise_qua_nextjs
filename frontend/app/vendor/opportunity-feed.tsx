@@ -223,6 +223,16 @@ export default function OpportunityFeed({
     setMyVendorName('');
     fetch(`/api/vendors/${encodeURIComponent(email)}`, { headers: vendorAuthHeaders() })
       .then((res) => {
+        // A 401 means the stored token is no longer accepted. The auth flow ends that session, so the
+        // lookup is skipped with a warning and is not reported as an error.
+        if (res.status === 401) {
+          logger.warn(
+            'Vendor profile lookup skipped because the session has ended',
+            { operation: 'load_vendor_profile', status: res.status },
+            'VENDOR_OPPORTUNITY_FEED'
+          );
+          return null;
+        }
         if (!res.ok) {
           logger.error(
             'Vendor profile lookup failed for opportunity category matching',

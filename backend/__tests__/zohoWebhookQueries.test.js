@@ -109,4 +109,16 @@ describe('zohoWebhookQueries', () => {
     pool.query.mockResolvedValueOnce({});
     await expect(zohoWebhookQueries.purgeExpiredWebhookEvents()).resolves.toBe(0);
   });
+
+  test('removes at most one batch of expired receipts per run, selected by the primary key pair', async () => {
+    pool.query.mockResolvedValue({ rowCount: 0 });
+
+    await zohoWebhookQueries.purgeExpiredWebhookEvents(new Date('2026-11-04T00:00:00.000Z'));
+
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toContain('(account_id, event_id) IN (');
+    expect(sql).toContain('LIMIT $2');
+    expect(params).toHaveLength(2);
+    expect(params[1]).toBe(require('../src/config/constants').ZOHO_WEBHOOK_RECEIPT_POLICY.PURGE_BATCH_SIZE);
+  });
 });

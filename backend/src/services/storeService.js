@@ -33,6 +33,7 @@ const {
   KEYWORD_TAXONOMY_MAP,
   DEFAULT_CATEGORY_TAXONOMY,
   RFQ_QUOTE_WRITE_RETRIES,
+  RFQ_QUOTE_WRITE_BACKOFF,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   RFQ_MINOR_INVITE_LOOKUP,
   RFQ_MINOR_SHORTFALL_ALERT,
@@ -199,6 +200,21 @@ function minorSearchTerms(minors) {
     else if (term.endsWith('s')) terms.add(term.slice(0, -1));
   }
   return Array.from(terms);
+}
+
+/**
+ * Waits before the next attempt at a quote write that lost a race with another write to the same RFQ.
+ * The wait doubles per attempt up to RFQ_QUOTE_WRITE_BACKOFF.MAX_MS, with jitter, and is skipped after the
+ * last attempt.
+ *
+ * @param {number} attempt Zero-based index of the attempt that just lost the race.
+ * @returns {Promise<void>}
+ */
+function waitBeforeQuoteRetry(attempt) {
+  if (attempt + 1 >= RFQ_QUOTE_WRITE_RETRIES) return Promise.resolve();
+  const ceilingMs = Math.min(RFQ_QUOTE_WRITE_BACKOFF.BASE_MS * 2 ** attempt, RFQ_QUOTE_WRITE_BACKOFF.MAX_MS);
+  const delayMs = Math.round(ceilingMs * (0.5 + Math.random() / 2));
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function extractCategories(val) {
@@ -464,7 +480,7 @@ class StoreService {
       );
       return { hydrated: true, source: 'postgres' };
     } catch (err) {
-      logger.error('Failed to load domain records from PostgreSQL', err, 'STORE_SERVICE');
+      logger.error('Failed to load domain records from the configured database', err, 'STORE_SERVICE');
       this.isHydratedFromDB = false;
       this._setDatabaseHealthRow({
         status: INFRASTRUCTURE_HEALTH.STATUS.UNREACHABLE,
@@ -5705,7 +5721,10 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
         throw error;
       }
       if (saved && saved.notFound) return null;
-      if (saved && saved.conflict) continue;
+      if (saved && saved.conflict) {
+        await waitBeforeQuoteRetry(attempt);
+        continue;
+      }
       if (!saved || !saved.rfq || !saved.vendor) {
         const persistError = new Error('The quote transaction returned no saved vendor and RFQ rows. Try again.');
         persistError.statusCode = 503;

@@ -156,4 +156,59 @@ describe('lib/store.tsx - AI feed by role and RFQ load when the session ends', (
     expect(logSpy).not.toHaveBeenCalledWith('ERROR', 'Failed to load RFQs', expect.anything(), 'RFQ_STORE');
     expect(app().rfqs).toEqual([]);
   });
+
+  test('the feed is not requested while the stored session has no user to read the role from', async () => {
+    const app = await mountAs('buyer');
+    authClient.setSession(null, 'buyer-session-token');
+    mockFetch.mockClear();
+
+    await act(async () => {
+      await app().refreshAIFeed();
+    });
+
+    const requested = mockFetch.mock.calls.map(([url]) => String(url));
+    expect(requested.some((url) => url.startsWith('/api/ai-feed'))).toBe(false);
+  });
+
+  test('the feed is not requested when the stored session is not a feed viewer, even though the screen shows a buyer', async () => {
+    const app = await mountAs('buyer');
+    authClient.setSession({
+      id: 'usr-vendor-stored',
+      email: 'vendor@procucev.com',
+      name: 'Stored Vendor',
+      role: 'vendor',
+      orgId: 'org-session-1',
+      orgName: 'Session Org',
+    }, 'vendor-session-token');
+    mockFetch.mockClear();
+
+    await act(async () => {
+      await app().refreshAIFeed();
+    });
+
+    const requested = mockFetch.mock.calls.map(([url]) => String(url));
+    expect(requested.some((url) => url.startsWith('/api/ai-feed'))).toBe(false);
+    expect(app().aiFeed).toEqual([]);
+    expect(app().aiFeedError).toBeNull();
+  });
+
+  test('a 403 from the feed is a warning and the feed reads as empty, not an error', async () => {
+    const app = await mountAs('buyer');
+    const logSpy = jest.spyOn(logger, 'log');
+    mockFetch.mockImplementation((url: string) => {
+      if (url.startsWith('/api/ai-feed')) {
+        return respond(403, { success: false, error: 'You do not have permission to perform this action.' });
+      }
+      return serveDefaults(url);
+    });
+
+    await act(async () => {
+      await app().refreshAIFeed();
+    });
+
+    expect(logSpy).toHaveBeenCalledWith('WARN', 'AI feed is not offered to this session', { status: 403 }, 'AI_FEED');
+    expect(logSpy).not.toHaveBeenCalledWith('ERROR', 'AI feed request failed', expect.anything(), 'AI_FEED');
+    expect(app().aiFeed).toEqual([]);
+    expect(app().aiFeedError).toBeNull();
+  });
 });

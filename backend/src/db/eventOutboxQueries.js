@@ -7,6 +7,7 @@ const {
   EVENT_OUTBOX_TYPES,
   EVENT_OUTBOX_DEFERRED_STATUS,
   EVENT_OUTBOX_MAX_BATCH_SIZE,
+  EVENT_OUTBOX_PURGE_BATCH_SIZE,
 } = require('../config/constants');
 
 function getProviderLabel() {
@@ -273,19 +274,21 @@ async function rescheduleEventOutboxInDB({ id, leaseToken, status, availableAt, 
 
 async function purgeEventOutboxInDB(completedBefore, deadBefore) {
   if (!pool.hasStorage()) return 0;
-  const result = await execute(
-    'purge-expired',
-    `DELETE FROM event_outbox
-     WHERE (status = 'completed' AND completed_at < $1)
-        OR (status = 'dead' AND updated_at < $2)
-        OR (status = $3 AND created_at < $2)`,
-    [completedBefore, deadBefore, EVENT_OUTBOX_DEFERRED_STATUS.BUYER_ONBOARDING],
-    {
-      d1Text: `DELETE FROM event_outbox
+  // One bounded batch per run: the expired rows are selected by a LIMIT subquery, so a large backlog is
+  // drained over several runs rather than rewritten in one D1 window.
+  const purgeSql = `DELETE FROM event_outbox
+     WHERE id IN (
+       SELECT id FROM event_outbox
        WHERE (status = 'completed' AND completed_at < $1)
           OR (status = 'dead' AND updated_at < $2)
-          OR (status = $3 AND created_at < $2)`,
-    }
+          OR (status = $3 AND created_at < $2)
+       LIMIT $4
+     )`;
+  const result = await execute(
+    'purge-expired',
+    purgeSql,
+    [completedBefore, deadBefore, EVENT_OUTBOX_DEFERRED_STATUS.BUYER_ONBOARDING, EVENT_OUTBOX_PURGE_BATCH_SIZE],
+    { d1Text: purgeSql }
   );
   return result.rowCount || 0;
 }

@@ -217,7 +217,7 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
       expect(attemptedKeys).not.toContain(secretKey1);
     });
 
-    test('non-retryable 400 Bad Request aborts immediately without rotating through other keys', async () => {
+    test('a 400 rejection never rotates to another key, and two rejections in a row stop the chain', async () => {
       const secretKey1 = 'secret-key-bad-req-1';
       const secretKey2 = 'secret-key-bad-req-2';
       process.env.GEMINI_API_KEYS = `${secretKey1},${secretKey2}`;
@@ -247,8 +247,9 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
       });
 
       expect(result.status).not.toBe(gemini.EXTRACTION_STATUS.SUCCESS);
-      // Fails immediately on 400 without key rotation
-      expect(attemptedKeys).toEqual([secretKey1]);
+      // A 400 is judged per model: the next model gets one try with the same key, and the second
+      // rejection in a row stops the chain. No 400 rotates the request to another key.
+      expect(attemptedKeys).toEqual([secretKey1, secretKey1]);
       expect(gemini.isKeyInCooldown(secretKey1)).toBe(false);
     });
 

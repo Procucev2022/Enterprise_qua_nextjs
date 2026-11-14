@@ -18,6 +18,7 @@
  */
 
 const { GEMINI_CONFIG, GEMINI_INLINE_MIME_TYPES } = require('../config/constants');
+const { sanitizeTextForModel } = require('./documentTextSanitizer');
 const { logger } = require('./loggerService');
 const {
   normalizeAmount,
@@ -1483,14 +1484,23 @@ async function extractLineItems(input = {}) {
 
   // Loaded before the request is built so the category list is current.
   await ensureTaxonomyLoaded();
+  // Oversized text is truncated rather than rejected: the head of a BOQ still carries the line items,
+  // and a hard failure would lose them entirely. The text is cleaned first so the request is valid Unicode.
+  const sanitizedDocument = sanitizeTextForModel(trimmedText, GEMINI_CONFIG.MAX_DOCUMENT_TEXT_CHARS);
   const requestBody = buildRequestBody({
-    // Oversized text is truncated rather than rejected: the head of a BOQ still
-    // carries the line items, and a hard failure would lose them entirely.
-    documentText: trimmedText.slice(0, GEMINI_CONFIG.MAX_DOCUMENT_TEXT_CHARS),
+    documentText: sanitizedDocument.text,
     inlineData,
     mimeType,
-    fileName,
+    fileName: sanitizeTextForModel(fileName || '').text || undefined,
   });
+  // Sizes only, never content. Logged with a failure so the cause can be read from the logs.
+  const requestDiagnostics = {
+    approxRequestBytes: Buffer.byteLength(sanitizedDocument.text, 'utf8') + (inlineData ? String(inlineData).length : 0),
+    documentTextChars: sanitizedDocument.text.length,
+    inlineDataBytes: approxBytes,
+    controlCharactersRemoved: sanitizedDocument.controlCharactersRemoved,
+    loneSurrogatesReplaced: sanitizedDocument.loneSurrogatesReplaced,
+  };
 
   const failures = [];
 
@@ -1511,6 +1521,8 @@ async function extractLineItems(input = {}) {
     'GEMINI'
   );
 
+  let modelsAttempted = 0;
+  let consecutiveRejections = 0;
   for (let attempt = 0; attempt < chain.length; attempt++) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
@@ -1528,6 +1540,7 @@ async function extractLineItems(input = {}) {
       }
     }
 
+    modelsAttempted += 1;
     logger.info(
       `[GEMINI] Attempting model ${attempt + 1}/${chain.length}: ${model} (remaining budget: ${remainingMs}ms)`,
       { model, attempt: attempt + 1, totalModels: chain.length, remainingMs },
@@ -1689,8 +1702,18 @@ async function extractLineItems(input = {}) {
         logger.warn(`Gemini extraction attempt failed on ${model}`, { model, attempt: attempt + 1, totalModels: chain.length, error: err.message }, 'GEMINI');
       }
       if (isNonRetryableError(err.status, err.message)) {
-        logger.warn(`Gemini extraction aborting model chain on non-retryable error: ${err.message}`, {}, 'GEMINI');
-        break;
+        consecutiveRejections += 1;
+        if (consecutiveRejections >= GEMINI_CONFIG.MAX_CONSECUTIVE_REJECTIONS) {
+          logger.warn(
+            `Gemini extraction stopping after ${consecutiveRejections} rejected requests in a row: ${err.message}`,
+            { model, consecutiveRejections },
+            'GEMINI'
+          );
+          break;
+        }
+        logger.warn(`Gemini ${model} rejected the request; trying the next model`, { model, error: err.message }, 'GEMINI');
+      } else {
+        consecutiveRejections = 0;
       }
     }
   }
@@ -1712,13 +1735,15 @@ async function extractLineItems(input = {}) {
 
   const failureStatus = resolveExtractionFailureStatus(failures);
   logger.error(
-    `[GEMINI] Extraction failed across all ${chain.length} models in chain for "${fileName || 'document'}" (${failureStatus})`,
+    `[GEMINI] Extraction failed after ${modelsAttempted} of ${chain.length} models in chain for "${fileName || 'document'}" (${failureStatus})`,
     {
       fileName,
-      totalModelsAttempted: chain.length,
+      totalModelsInChain: chain.length,
+      totalModelsAttempted: modelsAttempted,
       failureCount: failures.length,
       failures,
       resolvedStatus: failureStatus,
+      ...requestDiagnostics,
     },
     'GEMINI'
   );
@@ -1772,7 +1797,7 @@ async function generateJson(input = {}) {
   }
 
   const requestBody = {
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    contents: [{ role: 'user', parts: [{ text: sanitizeTextForModel(prompt).text }] }],
     generationConfig: {
       temperature: GEMINI_CONFIG.TEMPERATURE,
       response_mime_type: 'application/json',
@@ -1806,6 +1831,8 @@ async function generateJson(input = {}) {
     'GEMINI'
   );
 
+  let modelsAttempted = 0;
+  let consecutiveRejections = 0;
   for (let attempt = 0; attempt < chain.length; attempt++) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
@@ -1823,6 +1850,7 @@ async function generateJson(input = {}) {
       }
     }
 
+    modelsAttempted += 1;
     logger.info(
       `[GEMINI] Attempting ${label} via model ${attempt + 1}/${chain.length}: ${model} (remaining budget: ${remainingMs}ms)`,
       { label, model, attempt: attempt + 1, totalModels: chain.length, remainingMs },
@@ -1865,8 +1893,18 @@ async function generateJson(input = {}) {
         logger.warn(`Gemini ${label} attempt failed on ${model}`, { model, label, attempt: attempt + 1, totalModels: chain.length, error: err.message }, 'GEMINI');
       }
       if (isNonRetryableError(err.status, err.message)) {
-        logger.warn(`Gemini ${label} aborting model chain on non-retryable error: ${err.message}`, {}, 'GEMINI');
-        break;
+        consecutiveRejections += 1;
+        if (consecutiveRejections >= GEMINI_CONFIG.MAX_CONSECUTIVE_REJECTIONS) {
+          logger.warn(
+            `Gemini ${label} stopping after ${consecutiveRejections} rejected requests in a row: ${err.message}`,
+            { label, model, consecutiveRejections },
+            'GEMINI'
+          );
+          break;
+        }
+        logger.warn(`Gemini ${label} rejected by ${model}; trying the next model`, { label, model, error: err.message }, 'GEMINI');
+      } else {
+        consecutiveRejections = 0;
       }
     }
   }
@@ -1882,8 +1920,15 @@ async function generateJson(input = {}) {
 
   const failureStatus = resolveExtractionFailureStatus(failures);
   logger.error(
-    `[GEMINI] ${label} failed across all ${chain.length} models (${failureStatus})`,
-    { label, totalModelsAttempted: chain.length, failureCount: failures.length, failures, resolvedStatus: failureStatus },
+    `[GEMINI] ${label} failed after ${modelsAttempted} of ${chain.length} models (${failureStatus})`,
+    {
+      label,
+      totalModelsInChain: chain.length,
+      totalModelsAttempted: modelsAttempted,
+      failureCount: failures.length,
+      failures,
+      resolvedStatus: failureStatus,
+    },
     'GEMINI'
   );
 

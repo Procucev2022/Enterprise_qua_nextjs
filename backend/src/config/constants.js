@@ -289,6 +289,9 @@ const RFQ_DEFAULTS = {
 const EXTENSION_HOURS_PER_DAY = 24;
 const DEFAULT_EXTENSION_DAYS = 1;
 const RFQ_QUOTE_WRITE_RETRIES = 5;
+// Pause before retrying a quote write that lost a race with another write to the same RFQ. The pause
+// doubles per attempt up to MAX_MS, with jitter, so competing submissions stop colliding on each retry.
+const RFQ_QUOTE_WRITE_BACKOFF = Object.freeze({ BASE_MS: 25, MAX_MS: 400 });
 const RFQ_STATE_WRITE_RETRIES = 5;
 const PERSISTED_RECORD_WRITE_RETRIES = 5;
 const AUDIT_CHAIN_WRITE_MAX_ATTEMPTS = 5;
@@ -332,6 +335,9 @@ const EVENT_OUTBOX_ENQUEUE_ATTEMPTS = 3;
 const EVENT_OUTBOX_ENQUEUE_RETRY_MS = 50;
 const EVENT_OUTBOX_POLL_INTERVAL_MS = 60 * 1000;
 const EVENT_OUTBOX_RETENTION_DAYS = 30;
+// Expired outbox rows removed per purge run. Larger backlogs drain over later runs, so one run never
+// rewrites an unbounded number of rows in a single D1 window.
+const EVENT_OUTBOX_PURGE_BATCH_SIZE = 500;
 const D1_NOTIFICATION_INSERT_BATCH_SIZE = 14;
 const EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE = D1_NOTIFICATION_INSERT_BATCH_SIZE;
 const RFQ_AUTO_CLOSE_AFTER_MS = 48 * 60 * 60 * 1000;
@@ -1303,6 +1309,10 @@ const GEMINI_CONFIG = {
   MIN_ATTEMPT_MS: 0,
   MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,
   MAX_DOCUMENT_TEXT_CHARS: GEMINI_MAX_DOCUMENT_TEXT_CHARS,
+  // A model that rejects a request (HTTP 400) may still be served by the next model, because
+  // limits differ between models. The chain stops once this many rejections come in a row,
+  // which means the request itself is refused.
+  MAX_CONSECUTIVE_REJECTIONS: 2,
   // Maximum number of API keys attempted per individual model before advancing
   // to the next fallback model in the chain (prevents long key-retry loops on rate limits).
   MAX_KEY_ATTEMPTS_PER_MODEL: Number(process.env.GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL || 3),
@@ -1601,6 +1611,9 @@ const ZOHO_CONFIG = new Proxy({}, {
 const ZOHO_WEBHOOK_RECEIPT_POLICY = Object.freeze({
   LEASE_MS: 120000,
   RETENTION_DAYS: 90,
+  // Expired receipts removed per purge run. Larger backlogs drain over later runs, so one run never
+  // rewrites an unbounded number of rows in a single D1 window.
+  PURGE_BATCH_SIZE: 500,
 });
 
 const ZOHO_WEBHOOK_MESSAGES = Object.freeze({
@@ -3742,6 +3755,7 @@ module.exports = {
   EXTENSION_MIN_DAYS,
   EXTENSION_MAX_DAYS,
   RFQ_QUOTE_WRITE_RETRIES,
+  RFQ_QUOTE_WRITE_BACKOFF,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
   AUDIT_CHAIN_WRITE_MAX_ATTEMPTS,
@@ -3759,6 +3773,7 @@ module.exports = {
   EVENT_OUTBOX_ENQUEUE_RETRY_MS,
   EVENT_OUTBOX_POLL_INTERVAL_MS,
   EVENT_OUTBOX_RETENTION_DAYS,
+  EVENT_OUTBOX_PURGE_BATCH_SIZE,
   D1_NOTIFICATION_INSERT_BATCH_SIZE,
   EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
   RFQ_AUTO_CLOSE_AFTER_MS,

@@ -998,6 +998,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  // The feed is not offered to every role. For a session that does not get it, an empty feed is the
+  // settled answer and not a failure.
+  const markAIFeedNotOffered = () => {
+    setAiFeed([]);
+    setAiFeedError(null);
+    setSessionCache('aiFeed', []);
+    loadedEntitiesRef.current.aiFeed = true;
+  };
+
   const refreshAIFeed = async () => {
     if (!authClient.getToken()) {
       setAiFeed([]);
@@ -1006,13 +1015,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       loadedEntitiesRef.current.aiFeed = false;
       return;
     }
-    // Roles outside the feed's audience are not asked for it. The endpoint answers them with a 403
-    // by design, so that is not a failure. An empty feed is the correct answer for this role.
-    if (!AI_FEED_VIEWER_ROLES.includes(currentRole)) {
-      setAiFeed([]);
-      setAiFeedError(null);
-      setSessionCache('aiFeed', []);
-      loadedEntitiesRef.current.aiFeed = true;
+    // The request is sent with the stored token, so the server checks the role on that token. The role
+    // held in memory must allow the feed as well, because the two can disagree. Until the stored session
+    // can be read, nothing is requested.
+    const credentialRole = authClient.getSessionUser()?.role;
+    if (!credentialRole) return;
+    if (!AI_FEED_VIEWER_ROLES.includes(currentRole) || !AI_FEED_VIEWER_ROLES.includes(credentialRole)) {
+      markAIFeedNotOffered();
       return;
     }
     try {
@@ -1025,6 +1034,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setAiFeedError(null);
         setSessionCache('aiFeed', json.data);
         loadedEntitiesRef.current.aiFeed = true;
+        return;
+      }
+      if (res.status === 403) {
+        // The server does not offer the feed to this session. That is a role mismatch, so it is a warning
+        // and the feed reads as empty. It is not an error.
+        logger.log('WARN', 'AI feed is not offered to this session', { status: res.status }, 'AI_FEED');
+        markAIFeedNotOffered();
         return;
       }
       // A failed read keeps the events already loaded and reports the failure. An empty list would read as "no activity".

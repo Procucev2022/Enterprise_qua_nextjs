@@ -237,6 +237,58 @@ describe('Worker cron jobs', () => {
     await expect(worker.scheduled({ cron: 'custom' }, {}, {})).rejects.toThrow('payment failure');
   });
 
+  test('runs the cron jobs one at a time, so their database queries never overlap', async () => {
+    const worker = await loadWorker();
+    let active = 0;
+    let maxActive = 0;
+    const job = async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setImmediate(resolve));
+      active -= 1;
+      return [];
+    };
+    eventOutbox.dispatchScheduledEventOutboxJobs.mockImplementation(job);
+    chasers.dispatchDueChaserJobs.mockImplementation(job);
+    chasers.dispatchDueRFQComparisonJobs.mockImplementation(job);
+    store.closeExpiredRFQsDurably.mockImplementation(job);
+    emailGateway.pollBothInboxesOnce.mockImplementation(job);
+
+    await worker.scheduled({ cron: '* * * * *' }, {}, {});
+
+    expect(maxActive).toBe(1);
+    expect(eventOutbox.dispatchScheduledEventOutboxJobs).toHaveBeenCalledTimes(1);
+    expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failed job does not stop the others, and the first failure in order is reported', async () => {
+    const worker = await loadWorker();
+    chasers.dispatchDueChaserJobs.mockRejectedValue(new Error('chaser failure'));
+    emailGateway.pollBothInboxesOnce.mockRejectedValue(new Error('mail failure'));
+
+    await expect(worker.scheduled({ cron: '* * * * *' }, {}, {})).rejects.toThrow('chaser failure');
+    expect(chasers.dispatchDueRFQComparisonJobs).toHaveBeenCalledTimes(1);
+    expect(store.closeExpiredRFQsDurably).toHaveBeenCalledTimes(1);
+    expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalledTimes(1);
+  });
+
+  test('the reconciliation trigger does not hydrate the store, even when the store has not been hydrated', async () => {
+    const worker = await loadWorker();
+    await worker.scheduled({ cron: '*/10 * * * *' }, {}, {});
+    expect(store.hydrateFromDB).not.toHaveBeenCalled();
+    expect(reconciliation.reconcileOnce).toHaveBeenCalledTimes(1);
+    expect(eventOutbox.purgeExpiredEventOutboxRows).toHaveBeenCalledTimes(1);
+  });
+
+  test('the daily report hydrates the store before it runs', async () => {
+    const worker = await loadWorker();
+    await worker.scheduled({ cron: '30 0 * * *', scheduledTime: Date.UTC(2026, 10, 4, 0, 30) }, {}, {});
+    expect(store.hydrateFromDB).toHaveBeenCalledTimes(1);
+    expect(store.hydrateFromDB.mock.invocationCallOrder[0]).toBeLessThan(
+      dailyReport.runScheduledDailyRfqReport.mock.invocationCallOrder[0]
+    );
+  });
+
   test('waits for both mail jobs before propagating an error', async () => {
     const worker = await loadWorker();
     emailGateway.pollBothInboxesOnce.mockRejectedValue(new Error('mail failure'));
