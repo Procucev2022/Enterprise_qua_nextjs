@@ -5781,3 +5781,9 @@ some vendor dummy pan data also coming sir.
 After clicking Request Vendor Evaluation, the request is showing an error and the popup is not closing. Please fix the API issue and ensure the popup closes automatically after successful submission and the page refreshes with the updated status.
 ```
 ---
+### Prompt 206
+**Timestamp**: 2026-11-14T05:18:37+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Add Vendor modal was attached.)
+```text
+Please reuse the existing Pincode API functionality from the Create RFQ page in the Invite Vendor form. When a valid pincode is entered, automatically fetch and populate the City and State fields.
+```
+---

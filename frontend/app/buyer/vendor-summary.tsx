@@ -43,7 +43,14 @@ import {
   Filter,
   ArrowLeft,
 } from 'lucide-react';
-import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, usablePan } from '@/lib/validationSchemas';
+import {
+  validatePincode,
+  resolveCityAndStateFromPostalResult,
+  PostOfficeDetail,
+  PINCODE_PATTERN,
+  isDummyPincode,
+  usablePan,
+} from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
@@ -202,11 +209,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formPincodeError, setFormPincodeError] = useState<string | null>(null);
   const [formPincodeValidating, setFormPincodeValidating] = useState(false);
   const [formPincodePostOffices, setFormPincodePostOffices] = useState<PostOfficeDetail[]>([]);
-  const formPincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  // The PIN the form holds now. A lookup that returns after the PIN has changed is ignored.
+  const formPincodeLatestRef = useRef('');
+  // True while the Add Vendor form is open, so a verified PIN fills its City and State. Opening an existing vendor's
+  // edit form turns it off, so a lookup never overwrites the City and State already on record.
+  const pincodeFillsLocationRef = useRef(false);
+  // Shown when the postal service could not verify the PIN. The PIN is not treated as invalid.
+  const [formPincodeNotice, setFormPincodeNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const raw = formPincode.trim();
-    if (formPincodeDebounceRef.current) clearTimeout(formPincodeDebounceRef.current);
+    formPincodeLatestRef.current = raw;
+    setFormPincodeNotice(null);
     if (!raw) {
       setFormPincodeError(null);
       setFormPincodeValidating(false);
@@ -227,27 +241,42 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     }
     if (/^\d{6}$/.test(raw)) {
       setFormPincodeValidating(true);
-      formPincodeDebounceRef.current = setTimeout(async () => {
+      const lookupTimer = setTimeout(async () => {
         try {
+          // The same postal lookup the Create RFQ page uses for its delivery PIN code.
           const res = await validatePincode(raw);
-          if (!res.isValid) {
+          // A PIN typed after this lookup started has replaced it, so this result must not fill the form.
+          if (formPincodeLatestRef.current !== raw) return;
+          if (!res.isValid && res.unverified) {
+            // The postal service could not be reached. The PIN is not judged invalid, and the form can still be saved.
+            setFormPincodeError(null);
+            setFormPincodeNotice(UI_STRINGS.pincodeVerification.unverifiedFillManually);
+            setFormPincodePostOffices([]);
+          } else if (!res.isValid) {
             setFormPincodeError(res.message || 'Invalid PIN code');
             setFormPincodePostOffices([]);
           } else {
+            const offices = res.postOffices || [];
             setFormPincodeError(null);
-            setFormPincodePostOffices(res.postOffices || []);
+            setFormPincodePostOffices(offices);
+            if (pincodeFillsLocationRef.current) {
+              const { city, state } = resolveCityAndStateFromPostalResult(raw, offices);
+              if (city) setFormCity(city);
+              if (state) setFormState(state);
+            }
           }
         } catch {
           setFormPincodeError(null);
         } finally {
-          setFormPincodeValidating(false);
+          if (formPincodeLatestRef.current === raw) setFormPincodeValidating(false);
         }
       }, 350);
-    } else {
-      setFormPincodeError(null);
-      setFormPincodeValidating(false);
-      setFormPincodePostOffices([]);
+      // Cancels the pending lookup when the PIN changes again or the form unmounts, so it cannot run afterwards.
+      return () => clearTimeout(lookupTimer);
     }
+    setFormPincodeError(null);
+    setFormPincodeValidating(false);
+    setFormPincodePostOffices([]);
   }, [formPincode]);
   const [formGst, setFormGst] = useState('');
   const [formPan, setFormPan] = useState('');
@@ -376,6 +405,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormMsme('');
     setFormAnnualTurnover('');
     setFormRating(null);
+    pincodeFillsLocationRef.current = true;
     setAddModalOpen(true);
   };
 
@@ -467,6 +497,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormCity(vendor.city || '');
     setFormState(vendor.state || '');
     setFormCountry(vendor.country || 'India');
+    pincodeFillsLocationRef.current = false;
     setFormPincode(vendor.pincode || '');
     setFormRating(typeof vendor.rating === 'number' ? vendor.rating : null);
     setEditModalOpen(true);
@@ -1729,7 +1760,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </label>
                     {formPincodeValidating && (
                       <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
-                        <Loader2 size={10} className="animate-spin" /> Checking
+                        <Loader2 size={10} className="animate-spin" /> {UI_STRINGS.pincodeVerification.checking}
                       </span>
                     )}
                     {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
@@ -1757,6 +1788,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   />
                   {formPincodeError && formPincode.trim().length >= 6 && (
                     <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
+                  )}
+                  {formPincodeNotice && formPincode.trim().length >= 6 && (
+                    <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 font-medium">{formPincodeNotice}</p>
                   )}
                 </div>
               </div>
@@ -2143,7 +2177,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <label className="block font-semibold text-slate-700 dark:text-gray-300">Pincode</label>
                       {formPincodeValidating && (
                         <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
-                          <Loader2 size={10} className="animate-spin" /> Checking
+                          <Loader2 size={10} className="animate-spin" /> {UI_STRINGS.pincodeVerification.checking}
                         </span>
                       )}
                       {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
@@ -2168,6 +2202,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     />
                     {formPincodeError && formPincode.trim().length >= 6 && (
                       <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
+                    )}
+                    {formPincodeNotice && formPincode.trim().length >= 6 && (
+                      <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 font-medium">{formPincodeNotice}</p>
                     )}
                   </div>
                   <div>

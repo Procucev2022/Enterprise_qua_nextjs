@@ -690,6 +690,206 @@ describe('app/buyer/vendor-summary.tsx', () => {
       await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Vendor' })).not.toBeInTheDocument());
     });
 
+    it('fills City and State from a verified PIN code in the Add Vendor form', async () => {
+      (validatePincode as jest.Mock).mockResolvedValueOnce({
+        isValid: true,
+        postOffices: [{ Name: 'Koramangala', Pincode: '560034', District: 'Bangalore Urban', State: 'Karnataka' }],
+      });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '560034' } });
+
+      await waitFor(() => expect(screen.getByLabelText(/City/i)).toHaveValue('Bangalore Urban'));
+      expect(screen.getByLabelText(/State/i)).toHaveValue('Karnataka');
+      expect(validatePincode).toHaveBeenCalledWith('560034');
+      expect(screen.queryByText(UI_STRINGS.pincodeVerification.unverifiedFillManually)).not.toBeInTheDocument();
+    });
+
+    it('keeps the Add Vendor form saveable with a note when the postal service cannot verify the PIN code', async () => {
+      mockAddBuyerVendor.mockResolvedValueOnce({ id: 'v-offline', name: 'Offline PIN Vendor', email: 'offline-pin@vendor.test' });
+      (validatePincode as jest.Mock).mockResolvedValueOnce({
+        isValid: false,
+        unverified: true,
+        message: UI_STRINGS.pincodeVerification.unverified,
+      });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Offline PIN Vendor' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Priya Singh' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'offline-pin@vendor.test' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
+
+      expect(await screen.findByText(UI_STRINGS.pincodeVerification.unverifiedFillManually)).toBeInTheDocument();
+      expect(screen.getByLabelText(/City/i)).toHaveValue('Pune');
+
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+
+      await waitFor(() => expect(mockAddBuyerVendor).toHaveBeenCalledWith(
+        expect.objectContaining({ city: 'Pune', state: 'Maharashtra', pincode: '411001' })
+      ));
+    });
+
+    it('keeps the typed City and State when a valid PIN code has no office details to fill them from', async () => {
+      (validatePincode as jest.Mock).mockResolvedValueOnce({ isValid: true });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
+
+      expect(await screen.findByText(UI_STRINGS.pincodeVerification.checking)).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText(UI_STRINGS.pincodeVerification.checking)).not.toBeInTheDocument());
+      expect(screen.getByLabelText(/City/i)).toHaveValue('Pune');
+      expect(screen.getByLabelText(/State/i)).toHaveValue('Maharashtra');
+    });
+
+    it('shows the postal service message for a PIN code it does not find, and leaves City and State as typed', async () => {
+      (validatePincode as jest.Mock).mockResolvedValueOnce({
+        isValid: false,
+        message: UI_STRINGS.pincodeVerification.notFound,
+      });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400799' } });
+
+      expect(await screen.findByText(UI_STRINGS.pincodeVerification.notFound)).toBeInTheDocument();
+      expect(screen.getByLabelText(/City/i)).toHaveValue('Pune');
+      expect(screen.getByLabelText(/State/i)).toHaveValue('');
+    });
+
+    it('ignores a PIN lookup that returns after the PIN was changed', async () => {
+      let resolveFirstLookup: ((value: unknown) => void) | undefined;
+      (validatePincode as jest.Mock)
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstLookup = resolve; }))
+        .mockResolvedValueOnce({
+          isValid: true,
+          postOffices: [{ Name: 'Dadar', Pincode: '400014', District: 'Mumbai', State: 'Maharashtra' }],
+        });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '560034' } });
+      await waitFor(() => expect(validatePincode).toHaveBeenCalledWith('560034'));
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400014' } });
+
+      await waitFor(() => expect(screen.getByLabelText(/City/i)).toHaveValue('Mumbai'));
+      await act(async () => {
+        resolveFirstLookup?.({
+          isValid: true,
+          postOffices: [{ Name: 'Koramangala', Pincode: '560034', District: 'Bangalore Urban', State: 'Karnataka' }],
+        });
+      });
+
+      expect(screen.getByLabelText(/City/i)).toHaveValue('Mumbai');
+      expect(screen.getByLabelText(/State/i)).toHaveValue('Maharashtra');
+    });
+
+    it('does not overwrite the City and State on record when an existing vendor edit form opens', async () => {
+      (validatePincode as jest.Mock).mockResolvedValueOnce({
+        isValid: true,
+        postOffices: [{ Name: 'Kothrud', Pincode: '411038', District: 'Pune', State: 'Maharashtra' }],
+      });
+      (useApp as jest.Mock).mockReturnValue({
+        ...(useApp as jest.Mock)(),
+        buyerVendors: mockBuyerVendors.map((v) =>
+          v.id === 'v-1' ? { ...v, city: 'Hadapsar', state: 'Maharashtra', pincode: '411038' } : v
+        ),
+      });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+
+      await waitFor(() => expect(validatePincode).toHaveBeenCalledWith('411038'));
+      expect(screen.getByDisplayValue('Hadapsar')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Maharashtra')).toBeInTheDocument();
+    });
+
+    it('shows the unverified PIN notice in the edit form and keeps the City and State on record', async () => {
+      (validatePincode as jest.Mock).mockResolvedValueOnce({
+        isValid: false,
+        unverified: true,
+        message: UI_STRINGS.pincodeVerification.unverified,
+      });
+      (useApp as jest.Mock).mockReturnValue({
+        ...(useApp as jest.Mock)(),
+        buyerVendors: mockBuyerVendors.map((v) =>
+          v.id === 'v-1' ? { ...v, city: 'Hadapsar', state: 'Maharashtra', pincode: '411038' } : v
+        ),
+      });
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+
+      expect(await screen.findByText(UI_STRINGS.pincodeVerification.unverifiedFillManually)).toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.pincodeVerification.unverified)).not.toBeInTheDocument();
+      expect(screen.getByDisplayValue('Hadapsar')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Maharashtra')).toBeInTheDocument();
+    });
+
+    it('stops the PIN check spinner when the lookup fails unexpectedly, and fills nothing', async () => {
+      (validatePincode as jest.Mock).mockRejectedValueOnce(new Error('lookup crashed'));
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '560034' } });
+
+      expect(await screen.findByText(UI_STRINGS.pincodeVerification.checking)).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText(UI_STRINGS.pincodeVerification.checking)).not.toBeInTheDocument());
+      expect(screen.getByLabelText(/City/i)).toHaveValue('');
+      expect(screen.getByLabelText(/State/i)).toHaveValue('');
+    });
+
     it('closes the Add Vendor modal via the header close button', () => {
       render(
         <VendorSummary

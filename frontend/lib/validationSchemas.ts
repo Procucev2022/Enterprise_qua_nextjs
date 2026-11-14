@@ -608,18 +608,28 @@ export async function validatePincode(
 /**
  * City and state from the postal office records returned for a PIN code.
  *
- * Returns '' when no office record is available, so the caller leaves the location blank.
- * The location is never guessed from the PIN digits. An office whose Pincode matches the
- * requested PIN is preferred over the first record.
+ * Both fields are '' when no office record is available, so the caller leaves them blank. They are never guessed from
+ * the PIN digits. An office whose Pincode matches the requested PIN is preferred over the first record.
+ */
+export function resolveCityAndStateFromPostalResult(
+  pincode: string,
+  offices?: PostOfficeDetail[]
+): { city: string; state: string } {
+  if (!offices || offices.length === 0) return { city: '', state: '' };
+  const office = offices.find((candidate) => candidate.Pincode === pincode) ?? offices[0];
+  const city = office.District || office.Division || office.Circle || office.Name || '';
+  const state = office.State || '';
+  return { city, state };
+}
+
+/**
+ * The city and state from resolveCityAndStateFromPostalResult, joined as "City, State" for a single location field.
  */
 export function resolveLocationFromPostalResult(
   pincode: string,
   offices?: PostOfficeDetail[]
 ): string {
-  if (!offices || offices.length === 0) return '';
-  const office = offices.find((candidate) => candidate.Pincode === pincode) ?? offices[0];
-  const city = office.District || office.Division || office.Circle || office.Name || '';
-  const state = office.State || '';
+  const { city, state } = resolveCityAndStateFromPostalResult(pincode, offices);
   return [city, state].filter(Boolean).join(', ');
 }
 

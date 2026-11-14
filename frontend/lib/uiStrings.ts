@@ -3046,6 +3046,9 @@ sellerDirectory: {
   /** PIN code checks against the postal records service. */
   pincodeVerification: {
     unverified: 'Could not verify this PIN code with the postal records service. Check your connection and try again.',
+    unverifiedFillManually:
+      'Could not verify this PIN code, so City and State were not filled in. Enter them by hand, or check your connection and try again.',
+    checking: 'Checking',
     formatValid: 'PIN code format is valid. It has not been checked against postal records.',
     notFound: 'PIN Code is not found or invalid in postal records.',
     required: 'PIN code is required.',

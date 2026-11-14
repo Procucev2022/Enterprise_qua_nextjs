@@ -14,6 +14,7 @@ import {
   isDummyPan,
   usablePan,
   FormSchema,
+  resolveCityAndStateFromPostalResult,
   resolveLocationFromPostalResult,
   PASSWORD_MIN_LENGTH,
   PROCUCEV_EMAIL_PATTERN,
@@ -36,6 +37,7 @@ import {
   findMissingPoDumpFields,
   findMissingPoDumpHeaders,
 } from '../../lib/validationSchemas';
+import type { PostOfficeDetail } from '../../lib/validationSchemas';
 import { UI_STRINGS } from '../../lib/uiStrings';
 
 describe('Frontend validationSchemas Unit Tests', () => {
@@ -872,5 +874,44 @@ describe('isDummyPan and usablePan', () => {
     expect(usablePan(null)).toBeNull();
     expect(usablePan(undefined)).toBeNull();
     expect(usablePan(42)).toBeNull();
+  });
+});
+
+describe('resolveCityAndStateFromPostalResult', () => {
+  const offices = [
+    { Name: 'New Delhi GPO', Pincode: '110001', District: 'New Delhi', State: 'Delhi' },
+    { Name: 'Koramangala', Pincode: '560034', District: 'Bangalore Urban', State: 'Karnataka' },
+  ] as PostOfficeDetail[];
+
+  test('returns blank city and state when no office record is available, without guessing from the PIN', () => {
+    expect(resolveCityAndStateFromPostalResult('560034', [])).toEqual({ city: '', state: '' });
+    expect(resolveCityAndStateFromPostalResult('560034')).toEqual({ city: '', state: '' });
+  });
+
+  test('takes the office whose Pincode matches the requested PIN, and falls back to the first office', () => {
+    expect(resolveCityAndStateFromPostalResult('560034', offices)).toEqual({ city: 'Bangalore Urban', state: 'Karnataka' });
+    expect(resolveCityAndStateFromPostalResult('999999', offices)).toEqual({ city: 'New Delhi', state: 'Delhi' });
+  });
+
+  test('takes the city from District, then Division, then Circle, then Name', () => {
+    const district = [{ Name: 'PO', Division: 'Div', Circle: 'Cir', District: 'Dist', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const division = [{ Name: 'PO', Division: 'Div', Circle: 'Cir', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const circle = [{ Name: 'PO', Circle: 'Cir', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const name = [{ Name: 'PO', State: 'Maharashtra' }] as PostOfficeDetail[];
+
+    expect(resolveCityAndStateFromPostalResult('400701', district)).toEqual({ city: 'Dist', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', division)).toEqual({ city: 'Div', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', circle)).toEqual({ city: 'Cir', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', name)).toEqual({ city: 'PO', state: 'Maharashtra' });
+  });
+
+  test('leaves the state blank when the office record has none', () => {
+    const noState = [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[];
+    expect(resolveCityAndStateFromPostalResult('400701', noState)).toEqual({ city: 'Dist', state: '' });
+  });
+
+  test('resolveLocationFromPostalResult joins the same city and state', () => {
+    expect(resolveLocationFromPostalResult('560034', offices)).toBe('Bangalore Urban, Karnataka');
+    expect(resolveLocationFromPostalResult('999999', [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[])).toBe('Dist');
   });
 });
