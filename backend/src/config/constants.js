@@ -1425,6 +1425,7 @@ const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = Object.freeze([
   'gmtrfq@procucev.com',
   'quateam@procucev.com',
   'anshul.goel@procucev.com',
+  'veerababu.v@procucev.com',
 ]);
 
 const RFQ_MINOR_SHORTFALL_ALERT = Object.freeze({

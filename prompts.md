@@ -5835,3 +5835,13 @@ change this +24 and +48 to give calender and timer how many days buyer want can 
 sir please check this closing dateline timestamp and create rfq tiime stamp should match created at 07:49 am closing 5:30 am default 48 hours
 ```
 ---
+### Prompt 212
+**Timestamp**: 2026-11-14T11:22:53+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. Two screenshots were attached: the ingestion wizard line items for Electrical_RFQ.pdf and the RFQ details supplier panel showing 25 assigned and invited suppliers.)
+```text
+Seems like RFQ invitation process is not working properly. It didn't sent the RFQ invitation to extracted minor category. Please check & debug once, what could be the issue.
+
+Ideal RFQ invitation flow:
+
+"invite 25 vendors for submitting quotations per each unique minor category. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at gmtrfq@procucev.com,quateam@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com"
+```
+---

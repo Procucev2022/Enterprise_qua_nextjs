@@ -15,7 +15,7 @@ const MINOR = 'Bearings & Accessories';
 const OTHER_MINOR = 'Pumps & Accessories';
 const TARGET = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
 const PER_MINOR_LOOKUP = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY * RFQ_MINOR_INVITE_LOOKUP.OVERFETCH_FACTOR;
-const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'quateam@procucev.com', 'anshul.goel@procucev.com'];
+const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'quateam@procucev.com', 'anshul.goel@procucev.com', 'veerababu.v@procucev.com'];
 
 /** A Procucev network vendor. A vendor with no minors is a major-only vendor. */
 function networkVendor(id, { minors = [], major = MAJOR, rating = 3, pincode = null } = {}) {
@@ -516,5 +516,75 @@ describe('database top-up for a minor-level RFQ', () => {
     const created = createQuietRfq({ sourcingMode: 'mode_1', id: 'rfq-v1-fill', rfqNumber: 'RFQ-V1-FILL' }, BUYER_7);
 
     expect(idsOf(created.assignedVendors)).toEqual(['r-major']);
+  });
+});
+
+describe('planMinorInvites: each minor is filled on its own', () => {
+  beforeEach(() => {
+    storeService.vendors = [];
+  });
+
+  test('a minor with no vendor of its own is topped up from the parent major after another minor filled its slate', () => {
+    const rfq = minorRfq({
+      extractedEntities: [
+        { minorCategory: MINOR, quantity: 1, unit: 'Nos' },
+        { minorCategory: OTHER_MINOR, quantity: 1, unit: 'Nos' },
+      ],
+    });
+    // 21 vendors carry MINOR, nothing carries OTHER_MINOR, and the parent major holds 50 vendors in all.
+    const plan = storeService.planMinorInvites(rfq, {
+      candidatePool: [...minorVendors(21, 'a'), ...majorOnlyVendors(50, 'x')],
+      limit: 25,
+    });
+
+    expect(plan.shortfalls).toEqual([
+      { minorCategory: MINOR, majorCategory: MAJOR, minorMatched: 21, majorFilled: 4, target: 25 },
+      { minorCategory: OTHER_MINOR, majorCategory: MAJOR, minorMatched: 0, majorFilled: 25, target: 25 },
+    ]);
+    // OTHER_MINOR's own top-up reaches parent-major vendors that MINOR's set did not take.
+    expect(idsOf(plan.selected)).toEqual(expect.arrayContaining(['x4', 'x5']));
+  });
+});
+
+describe('parent majors of a minor', () => {
+  test('the default is the first major that lists the minor, and allMajors adds every other one, such as CAPEX for Panels', () => {
+    const first = storeService._majorCategoriesForMinors(['Panels']);
+
+    expect(first).toEqual(expect.arrayContaining(['engineering spares - electrical']));
+    expect(first).not.toContain('capex - equipment & machinery');
+    expect(storeService._majorCategoriesForMinors(['Panels'], { allMajors: true })).toEqual(
+      expect.arrayContaining(['engineering spares - electrical', 'capex - equipment & machinery'])
+    );
+  });
+});
+
+describe('V0 minor lookup covers every major that lists the minor', () => {
+  let minorSpy;
+
+  beforeEach(() => {
+    storeService.vendors = [];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(storeService, '_persistRFQ').mockImplementation(() => {});
+    jest.spyOn(storeService, 'updateRFQDurably').mockResolvedValue(null);
+    jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
+    minorSpy = jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a Panels RFQ looks the minor up under the electrical major and the CAPEX major, where the taxonomy also lists it', async () => {
+    const created = createQuietRfq({
+      sourcingMode: 'mode_0',
+      id: 'rfq-panels',
+      rfqNumber: 'RFQ-PANELS',
+      extractedEntities: [{ minorCategory: 'Panels', majorCategory: 'Engineering Spares - Electrical', quantity: 1, unit: 'Nos' }],
+    });
+
+    await storeService.augmentV0AssignmentsFromDB(created);
+
+    const [, majors] = minorSpy.mock.calls[0];
+    expect(majors).toEqual(expect.arrayContaining(['engineering spares - electrical', 'capex - equipment & machinery']));
   });
 });

@@ -8,7 +8,7 @@ const { RFQ_MINOR_SHORTFALL_ALERT } = require('../src/config/constants');
 
 const MAJOR = 'Engineering Spares - Mechanical';
 const MINOR = 'Bearings & Accessories';
-const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'quateam@procucev.com', 'anshul.goel@procucev.com'];
+const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'quateam@procucev.com', 'anshul.goel@procucev.com', 'veerababu.v@procucev.com'];
 const SHORTFALL = { minorCategory: MINOR, majorCategory: MAJOR, minorMatched: 21, majorFilled: 4, target: 25 };
 const RECIPIENT_ENV = 'RFQ_MINOR_SHORTFALL_ALERT_EMAILS';
 

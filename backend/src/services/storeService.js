@@ -107,6 +107,8 @@ function rfqClosingMs(rfq) {
 const MAX_HYDRATION_VENDORS = 500;
 
 const MINOR_TO_MAJOR_MAP = new Map();
+// Every major that lists a minor, not only the first one. Panels sits under two majors in the taxonomy.
+const MINOR_TO_MAJORS_MAP = new Map();
 const MAJOR_TO_MINORS_MAP = new Map();
 
 function buildTaxonomyMaps(taxonomy) {
@@ -124,6 +126,8 @@ function buildTaxonomyMaps(taxonomy) {
       const mTrimmed = String(minor).trim();
       const mKey = mTrimmed.toLowerCase();
       minorSet.add(mKey);
+      if (!MINOR_TO_MAJORS_MAP.has(mKey)) MINOR_TO_MAJORS_MAP.set(mKey, new Set());
+      MINOR_TO_MAJORS_MAP.get(mKey).add(majorCanonical);
       if (!MINOR_TO_MAJOR_MAP.has(mKey)) {
         MINOR_TO_MAJOR_MAP.set(mKey, majorCanonical);
       }
@@ -6730,17 +6734,23 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    * spellings of those majors. The V0 lookup filters by these majors.
    *
    * @param {string[]} minors
+   * @param {{ allMajors?: boolean }} [options] With allMajors, every major that lists a minor counts,
+   *   not only its first one. The minor lookup uses that, so a Panels vendor filed under CAPEX is found.
    * @returns {string[]} Lower-case major names.
    */
-  _majorCategoriesForMinors(minors) {
+  _majorCategoriesForMinors(minors, { allMajors = false } = {}) {
     const majors = new Set();
     for (const minor of minors) {
-      const parent = MINOR_TO_MAJOR_MAP.get(taxonomyKeyOf(minor));
-      if (!parent) continue;
-      const parentKey = parent.toLowerCase();
-      majors.add(parentKey);
-      for (const [alias, canonical] of Object.entries(MAJOR_CATEGORY_ALIASES || {})) {
-        if (String(canonical).trim().toLowerCase() === parentKey) majors.add(alias.toLowerCase());
+      const key = taxonomyKeyOf(minor);
+      const parents = allMajors
+        ? Array.from(MINOR_TO_MAJORS_MAP.get(key) || [])
+        : [MINOR_TO_MAJOR_MAP.get(key)].filter(Boolean);
+      for (const parent of parents) {
+        const parentKey = parent.toLowerCase();
+        majors.add(parentKey);
+        for (const [alias, canonical] of Object.entries(MAJOR_CATEGORY_ALIASES || {})) {
+          if (String(canonical).trim().toLowerCase() === parentKey) majors.add(alias.toLowerCase());
+        }
       }
     }
     return Array.from(majors);
@@ -7040,8 +7050,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    *
    * Vendors already on the RFQ (`seedVendors`) stay selected. They count toward every minor they
    * carry and toward the top-up of their parent major, so a later pass adds only what is missing.
-   * A vendor picked for one minor also counts toward the top-up of another minor under the same
-   * parent major. A vendor that serves several minors is listed once. An RFQ without minor
+   * Each minor is planned on its own: a vendor picked for one minor does not count toward another
+   * minor's target, so one parent-major vendor can appear in several minors' sets. A vendor that serves
+   * several minors is listed once. An RFQ without minor
    * categories has no plan: the result is the seeds with no shortfalls.
    *
    * @param {Object} rfq
@@ -7057,19 +7068,19 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const minors = this._rfqMinorCategories(rfq);
     // Each entry keeps the vendor as given and a view of it for category checks. A seed is merged
     // with its in-memory record, since its stored assignment entry carries only a few fields.
-    const picked = new Map();
-    const unpicked = new Map();
+    const seeds = new Map();
+    const pool = new Map();
 
     for (const seed of Array.isArray(seedVendors) ? seedVendors : []) {
       const key = vendorKey(seed);
-      if (key && !picked.has(key)) {
+      if (key && !seeds.has(key)) {
         const full = seed.id ? this.getVendorById(seed.id, 'all') : null;
-        picked.set(key, { vendor: seed, view: full ? { ...seed, ...full } : seed });
+        seeds.set(key, { vendor: seed, view: full ? { ...seed, ...full } : seed });
       }
     }
     for (const candidate of Array.isArray(candidatePool) ? candidatePool : []) {
       const key = vendorKey(candidate);
-      if (key && !picked.has(key) && !unpicked.has(key)) unpicked.set(key, { vendor: candidate, view: candidate });
+      if (key && !seeds.has(key) && !pool.has(key)) pool.set(key, { vendor: candidate, view: candidate });
     }
 
     const rank = (a, b) => {
@@ -7080,34 +7091,35 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       }
       return (Number(b.view.rating) || 0) - (Number(a.view.rating) || 0);
     };
-    const pick = (entry) => {
-      const key = vendorKey(entry.vendor);
-      unpicked.delete(key);
-      picked.set(key, entry);
-    };
 
     const shortfalls = [];
+    // Each minor gets its own invite set. It starts from the seeds and is filled from the pool without
+    // counting the vendors chosen for another minor, so a minor is never left short because an earlier
+    // minor already reached the target. The result is the union of the sets, with each vendor listed once.
+    const selected = new Map(seeds);
     for (const minor of minors) {
       const majorKeys = new Set(this._majorCategoriesForMinors([minor]));
       const coversMinor = (entry) => this.vendorCoversMinorCategory(entry.view, minor);
       const inParentMajor = (entry) => majorKeys.size > 0 && vendorMajorKeys(entry.view).some((key) => majorKeys.has(key));
+      const set = new Map(seeds);
+      const isAvailable = (entry) => !set.has(vendorKey(entry.vendor));
 
-      let minorMatched = Array.from(picked.values()).filter(coversMinor).length;
+      let minorMatched = Array.from(set.values()).filter(coversMinor).length;
       if (minorMatched < target) {
-        const minorCandidates = Array.from(unpicked.values()).filter(coversMinor).sort(rank);
+        const minorCandidates = Array.from(pool.values()).filter((entry) => isAvailable(entry) && coversMinor(entry)).sort(rank);
         for (const entry of minorCandidates) {
           if (minorMatched >= target) break;
-          pick(entry);
+          set.set(vendorKey(entry.vendor), entry);
           minorMatched += 1;
         }
       }
 
       if (minorMatched < target) {
-        let inSet = Array.from(picked.values()).filter((entry) => coversMinor(entry) || inParentMajor(entry)).length;
-        const majorCandidates = Array.from(unpicked.values()).filter(inParentMajor).sort(rank);
+        let inSet = Array.from(set.values()).filter((entry) => coversMinor(entry) || inParentMajor(entry)).length;
+        const majorCandidates = Array.from(pool.values()).filter((entry) => isAvailable(entry) && inParentMajor(entry)).sort(rank);
         for (const entry of majorCandidates) {
           if (inSet >= target) break;
-          pick(entry);
+          set.set(vendorKey(entry.vendor), entry);
           inSet += 1;
         }
         shortfalls.push({
@@ -7118,9 +7130,13 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
           target,
         });
       }
+
+      for (const [key, entry] of set) {
+        if (!selected.has(key)) selected.set(key, entry);
+      }
     }
 
-    return { selected: Array.from(picked.values(), (entry) => entry.vendor), shortfalls };
+    return { selected: Array.from(selected.values(), (entry) => entry.vendor), shortfalls };
   }
 
   /**
@@ -7414,7 +7430,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
         try {
           const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => domainQueries.getPublicVendorsByMinorCategoryFromDB(
             minorSearchTerms(subset),
-            this._majorCategoriesForMinors(subset),
+            this._majorCategoriesForMinors(subset, { allMajors: true }),
             rowLimit
           ));
           const majorRows = await this._fetchMajorFallbackFromDB(minors);

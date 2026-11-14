@@ -1098,7 +1098,9 @@ async function createRFQ(req, res, next) {
       // count, so the success modal, buyer panel and CM tabs all agree (and the
       // inflated directory tally is never shown for V0).
       try {
-        finalRFQ = await storeService.augmentV0AssignmentsFromDB(created);
+        // notifyShortfall: a minor category with fewer network vendors than the target is reported to the
+        // Procucev team from this path too, not only from the email gateway and the other modes.
+        finalRFQ = await storeService.augmentV0AssignmentsFromDB(created, { notifyShortfall: true });
       } catch (err) {
         logger.warn('Could not apply DB-backed V0 vendor assignment', { error: err.message }, 'RFQ_CONTROLLER');
       }
