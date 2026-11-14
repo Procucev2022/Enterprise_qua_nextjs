@@ -104,17 +104,17 @@ export default function OpportunityFeed({
     // Helper to determine if a quote was submitted by this vendor
     const isMyQuote = (q: any) => {
       if (!q) return false;
-      const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
-      const qEmail = (q.vendorEmail || '').toLowerCase().trim();
-      if (qEmail && sessionEmail && qEmail === sessionEmail) return true;
+      const sessionEmail = (currentUserSession?.email ?? '').toLowerCase().trim();
+      const qEmail = (q.vendorEmail ?? '').toLowerCase().trim();
+      if (sessionEmail && qEmail === sessionEmail) return true;
 
-      const myVendorId = String(currentUserSession?.orgId || (currentUserSession as any)?.vendorId || '').trim().toLowerCase();
-      const qVendorId = String(q.vendorId || '').trim().toLowerCase();
-      if (myVendorId && qVendorId && qVendorId === myVendorId) return true;
+      const myVendorId = String(currentUserSession?.orgId ?? (currentUserSession as any)?.vendorId ?? '').trim().toLowerCase();
+      const qVendorId = String(q.vendorId ?? '').trim().toLowerCase();
+      if (myVendorId && qVendorId === myVendorId) return true;
 
-      const myVendorName = (currentUserSession?.orgName || currentUserSession?.name || '').toLowerCase().trim();
-      const qName = (q.vendorName || '').toLowerCase().trim();
-      if (qName && myVendorName && qName === myVendorName) return true;
+      const myVendorName = (currentUserSession?.orgName ?? currentUserSession?.name ?? '').toLowerCase().trim();
+      const qName = (q.vendorName ?? '').toLowerCase().trim();
+      if (myVendorName && qName === myVendorName) return true;
 
       return !sessionEmail && !myVendorId && !myVendorName;
     };
@@ -303,7 +303,11 @@ export default function OpportunityFeed({
   const [selectedMinorCategoryDirect, setSelectedMinorCategoryDirect] = React.useState('all');
   const [rfqSearchTermDirect, setRfqSearchTermDirect] = React.useState('');
   const [filterCatalogueMatchesDirect, setFilterCatalogueMatchesDirect] = React.useState(false);
-  const toggleCatalogueMatchesDirect = () => toggleCatalogueMatches();
+  const toggleCatalogueMatchesDirect = () => {
+    setFilterCatalogueMatchesDirect((prev) => !prev);
+    setFilterCatalogueMatches((prev) => !prev);
+    setCurrentPage(1);
+  };
   const handleBuyerChangeDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedBuyerDirect(e.target.value);
   const handleMajorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedMajorCategoryDirect(e.target.value);
@@ -312,13 +316,21 @@ export default function OpportunityFeed({
     setCurrentPage(1);
   };
   const handleMinorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => handleMinorCategoryChange(e);
-  const handleSearchDirect = (e: React.ChangeEvent<HTMLInputElement>) => handleSearchChange(e);
+  const handleSearchDirect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setRfqSearchTermDirect(e.target.value);
+    setRfqSearchTerm(e.target.value);
+    setCurrentPage(1);
+  };
 
   const [selectedMajorCategoryNet, setSelectedMajorCategoryNet] = React.useState('all');
   const [selectedMinorCategoryNet, setSelectedMinorCategoryNet] = React.useState('all');
   const [rfqSearchTermNet, setRfqSearchTermNet] = React.useState('');
   const [filterCatalogueMatchesNet, setFilterCatalogueMatchesNet] = React.useState(false);
-  const toggleCatalogueMatchesNet = () => toggleCatalogueMatches();
+  const toggleCatalogueMatchesNet = () => {
+    setFilterCatalogueMatchesNet((prev) => !prev);
+    setFilterCatalogueMatches((prev) => !prev);
+    setCurrentPageNet(1);
+  };
   const handleMajorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedMajorCategoryNet(e.target.value);
     setSelectedMinorCategoryNet('all');
@@ -331,7 +343,8 @@ export default function OpportunityFeed({
     setCurrentPageNet(1);
   };
   const handleSearchNet = (e: React.ChangeEvent<HTMLInputElement>) => {
-    handleSearchChange(e);
+    setRfqSearchTermNet(e.target.value);
+    setRfqSearchTerm(e.target.value);
     setCurrentPageNet(1);
   };
 
@@ -364,17 +377,17 @@ export default function OpportunityFeed({
 
   // The RFQ's own categories. An empty string means the buyer never classified it.
   const getOpportunityCategories = (opp: VendorOpportunity) => ({
-    major: opp.majorCategory || '',
-    minor: opp.minorCategory || '',
+    major: opp.majorCategory ?? '',
+    minor: opp.minorCategory ?? '',
   });
 
   // Filter options come from the categories the feed actually carries, or all 310 master minor categories.
-  const feedMajorCategories = distinctSorted(vendorOpportunities.map((opp) => opp.majorCategory || ''));
+  const feedMajorCategories = distinctSorted(vendorOpportunities.map((opp) => opp.majorCategory ?? ''));
   const feedMinorCategoriesFor = (major: string) => {
     return distinctSorted(
       vendorOpportunities
-        .filter((opp) => (opp.majorCategory || '') === major)
-        .map((opp) => opp.minorCategory || '')
+        .filter((opp) => (opp.majorCategory ?? '') === major)
+        .map((opp) => opp.minorCategory ?? '')
     );
   };
 
@@ -388,12 +401,12 @@ export default function OpportunityFeed({
     const assignedList = opp.assignedVendors || rfqRecord?.assignedVendors;
     if (assignedList && assignedList.length > 0) {
       const isAssigned = assignedList.some((v) => {
-        const vEmail = (v.email || '').toLowerCase().trim();
-        if (vEmail && sessionEmail && vEmail === sessionEmail) return true;
-        const vId = String(v.id || '').trim();
-        if (vId && myVendorId && vId === myVendorId) return true;
-        const vName = (v.name || '').toLowerCase().trim();
-        return Boolean(vName && myVendorName && vName === myVendorName.toLowerCase().trim());
+        const vEmail = (v.email ?? '').toLowerCase().trim();
+        if (sessionEmail && vEmail === sessionEmail) return true;
+        const vId = String(v.id ?? '').trim();
+        if (myVendorId && vId === myVendorId) return true;
+        const vName = (v.name ?? '').toLowerCase().trim();
+        return Boolean(myVendorName && vName === myVendorName.toLowerCase().trim());
       });
       if (isAssigned) return true;
     }
@@ -552,7 +565,7 @@ export default function OpportunityFeed({
   const matchOpportunityMinorCat = (opp: VendorOpportunity, selMinor: string) => {
     if (selMinor === 'all') return true;
     const s = selMinor.toLowerCase().trim();
-    const text = `${opp.minorCategory || ''} ${opp.majorCategory || ''} ${(opp.lineItems || []).map((li) => li.description).join(' ')}`.toLowerCase();
+    const text = `${opp.minorCategory ?? ''} ${opp.majorCategory ?? ''} ${(opp.lineItems ?? []).map((li) => li.description).join(' ')}`.toLowerCase();
     return text.includes(s);
   };
 
@@ -565,8 +578,10 @@ export default function OpportunityFeed({
     if (selectedMajorCategoryDirect !== 'all' && cats.major !== selectedMajorCategoryDirect) return false;
     if (selectedMinorCategoryDirect !== 'all' && cats.minor !== selectedMinorCategoryDirect) return false;
     if (!matchOpportunityMinorCat(opp, selectedMinorCategory)) return false;
-    if (!matchOpportunitySearch(opp, rfqSearchTerm || rfqSearchTermDirect, cats)) return false;
-    if ((filterCatalogueMatches || filterCatalogueMatchesDirect) && catalogueMatchesFor(opp).length === 0) return false;
+    const directSearch = rfqSearchTermDirect || rfqSearchTerm;
+    if (!matchOpportunitySearch(opp, directSearch, cats)) return false;
+    const directCatFilter = filterCatalogueMatchesDirect || filterCatalogueMatches;
+    if (directCatFilter && catalogueMatchesFor(opp).length === 0) return false;
     return matchOpportunityStatus(opp, statusFilter);
   });
 
@@ -578,8 +593,10 @@ export default function OpportunityFeed({
     if (selectedMajorCategoryNet !== 'all' && cats.major !== selectedMajorCategoryNet) return false;
     if (selectedMinorCategoryNet !== 'all' && cats.minor !== selectedMinorCategoryNet) return false;
     if (!matchOpportunityMinorCat(opp, selectedMinorCategory)) return false;
-    if (!matchOpportunitySearch(opp, rfqSearchTerm || rfqSearchTermNet, cats)) return false;
-    if ((filterCatalogueMatches || filterCatalogueMatchesNet) && catalogueMatchesFor(opp).length === 0) return false;
+    const netSearch = rfqSearchTermNet || rfqSearchTerm;
+    if (!matchOpportunitySearch(opp, netSearch, cats)) return false;
+    const netCatFilter = filterCatalogueMatchesNet || filterCatalogueMatches;
+    if (netCatFilter && catalogueMatchesFor(opp).length === 0) return false;
     return matchOpportunityStatus(opp, statusFilter);
   });
 
@@ -596,8 +613,8 @@ export default function OpportunityFeed({
       const aDirect = isOwnBuyerRfq(a) ? 1 : 0;
       const bDirect = isOwnBuyerRfq(b) ? 1 : 0;
       if (bDirect !== aDirect) return bDirect - aDirect;
-      const aTime = new Date(a.deadline || 0).getTime();
-      const bTime = new Date(b.deadline || 0).getTime();
+      const aTime = a.deadline ? new Date(a.deadline).getTime() : 0;
+      const bTime = b.deadline ? new Date(b.deadline).getTime() : 0;
       return bTime - aTime;
     });
   }, [eligibleDirectOpportunities, isOwnBuyerRfq]);
@@ -754,8 +771,8 @@ export default function OpportunityFeed({
     const catalogueMatches = catalogueMatchesFor(opp);
     const hasCatalogueMatch = catalogueMatches.length > 0;
     const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
-    const buyerCompanyName = opp.buyer || (rfqRecord as any)?.buyerAccountName || (isDirect ? 'Invited Buyer' : 'Procucev Network');
-    const buyerCompanyLogo = isDirect ? ((rfqRecord as any)?.buyerLogo || null) : null;
+    const buyerCompanyName = opp.buyer ?? (rfqRecord as any)?.buyerAccountName ?? (isDirect ? 'Invited Buyer' : 'Procucev Network');
+    const buyerCompanyLogo = isDirect ? ((rfqRecord as any)?.buyerLogo ?? null) : null;
     const isSubmitted = submittedBids.some((b) => b.rfqNumber === opp.rfqNumber);
     const currP = isDirect ? currentPage : currentPageNet;
     const pSize = isDirect ? pageSize : pageSizeNet;

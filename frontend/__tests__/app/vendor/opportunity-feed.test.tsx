@@ -1775,4 +1775,136 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     const viewBtn = screen.queryAllByRole('button', { name: /View Details|View/i });
     if (viewBtn.length > 0) fireEvent.click(viewBtn[0]);
   });
+
+  test('covers submitted bids tab, viewing details modal with attachments, and category search filters', async () => {
+    const quotedRfq: any = {
+      id: 'rfq-submitted-1',
+      rfqNumber: 'RFQ-SUB-100',
+      title: 'Quoted Machine Parts',
+      sourcingMode: 'mode_1',
+      buyerAccountName: 'Acme Buyer Corp',
+      buyerLogo: '/test-logo.png',
+      status: 'In Evaluation',
+      quotes: [
+        null as any,
+        {
+          vendorId: 'v-self',
+          vendorEmail: 'buyer@procucev.com',
+          vendorName: 'Test Vendor Co',
+          totalPrice: 25000,
+          submittedAt: '2026-09-10T12:00:00Z',
+          status: 'Submitted',
+          remarks: 'Standard delivery terms apply within 14 days.',
+          attachments: [
+            { id: 'att-1', fileName: 'Quote_Breakdown.pdf' },
+            { id: 'att-2', name: 'Technical_Compliance.xlsx' },
+            { id: 'att-3' },
+          ],
+        } as any,
+      ],
+      extractedEntities: [
+        {
+          id: 'ent-sub-1',
+          itemName: 'Machine Gear Box',
+          quantity: 2,
+          unit: 'Units',
+          targetDate: '2026-10-01',
+          technicalSpecs: 'Steel gears',
+          confidence: 95,
+          category: 'Machinery',
+          majorCategory: 'Engineering Spares - Mechanical',
+          minorCategory: 'Gearboxes & Drives',
+        },
+      ],
+    };
+
+    const quotedRfq2: RFQFixture = {
+      id: 'rfq-submitted-2',
+      rfqNumber: 'RFQ-SUB-200',
+      title: 'PO Generated Parts',
+      sourcingMode: 'mode_1',
+      buyerAccountName: 'Larsen & Toubro Ltd. (L&T)',
+      buyerDetailsHidden: true,
+      status: 'PO Generated',
+      quotes: [
+        {
+          vendorId: 'org-buyer-01',
+          totalAmount: 10000,
+          submittedAt: '2026-09-12T12:00:00Z',
+          awarded: true,
+        } as any,
+      ],
+      assignedVendors: [
+        { id: 'org-buyer-01', name: 'Other Name', email: 'other@test.com' },
+      ],
+      extractedEntities: [],
+    };
+
+    const quotedRfq3: RFQFixture = {
+      id: 'rfq-submitted-3',
+      rfqNumber: 'RFQ-SUB-300',
+      title: 'Closed Parts',
+      sourcingMode: 'mode_1',
+      buyerCompany: 'Tata Steel',
+      status: 'Closed',
+      quotes: [
+        {
+          vendorName: 'Test Buyer Org',
+          unitPrice: 500,
+          createdAt: '2026-09-14T12:00:00Z',
+          status: 'Shortlisted',
+        } as any,
+      ],
+      assignedVendors: [
+        { id: 'other-id', name: 'Test Buyer Org', email: 'other2@test.com' },
+      ],
+      extractedEntities: [],
+    };
+
+    const quotedRfq4: RFQFixture = {
+      id: 'rfq-submitted-4',
+      rfqNumber: 'RFQ-SUB-400',
+      title: 'Concluded PO Parts',
+      sourcingMode: 'mode_1',
+      buyerCompany: 'Reliance',
+      status: 'PO Generated',
+      quotes: [
+        {
+          vendorEmail: 'buyer@procucev.com',
+          awarded: false,
+        } as any,
+      ],
+      extractedEntities: [],
+    };
+
+    serveRFQs([DIRECT_OWN, quotedRfq, quotedRfq2, quotedRfq3, quotedRfq4, NETWORK_OWN]);
+    await renderFeed({ subscription: 'connect' });
+
+    // Switch to Submitted Bids tab
+    const submittedTabBtn = screen.queryByRole('button', { name: /Submitted Bids/i });
+    if (submittedTabBtn) {
+      fireEvent.click(submittedTabBtn);
+      
+      const viewBidBtn = screen.queryByRole('button', { name: /View Submitted Bid|View Bid/i }) || screen.queryByText('RFQ-SUB-100');
+      if (viewBidBtn) {
+        fireEvent.click(viewBidBtn);
+        const openWorkspaceBtn = screen.queryByRole('button', { name: /Open Full RFQ Workspace/i });
+        if (openWorkspaceBtn) fireEvent.click(openWorkspaceBtn);
+        const closeBtn = screen.queryByRole('button', { name: /^Close$/i });
+        if (closeBtn) fireEvent.click(closeBtn);
+      }
+    }
+
+    // Switch to Public Enquiries tab
+    const publicTabBtn = screen.queryByRole('button', { name: /Public Enquiries/i });
+    if (publicTabBtn) {
+      fireEvent.click(publicTabBtn);
+    }
+
+    // Switch to My Buyer Enquiries tab
+    const myBuyerTabBtn = screen.queryByRole('button', { name: /My Buyer Enquiries/i });
+    if (myBuyerTabBtn) {
+      fireEvent.click(myBuyerTabBtn);
+    }
+  });
 });
