@@ -4138,7 +4138,7 @@ class StoreService {
     return candidate;
   }
 
-  createRFQ(rfqData, requestingBuyerAccount = null, { deferPersistence = false, deferSideEffects = false } = {}) {
+  createRFQ(rfqData, requestingBuyerAccount = null, { deferPersistence = false, deferSideEffects = false, deferVendorPlan = false } = {}) {
     const rfqTitle = String(rfqData.title ?? '').trim();
     if (!rfqTitle) {
       const titleError = new Error(RFQ_CREATION_ERRORS.TITLE_REQUIRED);
@@ -4487,7 +4487,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
 
       const signals = this._rfqCategorySignals(newRFQ);
       const categories = this._rfqDistinctCategories(newRFQ);
-      if (signals.length > 0 && categories.length > 0) {
+      if (deferVendorPlan) {
+        // The database plan assigns this RFQ's vendors right after creation. The Procucev filter above still applies.
+      } else if (signals.length > 0 && categories.length > 0) {
         const matchesRfq = this._rfqVendorMatcher(newRFQ);
         for (const v of this.vendors) {
           if (this.isProcucevVendor(v)) {
@@ -4591,7 +4593,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     // meant to stay strictly private). mode_1 now only ever gets whatever
     // the client-supplied assignedVendors already contains (the buyer's own
     // roster, category-filtered on the frontend).
-    if (!newRFQ.needsCategoryManagerAssignment && !newRFQ.categoryNotAvailable && (newRFQ.sourcingMode === 'mode_2' || newRFQ.sourcingMode === 'v2' || newRFQ.sourcingMode === 'version_2' || newRFQ.source === 'email_gateway')) {
+    if (!deferVendorPlan && !newRFQ.needsCategoryManagerAssignment && !newRFQ.categoryNotAvailable && (newRFQ.sourcingMode === 'mode_2' || newRFQ.sourcingMode === 'v2' || newRFQ.sourcingMode === 'version_2' || newRFQ.source === 'email_gateway')) {
       const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY;
       const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
       const categories = this._rfqDistinctCategories(newRFQ);
@@ -4660,6 +4662,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     // Dynamically retrieve category-matched Procucev verified vendors for Version 3 RFQs.
     let mode3ProcucevCount = 0;
     if (
+      !deferVendorPlan &&
       !newRFQ.needsCategoryManagerAssignment &&
       !newRFQ.categoryNotAvailable &&
       (newRFQ.sourcingMode === 'mode_3' ||
@@ -4730,10 +4733,13 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     }
 
     this._reconcileRFQFollowUpStats(newRFQ);
+    // A deferred RFQ is invited by its database plan, which runs right after creation, so creation queues
+    // only the vendors the buyer named. The in-memory pool is a capped slice of the directory, and
+    // selecting from it here would queue invitations for whichever minors that slice happens to cover.
     const initialInviteCandidates = newRFQ.status === 'Draft'
       ? []
       : [
-        ...this.selectVendorsForRFQEmail(newRFQ),
+        ...(deferVendorPlan ? [] : this.selectVendorsForRFQEmail(newRFQ)),
         ...(Array.isArray(newRFQ.assignedVendors) ? newRFQ.assignedVendors : []),
       ];
     newRFQ.vendorInvitationTargets = this._buildRFQVendorInviteTargets(newRFQ, initialInviteCandidates);
@@ -4824,6 +4830,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const created = this.createRFQ(rfqData, requestingBuyerAccount, {
       deferPersistence: true,
       deferSideEffects: true,
+      deferVendorPlan: storageConfigured && this._isDbPlannedRFQ(rfqData),
     });
 
     if (storageConfigured && requestingBuyerAccount && requestingBuyerAccount.id) {
@@ -7140,6 +7147,94 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
   }
 
   /**
+   * Orders vendors so the RFQ's minors take turns: one vendor from each minor, then the next
+   * vendor from each, and so on. A vendor belongs to the first minor, in the RFQ's order, that it
+   * covers. Vendors that cover none of the minors (the parent-major top-up) come last, in their
+   * given order. Invitations are queued and e-mailed in this order, so a batch that is only partly
+   * sent still reaches every minor instead of finishing one minor before the next starts.
+   *
+   * @param {Object[]} vendors
+   * @param {string[]} minors The RFQ's minor categories, in the RFQ's order.
+   * @returns {Object[]}
+   */
+  _interleaveVendorsByMinor(vendors, minors) {
+    const lanes = minors.map(() => []);
+    const uncovered = [];
+    for (const vendor of Array.isArray(vendors) ? vendors : []) {
+      const index = minors.findIndex((minor) => this.vendorCoversMinorCategory(vendor, minor));
+      if (index === -1) uncovered.push(vendor);
+      else lanes[index].push(vendor);
+    }
+    const ordered = [];
+    const longest = lanes.reduce((max, lane) => Math.max(max, lane.length), 0);
+    for (let turn = 0; turn < longest; turn += 1) {
+      for (const lane of lanes) {
+        if (turn < lane.length) ordered.push(lane[turn]);
+      }
+    }
+    return [...ordered, ...uncovered];
+  }
+
+  /**
+   * Whether the database plan assigns and invites this RFQ's vendors: a V0, V2 or V3 RFQ that names
+   * minor categories. Such an RFQ is created without an in-memory assignment or invitation.
+   *
+   * @param {Object} rfq The RFQ as submitted, or as stored.
+   * @returns {boolean}
+   */
+  _isDbPlannedRFQ(rfq) {
+    const mode = String(rfq?.sourcingMode || '').trim().toLowerCase();
+    const plannedMode = mode === 'mode_0' || mode === 'v0' || mode === 'version_0'
+      || mode === 'mode_2' || mode === 'v2' || mode === 'version_2'
+      || mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+    return plannedMode && this._rfqMinorCategories(rfq).length > 0;
+  }
+
+  /**
+   * Runs the database plan for an RFQ created by createRFQDurably. V0 uses the V0 augment; V2 and V3 use
+   * auto-assignment. Other RFQs, and RFQs without a minor category, are returned unchanged. Every create
+   * path calls this, so a planned RFQ gets its vendors and invitations however it was created.
+   *
+   * @param {Object} rfq
+   * @param {{ notifyShortfall?: boolean }} [options]
+   * @returns {Promise<Object>} The RFQ with its assigned vendors.
+   */
+  async completeRFQVendorPlan(rfq, { notifyShortfall = false } = {}) {
+    if (!rfq || !this._isDbPlannedRFQ(rfq)) return rfq;
+    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+    if (mode === 'mode_0' || mode === 'v0' || mode === 'version_0') {
+      return this.augmentV0AssignmentsFromDB(rfq, { notifyShortfall });
+    }
+    return this.autoAssignVendorsFromDB(rfq, { notifyShortfall });
+  }
+
+  /**
+   * Logs how many vendors each minor of an RFQ received in a DB-backed assignment, so an RFQ that
+   * reached only some of its minors can be traced from the logs.
+   *
+   * @param {Object} rfq
+   * @param {{ path: string, minors: string[], planned: Object[], added: number, shortfalls: Object[] }} plan
+   */
+  _logMinorInvitePlan(rfq, { path, minors, planned, added, shortfalls }) {
+    logger.info(
+      'RFQ minor invitation plan',
+      {
+        rfqNumber: rfq.rfqNumber,
+        path,
+        minorCount: minors.length,
+        plannedVendors: planned.length,
+        addedVendors: added,
+        shortfallMinors: shortfalls.map((shortfall) => shortfall.minorCategory),
+        perMinor: minors.map((minorCategory) => ({
+          minorCategory,
+          vendors: planned.filter((vendor) => this.vendorCoversMinorCategory(this._storedVendorRecord(vendor), minorCategory)).length,
+        })),
+      },
+      'STORE_SERVICE'
+    );
+  }
+
+  /**
    * Whether a vendor belongs to the Procucev Network vendor pool (mode_0 / V0).
    * Private buyer-uploaded vendors (having buyerId, buyerAccountId, or addedByBuyerCompany)
    * are excluded from the public Procucev Network pool.
@@ -7492,6 +7587,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
 
     let sorted;
+    let planShortfalls = [];
     if (minorScoped) {
       // Each minor is filled to the target from its own vendors, then from its parent major.
       // Vendors already assigned count toward those targets, so only the missing ones are added.
@@ -7501,7 +7597,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
         targetLocation,
         limit: maxProcucevPerCat,
       });
-      sorted = plan.selected;
+      sorted = this._interleaveVendorsByMinor(plan.selected, minors);
+      planShortfalls = plan.shortfalls;
       if (notifyShortfall) this._alertRfqMinorShortfall(rfq, plan.shortfalls);
     } else {
       // Legacy major-only RFQs: select by category, then keep the last-resort fill of the best-ranked vendors.
@@ -7550,12 +7647,21 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
         pincode: v.pincode || null,
       }));
 
+    if (minorScoped) {
+      this._logMinorInvitePlan(rfq, {
+        path: 'v0-augment',
+        minors,
+        planned: sorted,
+        added: additions.length,
+        shortfalls: planShortfalls,
+      });
+    }
     if (additions.length === 0) return rfq;
 
     const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
-      { ensureFollowUpData: true }
+      { ensureFollowUpData: true, advanceStatus: minorScoped }
     );
     if (!updated) return rfq;
     if (committedAdditions.length === 0) return updated;
@@ -7778,6 +7884,7 @@ let clientCandidates = [];
     }
 
     let sortedProcucev = [];
+    let procucevShortfalls = [];
     if (!isV1) {
       let dbMatches = [];
       if (pool.hasStorage()) {
@@ -7816,6 +7923,7 @@ let clientCandidates = [];
           limit: maxProcucevPerCat,
         });
         sortedProcucev = plan.selected;
+        procucevShortfalls = plan.shortfalls;
         if (notifyShortfall) this._alertRfqMinorShortfall(rfq, plan.shortfalls);
       } else {
         sortedProcucev = this.selectVendorsForRFQ(network, rfq, maxProcucevPerCat, targetLocation) || [];
@@ -7825,7 +7933,11 @@ let clientCandidates = [];
       }
     }
 
-    const candidatePool = [...sortedClient, ...sortedProcucev];
+    const combinedCandidates = [...sortedClient, ...sortedProcucev];
+    // Minor-level RFQs queue and send invitations in turn across the minors (see _interleaveVendorsByMinor).
+    const candidatePool = minorScoped
+      ? this._interleaveVendorsByMinor(combinedCandidates, minors)
+      : combinedCandidates;
     if (candidatePool.length === 0) {
       return rfq;
     }
@@ -7855,12 +7967,21 @@ let clientCandidates = [];
         };
       });
 
+    if (minorScoped) {
+      this._logMinorInvitePlan(rfq, {
+        path: 'auto-assign',
+        minors,
+        planned: candidatePool,
+        added: additions.length,
+        shortfalls: procucevShortfalls,
+      });
+    }
     if (additions.length === 0) return rfq;
 
     const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
-      { ensureFollowUpData: true }
+      { ensureFollowUpData: true, advanceStatus: minorScoped }
     );
     if (!updated) return rfq;
     if (committedAdditions.length === 0) return updated;
