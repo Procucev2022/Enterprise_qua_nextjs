@@ -258,4 +258,30 @@ describe('Vendor RFQ Details page', () => {
     );
     expect(mockedFetchRFQById).toHaveBeenCalledTimes(2);
   });
+
+  test('matches quotes by vendorEmail and vendorName when vendorId does not match', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: jest.fn(),
+      currentUserSession: { email: 'named@vendor.com', name: 'My Named Vendor' },
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: { id: 'unmatched-id' } }),
+    }) as any;
+
+    const rfqWithNamedQuotes = {
+      ...BASE_RFQ,
+      quotes: [
+        { vendorEmail: 'named@vendor.com', unitPrice: 20000, totalPrice: 10000000 },
+        { vendorName: 'My Named Vendor', unitPrice: 21000, totalPrice: 10500000 },
+      ],
+    };
+    mockedFetchRFQById.mockResolvedValue({ success: true, rfq: rfqWithNamedQuotes });
+
+    render(<VendorRFQDetailsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+    );
+  });
 });

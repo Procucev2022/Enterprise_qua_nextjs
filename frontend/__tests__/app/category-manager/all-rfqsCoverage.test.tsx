@@ -28,11 +28,12 @@ const COL = {
   buyer: 2,
   status: 3,
   quotes: 4,
-  vendors: 5,
-  budget: 6,
-  created: 7,
-  latestQuote: 8,
-  actions: 9,
+  invitedVendors: 5,
+  vendors: 6,
+  budget: 7,
+  created: 8,
+  latestQuote: 9,
+  actions: 10,
 } as const;
 
 // Literals the component hard-codes rather than reading from UI_STRINGS.
@@ -175,7 +176,7 @@ function cellOf(rfq: RFQItem, column: number): HTMLElement {
 async function openInvitedVendorList(): Promise<{ rfq: RFQItem; dialog: HTMLElement }> {
   const rfq = makeRfq({ id: 'il01', title: 'Invited Roster', assignedVendors: INVITED_FOUR });
   await renderLoaded([rfq]);
-  fireEvent.click(within(cellOf(rfq, COL.vendors)).getByRole('button', { name: '+2 more' }));
+  fireEvent.click(within(cellOf(rfq, COL.invitedVendors)).getByRole('button', { name: '+2 more' }));
   return { rfq, dialog: screen.getByRole('dialog') };
 }
 
@@ -437,7 +438,7 @@ describe('AllRFQsConsole invited vendors column', () => {
     const invited = makeRfq({ id: 'iv01', title: 'Invited Pair', assignedVendors: [ALPHA_SUPPLIES, LEGACY_TRADERS] });
     await renderLoaded([invited]);
 
-    const vendorsCell = cellOf(invited, COL.vendors);
+    const vendorsCell = cellOf(invited, COL.invitedVendors);
     expect(within(vendorsCell).getByText('Invited (2)')).toBeInTheDocument();
     expect(within(vendorsCell).getByRole('button', { name: 'Alpha Supplies' })).toBeInTheDocument();
     expect(within(vendorsCell).getByRole('button', { name: 'Legacy Traders' })).toBeInTheDocument();
@@ -449,7 +450,7 @@ describe('AllRFQsConsole invited vendors column', () => {
     const nameless = makeRfq({ id: 'iv02', title: 'Nameless Invite', assignedVendors: [NAMELESS_VENDOR] });
     await renderLoaded([nameless]);
 
-    fireEvent.click(within(cellOf(nameless, COL.vendors)).getByRole('button', { name: UI_STRINGS.dataLoad.emptyCell }));
+    fireEvent.click(within(cellOf(nameless, COL.invitedVendors)).getByRole('button', { name: UI_STRINGS.dataLoad.emptyCell }));
 
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: UI_STRINGS.dataLoad.emptyCell })).toBeInTheDocument();
@@ -460,7 +461,7 @@ describe('AllRFQsConsole invited vendors column', () => {
     const invited = makeRfq({ id: 'iv03', title: 'Invited Detail', assignedVendors: [ALPHA_SUPPLIES, DELTA_FABRICATORS] });
     await renderLoaded([invited]);
 
-    fireEvent.click(within(cellOf(invited, COL.vendors)).getByRole('button', { name: 'Alpha Supplies' }));
+    fireEvent.click(within(cellOf(invited, COL.invitedVendors)).getByRole('button', { name: 'Alpha Supplies' }));
 
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Alpha Supplies' })).toBeInTheDocument();
@@ -480,7 +481,7 @@ describe('AllRFQsConsole invited vendors column', () => {
     const many = makeRfq({ id: 'iv04', title: 'Invited Many', assignedVendors: INVITED_FOUR });
     await renderLoaded([many]);
 
-    const vendorsCell = cellOf(many, COL.vendors);
+    const vendorsCell = cellOf(many, COL.invitedVendors);
     expect(within(vendorsCell).getByText('Invited (4)')).toBeInTheDocument();
     expect(within(vendorsCell).getByRole('button', { name: 'Alpha Supplies' })).toBeInTheDocument();
     expect(within(vendorsCell).getByRole('button', { name: 'Legacy Traders' })).toBeInTheDocument();

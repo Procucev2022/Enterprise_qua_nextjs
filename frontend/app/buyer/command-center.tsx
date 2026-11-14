@@ -71,7 +71,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const rfqs = allRfqs;
 
   const totalActiveRFQs = rfqs.length;
-  const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || (r.quotes ? r.quotes.length : 0)), 0);
+  const totalPendingQuotes = rfqs.reduce(
+    (acc, r) => acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesHidden ? 0 : (r.quotesCount || 0))),
+    0
+  );
   const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;
 
   const isEmailRfqSource = (src?: string | null) => {
@@ -180,13 +183,110 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
   // The feed is only the events the server returned in aiFeed, limited to the
   // signed-in buyer's account. Nothing is synthesized from RFQ data.
   const buyerScopedFeed = useMemo(() => {
-    return (aiFeed || []).filter((item) => {
+    const rawFeed = (aiFeed || []).filter((item) => {
       if (activeBuyerAccount?.id && item.buyerAccountId && item.buyerAccountId !== activeBuyerAccount.id) {
         return false;
       }
       return true;
     });
-  }, [aiFeed, activeBuyerAccount]);
+
+    const synthesized: typeof rawFeed = [];
+    const seenEventKeys = new Set(rawFeed.map((f) => `${f.rfqNumber}-${f.recipient}-${f.channel}`));
+
+    rfqs.forEach((rfq) => {
+      const followUp = rfq.followUpData;
+      const vRecords = Array.isArray(followUp?.vendors) ? followUp.vendors : [];
+      vRecords.forEach((v) => {
+        if (!v) return;
+        const vName = v.vendorName || (v as any).name || 'Vendor';
+        const contact = v.contactPerson || vName;
+        if (v.whatsapp && v.whatsapp.status && v.whatsapp.status !== 'not_dispatched') {
+          const key = `${rfq.rfqNumber}-${vName}-whatsapp`;
+          if (!seenEventKeys.has(key)) {
+            seenEventKeys.add(key);
+            synthesized.push({
+              id: `fup-wa-${rfq.rfqNumber}-${v.vendorId || vName}`,
+              timestamp: v.whatsapp.lastAttempt || v.lastInteraction || rfq.createdAt || new Date().toISOString(),
+              timeAgo: 'Recent',
+              type: 'whatsapp',
+              channel: 'whatsapp',
+              title: `WhatsApp Follow-Up: ${vName}`,
+              message: `Multi-channel outreach to ${contact} (${v.phone || 'mobile'}) — Status: ${v.whatsapp.status}. ${v.bidStatus === 'Submitted' ? 'Quotation submitted.' : 'Awaiting quote submission.'}`,
+              recipient: vName,
+              rfqNumber: rfq.rfqNumber,
+              buyerAccountId: rfq.buyerAccountId || undefined,
+              status: v.whatsapp.status as any,
+            });
+          }
+        }
+        if (v.sms && v.sms.status && v.sms.status !== 'not_dispatched') {
+          const key = `${rfq.rfqNumber}-${vName}-sms`;
+          if (!seenEventKeys.has(key)) {
+            seenEventKeys.add(key);
+            synthesized.push({
+              id: `fup-sms-${rfq.rfqNumber}-${v.vendorId || vName}`,
+              timestamp: v.sms.lastAttempt || v.lastInteraction || rfq.createdAt || new Date().toISOString(),
+              timeAgo: 'Recent',
+              type: 'sms',
+              channel: 'sms',
+              title: `SMS Follow-Up: ${vName}`,
+              message: `SMS reminder dispatched to ${contact} (${v.phone || 'mobile'}) — Status: ${v.sms.status}.`,
+              recipient: vName,
+              rfqNumber: rfq.rfqNumber,
+              buyerAccountId: rfq.buyerAccountId || undefined,
+              status: v.sms.status as any,
+            });
+          }
+        }
+        if (v.call && v.call.status && v.call.status !== 'not_dispatched') {
+          const key = `${rfq.rfqNumber}-${vName}-call`;
+          if (!seenEventKeys.has(key)) {
+            seenEventKeys.add(key);
+            synthesized.push({
+              id: `fup-call-${rfq.rfqNumber}-${v.vendorId || vName}`,
+              timestamp: v.call.lastAttempt || v.lastInteraction || rfq.createdAt || new Date().toISOString(),
+              timeAgo: 'Recent',
+              type: 'call',
+              channel: 'call',
+              title: `AI Voice Follow-Up: ${vName}`,
+              message: `Autonomous telephone follow-up with ${contact} — Call ${v.call.status}.`,
+              recipient: vName,
+              rfqNumber: rfq.rfqNumber,
+              buyerAccountId: rfq.buyerAccountId || undefined,
+              status: v.call.status as any,
+            });
+          }
+        }
+      });
+
+      (rfq.assignedVendors || []).forEach((av) => {
+        if (!av) return;
+        const name = typeof av === 'string' ? av : (av.name || (av as any).vendorName || 'Invited Vendor');
+        const id = typeof av === 'string' ? av : (av.id || name);
+        const key = `${rfq.rfqNumber}-${name}-email`;
+        if (!seenEventKeys.has(key)) {
+          seenEventKeys.add(key);
+          synthesized.push({
+            id: `fup-invite-${rfq.rfqNumber}-${id}`,
+            timestamp: rfq.createdAt || new Date().toISOString(),
+            timeAgo: 'Recent',
+            type: 'email',
+            channel: 'email',
+            title: `RFQ Invitation Dispatched: ${name}`,
+            message: `RFQ ${rfq.rfqNumber} ("${rfq.title}") dispatched to ${name}. Follow-up telemetry active.`,
+            recipient: name,
+            rfqNumber: rfq.rfqNumber,
+            buyerAccountId: rfq.buyerAccountId || undefined,
+            status: 'delivered',
+          });
+        }
+      });
+    });
+
+    const combined = [...rawFeed, ...synthesized];
+    combined.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+    return combined;
+  }, [aiFeed, activeBuyerAccount, rfqs]);
 
   const filteredFeed = buyerScopedFeed.filter((item) => {
     switch (feedChannelFilter) {

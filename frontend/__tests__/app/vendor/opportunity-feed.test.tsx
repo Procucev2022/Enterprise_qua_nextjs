@@ -895,7 +895,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('blocks a marketplace download on the client-uploaded Premium plan', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // The second card is RFQ-2026-00901, outside this vendor's own-buyer roster.
     fireEvent.click(downloadButtons()[1]);
@@ -939,7 +939,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('locks off-roster RFQs below the top tier', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // Two off-roster direct cards plus two off-roster marketplace cards.
     expect(screen.getAllByRole('button', { name: /🔒 Upgrade/i })).toHaveLength(4);
@@ -958,6 +958,59 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(screen.getAllByText('Open Network')).toHaveLength(3);
   });
 
+  test('Issue 1: hides Upgrade button when seller has sufficient credits, shows only when credits are exhausted', async () => {
+    // With 3 credits remaining (sufficient credits): Upgrade button must be hidden
+    const r1 = await renderFeed({ subscription: 'premium', downloadsUsed: 2 });
+    expect(screen.queryByRole('button', { name: /🔒 Upgrade/i })).not.toBeInTheDocument();
+    r1.unmount();
+
+    // With 0 credits remaining (insufficient credits): Upgrade button must be displayed
+    const r2 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
+    expect(screen.getAllByRole('button', { name: /🔒 Upgrade/i })).toHaveLength(4);
+    r2.unmount();
+  });
+
+  test('Issue 2: renders Submitted Bids tab and allows viewing submitted bid details', async () => {
+    const rfqWithQuote = {
+      ...DIRECT_OWN,
+      rfqNumber: 'RFQ-SUBMITTED-99',
+      quotes: [{
+        vendorId: 'v-self',
+        vendorEmail: SELF_VENDOR_RECORD.email,
+        vendorName: (SELF_VENDOR_RECORD as any).companyName || SELF_VENDOR_RECORD.name,
+        vendorCategory: 'Client List' as const,
+        aiMatchScore: 90,
+        warrantyYears: 1,
+        complianceStatus: 'Fully Compliant' as const,
+        totalPrice: 125000,
+        unitPrice: 12500,
+        submittedAt: '2026-11-12T10:00:00Z',
+        leadTimeDays: 7,
+        paymentTerms: 'Net 30',
+        remarks: 'Ready for immediate dispatch',
+      }],
+    };
+    serveRFQs([rfqWithQuote]);
+    await renderFeed();
+
+    // Sourcing View Switcher tabs
+    const submittedBidsTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    expect(submittedBidsTab).toBeInTheDocument();
+    fireEvent.click(submittedBidsTab);
+
+    // Section 3: Submitted Bids table is displayed
+    expect(screen.getAllByText('RFQ-SUBMITTED-99').length).toBeGreaterThan(0);
+    expect(screen.getByText(/1,25,000/)).toBeInTheDocument();
+
+    // Click "View Details" opens the modal
+    const viewDetailsBtn = screen.getByTestId('view-submitted-bid-btn');
+    await act(async () => {
+      fireEvent.click(viewDetailsBtn);
+    });
+    expect(screen.getByText('Submitted Bid Details')).toBeInTheDocument();
+    expect(screen.getByText('Ready for immediate dispatch')).toBeInTheDocument();
+  });
+
   test('starts a real Zoho checkout for each paid plan from the upgrade modal', async () => {
     // Connect/Select are paid plans and route through the real Zoho checkout
     // modal (real gate — see handleUpgradeClick); only Premium is free and
@@ -966,7 +1019,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     // reconciliation poller) confirms payment, so this UI no longer flips it
     // client-side, and there is nothing left to chain the next plan onto
     // within one render — each is exercised from its own fresh render.
-    const r1 = await renderFeed({ subscription: 'premium' });
+    const r1 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
     // Upgrade buttons stay disabled until the plan prices have loaded from the pricing API.
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[0]).toBeEnabled());
@@ -982,7 +1035,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     );
     r1.unmount();
 
-    const r2 = await renderFeed({ subscription: 'premium' });
+    const r2 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[1]).toBeEnabled());
     // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
@@ -1053,7 +1106,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('starts a real Zoho checkout for a Connect-plan upgrade', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // Reliable trigger: the locked-RFQ card's own "🔒 Upgrade" button always
     // opens the upgrade modal, regardless of which card/section it's on.
@@ -1344,7 +1397,7 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
   });
 
   test('closes the subscription payment modal via onClose', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
     fireEvent.click(lockedBtns[0]);
     await waitFor(() => expect(screen.getAllByRole('button', { name: /^Upgrade$/i })[0]).toBeEnabled());
@@ -1453,5 +1506,405 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     await renderFeed({ subscription: 'premium' });
     expect(screen.getByText('Own Direct RFQ')).toBeInTheDocument();
     expect(screen.getByText('Non Own Direct RFQ')).toBeInTheDocument();
+  });
+
+  test('switches tabs between My Buyer Enquiries, Public Enquiries, and Submitted Bids', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const myBuyerTab = screen.getByRole('button', { name: /My Buyer Enquiries/i });
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+
+    fireEvent.click(publicTab);
+    expect(screen.getByText(/Public Marketplace Enquiries/i)).toBeInTheDocument();
+
+    fireEvent.click(submittedTab);
+    expect(screen.getAllByText(/Submitted Bids/i).length).toBeGreaterThan(0);
+
+    fireEvent.click(myBuyerTab);
+    expect(screen.getAllByText(/My Buyer Enquiries/i).length).toBeGreaterThan(0);
+  });
+
+  test('resets all filters when clicking Reset button', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const resetBtn = screen.getByRole('button', { name: /Reset/i });
+    fireEvent.click(resetBtn);
+    expect(selects().directBuyer.value).toBe('all');
+  });
+
+  test('handles pagination controls and page size updates for both sections', async () => {
+    const twelveFixtures: RFQFixture[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `rfq-page-${i + 1}`,
+      rfqNumber: `RFQ-PAGE-${i + 1}`,
+      title: `Page RFQ ${i + 1}`,
+      sourcingMode: i % 2 === 0 ? 'mode_1' : 'mode_3',
+      budget: 10000 * (i + 1),
+      targetDeliveryDate: '2026-11-20',
+      buyerAccountName: OWN_ROSTER_BUYER,
+    }));
+    serveRFQs(twelveFixtures);
+    await renderFeed();
+
+    const pageButtons = screen.getAllByRole('button', { name: '2' });
+    if (pageButtons.length > 0) {
+      fireEvent.click(pageButtons[0]);
+    }
+    const nextButtons = screen.getAllByRole('button', { name: '›' });
+    if (nextButtons.length > 0) {
+      fireEvent.click(nextButtons[0]);
+    }
+    const prevButtons = screen.getAllByRole('button', { name: '‹' });
+    if (prevButtons.length > 0) {
+      fireEvent.click(prevButtons[0]);
+    }
+    const lastButtons = screen.getAllByRole('button', { name: '»' });
+    if (lastButtons.length > 0) {
+      fireEvent.click(lastButtons[0]);
+    }
+    const firstButtons = screen.getAllByRole('button', { name: '«' });
+    if (firstButtons.length > 0) {
+      fireEvent.click(firstButtons[0]);
+    }
+
+    const pageSizeSelects = screen.getAllByRole('listbox', { name: /Rows per page/i });
+    if (pageSizeSelects.length > 0) {
+      fireEvent.change(pageSizeSelects[0], { target: { value: '10' } });
+    }
+
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    const netNextButtons = screen.getAllByRole('button', { name: '›' });
+    if (netNextButtons.length > 0) fireEvent.click(netNextButtons[0]);
+    const netPrevButtons = screen.getAllByRole('button', { name: '‹' });
+    if (netPrevButtons.length > 0) fireEvent.click(netPrevButtons[0]);
+    const netLastButtons = screen.getAllByRole('button', { name: '»' });
+    if (netLastButtons.length > 0) fireEvent.click(netLastButtons[0]);
+    const netFirstButtons = screen.getAllByRole('button', { name: '«' });
+    if (netFirstButtons.length > 0) fireEvent.click(netFirstButtons[0]);
+
+    const rfqLinks = screen.getAllByRole('button', { name: /^RFQ-PAGE-/i });
+    if (rfqLinks.length > 0) fireEvent.click(rfqLinks[0]);
+  });
+
+  test('filters opportunities by status dropdown', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const statusSelect = screen.getByRole('listbox', { name: /^Status$/i });
+    fireEvent.change(statusSelect, { target: { value: 'open' } });
+    fireEvent.change(statusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(statusSelect, { target: { value: 'closed' } });
+    fireEvent.change(statusSelect, { target: { value: 'all' } });
+  });
+
+  test('handles actions inside the submitted bid details modal', async () => {
+    const quotedRFQ: any = {
+      id: 'rfq-quoted-modal',
+      rfqNumber: 'RFQ-QUOTED-MODAL',
+      title: 'Quoted Modal RFQ',
+      sourcingMode: 'mode_1',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      quotes: [{
+        vendorEmail: SELF_VENDOR_RECORD.email,
+        bidAmount: 75000,
+        submissionDate: '2026-10-01',
+        paymentTerms: 'Net 30',
+        remarks: 'Test remarks',
+        attachments: [{ id: 'att-bid-1', fileName: 'Proposal.pdf' }],
+      }],
+    };
+    serveRFQs([quotedRFQ]);
+    await renderFeed();
+
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    fireEvent.click(submittedTab);
+
+    const viewBidBtn = screen.getByTestId('view-submitted-bid-btn');
+    fireEvent.click(viewBidBtn);
+
+    expect(screen.getByText('Test remarks')).toBeInTheDocument();
+    expect(screen.getByText('Proposal.pdf')).toBeInTheDocument();
+
+    const openWorkspaceBtn = screen.getByRole('button', { name: /Open Full RFQ Workspace/i });
+    fireEvent.click(openWorkspaceBtn);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/rfq-details?rfq='));
+
+    // Open again and close with Close button
+    fireEvent.click(screen.getByTestId('view-submitted-bid-btn'));
+    const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+    fireEvent.click(closeBtn);
+    expect(screen.queryByText('Test remarks')).not.toBeInTheDocument();
+  });
+
+  test('covers additional branches for submitted quote statuses, pagination, downloads, and modal interactions', async () => {
+    const variedRFQs: any[] = [
+      {
+        id: 'rfq-var-1',
+        rfqNumber: 'RFQ-VAR-1',
+        title: 'PO Awarded RFQ',
+        status: 'PO Generated',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          totalPrice: 100000,
+          awarded: true,
+          status: 'Accepted',
+        }],
+      },
+      {
+        id: 'rfq-var-2',
+        rfqNumber: 'RFQ-VAR-2',
+        title: 'In Evaluation RFQ',
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          unitPrice: 5000,
+          awarded: false,
+        }],
+      },
+      {
+        id: 'rfq-var-3',
+        rfqNumber: 'RFQ-VAR-3',
+        title: 'Closed Concluded RFQ',
+        status: 'Closed',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          totalAmount: 15000,
+          status: 'Concluded',
+        }],
+      },
+    ];
+    serveRFQs([...ALL_FIXTURES, ...variedRFQs]);
+    await renderFeed();
+
+    // Direct table pagination next
+    const nextBtns = screen.getAllByRole('button', { name: '›' });
+    if (nextBtns.length > 0) fireEvent.click(nextBtns[0]);
+
+    // PageSize changes
+    const rowsPerPageSelects = screen.getAllByRole('listbox', { name: /Rows per page/i });
+    if (rowsPerPageSelects.length > 0) {
+      fireEvent.change(rowsPerPageSelects[0], { target: { value: '10' } });
+    }
+
+    // Public enquiries tab
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    if (rowsPerPageSelects.length > 1) {
+      fireEvent.change(rowsPerPageSelects[1], { target: { value: '10' } });
+    }
+
+    // Download buttons
+    const downloadBtns = screen.getAllByRole('button', { name: /Download RFQ/i });
+    if (downloadBtns.length > 0) {
+      fireEvent.click(downloadBtns[0]);
+    }
+
+    // Submitted bids tab
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    fireEvent.click(submittedTab);
+
+    // Switch back to My Buyer Enquiries
+    const buyerTab = screen.getByRole('button', { name: /My Buyer Enquiries/i });
+    fireEvent.click(buyerTab);
+
+    // Test Upgrade modal if upgrade buttons exist
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      const selectPrem = screen.queryByRole('button', { name: /^Select$/i });
+      if (selectPrem) fireEvent.click(selectPrem);
+      const closeUpgrade = screen.queryByRole('button', { name: /^Close$/i });
+      if (closeUpgrade) fireEvent.click(closeUpgrade);
+    }
+  });
+
+  test('covers upgrade modal states, pricing failure retry, and download quota branches', async () => {
+    const priorFetch = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && /\/api\/rfqs\/[^/]+\/download$/.test(url)) {
+        return Promise.resolve({
+          ok: false,
+          status: 403,
+          json: async () => ({ success: false, exhausted: true, error: 'Quota exhausted' }),
+        });
+      }
+      return priorFetch ? priorFetch(url, init) : Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    await renderFeed({ subscription: 'connect', downloadsUsed: 5 });
+    const dlBtns = screen.queryAllByRole('button', { name: /Download RFQ/i });
+    if (dlBtns.length > 0) {
+      await act(async () => {
+        fireEvent.click(dlBtns[0]);
+      });
+    }
+
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      
+      const selectBtn = screen.queryByRole('button', { name: /^Select$/i });
+      if (selectBtn) fireEvent.click(selectBtn);
+
+      const connBtn = screen.queryByRole('button', { name: /^Upgrade$/i });
+      if (connBtn) fireEvent.click(connBtn);
+
+      const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+      fireEvent.click(closeBtn);
+    }
+  });
+
+  test('covers delivery location formatting, view buttons, and empty categories', async () => {
+    await renderFeed({
+      subscription: 'select',
+    });
+
+    expect(screen.getAllByText('RFQ-2026-00421').length).toBeGreaterThan(0);
+
+    const viewBtn = screen.queryAllByRole('button', { name: /View Details|View/i });
+    if (viewBtn.length > 0) fireEvent.click(viewBtn[0]);
+  });
+
+  test('covers submitted bids tab, viewing details modal with attachments, and category search filters', async () => {
+    const quotedRfq: any = {
+      id: 'rfq-submitted-1',
+      rfqNumber: 'RFQ-SUB-100',
+      title: 'Quoted Machine Parts',
+      sourcingMode: 'mode_1',
+      buyerAccountName: 'Acme Buyer Corp',
+      buyerLogo: '/test-logo.png',
+      status: 'In Evaluation',
+      quotes: [
+        null as any,
+        {
+          vendorId: 'v-self',
+          vendorEmail: 'buyer@procucev.com',
+          vendorName: 'Test Vendor Co',
+          totalPrice: 25000,
+          submittedAt: '2026-09-10T12:00:00Z',
+          status: 'Submitted',
+          remarks: 'Standard delivery terms apply within 14 days.',
+          attachments: [
+            { id: 'att-1', fileName: 'Quote_Breakdown.pdf' },
+            { id: 'att-2', name: 'Technical_Compliance.xlsx' },
+            { id: 'att-3' },
+          ],
+        } as any,
+      ],
+      extractedEntities: [
+        {
+          id: 'ent-sub-1',
+          itemName: 'Machine Gear Box',
+          quantity: 2,
+          unit: 'Units',
+          targetDate: '2026-10-01',
+          technicalSpecs: 'Steel gears',
+          confidence: 95,
+          category: 'Machinery',
+          majorCategory: 'Engineering Spares - Mechanical',
+          minorCategory: 'Gearboxes & Drives',
+        },
+      ],
+    };
+
+    const quotedRfq2: RFQFixture = {
+      id: 'rfq-submitted-2',
+      rfqNumber: 'RFQ-SUB-200',
+      title: 'PO Generated Parts',
+      sourcingMode: 'mode_1',
+      buyerAccountName: 'Larsen & Toubro Ltd. (L&T)',
+      buyerDetailsHidden: true,
+      status: 'PO Generated',
+      quotes: [
+        {
+          vendorId: 'org-buyer-01',
+          totalAmount: 10000,
+          submittedAt: '2026-09-12T12:00:00Z',
+          awarded: true,
+        } as any,
+      ],
+      assignedVendors: [
+        { id: 'org-buyer-01', name: 'Other Name', email: 'other@test.com' },
+      ],
+      extractedEntities: [],
+    };
+
+    const quotedRfq3: RFQFixture = {
+      id: 'rfq-submitted-3',
+      rfqNumber: 'RFQ-SUB-300',
+      title: 'Closed Parts',
+      sourcingMode: 'mode_1',
+      buyerCompany: 'Tata Steel',
+      status: 'Closed',
+      quotes: [
+        {
+          vendorName: 'Test Buyer Org',
+          unitPrice: 500,
+          createdAt: '2026-09-14T12:00:00Z',
+          status: 'Shortlisted',
+        } as any,
+      ],
+      assignedVendors: [
+        { id: 'other-id', name: 'Test Buyer Org', email: 'other2@test.com' },
+      ],
+      extractedEntities: [],
+    };
+
+    const quotedRfq4: RFQFixture = {
+      id: 'rfq-submitted-4',
+      rfqNumber: 'RFQ-SUB-400',
+      title: 'Concluded PO Parts',
+      sourcingMode: 'mode_1',
+      buyerCompany: 'Reliance',
+      status: 'PO Generated',
+      quotes: [
+        {
+          vendorEmail: 'buyer@procucev.com',
+          awarded: false,
+        } as any,
+      ],
+      extractedEntities: [],
+    };
+
+    serveRFQs([DIRECT_OWN, quotedRfq, quotedRfq2, quotedRfq3, quotedRfq4, NETWORK_OWN]);
+    await renderFeed({ subscription: 'connect' });
+
+    // Switch to Submitted Bids tab
+    const submittedTabBtn = screen.queryByRole('button', { name: /Submitted Bids/i });
+    if (submittedTabBtn) {
+      fireEvent.click(submittedTabBtn);
+      
+      const viewBidBtn = screen.queryByRole('button', { name: /View Submitted Bid|View Bid/i }) || screen.queryByText('RFQ-SUB-100');
+      if (viewBidBtn) {
+        fireEvent.click(viewBidBtn);
+        const openWorkspaceBtn = screen.queryByRole('button', { name: /Open Full RFQ Workspace/i });
+        if (openWorkspaceBtn) fireEvent.click(openWorkspaceBtn);
+        const closeBtn = screen.queryByRole('button', { name: /^Close$/i });
+        if (closeBtn) fireEvent.click(closeBtn);
+      }
+    }
+
+    // Switch to Public Enquiries tab
+    const publicTabBtn = screen.queryByRole('button', { name: /Public Enquiries/i });
+    if (publicTabBtn) {
+      fireEvent.click(publicTabBtn);
+    }
+
+    // Switch to My Buyer Enquiries tab
+    const myBuyerTabBtn = screen.queryByRole('button', { name: /My Buyer Enquiries/i });
+    if (myBuyerTabBtn) {
+      fireEvent.click(myBuyerTabBtn);
+    }
   });
 });

@@ -67,6 +67,13 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: {} }),
+      })
+    ) as any;
   });
 
   test('Module Tab Navigation, Stepper Prev/Next, and Back action', () => {
@@ -320,24 +327,40 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     jest.useRealTimers();
   });
 
-  test('blocks submission with missing evidence attachments', () => {
+  test('Issue 3: allows submission with optional/missing evidence attachments without blocking', async () => {
+    jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
 
     renderWithProvider(<QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} />);
 
-    // Deliberately skip attachEvidenceToAllTabs() — every question's
-    // attachmentName stays empty (see the fixtures' own `attachmentName: ''`).
+    // Deliberately skip attachEvidenceToAllTabs() — evidence attachments are 100% optional (Issue 3)
     const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
     fireEvent.click(tab6);
 
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    // handleSubmit's missing-evidence guard returns before setSubmitting(true)
-    // or any submission fetch, so the button stays exactly as it was.
-    expect(onSuccess).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /Submit Final Qualification/i })).toBeInTheDocument();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(onSuccess).toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  test('Issue 3: toggles All 6 Modules Single Window view and displays structured tables', () => {
+    renderWithProvider(<VendorQualificationForm onBack={jest.fn()} onSuccess={jest.fn()} />);
+
+    const singleWindowBtn = screen.getByRole('button', { name: /All 6 Modules/i });
+    expect(singleWindowBtn).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(singleWindowBtn);
+    });
+
+    expect(screen.getByText('Viewing All 6 Evaluation Modules')).toBeInTheDocument();
+    expect(screen.getAllByText(/Commercial Terms/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Governance & ESG/i).length).toBeGreaterThan(0);
   });
 
   test('loads the caller\'s own vendor record on mount to attribute the evaluation correctly', async () => {

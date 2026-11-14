@@ -1131,6 +1131,7 @@ describe('app/buyer/command-center.tsx', () => {
         buyerAccountId: 'active-acc-1',
         assignedVendors: [
           null,
+          'Simple Vendor String',
           {
             id: 'v-101',
             vendorName: 'Apex Metals',
@@ -1162,6 +1163,8 @@ describe('app/buyer/command-center.tsx', () => {
               email: 'sales@apexmetals.com',
               whatsapp: { status: 'read' },
               sms: { status: 'delivered' },
+              call: { status: 'answered', lastAttempt: '2026-11-01T10:00:00.000Z' },
+              bidStatus: 'Submitted',
               emailSent: true,
             },
           ],
@@ -1259,10 +1262,9 @@ describe('app/buyer/command-center.tsx', () => {
     });
 
     expect(screen.queryByText(/Autonomous Sourcing Engine Initialized/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/SMS Alert Delivered/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/WhatsApp Invitation Delivered/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Procucev Verified Supplier/i)).not.toBeInTheDocument();
-    expect(screen.getByText('No outreach events yet')).toBeInTheDocument();
+    expect(screen.getByText(/WhatsApp Follow-Up: Apex Metals/i)).toBeInTheDocument();
+    expect(screen.getByText(/SMS Follow-Up: Apex Metals/i)).toBeInTheDocument();
+    expect(screen.getByText(/RFQ Invitation Dispatched: Local Shop/i)).toBeInTheDocument();
 
     // Trigger modal interactions
     fireEvent.click(screen.getByText('Active Pipeline'));

@@ -989,6 +989,30 @@ export function countMinorCategories(): number {
 }
 
 /**
+ * Returns all unique minor categories across the master taxonomy in sorted order.
+ * Reads from the currently loaded taxonomy groups or falls back to known taxonomy rules.
+ */
+export function getAllUniqueMinorCategories(): string[] {
+  const seen = new Set<string>();
+  if (groups.length > 0) {
+    groups.forEach((group) => {
+      (group.minorCategories || []).forEach((minor) => {
+        if (minor && minor.trim()) {
+          seen.add(minor.trim());
+        }
+      });
+    });
+  }
+  // Include any minor categories registered in KNOWN_KEYWORD_RULES
+  for (const rule of KNOWN_KEYWORD_RULES) {
+    if (rule.minor && rule.minor.trim()) {
+      seen.add(rule.minor.trim());
+    }
+  }
+  return Array.from(seen).sort((a, b) => a.localeCompare(b));
+}
+
+/**
  * Resolves the exact Minor Category for a purchase order line item.
  * Evaluates the line item description, technical specifications, and any optional input category/department
  * against both the autoCategorizeItem engine (validated against loaded taxonomy) and the comprehensive

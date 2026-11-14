@@ -1076,13 +1076,10 @@ function getSubscriptionPricing(req, res) {
 async function getPaymentLinks(req, res, next) {
   try {
     const { id } = req.params;
-    let existing = storeService.getVendorById(id, 'all');
-    if (!existing) {
-      existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
-    }
-    if (!existing && id === 'me' && req.user?.email) {
-      existing = storeService.getVendorById(req.user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(req.user.email, 'all'));
-    }
+    const lookupTarget = (id === 'me') ? (req.user?.email || req.user?.vendorId || req.user?.id) : id;
+    const existing = lookupTarget
+      ? (storeService.getVendorById(lookupTarget, 'all') || (typeof storeService.getVendorByIdWithDBFallback === 'function' ? await storeService.getVendorByIdWithDBFallback(lookupTarget, 'all') : null))
+      : null;
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -1106,13 +1103,10 @@ async function getPaymentLinks(req, res, next) {
 async function downloadInvoice(req, res, next) {
   try {
     const { id, linkId } = req.params;
-    let existing = storeService.getVendorById(id, 'all');
-    if (!existing) {
-      existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
-    }
-    if (!existing && id === 'me' && req.user?.email) {
-      existing = storeService.getVendorById(req.user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(req.user.email, 'all'));
-    }
+    const lookupTarget = (id === 'me') ? (req.user?.email || req.user?.vendorId || req.user?.id) : id;
+    const existing = lookupTarget
+      ? (storeService.getVendorById(lookupTarget, 'all') || (typeof storeService.getVendorByIdWithDBFallback === 'function' ? await storeService.getVendorByIdWithDBFallback(lookupTarget, 'all') : null))
+      : null;
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }

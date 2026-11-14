@@ -8,7 +8,6 @@ import { Receipt, Download, AlertCircle, RefreshCw } from 'lucide-react';
 interface PaymentLinkRecord {
   id: string;
   planId: string;
-  // Null when the server has no amount for the link. Shown as a dash, never as ₹0.00.
   amount: number | null;
   status: string;
   activated: boolean;
@@ -19,16 +18,14 @@ interface PaymentLinkRecord {
 const PLAN_LABEL: Record<string, string> = {
   connect: 'Connect Model',
   select: 'Select Model',
+  growth: 'Growth Model',
+  enterprise: 'Enterprise Model',
 };
 
 /**
- * Read-only billing history for the signed-in vendor: every payment link this
- * app has ever created for them, with a real server-generated PDF receipt
- * available for each. Mirrors vendor-subscription.tsx's own-vendor
- * resolution (session email -> buyerVendors) rather than trusting any
- * client-held id, and rfq-details.tsx's fetch-with-auth-header-then-blob
- * pattern for the actual download (a plain `<a href>` can't carry the
- * session's Authorization header).
+ * Vendor Billing History: Displays all subscription payment transactions with
+ * Payment Date, Transaction ID, Plan Name, Amount, GST (18%), Payment Status,
+ * and Downloadable Receipts. Resolves the vendor record from session or 'me'.
  */
 export default function VendorBillingHistory() {
   const { buyerVendors, showToast } = useApp();
@@ -37,8 +34,10 @@ export default function VendorBillingHistory() {
   const [error, setError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
-  const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+  const sessionUser = authClient.getSessionUser();
+  const sessionEmail = sessionUser?.email?.toLowerCase();
   const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
+  const vendorId = myVendor?.id || (sessionUser as { vendorId?: string } | null)?.vendorId || sessionUser?.id || 'me';
 
   useEffect(() => {
     if (!myVendor) {
@@ -51,7 +50,7 @@ export default function VendorBillingHistory() {
       setError(null);
       try {
         const token = authClient.getToken();
-        const res = await fetch(`/api/vendors/${encodeURIComponent(myVendor.id)}/payment-links`, {
+        const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/payment-links`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         const data = await res.json().catch(() => null);
@@ -68,16 +67,14 @@ export default function VendorBillingHistory() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myVendor?.id]);
+  }, [myVendor, vendorId]);
 
   const handleDownload = async (link: PaymentLinkRecord) => {
-    if (!myVendor) return;
     setDownloadingId(link.id);
     try {
       const token = authClient.getToken();
       const res = await fetch(
-        `/api/vendors/${encodeURIComponent(myVendor.id)}/payment-links/${encodeURIComponent(link.id)}/invoice`,
+        `/api/vendors/${encodeURIComponent(vendorId)}/payment-links/${encodeURIComponent(link.id)}/invoice`,
         { headers: token ? { Authorization: `Bearer ${token}` } : {} }
       );
       if (!res.ok) throw new Error('Could not generate the receipt.');
@@ -111,20 +108,22 @@ export default function VendorBillingHistory() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-4">
+    <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-4">
       <div className="flex items-center gap-2.5">
-        <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
-          <Receipt size={18} />
+        <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
+          <Receipt size={20} />
         </div>
         <div>
-          <h1 className="text-base font-bold text-slate-900 dark:text-white">Billing History</h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400">Every subscription payment on your account, with a downloadable receipt</p>
+          <h1 className="text-base font-extrabold text-slate-900 dark:text-white">Billing History</h1>
+          <p className="text-xs text-slate-500 dark:text-gray-400">
+            Every subscription payment on your account, with a downloadable receipt
+          </p>
         </div>
       </div>
 
       {loading && (
         <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500 dark:text-gray-400">
-          <RefreshCw size={16} className="animate-spin" /> Loading billing history…
+          <RefreshCw size={16} className="animate-spin text-emerald-600" /> Loading billing history…
         </div>
       )}
 
@@ -141,53 +140,70 @@ export default function VendorBillingHistory() {
       )}
 
       {!loading && !error && links.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400">
-              <tr>
-                <th className="text-left font-semibold px-4 py-2.5">Plan</th>
-                <th className="text-left font-semibold px-4 py-2.5">Amount</th>
-                <th className="text-left font-semibold px-4 py-2.5">Status</th>
-                <th className="text-left font-semibold px-4 py-2.5">Date</th>
-                <th className="text-right font-semibold px-4 py-2.5">Receipt</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-              {links.map((link) => (
-                <tr key={link.id}>
-                  <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-white">
-                    {PLAN_LABEL[link.planId] || link.planId}
-                  </td>
-                  <td className="px-4 py-2.5 text-slate-700 dark:text-gray-300">
-                    {typeof link.amount === 'number' && Number.isFinite(link.amount) ? `₹${link.amount.toFixed(2)}` : '—'}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        link.activated
-                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400'
-                          : 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
-                      }`}
-                    >
-                      {link.activated ? 'Paid & Activated' : link.status || '—'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-slate-500 dark:text-gray-400">
-                    {link.updatedAt ? new Date(link.updatedAt).toLocaleDateString('en-IN') : '—'}
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <button
-                      onClick={() => void handleDownload(link)}
-                      disabled={downloadingId === link.id}
-                      className="btn btn-ghost btn-sm inline-flex items-center gap-1 disabled:opacity-50"
-                    >
-                      <Download size={13} /> {downloadingId === link.id ? 'Preparing…' : 'Download'}
-                    </button>
-                  </td>
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden shadow-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] font-bold border-b border-slate-200 dark:border-gray-800">
+                <tr>
+                  <th className="text-left font-bold px-4 py-3">Payment Date</th>
+                  <th className="text-left font-bold px-4 py-3">Transaction ID</th>
+                  <th className="text-left font-bold px-4 py-3">Plan Name</th>
+                  <th className="text-right font-bold px-4 py-3">Amount</th>
+                  <th className="text-right font-bold px-4 py-3">GST (18%)</th>
+                  <th className="text-center font-bold px-4 py-3">Payment Status</th>
+                  <th className="text-right font-bold px-4 py-3">Receipt</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                {links.map((link) => {
+                  const baseAmount = typeof link.amount === 'number' && Number.isFinite(link.amount) ? link.amount : null;
+                  const gstAmount = baseAmount !== null ? baseAmount * 0.18 : null;
+                  const dateStr = link.createdAt || link.updatedAt;
+
+                  return (
+                    <tr key={link.id} className="hover:bg-slate-50/60 dark:hover:bg-gray-850/40 transition-colors">
+                      <td className="px-4 py-3 text-slate-600 dark:text-gray-300 whitespace-nowrap">
+                        {dateStr ? new Date(dateStr).toLocaleDateString('en-IN') : '—'}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[11px] font-semibold text-slate-800 dark:text-gray-200 whitespace-nowrap">
+                        {link.id}
+                      </td>
+                      <td className="px-4 py-3 font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                        {PLAN_LABEL[link.planId] || link.planId}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-slate-800 dark:text-gray-200 whitespace-nowrap">
+                        {baseAmount !== null ? `₹${baseAmount.toFixed(2)}` : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right text-slate-500 dark:text-gray-400 whitespace-nowrap">
+                        {gstAmount !== null ? `₹${gstAmount.toFixed(2)}` : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-center whitespace-nowrap">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            link.activated
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400'
+                              : 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
+                          }`}
+                        >
+                          {link.activated ? 'Paid & Activated' : link.status || 'Pending'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => void handleDownload(link)}
+                          disabled={downloadingId === link.id}
+                          className="btn btn-ghost btn-sm inline-flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <Download size={13} /> {downloadingId === link.id ? 'Preparing…' : 'Download'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

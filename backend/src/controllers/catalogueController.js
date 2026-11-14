@@ -3,13 +3,17 @@ const { logger } = require('../services/loggerService');
 
 // Resolves the caller's own vendor record id (for ownership checks below).
 // Returns null for a non-vendor role or a vendor with no profile record yet.
-function resolveOwnVendorId(req) {
+async function resolveOwnVendorId(req) {
   if (!req.user || req.user.role !== 'vendor') return null;
   // 'all': resolving the caller's own vendor identity by session email, not
   // filtering a buyer-scoped list — omitting this silently returns nothing
   // for any buyer-uploaded vendor (one with a buyerId set).
-  const vendor = storeService.getVendorById(req.user.email, 'all');
-  return vendor ? vendor.id : null;
+  const candidate = req.user.email || req.user.vendorId || req.user.id;
+  let vendor = candidate ? storeService.getVendorById(candidate, 'all') : null;
+  if (!vendor && candidate && typeof storeService.getVendorByIdWithDBFallback === 'function') {
+    vendor = await storeService.getVendorByIdWithDBFallback(candidate, 'all');
+  }
+  return vendor ? vendor.id : (req.user.vendorId || null);
 }
 
 async function getProducts(req, res, next) {
@@ -36,7 +40,7 @@ async function addProduct(req, res, next) {
     if (req.user.role !== 'vendor' && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, error: 'Only a vendor can add to their own catalogue.' });
     }
-    const vendorId = req.user.role === 'admin' ? req.body.vendorId : resolveOwnVendorId(req);
+    const vendorId = req.user.role === 'admin' ? req.body.vendorId : await resolveOwnVendorId(req);
     if (!vendorId) {
       return res.status(400).json({ success: false, error: 'Create your vendor profile before adding catalogue items.' });
     }
@@ -74,7 +78,7 @@ async function updateProduct(req, res, next) {
       return res.status(404).json({ success: false, error: `Product with ID ${id} not found.` });
     }
     if (req.user.role !== 'admin') {
-      const ownVendorId = resolveOwnVendorId(req);
+      const ownVendorId = await resolveOwnVendorId(req);
       if (!ownVendorId || existing.vendorId !== ownVendorId) {
         return res.status(403).json({ success: false, error: 'You do not have permission to modify this catalogue item.' });
       }
@@ -97,7 +101,7 @@ async function deleteProduct(req, res, next) {
       return res.status(404).json({ success: false, error: `Product with ID ${id} not found.` });
     }
     if (req.user.role !== 'admin') {
-      const ownVendorId = resolveOwnVendorId(req);
+      const ownVendorId = await resolveOwnVendorId(req);
       if (!ownVendorId || existing.vendorId !== ownVendorId) {
         return res.status(403).json({ success: false, error: 'You do not have permission to delete this catalogue item.' });
       }
