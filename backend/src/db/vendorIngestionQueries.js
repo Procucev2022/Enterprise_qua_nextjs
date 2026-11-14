@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const pool = require('./pool');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
 const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_AI_STATUS,
@@ -720,6 +721,30 @@ async function deleteVendorMasterRecords(sessionId, organizationId) {
   return result.rowCount || 0;
 }
 
+/**
+ * Stamp the organization's first vendor master upload.
+ *
+ * The `is null` guard means only the first call writes. Later uploads keep the original timestamp, so the
+ * buyer initial setup popup does not return. Resolves true on the call that set the timestamp.
+ *
+ * The sign-in user row joins this column (identityQueries USER_SELECT), and those rows are cached under the
+ * `user` tag. pool.query clears only the tag named after the written table, so the `user` tag is cleared
+ * here. Otherwise a buyer who signs in again within the cache TTL would read the unset value and see the
+ * popup again.
+ */
+async function markVendorMasterUploaded(organizationId, uploadedAt = new Date().toISOString()) {
+  if (!pool.hasStorage() || !organizationId) return false;
+  const result = await pool.query(
+    `update organization
+        set vendor_master_uploaded_at = $1
+      where uuid = $2 and vendor_master_uploaded_at is null`,
+    [uploadedAt, organizationId],
+    { d1: true }
+  );
+  queryCache.invalidate('user');
+  return (result.rowCount || 0) > 0;
+}
+
 // ------------------------------------------------------------------------------
 // PO LINE ITEMS
 // ------------------------------------------------------------------------------
@@ -966,6 +991,8 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
  * count — instead of vanishing. That row is exactly the SELF_MAP_REQUIRED case,
  * and it has to be visible to be flagged.
  *
+ * A line with no PO number counts as an order of its own, so po_count is not zero for a
+ * vendor whose lines carry no numbers.
  * Descriptions are aggregated here in one grouped query rather than by reading
  * every PO row into Node and reducing it, so the AI aggregation is one round
  * trip regardless of how many line items the dump held.
@@ -1008,7 +1035,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
             v.gstin,
             v.rating,
             count(p.id)::int          as po_line_count,
-            count(distinct p.po_number)::int as po_count,
+            count(distinct coalesce(p.po_number, p.id))::int as po_count,
             coalesce(sum(p.spend), 0) as total_spend,
             min(p.po_date)            as first_po_date,
             max(p.po_date)            as last_po_date,
@@ -1056,7 +1083,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
             v.gstin,
             v.rating,
             CAST(count(p.id) AS INTEGER)          as po_line_count,
-            CAST(count(distinct p.po_number) AS INTEGER) as po_count,
+            CAST(count(distinct coalesce(p.po_number, p.id)) AS INTEGER) as po_count,
             coalesce(sum(p.spend), 0) as total_spend,
             min(p.po_date)            as first_po_date,
             max(p.po_date)            as last_po_date,
@@ -2246,6 +2273,7 @@ module.exports = {
   findVendorMasterRecord,
   countVendorMasterRecords,
   deleteVendorMasterRecords,
+  markVendorMasterUploaded,
   // po data
   bulkInsertPoLineItems,
   countPoLineItems,

@@ -1,9 +1,17 @@
 const { logger } = require('../services/loggerService');
 const crypto = require('crypto');
 const { REQUEST_ID_CONFIG } = require('../config/constants');
+const {
+  createRequestContext,
+  runWithRequestContext,
+  summarizeD1Counters,
+} = require('../services/requestContext');
 
 /**
  * HTTP Request Structured Logging Middleware
+ *
+ * Each request runs inside a request context, so every log line written while it is handled
+ * carries the request id. The access line also reports the D1 work the request caused.
  */
 function requestLogger(req, res, next) {
   if (process.env.NODE_ENV === 'test') {
@@ -19,6 +27,7 @@ function requestLogger(req, res, next) {
   const requestPath = req.originalUrl.split('?')[0];
   req.requestId = requestId;
   if (typeof res.setHeader === 'function') res.setHeader('X-Request-Id', requestId);
+  const requestContext = createRequestContext({ requestId, method: req.method, path: requestPath });
 
   /**
    * A request that never produces a response used to leave no trace at all,
@@ -40,6 +49,7 @@ function requestLogger(req, res, next) {
         durationMs: Date.now() - start,
         requestId,
         ipAddress: req.ip || req.connection?.remoteAddress,
+        ...summarizeD1Counters(requestContext),
       },
       'HTTP_REQUEST'
     );
@@ -63,12 +73,13 @@ function requestLogger(req, res, next) {
         requestId,
         ipAddress: req.ip || req.connection?.remoteAddress,
         userAgent: headers['user-agent'],
+        ...summarizeD1Counters(requestContext),
       },
       'HTTP_REQUEST'
     );
   });
 
-  next();
+  return runWithRequestContext(requestContext, () => next());
 }
 
 module.exports = requestLogger;

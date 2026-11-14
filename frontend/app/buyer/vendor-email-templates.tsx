@@ -101,7 +101,7 @@ function EditorPanel({ title, description, defaultValue, value, onChange, onSave
 
 /**
  * Buyer-editable subject/message for the two vendor-onboarding emails sent
- * from Step 5 of the "Buyer Initial Setup" wizard (Template A — supplier has
+ * from Step 4 of the "Buyer Initial Setup" wizard (Template A — supplier has
  * pre-purchase-order history, Template B — no history). Saved once per
  * organisation and reused on every future vendor upload: GET on mount, PUT
  * per template on save. Backed by storeService.processHistoricalPurchaseData

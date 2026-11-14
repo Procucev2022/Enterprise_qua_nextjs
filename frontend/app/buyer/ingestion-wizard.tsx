@@ -43,6 +43,8 @@ import {
   type RankedProcucevVendor,
 } from '@/lib/vendorMatching';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
+import RequiredMarker from '@/app/components/RequiredMarker';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -118,6 +120,13 @@ function withStoredValue(options: string[], value: string): string[] {
   const trimmed = (value || '').trim();
   if (trimmed === '' || options.some((o) => o.toLowerCase() === trimmed.toLowerCase())) return options;
   return [trimmed, ...options];
+}
+
+/** Placeholder for a line item's category field: not needed for All Categories, and waits for a division otherwise. */
+function categoryFieldPlaceholder(major: string): string {
+  if (major === ALL_CATEGORIES_OPTION) return UI_STRINGS.categorySearch.notRequired;
+  if (!major) return MODAL.selectPlaceholder;
+  return UI_STRINGS.categorySearch.searchPlaceholder;
 }
 
 /**
@@ -634,7 +643,7 @@ export default function IngestionWizard({
       setProcucevV3Ranked([]);
       return;
     }
-    const { signals } = extractRfqCategorySignals(form);
+    const { signals, minorOnly } = extractRfqCategorySignals(form);
     const lineItemMinors = Array.from(
       new Set(
         (form.lineItems || [])
@@ -660,7 +669,8 @@ export default function IngestionWizard({
           signals,
           { location: form.deliveryLocation, pincode: form.deliveryPincode },
           10,
-          lineItemMinors
+          lineItemMinors,
+          minorOnly
         );
         setProcucevV3Ranked(ranked);
         // Drop any prior selection that is no longer in the new top-10.
@@ -1132,14 +1142,14 @@ export default function IngestionWizard({
     if (!validation.isValid || form.sourcingMode === null) {
       const missing: string[] = [];
       if (validation.formErrors.sourcingMode) missing.push(MODAL.sourcingModeLabel);
-      if (validation.formErrors.title) missing.push('RFQ Title');
+      if (validation.formErrors.title) missing.push(MODAL.titleLabel);
       if (validation.formErrors.deliveryLocation) missing.push('Delivery Location');
       if (validation.formErrors.deliveryPincode) missing.push('Delivery Pincode');
-      if (validation.formErrors.targetDeliveryDate) missing.push('Target Delivery Date (cannot be in the past)');
+      if (validation.formErrors.targetDeliveryDate) missing.push(MODAL.targetDateMissingLabel);
       if (validation.formErrors.lineItems) missing.push('At least 1 complete line item');
       const lineItemErrCount = Object.keys(validation.lineItemErrors).length;
       if (lineItemErrCount > 0) {
-        missing.push(`${lineItemErrCount} line item(s) missing name, quantity, or unit`);
+        missing.push(formatString(MODAL.lineItemsIncompleteLabel, { count: lineItemErrCount }));
       }
       const errorMsg = missing.length > 0
         ? `Validation Error – Please complete: ${missing.join(', ')}.`
@@ -1211,7 +1221,7 @@ export default function IngestionWizard({
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
-        const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
+        const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -1220,7 +1230,7 @@ export default function IngestionWizard({
         const mismatchedVendors: typeof candidatePool = [];
 
         for (const v of candidatePool) {
-          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals).isMatch) {
+          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
             matchingVendors.push(v);
           } else {
             mismatchedVendors.push(v);
@@ -1240,7 +1250,8 @@ export default function IngestionWizard({
               matchingVendors,
               dispatchSignals,
               VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode }
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
+              dispatchMinorOnly
             ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
@@ -1273,22 +1284,16 @@ export default function IngestionWizard({
         return;
       }
 
-      // ALL_CATEGORIES_OPTION is a UI-only sentinel that opts a line item out
-      // of category-narrowed matching — never a real taxonomy value, so it
-      // must never reach the server as this item's majorCategory.
-      const sanitizedForm: ManualRFQForm = {
-        ...updatedForm,
-        lineItems: updatedForm.lineItems.map((item) =>
-          item.majorCategory === ALL_CATEGORIES_OPTION ? { ...item, majorCategory: '' } : item
-        ),
-      };
+      // All Categories is a complete choice that opts a line item out of category-narrowed
+      // matching. It is sent as chosen, and the server stores it as a blank category, which is
+      // how it was always stored. Every row must carry a major category, so a blank one is refused.
       const isAiExtracted = Boolean(
         extractionSummary &&
         extractionSummary.accepted > 0 &&
         uploadedFiles.length > 0
       );
       const rfqSource: RFQSource = isAiExtracted ? 'ai_extraction' : 'manual_entry';
-      const payload = toRFQCreatePayload(sanitizedForm, mode1AssignedVendors, rfqSource);
+      const payload = toRFQCreatePayload(updatedForm, mode1AssignedVendors, rfqSource);
       if (isAiExtracted && extractionSummary?.fileName) {
         payload.sourceFileName = extractionSummary.fileName;
       }
@@ -1591,10 +1596,14 @@ export default function IngestionWizard({
           <div className="xl:col-span-2">
             <label htmlFor="rfq-title" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.titleLabel}
+              <RequiredMarker />
             </label>
             <input
               id="rfq-title"
               type="text"
+              required
+              aria-required
+              aria-invalid={!!formErrors.title}
               value={form.title}
               onChange={(e) => patchForm('title', e.target.value)}
               placeholder={MODAL.titlePlaceholder}
@@ -1626,13 +1635,15 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.deliveryPincodeLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+              <RequiredMarker />
             </label>
             <div className="relative">
               <input
                 id="rfq-pincode"
                 type="text"
                 required
+                aria-required
+                aria-invalid={!!formErrors.deliveryPincode || !!pincodeError}
                 value={form.deliveryPincode}
                 onChange={(e) => patchForm('deliveryPincode', e.target.value)}
                 onBlur={handlePincodeBlur}
@@ -1665,12 +1676,14 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-location" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.deliveryLocationLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+              <RequiredMarker />
             </label>
             <input
               id="rfq-location"
               type="text"
               required
+              aria-required
+              aria-invalid={!!formErrors.deliveryLocation}
               value={form.deliveryLocation}
               onChange={(e) => patchForm('deliveryLocation', e.target.value)}
               placeholder={MODAL.deliveryLocationPlaceholder}
@@ -1684,14 +1697,18 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-date" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.targetDateLabel}
+              <RequiredMarker />
             </label>
             <input
               id="rfq-date"
               type="date"
+              required
+              aria-required
+              aria-invalid={!!formErrors.targetDeliveryDate}
               min={new Date().toISOString().slice(0, 10)}
               value={form.targetDeliveryDate}
               onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
+              className="date-input-whole-field w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
             <FieldError message={formErrors.targetDeliveryDate} />
           </div>
@@ -1744,12 +1761,12 @@ export default function IngestionWizard({
             <table className="w-full text-left min-w-[1080px] text-xs">
               <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
                 <tr>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
                   <th className="px-3 py-2.5 text-center font-bold">Action</th>
                 </tr>
               </thead>
@@ -1776,11 +1793,14 @@ export default function IngestionWizard({
                         <input
                           type="text"
                           aria-label={MODAL.colSpecs}
+                          aria-required
+                          aria-invalid={!!errors.technicalSpecs}
                           value={item.technicalSpecs}
                           onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
                           placeholder={MODAL.specsPlaceholder}
                           className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
+                        <FieldError message={errors.technicalSpecs} />
                       </td>
 
                       {/* Quantity */}
@@ -1818,6 +1838,8 @@ export default function IngestionWizard({
                       <td className="px-3 py-2.5 align-top">
                         <select
                           aria-label={MODAL.colMajor}
+                          aria-required
+                          aria-invalid={!!errors.majorCategory}
                           value={item.majorCategory}
                           onChange={(e) => {
                             const newMajor = e.target.value;
@@ -1837,27 +1859,17 @@ export default function IngestionWizard({
                         <FieldError message={errors.majorCategory} />
                       </td>
 
-                      {/* Minor Category */}
+                      {/* Category: a search field that lists the matching categories of the chosen division */}
                       <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMinor}
+                        <CategorySearchInput
+                          label={MODAL.colMinor}
+                          invalid={!!errors.minorCategory}
                           value={item.minorCategory}
-                          disabled={
-                            !item.majorCategory ||
-                            item.majorCategory === ALL_CATEGORIES_OPTION
-                          }
-                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">
-                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
-                          </option>
-                          {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
-                            <option key={minor} value={minor}>
-                              {minor}
-                            </option>
-                          ))}
-                        </select>
+                          options={withStoredValue(minorsFor(item.majorCategory), item.minorCategory)}
+                          onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
+                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
+                          placeholder={categoryFieldPlaceholder(item.majorCategory)}
+                        />
                         <FieldError message={errors.minorCategory} />
                       </td>
 
@@ -2051,12 +2063,12 @@ export default function IngestionWizard({
                 );
               }
 
-              const { signals: mode1Signals } = extractRfqCategorySignals(form);
+              const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
               const matchingVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
                 : allMyVendors;
               const mismatchedVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
                 : [];
 
               let pool = allMyVendors;
@@ -2136,7 +2148,7 @@ export default function IngestionWizard({
                         onClick={() => {
                           const selectableIds = myVendors.filter((v) => {
                             if (mode1Signals.length === 0) return true;
-                            return matchVendorAgainstSignals(v, mode1Signals).isMatch;
+                            return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
                           }).map((v) => v.id);
 
                           if (allSelected) {
@@ -2189,7 +2201,7 @@ export default function IngestionWizard({
                         : [];
                       
                       const matchResult = mode1Signals.length > 0
-                        ? matchVendorAgainstSignals(vendor, mode1Signals)
+                        ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
                         : { isMatch: true };
                       const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
 
@@ -2368,12 +2380,12 @@ export default function IngestionWizard({
                 );
               }
 
-              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
               const matchingVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
                 : allMyVendors;
               const mismatchedVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
                 : [];
 
               let pool = allMyVendors;
@@ -2522,7 +2534,7 @@ export default function IngestionWizard({
                           onClick={() => {
                             const selectableIds = myVendors.filter((v) => {
                               if (rfqSignals.length === 0) return true;
-                              return matchVendorAgainstSignals(v, rfqSignals).isMatch;
+                              return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
                             }).map((v) => v.id);
 
                             if (allSelected) {
@@ -2568,7 +2580,7 @@ export default function IngestionWizard({
                             : [];
 
                           const matchResult = rfqSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, rfqSignals)
+                            ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
                             : { isMatch: true };
                           const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
 
@@ -2747,7 +2759,7 @@ export default function IngestionWizard({
           <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
               const allMyVendors = buyerVendors.filter(isBuyerUploaded);
-              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
               const lineItemMinors = Array.from(
                 new Set(
                   (form.lineItems || [])
@@ -2760,15 +2772,15 @@ export default function IngestionWizard({
               let myVendors = allMyVendors;
               if (lineItemMinors.length > 0) {
                 const minorMatched = allMyVendors.filter((v) =>
-                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m]).isMatch)
+                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
                 );
                 if (minorMatched.length > 0) {
                   myVendors = minorMatched;
                 } else if (rfqSignals.length > 0) {
-                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
                 }
               } else if (rfqSignals.length > 0) {
-                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
               }
 
               return (

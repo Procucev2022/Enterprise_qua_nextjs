@@ -389,11 +389,12 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
       fireEvent.click(smsTab);
     });
 
-    it('covers nextScheduledChaser branch', () => {
+    it('ignores the server next-chaser value and shows follow-up times from the RFQ creation time', () => {
       const rfqWithChaser: RFQItem = {
         id: 'rfq-chaser',
         rfqNumber: 'RFQ-CHASER-1',
         title: 'Chaser RFQ',
+        createdAt: '2026-11-11T07:10:00.000Z',
         followUpData: {
           nextScheduledChaser: 'Tomorrow at 09:00 AM',
           vendors: [],
@@ -412,7 +413,11 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
         />
       );
 
-      expect(screen.getByText('Tomorrow at 09:00 AM')).toBeInTheDocument();
+      expect(screen.queryByText('Tomorrow at 09:00 AM')).not.toBeInTheDocument();
+      // 07:10 UTC is 12:40 IST, so the AI call is due at 10:40 the next day.
+      expect(screen.getByTestId('next-follow-up-call')).toHaveTextContent(
+        `${UI_STRINGS.modals.followUp.nextFollowUpLabel} 12 Nov 2026, 10:40 am IST`
+      );
     });
   });
 

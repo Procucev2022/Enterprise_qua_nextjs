@@ -48,6 +48,8 @@ import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingM
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
+import RequiredMarker from '@/app/components/RequiredMarker';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import {
   addManualRFQLineItem,
   createEmptyManualRFQForm,
@@ -251,7 +253,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   // never looked past the first 500 rows of an 80k+-row table. Fetched from
   // the real paginated/searchable directory instead, scoped to the RFQ's
   // own category signals, same as every other screen fixed this session.
-  const { rawSignals: categoryFetchSignals } = useMemo(() => extractRfqCategorySignals(form), [form]);
+  const categorySignalSet = useMemo(() => extractRfqCategorySignals(form), [form]);
+  const categoryFetchSignals = categorySignalSet.rawSignals;
   const [fetchedCategoryVendors, setFetchedCategoryVendors] = useState<VendorEntry[]>([]);
   const lastFetchedCategorySignalsRef = useRef<string>('');
   useEffect(() => {
@@ -632,7 +635,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
-        const { signals } = extractRfqCategorySignals(form);
+        const { signals, minorOnly } = extractRfqCategorySignals(form);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -641,7 +644,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         const mismatchedVendors: typeof candidatePool = [];
 
         for (const v of candidatePool) {
-          if (signals.length === 0 || matchVendorAgainstSignals(v, signals).isMatch) {
+          if (signals.length === 0 || matchVendorAgainstSignals(v, signals, minorOnly).isMatch) {
             matchingVendors.push(v);
           } else {
             mismatchedVendors.push(v);
@@ -661,7 +664,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               matchingVendors,
               signals,
               VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: form.deliveryLocation, pincode: form.deliveryPincode }
+              { location: form.deliveryLocation, pincode: form.deliveryPincode },
+              minorOnly
             ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
@@ -1066,10 +1070,14 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             <div className="xl:col-span-2">
               <label htmlFor="manual-rfq-title" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
                 {MODAL.titleLabel}
+                <RequiredMarker />
               </label>
               <input
                 id="manual-rfq-title"
                 type="text"
+                required
+                aria-required
+                aria-invalid={!!formErrors.title}
                 value={form.title}
                 onChange={(e) => patchForm('title', e.target.value)}
                 placeholder={MODAL.titlePlaceholder}
@@ -1175,14 +1183,18 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             <div>
               <label htmlFor="manual-rfq-date" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
                 {MODAL.targetDateLabel}
+                <RequiredMarker />
               </label>
               <input
                 id="manual-rfq-date"
                 type="date"
+                required
+                aria-required
+                aria-invalid={!!formErrors.targetDeliveryDate}
                 min={new Date().toISOString().slice(0, 10)}
                 value={form.targetDeliveryDate}
                 onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
-                className="font-medium"
+                className="date-input-whole-field font-medium"
               />
               <FieldError message={formErrors.targetDeliveryDate} />
             </div>
@@ -1201,7 +1213,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   onClick={handleAutoCategorizeAll}
                   disabled={isCategorizing || form.lineItems.length === 0}
                   className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
-                  title="Auto-identify and assign major/minor categories for all items"
+                  title={MODAL.autoCategorizeTitle}
                 >
                   {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                   {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
@@ -1226,22 +1238,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 <table className="w-full text-left min-w-[1080px]">
                   <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400">
                     <tr>
-                      <th className="px-2 py-2 font-bold">{MODAL.colItem}</th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colSpecs}</th>
-                      <th className="px-2 py-2 font-bold">
-                        {MODAL.colMajor}
-                        {form.sourcingMode === 'mode_0' && (
-                          <span className="ml-1 text-[9px] font-medium text-slate-400 normal-case">(Optional)</span>
-                        )}
-                      </th>
-                      <th className="px-2 py-2 font-bold">
-                        {MODAL.colMinor}
-                        {form.sourcingMode === 'mode_0' && (
-                          <span className="ml-1 text-[9px] font-medium text-slate-400 normal-case">(Optional)</span>
-                        )}
-                      </th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colQty}</th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colUnit}</th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colItem}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colQty}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
                       <th className="px-2 py-2" />
                     </tr>
                   </thead>
@@ -1266,15 +1268,19 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <input
                               type="text"
                               aria-label={MODAL.colSpecs}
+                              aria-required
+                              aria-invalid={!!errors.technicalSpecs}
                               value={item.technicalSpecs}
                               onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
                               placeholder={MODAL.specsPlaceholder}
                               className="w-48"
                             />
+                            <FieldError message={errors.technicalSpecs} />
                           </td>
                           <td className="px-2 py-2 align-top">
                             <select
                               aria-label={MODAL.colMajor}
+                              aria-required
                               aria-invalid={!!errors.majorCategory}
                               value={item.majorCategory}
                               onChange={(e) => {
@@ -1294,21 +1300,16 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <FieldError message={errors.majorCategory} />
                           </td>
                           <td className="px-2 py-2 align-top">
-                            <select
-                              aria-label={MODAL.colMinor}
-                              aria-invalid={!!errors.minorCategory}
+                            <CategorySearchInput
+                              label={MODAL.colMinor}
+                              required
+                              invalid={!!errors.minorCategory}
                               value={item.minorCategory}
+                              options={minorsFor(item.majorCategory)}
+                              onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
                               disabled={!item.majorCategory}
-                              onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                              className="w-44 disabled:opacity-50"
-                            >
-                              <option value="">{MODAL.selectPlaceholder}</option>
-                              {minorsFor(item.majorCategory).map((minor) => (
-                                <option key={minor} value={minor}>
-                                  {minor}
-                                </option>
-                              ))}
-                            </select>
+                              placeholder={item.majorCategory ? UI_STRINGS.categorySearch.searchPlaceholder : MODAL.selectPlaceholder}
+                            />
                             <FieldError message={errors.minorCategory} />
                           </td>
                           <td className="px-2 py-2 align-top">
@@ -1608,10 +1609,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   }
 
                   const matchingVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                     : allMyVendors;
                   const mismatchedVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                     : [];
 
                   let pool = allMyVendors;
@@ -1745,7 +1746,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             : [];
 
                           const matchResult = categoryFetchSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                            ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
                             : { isMatch: true };
                           const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 
@@ -1972,10 +1973,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       ) : (() => {
                         const matchingVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                           : allMyVendors;
                         const mismatchedVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                           : [];
 
                         let pool = allMyVendors;
@@ -2110,7 +2111,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   : [];
 
                                 const matchResult = categoryFetchSignals.length > 0
-                                  ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                                  ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
                                   : { isMatch: true };
                                 const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 

@@ -12,6 +12,7 @@ const zohoReconciliationService = require('../services/zohoReconciliationService
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
+const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
 const {
   EMAIL_REGEX,
   VALIDATION_SCHEMAS,
@@ -28,6 +29,7 @@ const {
   PERSISTENCE_MESSAGES,
   EVENT_OUTBOX_TYPES,
   VENDOR_EVALUATION_REQUEST,
+  BUYER_LOCKED_STATUTORY_FIELDS,
   formatMessage,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
@@ -179,6 +181,21 @@ function pickVendorSelfEditFields(body) {
     }
   });
   return picked;
+}
+
+// A buyer may read a vendor's statutory identifiers but may not write them. Those identifiers come from the supplier's
+// own registration, so a buyer's update keeps every other field and reports which locked fields it dropped.
+function splitBuyerLockedFields(body) {
+  const kept = {};
+  const dropped = [];
+  Object.keys(body || {}).forEach((field) => {
+    if (BUYER_LOCKED_STATUTORY_FIELDS.includes(field)) {
+      dropped.push(field);
+    } else {
+      kept[field] = body[field];
+    }
+  });
+  return { kept, dropped };
 }
 
 // A buyer adding a vendor they already deal with directly may set these
@@ -643,9 +660,18 @@ async function updateVendor(req, res, next) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
     if (!(await assertVendorOwnership(req, res, existing))) return;
-    // A vendor editing their own record only gets the self-service field set;
-    // an admin or buyer retains full field access.
-    const updates = req.user.role === 'vendor' ? pickVendorSelfEditFields(req.body) : req.body;
+    // A vendor editing their own record only gets the self-service field set. A buyer's edit drops the locked
+    // statutory identifiers. An admin keeps full field access.
+    let updates = req.body;
+    if (req.user.role === 'vendor') {
+      updates = pickVendorSelfEditFields(req.body);
+    } else if (req.user.role === 'buyer') {
+      const { kept, dropped } = splitBuyerLockedFields(req.body);
+      updates = kept;
+      if (dropped.length > 0) {
+        logger.info(`Ignored buyer changes to locked statutory fields on vendor ${id}`, { id, droppedFields: dropped }, 'VENDOR_CONTROLLER');
+      }
+    }
     logger.info(`Updating vendor ${id}`, { id, updatedFields: Object.keys(updates || {}) }, 'VENDOR_CONTROLLER');
     const updated = await storeService.updateVendorDurably(existing.id, updates);
     res.json({ success: true, data: withoutTemporaryPassword(updated) });
@@ -815,25 +841,17 @@ async function requestEvaluation(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid evaluation request.', errors: bodyValidation.errors });
     }
 
-    let buyerId = null;
-    let buyerCompany = req.user.orgName || req.user.name || 'Buyer';
-    let buyerName = req.user.name || '';
-    let buyerEmail = req.user.email || '';
+    // A buyer may request an evaluation only from a supplier on that buyer's roster. The roster and this check read the
+    // same buyer identifiers, and a supplier that is stored but not in the in-memory list is read from storage.
+    const buyerAccount = req.user.role === 'buyer' ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
+    const buyerScope = req.user.role === 'buyer' ? buyerScopeIdsFor(req.user, buyerAccount) : 'all';
+    const buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
+    const buyerName = buyerAccount?.contactPerson || req.user.name || '';
+    const buyerEmail = req.user.email || '';
 
-    if (req.user.role === 'buyer') {
-      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
-      if (buyerAccount) {
-        buyerId = buyerAccount.id;
-        buyerCompany = buyerAccount.organizationName || buyerCompany;
-        buyerName = buyerAccount.contactPerson || buyerName;
-      } else {
-        buyerId = req.user.sub || req.user.email;
-      }
-    }
-
-    const vendor = storeService.getVendorById(id, buyerId || 'all');
+    const vendor = await storeService.getVendorByIdWithDBFallback(id, buyerScope, { fresh: true });
     if (!vendor) {
-      logger.warn(`Vendor not found for evaluation request: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      logger.warn(`Vendor not found for evaluation request: ${id}`, { id, role: req.user.role }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
 
@@ -862,7 +880,7 @@ async function requestEvaluation(req, res, next) {
       buyerName,
       buyerEmail,
       notes: bodyValidation.sanitizedData.notes || '',
-    }, buyerId);
+    }, buyerScope);
 
     return res.status(200).json({
       success: true,

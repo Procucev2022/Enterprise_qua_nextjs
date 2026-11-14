@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { getRequestContext } = require('./requestContext');
 
 // Log Levels
 const LOG_LEVELS = {
@@ -70,6 +71,31 @@ function redactLogValue(value, key = '', seen = new WeakSet(), preserveAuditIden
     childKey,
     redactLogValue(childValue, childKey, seen, preserveAuditIdentity),
   ]));
+}
+
+/**
+ * Adds the active request's id, method and path to a log line's metadata. A field the caller
+ * already set keeps its value. Lines written outside a request are returned unchanged.
+ */
+function withRequestContext(meta) {
+  const context = getRequestContext();
+  if (!context) return meta;
+  const requestFields = {
+    requestId: context.requestId,
+    requestMethod: context.requestMethod,
+    requestPath: context.requestPath,
+  };
+  if (meta instanceof Error) {
+    return { error: meta, errorName: meta.name, ...requestFields };
+  }
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    return { ...requestFields };
+  }
+  const merged = { ...meta };
+  for (const [key, value] of Object.entries(requestFields)) {
+    if (merged[key] === undefined) merged[key] = value;
+  }
+  return merged;
 }
 
 class LoggerService {
@@ -269,7 +295,7 @@ class LoggerService {
   }
 
   log(level, message, meta = {}, category = 'SYSTEM') {
-    const entry = this.createLogEntry(level, message, meta, category);
+    const entry = this.createLogEntry(level, message, withRequestContext(meta), category);
 
     // Output to console in non-test environment so cloud dashboards (Render, Railway) stream logs live
     if (process.env.NODE_ENV !== 'test') {

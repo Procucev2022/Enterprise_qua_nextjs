@@ -13,6 +13,7 @@ import {
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 import { resolveMinorCategory, findMajorForMinor } from '@/lib/categoryTaxonomy';
+import { findMissingPoDumpFields, findMissingPoDumpHeaders } from '@/lib/validationSchemas';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -200,23 +201,6 @@ export function IngestionProgressCard({
   );
 }
 
-// Splits a raw email cell ("a@x.com; b@x.com, A@X.com") into unique addresses.
-// De-duplicates case-insensitively so each email is shown only once.
-const getUniqueEmails = (raw?: string | null): string[] => {
-  if (!raw) return [];
-  const seen = new Set<string>();
-  return raw
-    .split(/[;,\s/|]+/)
-    .map((e) => e.trim())
-    .filter((e) => e.includes('@'))
-    .filter((e) => {
-      const key = e.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-};
-
 // Parse vendor mobile number: accepts with or without +91 country code,
 // validates exactly 10 digits after country code, and stores country code without duplication.
 export interface ParsedVendorMobile {
@@ -288,7 +272,7 @@ export default function InitialSetupModal() {
   const [completionSummary, setCompletionSummary] = useState<IngestionSummary | null>(null);
   const [isRetryingFailedEmails, setIsRetryingFailedEmails] = useState(false);
 
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
   React.useEffect(() => {
     if (lastIngestionSummary) {
@@ -327,7 +311,6 @@ export default function InitialSetupModal() {
 
   const [isProcessingPOJoin, setIsProcessingPOJoin] = useState(false);
   const [isConfirmingIngestion, setIsConfirmingIngestion] = useState(false);
-  const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
   const [apiJoinedVendors, setApiJoinedVendors] = useState<HistoricalPurchaseVendorRecord[] | null>(null);
 
   // Validate vendor mobile number: accepts with or without +91, exactly 10 numeric digits after country code
@@ -356,14 +339,14 @@ export default function InitialSetupModal() {
 
   const invalidVendors = storedVendors.filter((v) => getVendorRowErrors(v).length > 0);
 
-  const navigateToStep = (targetStep: 1 | 2 | 3 | 4 | 5): boolean => {
+  const navigateToStep = (targetStep: 1 | 2 | 3 | 4): boolean => {
     // Backward navigation to Step 1 or 2 is always allowed
     if (targetStep <= 2) {
       setStep(targetStep);
       return true;
     }
 
-    // Moving forward to Step 3, 4, 5 requires at least 1 vendor in Vendor Master
+    // Moving forward to Step 3 or 4 requires at least 1 vendor in Vendor Master
     if (storedVendors.length === 0) {
       const msg = 'Vendor Master is required. Please upload your Vendor Master spreadsheet or add vendor records before proceeding.';
       setVendorUploadError(msg);
@@ -372,7 +355,7 @@ export default function InitialSetupModal() {
       return false;
     }
 
-    // Moving forward to Step 3, 4, 5 requires all Vendor Master rows to pass required-field validation
+    // Moving forward to Step 3 or 4 requires all Vendor Master rows to pass required-field validation
     if (invalidVendors.length > 0) {
       const msg = `Cannot proceed: ${invalidVendors.length} vendor record(s) contain missing or invalid required fields (Company Name, Email, or Mobile). Please click 'Edit Data' to fix them before continuing.`;
       setVendorUploadError(msg);
@@ -381,7 +364,7 @@ export default function InitialSetupModal() {
       return false;
     }
 
-    // Moving forward to Step 4 or 5 requires PO Dump data
+    // Moving forward to Step 4 (dispatch) requires PO Dump data
     if (targetStep >= 4 && (!poDataUploaded || poLineItems.length === 0)) {
       const msg = 'Historical PO Dump is required. Please upload your PO purchase dump spreadsheet before running AI Category Cross-Match.';
       setPoUploadError(msg);
@@ -390,9 +373,9 @@ export default function InitialSetupModal() {
       return false;
     }
 
-    // If ingestion was completed in the current session, allow viewing Step 5 summary
-    if (targetStep === 5 && (completionSummary || (lastIngestionSummary && poDataUploaded && poLineItems.length > 0))) {
-      setStep(5);
+    // If ingestion was completed in the current session, allow viewing the Step 4 (dispatch) summary
+    if (targetStep === 4 && (completionSummary || (lastIngestionSummary && poDataUploaded && poLineItems.length > 0))) {
+      setStep(4);
       return true;
     }
 
@@ -975,28 +958,17 @@ export default function InitialSetupModal() {
           }
 
           const headerKeys = Object.keys(rawJson[0]);
-          const hasPoNumber = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['ponumber', 'po', 'pono', 'orderid', 'ordernumber', 'orderno', 'purchaseorder'].some((c) => clean === c || clean.includes(c));
-          });
-          const hasVendor = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['vendorname', 'vendoridentifier', 'vendor', 'suppliername', 'supplier', 'companyname', 'vendorcode', 'vendorid'].some((c) => clean === c || clean.includes(c));
-          });
-          const hasItem = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['lineitemdescription', 'lineitem', 'itemdescription', 'description', 'itemname', 'productdescription', 'productname', 'materialdescription', 'material', 'servicedescription', 'service', 'item'].some((c) => clean === c || clean.includes(c));
-          });
-          const hasSpendOrQty = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['quantity', 'qty', 'spend', 'totalspend', 'totalspendinr', 'totalamount', 'totalamountinr', 'totalinr', 'unitprice', 'price', 'rate', 'amount', 'totalvalue', 'poamount', 'total'].some((c) => clean === c || clean.includes(c));
-          });
+          // The three required columns must each be present. Other PO columns are optional.
+          const missingHeaders = findMissingPoDumpHeaders(headerKeys);
 
-          if (!hasPoNumber && !hasVendor && !hasItem && !hasSpendOrQty) {
-            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || 'None';
-            const errMsg = `Sheet headers do not match PO Purchase Dump required fields. Expected: PO Number, Vendor Name, Item Description, Quantity / Spend. (Found: [${foundHeaders}]). Please download and use the provided PO Dump Excel template.`;
+          if (missingHeaders.length > 0) {
+            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || UI_STRINGS.vendorPoIngestion.poDump.noHeadersFound;
+            const errMsg = formatString(UI_STRINGS.vendorPoIngestion.poDump.missingColumnsTemplate, {
+              columns: missingHeaders.join(', '),
+              found: foundHeaders,
+            });
             setPoUploadError(errMsg);
-            showToast('Invalid PO Sheet Headers', errMsg, 'warning');
+            showToast(UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle, errMsg, 'warning');
             setIsParsingPo(false);
             setPoJob(null);
             if (poFileInputRef.current) poFileInputRef.current.value = '';
@@ -1070,13 +1042,7 @@ export default function InitialSetupModal() {
             // Rows the filter below would drop as blank are skipped here. Any other row must name every
             // required field it lacks. Nothing is substituted for a missing value.
             const isBlankRow = !vendorIdentifier && !itemName && !department && !categoryInput;
-            const missingFields: string[] = [];
-            if (!poNumber) missingFields.push('PO Number');
-            if (!poDate) missingFields.push('PO Date');
-            if (!vendorIdentifier) missingFields.push('Vendor');
-            if (!itemName) missingFields.push('Line Item Description');
-            if (quantity < 1) missingFields.push('Quantity');
-            if (totalSpend <= 0) missingFields.push('Spend');
+            const missingFields = findMissingPoDumpFields({ vendorIdentifier, itemName, specs });
             if (!isBlankRow && missingFields.length > 0) {
               invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
             }
@@ -1623,13 +1589,12 @@ export default function InitialSetupModal() {
 
 
         {/* Step Progress Indicators */}
-        <div className="grid grid-cols-5 gap-1.5 text-center text-[11px] font-bold">
+        <div className="grid grid-cols-4 gap-1.5 text-center text-[11px] font-bold">
           {[
             { num: 1, label: '1. Time Horizon' },
             { num: 2, label: '2. Vendor Master' },
             { num: 3, label: '3. PO Dump' },
-            { num: 4, label: '4. AI Category Join' },
-            { num: 5, label: '5. Dispatch Emails' },
+            { num: 4, label: '4. Dispatch Emails' },
           ].map((s) => (
             <button
               key={s.num}
@@ -2330,9 +2295,9 @@ export default function InitialSetupModal() {
             {/* Single-line Simplified PO Dump Info & Download Banner */}
             <div className="p-3.5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-blue-50/70 dark:from-purple-950/40 dark:via-indigo-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="badge badge-purple font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="badge badge-purple font-bold text-[10px] shrink-0">{UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBadge}</span>
                 <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
-                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Category
+                  {UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -2518,7 +2483,7 @@ export default function InitialSetupModal() {
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
                     {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                        <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[120px] truncate" title={p.poNumber}>{p.poNumber}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[120px] truncate" title={p.poNumber}>{p.poNumber || '—'}</td>
                         <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{normalizePoDate(p.poDate) || p.poDate || '—'}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[160px]">
                           <span className="truncate block" title={p.vendorIdentifier}>{p.vendorIdentifier}</span>
@@ -2529,11 +2494,11 @@ export default function InitialSetupModal() {
                         <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px]">
                           <span className="truncate block" title={p.specs || undefined}>{p.specs || '—'}</span>
                         </td>
-                        <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity.toLocaleString('en-IN')}</td>
+                        <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity > 0 ? p.quantity.toLocaleString('en-IN') : '—'}</td>
                         <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.unit}</td>
                         <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
-                          {formatCurrency(p.totalSpend)}
+                          {p.totalSpend > 0 ? formatCurrency(p.totalSpend) : '—'}
                         </td>
                         <td className="p-2.5 text-[10px] max-w-[160px]">
                           {p.category || p.minorCategory ? (
@@ -2609,179 +2574,12 @@ export default function InitialSetupModal() {
           </div>
         )}
 
-        {/* STEP 4: AI CATEGORY JOIN & CROSS-MATCH AUDIT */}
+        {/* STEP 4: FINAL CONFIRMATION & TAILORED EMAIL PREVIEWS */}
         {step === 4 && (
-          <div className="space-y-4 animate-fade-in">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                  Step 4: AI Cross-Match & Category Assignment Audit
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                  Review vendors with buyer-mapped categories vs vendors requiring self-mapping.
-                </p>
-              </div>
-
-              {/* Filter Tabs */}
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-1 rounded-xl text-xs font-bold shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setActiveReviewTab('all')}
-                  className={`px-2.5 py-1 rounded-lg transition-all ${
-                    activeReviewTab === 'all' ? 'bg-white dark:bg-gray-900 text-indigo-600 shadow-sm' : 'text-slate-500'
-                  }`}
-                >
-                  All ({joinedVendors.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveReviewTab('mapped')}
-                  className={`px-2.5 py-1 rounded-lg transition-all ${
-                    activeReviewTab === 'mapped' ? 'bg-white dark:bg-gray-900 text-emerald-600 shadow-sm' : 'text-slate-500'
-                  }`}
-                >
-                  ✓ Mapped ({mappedVendors.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveReviewTab('unmapped')}
-                  className={`px-2.5 py-1 rounded-lg transition-all ${
-                    activeReviewTab === 'unmapped' ? 'bg-white dark:bg-gray-900 text-amber-600 shadow-sm' : 'text-slate-500'
-                  }`}
-                >
-                  ⚠️ Unmapped ({unmappedVendors.length})
-                </button>
-              </div>
-            </div>
-
-            {/* List of Correlated Vendors */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1 text-xs">
-              {joinedVendors
-                .filter((v) => {
-                  if (activeReviewTab === 'mapped') return v.categoriesMappedByBuyer;
-                  if (activeReviewTab === 'unmapped') return !v.categoriesMappedByBuyer;
-                  return true;
-                })
-                .map((v) => (
-                  <div
-                    key={v.id}
-                    className={`p-4 rounded-2xl border transition-all space-y-2.5 ${
-                      v.categoriesMappedByBuyer
-                        ? 'bg-slate-50/80 dark:bg-gray-800/50 border-slate-200 dark:border-gray-800'
-                        : 'bg-amber-50/50 dark:bg-amber-950/20 border-amber-300/80 dark:border-amber-800/60'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="font-black text-slate-900 dark:text-white text-xs truncate max-w-[200px]" title={v.companyName}>
-                            {v.companyName}
-                          </h4>
-                          {v.vendorCode && (
-                            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300">
-                              {v.vendorCode}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-
-                      {v.categoriesMappedByBuyer ? (
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 shrink-0 flex items-center gap-0.5">
-                          <Check size={10} /> PO Mapped ({v.poCount} POs)
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 shrink-0 flex items-center gap-0.5">
-                          <AlertCircle size={10} /> No POs · Self-Map
-                        </span>
-                      )}
-                    </div>
-
-                    {(() => {
-                      const emails = getUniqueEmails(v.email);
-                      const phone = v.phone?.trim();
-                      if (emails.length === 0 && !phone) return null;
-                      return (
-                        <div className="flex flex-nowrap items-center gap-x-2 text-[10px] text-slate-500 font-mono min-w-0 max-w-full">
-                          {emails.length > 0 && (
-                            <span className="min-w-0 truncate" title={emails.join(', ')}>
-                              {emails.join(', ')}
-                            </span>
-                          )}
-                          {emails.length > 0 && phone && (
-                            <span className="shrink-0 text-slate-300 dark:text-gray-600" aria-hidden="true">·</span>
-                          )}
-                          {phone && <span className="shrink-0 whitespace-nowrap">{phone}</span>}
-                        </div>
-                      );
-                    })()}
-
-                    {v.categoriesMappedByBuyer ? (
-                      <>
-                        {/* 1st Set Category */}
-                        <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/50">
-                          <span className="text-[9px] uppercase font-black text-indigo-700 dark:text-indigo-300 block">
-                            1st Set: Primary Major Category
-                          </span>
-                          <span className="font-bold text-indigo-950 dark:text-white text-xs block mt-0.5">
-                            {v.firstSetMajorCategory}
-                          </span>
-                        </div>
-
-                        {/* 2nd Set Minor Categories */}
-                        <div className="space-y-1">
-                          <span className="text-[9px] uppercase font-bold text-slate-400 block">
-                            2nd Set: Minor Categories & Product Lines
-                          </span>
-                          <div className="flex flex-wrap gap-1">
-                            {v.secondSetMinorCategories.map((m) => (
-                              <span
-                                key={m}
-                                className="px-2 py-0.5 rounded-lg bg-white dark:bg-gray-900 text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-700 text-[10px] font-semibold"
-                              >
-                                {m}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      /* Unmapped Fallback Notice Box */
-                      <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900/60 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
-                        <div className="font-bold flex items-center gap-1 text-amber-800 dark:text-amber-300 text-[10px] uppercase">
-                          <AlertCircle size={12} />
-                          Dispatched Notification Protocol:
-                        </div>
-                        <p className="text-[10px] leading-relaxed">
-                          The onboarding email will explicitly notify <strong>{v.companyName}</strong> that <em>&quot;the buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;</em>
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-            </div>
-
-            <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
-              <button type="button" onClick={() => navigateToStep(3)} className="btn btn-secondary btn-sm">
-                Back to PO Dump
-              </button>
-              <button
-                type="button"
-                onClick={() => navigateToStep(5)}
-                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
-              >
-                Review Email Dispatch & Finalize <ArrowRight size={14} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 5: FINAL CONFIRMATION & TAILORED EMAIL PREVIEWS */}
-        {step === 5 && (
           <div className="space-y-4 animate-fade-in">
             <div>
               <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                Step 5: Confirm Ingestion & Dispatch Tailored Onboarding Emails
+                Step 4: Confirm Ingestion & Dispatch Tailored Onboarding Emails
               </h3>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
                 The platform will dispatch tailored credentials and category notices based on PO correlation.
@@ -2807,7 +2605,7 @@ export default function InitialSetupModal() {
             {/* Submission Error Banner */}
             {submissionError && (
               <div
-                data-testid="step5-submission-error-banner"
+                data-testid="dispatch-submission-error-banner"
                 className="p-4 rounded-2xl bg-rose-50/90 dark:bg-rose-950/50 border-2 border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-200 flex items-start justify-between gap-3 animate-fade-in shadow-sm"
               >
                 <div className="flex items-start gap-3">
@@ -2836,11 +2634,11 @@ export default function InitialSetupModal() {
             <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
               <button
                 type="button"
-                onClick={() => navigateToStep(4)}
+                onClick={() => navigateToStep(3)}
                 className="btn btn-secondary btn-sm"
                 disabled={isConfirmingIngestion}
               >
-                Back to Category Join
+                Back to PO Dump
               </button>
               <div className="flex items-center gap-2">
                 <button

@@ -5677,3 +5677,171 @@ Remove Frontend logging in database, we don't want to store this logs data in da
 Increase Gemini AI model timeout to 10 min. for now. not 15 seconds, Gemini AI model time is not in our hands. complex process may take some time. Do not touch gemini model timeout for now
 ```
 ---
+### Prompt 192
+**Timestamp**: 2026-11-13T12:15:26+05:30
+```text
+Keep pushing the changes directly in the "test-v3" branch for now. as soon as any change done.
+
+create account is not working
+```
+### Prompt 194
+**Timestamp**: 2026-11-13T13:12:48+05:30
+```text
+Keep pushing the changes directly in the "test-v3" branch for now. as soon as any change done.
+
+"*" mark for full name is madatory in image 1. Please add this.
+
+remove the "company name" already vendor enterprise is there. so it is duplicate in second image
+```
+---
+
+### Prompt 195
+
+**Timestamp**: 2026-11-13T13:39:45+05:30
+
+```text
+no vendor is assigned or invitation sent for any Rfq. Can you please check.
+```
+
+---
+
+### Prompt 196
+
+**Timestamp**: 2026-11-13T14:09:22+05:30
+
+```text
+All RFQ fields except Estimated Budget should be mandatory. Also, clicking anywhere inside the Target Delivery Date field should open the calendar picker.
+```
+
+---
+
+### Prompt 197
+
+**Timestamp**: 2026-11-13T15:39:00+05:30 (approximate: the message was re-sent and its exact send time was not recorded)
+
+```text
+All RFQ fields except Estimated Budget should be mandatory. Also, clicking anywhere inside the Target Delivery Date field should open the calendar picker.
+```
+
+---
+
+### Prompt 198
+
+**Timestamp**: 2026-11-13T16:09:03+05:30
+
+```text
+po dump needs only vendor name, line item description & specifications. but complete PO dump is optional
+```
+
+---
+### Prompt 199
+
+**Timestamp**: 2026-11-13T16:59:08+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded)
+
+```text
+After creating an RFQ, RFQ invitations seems like going to vendors based on major category, but it should go based on minor category. please check once & fix if there is issue.
+```
+
+---
+### Prompt 200
+**Timestamp**: 2026-11-13T18:50:18+05:30 (approximate: logged at this step; the exact send time was not recorded, and this prompt was sent before Prompt 201. A screenshot of the ingestion wizard was attached.)
+```text
+Remove entire 4th AI category join page in image 1
+```
+---
+### Prompt 201
+**Timestamp**: 2026-11-13T18:50:18+05:30 (approximate: logged at this step; the exact send time was not recorded)
+```text
+invite 25 vendors for submitting quotations per each unique minor category. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at gmtrfq@procucev.com,quateam@procucev.com,anshul.goel@procucev.com
+```
+---
+### Prompt 202
+**Timestamp**: 2026-11-13T19:40:37+05:30 (the exact send time was not recorded; logged when this request was picked up. A screenshot of the Buyer Initial Setup wizard was attached.)
+```text
+Remove entire 4th AI category join page as mentioned in image below
+```
+---
+### Prompt 203
+**Timestamp**: 2026-11-13T22:39:47+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Vendor Evaluation Summary was attached.)
+```text
+Please remove the vendor code from both places, change the Overall Score from *Not Evaluated* to *NA*, and remove the **Submitted: Not recorded* text from the Vendor Evaluation Summary.
+```
+---
+### Prompt 204
+**Timestamp**: 2026-11-13T22:51:40+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. Two screenshots of the vendor profile modal for Veera Solutions Pvt LTD were attached.)
+```text
+Please lock the Statutory Details section from editing. Fetch the mandatory GST number from vendor registration and display it automatically. Show "NA" for unavailable PAN, MSME, and Turnover details. Keep the remaining profile sections editable.
+
+some vendor dummy pan data also coming sir.
+```
+---
+### Prompt 205
+**Timestamp**: 2026-11-14T04:41:45+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. Two screenshots were attached: the Revise Supplier Performance Rating modal, and the Evaluation Request Failed message for vendor v-hist-1791613849048-0.)
+```text
+After clicking Request Vendor Evaluation, the request is showing an error and the popup is not closing. Please fix the API issue and ensure the popup closes automatically after successful submission and the page refreshes with the updated status.
+```
+---
+### Prompt 206
+**Timestamp**: 2026-11-14T05:18:37+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Add Vendor modal was attached.)
+```text
+Please reuse the existing Pincode API functionality from the Create RFQ page in the Invite Vendor form. When a valid pincode is entered, automatically fetch and populate the City and State fields.
+```
+---
+### Prompt 207
+**Timestamp**: 2026-11-14T06:25:02+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Vendor Follow-Up Details modal was attached.)
+```text
+Remove the *“Next Automated Follow-Up Wave: Not recorded”* section. Instead, display the next follow-up time separately for each channel, calculated from the RFQ creation timestamp:
+
+- *AI Voice Call:* RFQ creation time + 6 hours
+
+- *WhatsApp:* RFQ creation time + 12 hours
+
+- *SMS:* RFQ creation time + 5 minutes
+
+- *Email:* RFQ creation time + 24 hours
+
+Show the next follow-up date and time in the respective channel sections.
+
+ For AI Calls and WhatsApp, calculate the follow-up countdown only within the business hours of 10:00 AM to 6:00 PM (IST).
+
+If the RFQ is created between 10:00 AM and 6:00 PM, start the countdown from the RFQ creation time, counting only within this time window.
+
+If the RFQ is created after 6:00 PM, start the countdown at 10:00 AM the next day.
+
+If the RFQ is created before 10:00 AM, start the countdown at 10:00 AM on the same day.
+```
+---
+### Prompt 208
+**Timestamp**: 2026-11-14T08:00:37+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Line Items Specification table was attached.)
+```text
+UI change only, rename Major Category to Division and Minor Category to Category. Apart from the minor Category dropdown and implement a search-based input: showing matching categories.
+```
+---
+### Prompt 209
+**Timestamp**: 2026-11-14T08:30:02+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Buyer Initial Setup modal was attached.)
+```text
+Currently, the popup appears on every login. Please fix the condition: show this page only until the buyer uploads their own vendor for the first time. Once the buyer successfully uploads their vendor, never show this popup again on future logins .
+```
+---
+### Prompt 210
+**Timestamp**: 2026-11-14T09:51:00+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Extend RFQ Closing Deadline modal was attached.)
+```text
+change this +24 and +48 to give calender and timer how many days buyer want can change this
+```
+---
+### Prompt 211
+**Timestamp**: 2026-11-14T10:21:59+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the RFQ details page for RFQ261411297419 was attached.)
+```text
+sir please check this closing dateline timestamp and create rfq tiime stamp should match created at 07:49 am closing 5:30 am default 48 hours
+```
+---
+### Prompt 212
+**Timestamp**: 2026-11-14T11:22:53+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. Two screenshots were attached: the ingestion wizard line items for Electrical_RFQ.pdf and the RFQ details supplier panel showing 25 assigned and invited suppliers.)
+```text
+Seems like RFQ invitation process is not working properly. It didn't sent the RFQ invitation to extracted minor category. Please check & debug once, what could be the issue.
+
+Ideal RFQ invitation flow:
+
+"invite 25 vendors for submitting quotations per each unique minor category. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at gmtrfq@procucev.com,quateam@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com"
+```
+---

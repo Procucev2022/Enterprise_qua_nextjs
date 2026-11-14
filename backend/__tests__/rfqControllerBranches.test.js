@@ -13,6 +13,17 @@ const pool = require('../src/db/pool');
 const eventOutboxService = require('../src/services/eventOutboxService');
 const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 
+// One line item with every field the RFQ form requires. The controller rewrites rows in place,
+// so each request spreads a fresh copy rather than sharing one object.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Pump',
+  technicalSpecs: 'Centrifugal, 5 HP, cast iron casing',
+  quantity: 1,
+  unit: 'Nos',
+  majorCategory: 'Pumps & Motors',
+  minorCategory: 'Centrifugal Pumps',
+};
+
 function mockRes() {
   const res = {
     statusCode: 200,
@@ -518,7 +529,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             deliveryLocation: 'Navi Mumbai Plant',
             deliveryPincode: '400701',
             sourcingMode: 'mode_0',
-            lineItems: [{ itemName: 'Pump' }],
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
             source: 'email_gateway',
             buyerEmail: 'b@test.com',
           },
@@ -546,7 +557,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
               deliveryLocation: 'Navi Mumbai Plant',
               deliveryPincode: '400701',
               sourcingMode: 'mode_0',
-              lineItems: [{ itemName: 'Pump' }],
+              lineItems: [{ ...COMPLETE_LINE_ITEM }],
               source: 'email_gateway',
               buyerEmail: 'b@test.com',
             },
@@ -583,7 +594,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             deliveryLocation: 'Navi Mumbai Plant',
             deliveryPincode: '400701',
             sourcingMode: 'mode_2',
-            lineItems: [{ itemName: 'Pump' }],
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
           },
         },
         resV2,
@@ -604,7 +615,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             deliveryLocation: 'Navi Mumbai Plant',
             deliveryPincode: '400701',
             sourcingMode: 'mode_2',
-            lineItems: [{ itemName: 'Pump' }],
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
           },
         },
         resV2Err,
@@ -629,7 +640,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             deliveryLocation: 'Navi Mumbai Plant',
             deliveryPincode: '400701',
             sourcingMode: 'mode_1',
-            lineItems: [{ itemName: 'Pump' }],
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
             buyerEmail: 'fail@buyer.com',
           },
           user: { role: 'buyer', email: 'fail@buyer.com' },
@@ -956,13 +967,13 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       // Invalid payload
       storeService.getRFQByIdAsync.mockResolvedValue({ id: 'rfq-ext-1' });
       const resBad = mockRes();
-      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 'invalid' }, user: { role: 'admin' } }, resBad, next);
+      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { days: 'invalid' }, user: { role: 'admin' } }, resBad, next);
       expect(resBad.statusCode).toBe(400);
 
       // extendRFQ returns failure
       jest.spyOn(storeService, 'extendRFQDurably').mockResolvedValue({ success: false, reason: 'ALREADY_EXTENDED', error: 'Already extended' });
       const resFail = mockRes();
-      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 24 }, user: { role: 'admin' } }, resFail, next);
+      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { days: 1 }, user: { role: 'admin' } }, resFail, next);
       expect(resFail.statusCode).toBe(400);
 
       // extendRFQ returns success
@@ -971,7 +982,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         rfq: { id: 'rfq-ext-1', closingDeadline: '2026-12-01' },
       });
       const resOk = mockRes();
-      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 24 }, user: { role: 'admin', email: 'b@test.com' } }, resOk, next);
+      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { days: 1 }, user: { role: 'admin', email: 'b@test.com' } }, resOk, next);
       expect(resOk.statusCode).toBe(200);
       expect(storeService.getRFQByIdAsync).toHaveBeenCalledWith('rfq-ext-1');
 
@@ -1500,6 +1511,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2020-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
           },
           user: { role: 'buyer', email: 'b@corp.com' },
         },
@@ -1520,6 +1532,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
           },
           user: { role: 'buyer', email: 'b@corp.com' },
         },
@@ -1542,6 +1555,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
           },
           user: { role: 'buyer', email: 'b@corp.com' },
         },
@@ -1562,7 +1576,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
-            lineItems: [{ targetDate: '2020-01-01' }],
+            lineItems: [{ ...COMPLETE_LINE_ITEM, targetDate: '2020-01-01' }],
           },
           user: { role: 'buyer', email: 'b@corp.com' },
         },
@@ -1582,7 +1596,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
-            lineItems: [{ majorCategory: 'Unknown Major' }],
+            lineItems: [{ ...COMPLETE_LINE_ITEM, majorCategory: 'Unknown Major' }],
           },
           user: { role: 'buyer', email: 'b@corp.com' },
         },
@@ -1646,6 +1660,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
           },
           user: { role: 'buyer', email: 'b@v1.com' },
         },
@@ -1674,6 +1689,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
           },
           user: { role: 'buyer', email: 'b@exh.com' },
         },
@@ -1715,6 +1731,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
               targetDeliveryDate: '2099-01-01',
               deliveryLocation: 'Mumbai',
               deliveryPincode: '400001',
+              lineItems: [{ ...COMPLETE_LINE_ITEM }],
             },
             user: { role: 'buyer', email: 'b@mailfail.com' },
           },
@@ -1749,6 +1766,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
               targetDeliveryDate: '2099-01-01',
               deliveryLocation: 'Mumbai',
               deliveryPincode: '400001',
+              lineItems: [{ ...COMPLETE_LINE_ITEM }],
             },
             user: { role: 'buyer', email: 'b@mailrefused.com' },
           },
@@ -2225,6 +2243,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             title: 'Test Minor No Major',
             category: '',
             majorCategory: '',
+            lineItems: [{ ...COMPLETE_LINE_ITEM }],
             minorCategory: 'Valves',
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
@@ -2377,7 +2396,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
             targetDeliveryDate: '2099-01-01',
             deliveryLocation: 'Mumbai',
             deliveryPincode: '400001',
-            lineItems: [{ minorCategory: 'Centrifugal', targetDate: '2099-01-01' }],
+            lineItems: [{ ...COMPLETE_LINE_ITEM, minorCategory: 'Centrifugal', targetDate: '2099-01-01' }],
           },
           user: { role: 'buyer', email: 'b@fill.com' },
         },

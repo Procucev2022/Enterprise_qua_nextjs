@@ -16,6 +16,7 @@ const { getD1Binding, getD1HttpClient, queryD1 } = d1Bridge;
 const { queryCache } = require('./queryCache');
 const { queryAuditor } = require('./queryAuditor');
 const { logger } = require('../services/loggerService');
+const { recordD1Statement } = require('../services/requestContext');
 const { DATABASE_QUERY_LOGGING } = require('../config/constants');
 const crypto = require('crypto');
 
@@ -134,6 +135,31 @@ function hasStorage() {
   return !!poolModule.pool || !!getD1Binding() || !!getD1HttpClient();
 }
 
+/** The SQL verb (SELECT, INSERT, ...) that starts a statement. Used to filter query logs. */
+function getSqlOperation(sql) {
+  return /^\s*([a-z]+)/i.exec(String(sql || ''))?.[1]?.toUpperCase() || 'UNKNOWN';
+}
+
+/**
+ * The statement template with whitespace collapsed and every quoted literal replaced by '?'.
+ * Parameter values are bound separately and never appear in the SQL text, so the preview carries
+ * no request data. It is cut to DATABASE_QUERY_LOGGING.SQL_PREVIEW_MAX_CHARS.
+ */
+function buildSqlPreview(sql) {
+  const compact = String(sql || '')
+    .replace(/\s+/g, ' ')
+    .replace(/'(?:[^']|'')*'/g, "'?'")
+    .trim();
+  const limit = DATABASE_QUERY_LOGGING.SQL_PREVIEW_MAX_CHARS;
+  return compact.length > limit ? `${compact.slice(0, limit)}...` : compact;
+}
+
+/** The SQLite error code (for example SQLITE_CONSTRAINT) named in a D1 error message, when there is one. */
+function extractSqliteErrorCode(err) {
+  const match = /SQLITE_[A-Z_]+/.exec(String(err?.message || ''));
+  return match ? match[0] : undefined;
+}
+
 /**
  * Run a parameterised query and return the full pg result.
  *
@@ -196,6 +222,7 @@ async function query(text, params = [], options = {}) {
   let result;
   const table = queryAuditor.detectTable(sql);
   const queryId = crypto.createHash('sha256').update(sql.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
+  const operation = getSqlOperation(sql);
   const provider = d1
     ? (d1._isHttpClient ? 'cloudflare-d1-http' : 'cloudflare-d1')
     : 'postgres';
@@ -253,13 +280,25 @@ async function query(text, params = [], options = {}) {
     }
   } catch (err) {
     const durationMs = Date.now() - startTime;
+    const overloaded = d1 ? d1Bridge.isD1OverloadError(err) : false;
+    const undefinedParameterIndexes = d1 ? d1Bridge.findUndefinedParameterIndexes(boundParams) : [];
+    if (d1) recordD1Statement({ durationMs, failed: true, overloaded });
     logger.error('Database query failed', {
       error: err,
+      errorName: err?.name,
+      errorCode: err?.code,
+      sqliteErrorCode: extractSqliteErrorCode(err),
       queryId,
+      operation,
       table,
+      sqlPreview: buildSqlPreview(sql),
       durationMs,
       parameterCount: boundParams.length,
+      ...(undefinedParameterIndexes.length > 0 ? { undefinedParameterIndexes } : {}),
       provider,
+      retryable: d1 ? d1Bridge.isRetryableD1Error(err) : false,
+      overloaded,
+      attempts: err?.d1Attempts,
     }, 'DATABASE_QUERY');
     throw err;
   }
@@ -267,8 +306,12 @@ async function query(text, params = [], options = {}) {
 
   // 3. Continuous query auditing
   queryAuditor.auditQuery(sql, boundParams, durationMs, false);
-
   if (d1) {
+    recordD1Statement({
+      durationMs,
+      rowsRead: result?.meta?.rowsRead,
+      rowsWritten: result?.meta?.rowsWritten,
+    });
     const configuredSampleRate = Number(
       process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE ?? DATABASE_QUERY_LOGGING.D1_SUCCESS_SAMPLE_RATE_DEFAULT
     );
@@ -287,7 +330,6 @@ async function query(text, params = [], options = {}) {
     const isHighRead = Number.isFinite(rowsRead) &&
       rowsRead >= highReadThreshold;
     if (isSlow || isHighRead || Math.random() < sampleRate) {
-      const operation = /^\s*([a-z]+)/i.exec(sql)?.[1]?.toUpperCase() || 'UNKNOWN';
       logger.info('D1 query completed', {
         queryId,
         table,
@@ -307,6 +349,7 @@ async function query(text, params = [], options = {}) {
         highRead: isHighRead,
         provider,
         slow: isSlow,
+        ...(isSlow || isHighRead ? { sqlPreview: buildSqlPreview(sql) } : {}),
       }, 'DATABASE_QUERY');
     }
   }

@@ -1,0 +1,11 @@
+-- 0033_vendor_major_category_index.d1.sql
+--
+-- Index for the V0 DB-backed vendor assignment lookup (domainQueries.getPublicVendorsByMajorCategoryFromDB).
+-- That lookup filters on major_category COLLATE NOCASE and reads only the vendors in the RFQ's categories.
+-- With no index on that expression, SQLite reads the whole vendors table, which failed under D1 overload
+-- and left V0 RFQs without vendors.
+--
+-- schema.d1.sql declares this index, but the baseline is applied only once. A database whose baseline was
+-- recorded before the index was added never receives it, so this migration creates it. IF NOT EXISTS keeps
+-- the statement a no-op where the index already exists.
+CREATE INDEX IF NOT EXISTS idx_vendors_major_category_nocase ON vendors (major_category COLLATE NOCASE);

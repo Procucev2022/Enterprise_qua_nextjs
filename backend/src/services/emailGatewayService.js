@@ -3159,7 +3159,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     if (typeof storeService.autoAssignVendorsFromDB === 'function') {
       try {
-        await storeService.autoAssignVendorsFromDB(created);
+        await storeService.autoAssignVendorsFromDB(created, { notifyShortfall: true });
       } catch (assignErr) {
         logger.warn('Failed to auto-assign vendors for email RFQ', { rfqNumber: created.rfqNumber, error: assignErr.message }, 'EMAIL_GATEWAY');
       }
@@ -3608,7 +3608,23 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
               subject: result.message?.subject,
               uid: ref.id,
             });
-            logger.error(
+            // These outcomes are explained to the sender by an auto-reply, so they are expected results.
+            // Only a processing failure is an error.
+            const expectedOutcome = [
+              INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+              INGESTION_OUTCOME.NO_LINE_ITEMS,
+              INGESTION_OUTCOME.UNREADABLE,
+              INGESTION_OUTCOME.LINE_ITEMS_EXCEED_LIMIT,
+              INGESTION_OUTCOME.INVALID_RFQ,
+              INGESTION_OUTCOME.VENDOR_NOT_FOUND,
+              INGESTION_OUTCOME.SELF_MAIL_IGNORED,
+              INGESTION_OUTCOME.CREDITS_EXHAUSTED,
+              INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED,
+              INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED,
+              INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED,
+            ].includes(result.status);
+            logger.log(
+              expectedOutcome ? 'WARN' : 'ERROR',
               `RFQ creation failed for message ${resolvedMessageId} (${result.status}): ${result.detail || 'unknown reason'}`,
               {
                 messageId: resolvedMessageId,

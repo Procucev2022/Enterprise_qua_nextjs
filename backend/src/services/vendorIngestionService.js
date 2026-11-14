@@ -527,6 +527,17 @@ async function confirmVendorMaster(sessionUser, sessionId, { rows, fileName, rep
     currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
   });
 
+  if (totalStored > 0) {
+    const firstUpload = await queries.markVendorMasterUploaded(context.organizationId);
+    if (firstUpload) {
+      logger.info(
+        'Organization vendor master upload recorded for the first time',
+        { sessionId, organizationId: context.organizationId, totalStored },
+        LOG_CATEGORY
+      );
+    }
+  }
+
   await recordAudit(context, {
     sessionId,
     action: VENDOR_INGESTION_AUDIT_ACTION.VENDOR_MASTER_UPLOADED,
@@ -602,9 +613,11 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
     return null;
   });
 
+  // A row without a PO date cannot be placed before or after the window. It is kept
+  // inside, because a dump no longer has to carry dates to be used.
   const stamped = valid.map((row) => ({
     ...row,
-    inHorizon: row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd,
+    inHorizon: !row.poDate || (row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd),
   }));
 
   if (replaceExisting) {

@@ -2,6 +2,7 @@ const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
 const { sanitizePublicVendor } = require('./vendorController');
 const { isRetryableD1Error } = require('../db/d1Bridge');
+const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
 
 async function getBootstrap(req, res, next) {
   try {
@@ -20,15 +21,7 @@ async function getBootstrap(req, res, next) {
           userId: user.sub || user.id || null,
         }, 'BOOTSTRAP_CONTROLLER');
       }
-      if (resolvedBuyerAccount) {
-        if (resolvedBuyerAccount.id) candidateBuyerIds.push(resolvedBuyerAccount.id);
-        if (resolvedBuyerAccount.corporateEmail) candidateBuyerIds.push(resolvedBuyerAccount.corporateEmail);
-        if (resolvedBuyerAccount.organizationId) candidateBuyerIds.push(resolvedBuyerAccount.organizationId);
-      }
-      if (user.sub) candidateBuyerIds.push(user.sub);
-      if (user.id) candidateBuyerIds.push(user.id);
-      if (user.email) candidateBuyerIds.push(user.email);
-      if (user.orgId) candidateBuyerIds.push(user.orgId);
+      candidateBuyerIds.push(...buyerScopeIdsFor(user, resolvedBuyerAccount));
       buyerId = resolvedBuyerAccount ? resolvedBuyerAccount.id : user.sub || user.email;
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;

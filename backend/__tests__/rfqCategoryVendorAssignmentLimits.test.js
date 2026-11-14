@@ -50,8 +50,8 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
     expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(8);
   });
 
-  describe('25 Vendors per Unique Minor Category without Major Fallback', () => {
-    test('invites vendors strictly based on minor category (e.g. exactly 21 vendors) without major category fallback', () => {
+  describe('25 Vendors per Unique Minor Category with Major Fallback', () => {
+    test('invites all 21 minor vendors and tops the RFQ up to 25 from the parent major category', () => {
       const buyer = storeService.addBuyerAccount({
         organizationName: 'Fallback Test Corp',
         corporateEmail: 'buyer-fallback@test.com',
@@ -105,7 +105,7 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
       );
 
       const assigned = rfq.assignedVendors || [];
-      expect(assigned).toHaveLength(21);
+      expect(assigned).toHaveLength(25);
 
       const minorIds = new Set(minorVendors.map((v) => v.id));
       const majorIds = new Set(majorOnlyVendors.map((v) => v.id));
@@ -113,10 +113,10 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
       const assignedMinor = assigned.filter((v) => minorIds.has(v.id));
       const assignedMajorFallback = assigned.filter((v) => majorIds.has(v.id));
 
-      // Exactly 21 from minor category
+      // All 21 minor-category vendors
       expect(assignedMinor).toHaveLength(21);
-      // Strictly 0 from major category (no fallback)
-      expect(assignedMajorFallback).toHaveLength(0);
+      // The remaining 4 come from the major category
+      expect(assignedMajorFallback).toHaveLength(4);
     });
 
     test('preserves delivery location proximity sorting within minor category matches', () => {
@@ -196,13 +196,13 @@ describe('RFQ Category Vendor Assignment Limits (25 per Unique Minor Category wi
       );
 
       const assigned = rfq.assignedVendors || [];
-      expect(assigned).toHaveLength(21);
+      expect(assigned).toHaveLength(25);
 
       // Nearby minor vendor (exact pincode) must be at the very top of minor matches
       expect(assigned[0].id).toBe(nearbyMinorVendor.id);
 
-      // Major vendors must NOT be invited (no fallback)
-      expect(assigned.some((v) => v.id === nearbyMajorFallback.id)).toBe(false);
+      // The top-up fills the 4 slots left after the 21 minor vendors, best located first
+      expect(assigned.some((v) => v.id === nearbyMajorFallback.id)).toBe(true);
     });
 
     test('invites up to 25 vendors strictly per unique minor category across multiple line items', () => {

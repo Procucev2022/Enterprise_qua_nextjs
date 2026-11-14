@@ -10,8 +10,10 @@ import type {
   UserRole,
   OrganizationType,
   SourcingMode,
+  RFQItem,
 } from './types';
-import { UI_STRINGS } from './uiStrings';
+import { UI_STRINGS, formatString } from './uiStrings';
+import { EXTENSION_MIN_DAYS, EXTENSION_MAX_DAYS, isWholeExtensionDays } from './validationSchemas';
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -889,6 +891,57 @@ export function formatCurrency(amount: number): string {
  */
 export const DISPLAY_TIMEZONE = 'Asia/Kolkata';
 
+/** Milliseconds in one minute and in one day. */
+export const MILLISECONDS_PER_MINUTE = 60 * 1000;
+export const MILLISECONDS_PER_DAY = 24 * 60 * MILLISECONDS_PER_MINUTE;
+
+/** India Standard Time is UTC+05:30 all year. It has no daylight saving. */
+export const IST_UTC_OFFSET_MINUTES = 5 * 60 + 30;
+
+/**
+ * Minutes from RFQ creation to each follow-up channel. These match the backend defaults in
+ * backend/src/config/constants.js (CHASER_DELAYS). A deployment that sets a CHASER_*_DELAY_MS
+ * variable changes when messages are really sent, but not these displayed times.
+ */
+export const RFQ_FOLLOW_UP_DELAY_MINUTES = {
+  CALL: 6 * 60,
+  WHATSAPP: 12 * 60,
+  SMS: 5,
+  EMAIL: 24 * 60,
+} as const;
+
+/**
+ * The IST business window, in minutes after midnight. AI calls and WhatsApp follow-ups count only
+ * the time inside this window.
+ */
+export const FOLLOW_UP_BUSINESS_HOURS = {
+  OPEN_MINUTE_OF_DAY: 10 * 60,
+  CLOSE_MINUTE_OF_DAY: 18 * 60,
+} as const;
+
+/**
+ * An RFQ timestamp as epoch milliseconds, or null when the value is absent or unreadable.
+ *
+ * Reads the same forms as formatIndianDateTime. A zone-less "YYYY-MM-DD HH:mm:ss" value and a value
+ * tagged UTC are both read as UTC. A date-only value is read as midnight UTC.
+ */
+export function parseRfqTimestamp(value?: string | null): number | null {
+  if (!value || value.trim() === '') return null;
+  const trimmed = value.trim();
+
+  // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
+  // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
+  let normalized = trimmed;
+  if (/(\s+|_)UTC$/i.test(normalized)) {
+    normalized = `${normalized.replace(/(\s+|_)UTC$/i, '').trim().replace(' ', 'T')}Z`;
+  } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = `${normalized.replace(' ', 'T')}Z`;
+  }
+
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 /**
  * An RFQ timestamp as an Indian date and time, e.g. "04 Sep 2026, 02:55 pm IST".
  *
@@ -904,17 +957,8 @@ export function formatIndianDateTime(value?: string): string {
   const trimmed = value.trim();
   if (trimmed.endsWith(' IST')) return trimmed;
 
-  // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
-  // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
-  let normalized = trimmed;
-  if (/(\s+|_)UTC$/i.test(normalized)) {
-    normalized = `${normalized.replace(/(\s+|_)UTC$/i, '').trim().replace(' ', 'T')}Z`;
-  } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
-    normalized = `${normalized.replace(' ', 'T')}Z`;
-  }
-
-  const parsed = Date.parse(normalized);
-  if (Number.isNaN(parsed)) return value;
+  const parsed = parseRfqTimestamp(trimmed);
+  if (parsed === null) return value;
 
   const formatted = new Intl.DateTimeFormat(CURRENCY.LOCALE, {
     timeZone: DISPLAY_TIMEZONE,
@@ -952,29 +996,70 @@ export function formatIndianDate(value?: string): string {
   }).format(new Date(parsed));
 }
 
-export const ALLOWED_EXTENSION_HOURS = [24, 48] as const;
-export const DEFAULT_EXTENSION_HOURS = 24 as const;
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/** Hours in one day. A closing-deadline extension is stored in hours, so day counts convert through this. */
+export const EXTENSION_HOURS_PER_DAY = 24;
+
+/** The extension the dialog starts on. The allowed range is EXTENSION_MIN_DAYS to EXTENSION_MAX_DAYS. */
+export const DEFAULT_EXTENSION_DAYS = 1;
 
 /**
- * Calculates a revised RFQ deadline extended by 24 or 48 hours.
- * If the current deadline is in the past, extensions are measured from now.
+ * Hours from creation to automatic closing. Mirrors RFQ_AUTO_CLOSE_AFTER_MS in the backend constants,
+ * which the closure sweep uses for RFQs stored before a closing time was saved.
  */
-export function calculateExtendedDeadline(
-  currentDeadline?: string,
-  hours: 24 | 48 = 24,
-  baseCreatedAt?: string
-): string {
-  let baseMs: number;
-  if (currentDeadline && !Number.isNaN(Date.parse(currentDeadline))) {
-    baseMs = Math.max(new Date(currentDeadline).getTime(), Date.now());
-  } else if (baseCreatedAt && !Number.isNaN(Date.parse(baseCreatedAt))) {
-    const createdMs = new Date(baseCreatedAt).getTime();
-    const default7Days = createdMs + 7 * 24 * 60 * 60 * 1000;
-    baseMs = Math.max(default7Days, Date.now());
-  } else {
-    baseMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  }
-  return new Date(baseMs + hours * 60 * 60 * 1000).toISOString();
+export const RFQ_AUTO_CLOSE_HOURS = 48;
+
+/**
+ * The closing time of an RFQ as an ISO instant. The stored closingDeadline is used when present. That
+ * covers every RFQ created since closing times were saved, and every RFQ extended since. Other RFQs close
+ * RFQ_AUTO_CLOSE_HOURS after creation, which is when the backend sweep closes them. Returns null when
+ * neither time can be read.
+ */
+export function resolveRfqClosingDeadline(rfq: Partial<Pick<RFQItem, 'closingDeadline' | 'createdAt'>>): string | null {
+  const stored = parseRfqTimestamp(rfq.closingDeadline);
+  if (stored !== null) return new Date(stored).toISOString();
+  const created = parseRfqTimestamp(rfq.createdAt);
+  if (created === null) return null;
+  return new Date(created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR).toISOString();
+}
+
+/**
+ * The closing time after a one-time extension of a whole number of days, as an ISO instant. The days are
+ * added to the current closing time, or to now when that time has already passed.
+ */
+export function calculateExtendedDeadline(currentClosing: string | null | undefined, days: number = DEFAULT_EXTENSION_DAYS): string {
+  const baseMs = Math.max(parseRfqTimestamp(currentClosing) ?? 0, Date.now());
+  return new Date(baseMs + days * EXTENSION_HOURS_PER_DAY * MS_PER_HOUR).toISOString();
+}
+
+/** The day count typed into the dialog, or null when it is blank, fractional or outside the range. */
+export function parseExtensionDays(input: string): number | null {
+  const trimmed = input.trim();
+  return isWholeExtensionDays(trimmed) ? Number(trimmed) : null;
+}
+
+/**
+ * The day count after one stepper click. A blank or non-numeric entry steps from the default, and the
+ * result is always kept between EXTENSION_MIN_DAYS and EXTENSION_MAX_DAYS.
+ */
+export function stepExtensionDays(input: string, delta: number): number {
+  const trimmed = input.trim();
+  const parsed = trimmed === '' ? Number.NaN : Number(trimmed);
+  const base = Number.isFinite(parsed) ? Math.trunc(parsed) : DEFAULT_EXTENSION_DAYS;
+  return Math.min(EXTENSION_MAX_DAYS, Math.max(EXTENSION_MIN_DAYS, base + delta));
+}
+
+/** Whole days for a stored extension in hours. A missing or non-positive value reads as the default. */
+export function extensionDaysFromHours(hours?: number): number {
+  if (!hours || hours <= 0) return DEFAULT_EXTENSION_DAYS;
+  return Math.max(EXTENSION_MIN_DAYS, Math.round(hours / EXTENSION_HOURS_PER_DAY));
+}
+
+/** A day count as buyers read it: "1 day", "3 days". */
+export function formatExtensionDayCount(days: number): string {
+  const template = days === 1 ? UI_STRINGS.rfqDetails.dayCountOne : UI_STRINGS.rfqDetails.dayCountOther;
+  return formatString(template, { count: days });
 }
 
 /**
@@ -1094,6 +1179,15 @@ export function formatFileSize(bytes: number): string {
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
+/**
+ * Roles the backend lets read the AI activity feed (GET /api/ai-feed). Any other role gets a 403,
+ * so the store does not request the feed for them.
+ */
+export const AI_FEED_VIEWER_ROLES: readonly UserRole[] = ['admin', 'category_manager', 'buyer'];
+
+/** Response header carrying the backend request id, copied into failed-request log entries. */
+export const REQUEST_ID_HEADER = 'x-request-id';
+
 /** URL prefix that scopes each role's workspace, used to guard route access. */
 export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
   buyer: '/buyer',
@@ -1143,6 +1237,9 @@ export {
   PHONE_PATTERN,
   PINCODE_PATTERN,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  isWholeExtensionDays,
 } from './validationSchemas';
 
 export const QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES = {
@@ -1705,3 +1802,9 @@ export const DEFAULT_APPROVAL_COLUMNS: Array<{
   { key: 'actions', label: 'Actions', visible: true, locked: true, order: 9 },
 ];
 
+
+/**
+ * The most category matches the RFQ line item category search lists at once. Typing narrows the list,
+ * so the keyboard never has to scroll past this many options.
+ */
+export const CATEGORY_SEARCH_RESULT_LIMIT = 10;

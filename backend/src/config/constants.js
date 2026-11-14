@@ -283,11 +283,11 @@ const REQUEST_ID_CONFIG = Object.freeze({
 const RFQ_DEFAULTS = {
   ALLOCATED_TIME: '24 hrs',
   ELAPSED_TIME: '0 hrs',
-  ALLOWED_EXTENSION_HOURS: Object.freeze([24, 48]),
-  DEFAULT_EXTENSION_HOURS: 24,
 };
-const ALLOWED_EXTENSION_HOURS = Object.freeze([24, 48]);
-const DEFAULT_EXTENSION_HOURS = 24;
+// One-time closing-deadline extension. The buyer picks whole days between EXTENSION_MIN_DAYS and
+// EXTENSION_MAX_DAYS (defined in validationSchemas.js). The extension is stored in hours.
+const EXTENSION_HOURS_PER_DAY = 24;
+const DEFAULT_EXTENSION_DAYS = 1;
 const RFQ_QUOTE_WRITE_RETRIES = 5;
 const RFQ_STATE_WRITE_RETRIES = 5;
 const PERSISTED_RECORD_WRITE_RETRIES = 5;
@@ -369,9 +369,18 @@ const DATABASE_QUERY_LOGGING = Object.freeze({
   SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
   D1_SUCCESS_SAMPLE_RATE_DEFAULT: 0.01,
   D1_HIGH_READ_ROWS_THRESHOLD_DEFAULT: 1000,
+  // Failed and slow query log lines carry a preview of the SQL template, cut to this length.
+  SQL_PREVIEW_MAX_CHARS: 300,
 });
 const DATABASE_QUERY_CACHE = Object.freeze({
   VENDOR_PAGE_COUNT_TTL_MS: 30 * 1000,
+});
+// Public-vendor lookups by major category read the indexed major_category column. The limits
+// bound how many vendor rows one lookup returns and how many category signals it accepts.
+const PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG = Object.freeze({
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 500,
+  MAX_SIGNALS: 45,
 });
 /**
  * Unnecessary / deprecated tables automatically purged during migrations and deployments.
@@ -401,6 +410,13 @@ const GRAPHQL_CONFIG = Object.freeze({
 const D1_OVERLOAD_CONFIG = Object.freeze({
   RETRY_AFTER_SECONDS: 15,
   MESSAGE: 'The database is busy handling other requests. Please retry in a few seconds.',
+});
+// Transient D1 failures other than an overload are retried with a short, jittered backoff.
+// An overload is never retried: a retry spends the same per-window budget that caused it.
+const D1_RETRY_CONFIG = Object.freeze({
+  MAX_ATTEMPTS: 3,
+  BACKOFF_BASE_MS: 250,
+  BACKOFF_JITTER_MS: 100,
 });
 const STORE_HYDRATION_CONFIG = Object.freeze({
   // Frontend log ingestion never reads the store, so it must not wait for a load.
@@ -1345,23 +1361,39 @@ const RFQ_ATTACHMENT_CONFIG = {
 // Configurable via environment variables (default: 5):
 // - MAX_CLIENT_VENDORS_PER_CATEGORY
 // - MAX_PROCUCEV_VENDORS_PER_CATEGORY
-function getEnvNumber(key, fallback = 5) {
-  let val = undefined;
+/** The raw value of an environment variable: a Cloudflare Worker binding first, then process.env. Undefined when unset or blank. */
+function readEnvValue(key) {
   if (
     typeof globalThis !== 'undefined' &&
     globalThis.__CF_ENV__ &&
     globalThis.__CF_ENV__[key] !== undefined &&
     globalThis.__CF_ENV__[key] !== ''
   ) {
-    val = globalThis.__CF_ENV__[key];
-  } else if (typeof process !== 'undefined' && process.env && process.env[key] !== undefined && process.env[key] !== '') {
-    val = process.env[key];
+    return globalThis.__CF_ENV__[key];
   }
+  if (typeof process !== 'undefined' && process.env && process.env[key] !== undefined && process.env[key] !== '') {
+    return process.env[key];
+  }
+  return undefined;
+}
+
+function getEnvNumber(key, fallback = 5) {
+  const val = readEnvValue(key);
   if (val !== undefined && val !== null) {
     const num = Number(val);
     if (!Number.isNaN(num) && num > 0) return num;
   }
   return fallback;
+}
+
+/**
+ * Comma-separated list from an environment variable. Blank entries are dropped. Returns a copy of
+ * `fallback` when the variable is unset or has no usable entry.
+ */
+function getEnvList(key, fallback = []) {
+  const raw = readEnvValue(key);
+  const items = raw === undefined ? [] : String(raw).split(',').map((item) => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : [...fallback];
 }
 
 const MAX_INVITE_VENDORS_PER_REQUEST = 20;
@@ -1377,6 +1409,41 @@ const VENDOR_ASSIGNMENT_LIMITS = {
     return getEnvNumber('TARGET_VENDORS_PER_MINOR_CATEGORY', 25);
   },
 };
+
+// Each minor category of an RFQ is filled to the per-minor target from its own vendors, then from the
+// vendors under its parent major. These limits shape the database lookups behind that fill.
+// OVERFETCH_FACTOR reads more rows than the target, so the location and rating ranking has room to choose.
+// MAX_ROWS caps a single lookup at the bound the major-category lookup already uses.
+const RFQ_MINOR_INVITE_LOOKUP = Object.freeze({
+  OVERFETCH_FACTOR: 2,
+  MAX_ROWS: PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT,
+});
+
+// Recipients of the alert sent when an RFQ's minor category has fewer network vendors than the target.
+// RFQ_MINOR_SHORTFALL_ALERT_EMAILS (comma-separated) replaces the default list. A blank value keeps it.
+const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = Object.freeze([
+  'gmtrfq@procucev.com',
+  'quateam@procucev.com',
+  'anshul.goel@procucev.com',
+  'veerababu.v@procucev.com',
+]);
+
+const RFQ_MINOR_SHORTFALL_ALERT = Object.freeze({
+  get RECIPIENTS() {
+    return getEnvList('RFQ_MINOR_SHORTFALL_ALERT_EMAILS', RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS);
+  },
+  MESSAGES: Object.freeze({
+    SUBJECT: '[Action Required] RFQ {rfqNumber}: minor category vendor shortfall',
+    HEADLINE: 'Minor category vendor shortfall',
+    INTRO: 'RFQ {rfqNumber} ({title}) invites {target} network vendors for each minor category. The minor categories below have fewer network vendors than that target, so the rest of the invite list is filled from the parent major category.',
+    TABLE_MINOR: 'Minor category',
+    TABLE_MAJOR: 'Parent major category',
+    TABLE_FOUND: 'Minor vendors found',
+    TABLE_FILLED: 'Added from major category',
+    TEXT_LINE: '- {minorCategory} (major: {majorCategory}): {minorMatched} of {target} minor vendors found, {majorFilled} added from the major category',
+    ACTION: 'Onboard or map more vendors to these minor categories so future RFQs reach the target.',
+  }),
+});
 
 // ==============================================================================
 // EMAIL-TO-RFQ INGESTION
@@ -2644,6 +2711,8 @@ const {
   INDIAN_PINCODE_MESSAGE,
   ORGANIZATION_TYPES,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
   ISO_DATE_REGEX,
   ISO_DATE_MESSAGE,
   TIME_HORIZON_TYPES,
@@ -2737,6 +2806,12 @@ const VENDOR_INGESTION_AI_STATUS = {
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
 };
+
+/**
+ * Statutory identifiers on a vendor record. They come from the supplier's own registration, so a buyer may read them
+ * but may not write them. The supplier can still change them through its self-service profile.
+ */
+const BUYER_LOCKED_STATUTORY_FIELDS = Object.freeze(['gst', 'gstin', 'pan', 'msme', 'annualTurnover']);
 
 /** How a PO line was attributed to a vendor-master row. */
 const VENDOR_MATCH_STRATEGY = {
@@ -3501,6 +3576,7 @@ module.exports = {
   VENDOR_AI_PROCESSING_STATUS,
   VENDOR_INGESTION_AI_STATUS,
   VENDOR_MATCH_STRATEGY,
+  BUYER_LOCKED_STATUTORY_FIELDS,
   VENDOR_DISPATCH_TEMPLATE,
   VENDOR_EMAIL_STATUS,
   VENDOR_DISPATCH_STATUS,
@@ -3531,10 +3607,12 @@ module.exports = {
   INFRASTRUCTURE_HEALTH,
   DATABASE_QUERY_LOGGING,
   DATABASE_QUERY_CACHE,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
   DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
   D1_OVERLOAD_CONFIG,
+  D1_RETRY_CONFIG,
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   QUALIFICATION_PILLARS,
@@ -3625,12 +3703,16 @@ module.exports = {
   VENDOR_PRESENCE_MAX_IDENTIFIERS,
   VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH,
   VENDOR_ASSIGNMENT_LIMITS,
+  RFQ_MINOR_INVITE_LOOKUP,
+  RFQ_MINOR_SHORTFALL_ALERT,
   MAX_INVITE_VENDORS_PER_REQUEST,
   RFQ_MODES,
   RFQ_MODE_LABELS,
   RFQ_MODE_MAP,
-  ALLOWED_EXTENSION_HOURS,
-  DEFAULT_EXTENSION_HOURS,
+  EXTENSION_HOURS_PER_DAY,
+  DEFAULT_EXTENSION_DAYS,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
   RFQ_QUOTE_WRITE_RETRIES,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,

@@ -218,7 +218,7 @@ describe('vendorController.requestEvaluation saved-evaluation check', () => {
     expect(spies.dispatch).toHaveBeenCalledWith(
       vendor.id,
       expect.objectContaining({ notes: 'Please submit' }),
-      buyerUser.email
+      expect.arrayContaining([buyerUser.email])
     );
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
@@ -232,7 +232,7 @@ describe('vendorController.requestEvaluation saved-evaluation check', () => {
 
     await vendorController.requestEvaluation({ params: { id: vendor.id }, user: buyerUser }, res, jest.fn());
 
-    expect(spies.dispatch).toHaveBeenCalledWith(vendor.id, expect.objectContaining({ notes: '' }), buyerUser.email);
+    expect(spies.dispatch).toHaveBeenCalledWith(vendor.id, expect.objectContaining({ notes: '' }), expect.arrayContaining([buyerUser.email]));
     expect(res.status).toHaveBeenCalledWith(200);
   });
 

@@ -6,6 +6,7 @@ import { buildExtractionRequest } from '@/lib/documentExtraction';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type { ExtractedEntity, RFQAttachment, RFQExtractionResult, RFQItem, SourcingMode } from '@/lib/types';
 
 const mockPush = jest.fn();
@@ -199,15 +200,20 @@ function fillRow() {
   fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
     target: { value: HOME_CATEGORY.majorCategory },
   });
-  fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-    target: { value: HOME_CATEGORY.minorCategories[0] },
-  });
+  chooseCategory(within(row).getByLabelText(MODAL.colMinor), HOME_CATEGORY.minorCategories[0]);
+  fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), { target: { value: 'SS316 impeller, 2 HP' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
 }
 
-/** Fill the mandatory delivery destination. */
-function fillDelivery() {
+/** Fill the mandatory header fields: the title, the target delivery date and the destination. */
+function fillHeaderFields() {
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+    target: { value: 'Centrifugal pump replacement' },
+  });
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
+    target: { value: '2099-12-01' },
+  });
   fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
     target: { value: 'Navi Mumbai Plant, Gate 3' },
   });
@@ -486,7 +492,7 @@ describe('ManualRFQModal: saving branches', () => {
     createRFQ.mockResolvedValueOnce({ success: true, rfq: savedRFQ(), remainingFreeRFQs: 2 });
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(adoptCreatedRFQ).toHaveBeenCalledWith(savedRFQ(), 2));
@@ -497,7 +503,7 @@ describe('ManualRFQModal: saving branches', () => {
     mockedUseApp.mockReturnValue(storeWith({ adoptCreatedRFQ }));
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(adoptCreatedRFQ).toHaveBeenCalledWith(savedRFQ()));
@@ -512,7 +518,7 @@ describe('ManualRFQModal: saving branches', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('spec.pdf'));
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_0');
     clickSave();
     await waitFor(() => expect(createRFQ).toHaveBeenCalledTimes(1));
@@ -525,11 +531,12 @@ describe('ManualRFQModal: saving branches', () => {
       name: 'Network Supplier',
       source: 'self_onboarded',
       majorCategory: HOME_CATEGORY.majorCategory,
+      minorCategories: [HOME_CATEGORY.minorCategories[0]],
     };
     mockedUseApp.mockReturnValue(storeWith({ buyerVendors: [networkSupplier] }));
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_2');
     clickSave();
     await waitFor(() => expect(createRFQ).toHaveBeenCalledTimes(1));

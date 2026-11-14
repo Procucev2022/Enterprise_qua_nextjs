@@ -188,6 +188,40 @@ export interface RFQFollowUpBreakdown {
   autoChasingEnabled: boolean;
 }
 
+/**
+ * The next follow-up instant for each channel, as ISO-8601 text. Each value is null when the RFQ
+ * creation time cannot be read. See computeRFQFollowUpTimes in followUpSchedule.ts.
+ */
+export interface RFQNextFollowUpTimes {
+  call: string | null;
+  whatsapp: string | null;
+  sms: string | null;
+  email: string | null;
+}
+
+/** The categories a category search matched. `shown` is capped at the result limit, and `total` counts every match. */
+export interface CategorySearchResult {
+  shown: string[];
+  total: number;
+}
+
+/** Props for the category search field in the RFQ line item tables. */
+export interface CategorySearchInputProps {
+  /** Accessible name of the field, for example "Category". */
+  label: string;
+  /** Every category the field can choose from, in display order. */
+  options: string[];
+  /** The chosen category, or '' when none is chosen. */
+  value: string;
+  /** Called with the chosen category, or with '' when the choice is cleared. */
+  onChange: (category: string) => void;
+  /** Shown while the field is empty and no category is chosen. */
+  placeholder: string;
+  disabled?: boolean;
+  required?: boolean;
+  invalid?: boolean;
+}
+
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry' | 'ai_extraction';
 
 // ==============================================================================
@@ -557,7 +591,8 @@ export interface RFQItem {
   deadline?: string;
   closingDeadline?: string;
   isExtended?: boolean;
-  extensionHours?: 24 | 48;
+  /** Hours added by the one-time extension. Always a whole number of days times 24. */
+  extensionHours?: number;
   extendedAt?: string;
   extendedByEmail?: string | null;
   buyerDetailsHidden?: boolean;
@@ -572,7 +607,8 @@ export interface RFQItem {
 }
 
 export interface RFQExtensionPayload {
-  hours: 24 | 48;
+  /** Whole days to extend the closing deadline by, between the allowed minimum and maximum. */
+  days: number;
 }
 
 export type RFQExtensionResult =
@@ -2061,6 +2097,11 @@ export interface UserSession {
   mobile?: string;
   passwordChangeRequired?: boolean;
   onboardingRequired?: boolean;
+  /**
+   * Buyers only. True once the buyer's organization has stored its vendor master.
+   * The sign-in page opens the initial setup popup only while this is false.
+   */
+  vendorMasterUploaded?: boolean;
   authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
 }
 

@@ -395,6 +395,10 @@ function toPublicUser(user) {
   if (onboardingReq) {
     result.onboardingRequired = true;
   }
+  // The sign-in page opens the buyer initial setup popup only while this is false.
+  if (user.role === 'buyer') {
+    result.vendorMasterUploaded = user.vendorMasterUploaded === true;
+  }
   return result;
 }
 
@@ -753,13 +757,15 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
 
   try {
+    // Every stored OTP names the email it was issued to: the auth_otp_codes.email column is NOT NULL
+    // on the live D1 schema, so an insert without it fails and the failure is logged on every request.
     if (isRegistration) {
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`), emailCode, expiresAt);
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_mobile`), mobileCode, expiresAt);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`), emailCode, expiresAt, normalizedEmail);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_mobile`), mobileCode, expiresAt, normalizedEmail);
       // Also save combined key for backwards compatibility with single-code verifications
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
     } else {
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
     }
   } catch (err) {
     // Emailing a code that was never stored would guarantee the visitor's correct

@@ -3,7 +3,7 @@
  * Single source of truth for all form validations, user input limits, and payload verification.
  */
 
-import { UI_STRINGS } from './uiStrings';
+import { UI_STRINGS, formatString } from './uiStrings';
 
 /**
  * Shortest password accepted when an account holder changes their own password.
@@ -17,6 +17,25 @@ import { UI_STRINGS } from './uiStrings';
  * for callers that expect to find constants there.
  */
 export const PASSWORD_MIN_LENGTH = 8;
+
+/**
+ * Bounds for the one-time closing-deadline extension, in whole days. These mirror EXTENSION_MIN_DAYS and
+ * EXTENSION_MAX_DAYS in backend/src/config/validationSchemas.js, so the form and the server agree.
+ */
+export const EXTENSION_MIN_DAYS = 1;
+export const EXTENSION_MAX_DAYS = 30;
+
+/** True for a whole number of days inside the extension range. Blank and non-numeric input is false. */
+export function isWholeExtensionDays(value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return false;
+  const num = Number(value);
+  return Number.isInteger(num) && num >= EXTENSION_MIN_DAYS && num <= EXTENSION_MAX_DAYS;
+}
+
+const extensionDaysInvalidMessage = formatString(UI_STRINGS.rfqDetails.extensionDaysInvalid, {
+  min: EXTENSION_MIN_DAYS,
+  max: EXTENSION_MAX_DAYS,
+});
 
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
@@ -90,6 +109,34 @@ export function isDummyPincode(pincode: unknown): boolean {
  * told about a malformed value while typing rather than after a round trip.
  */
 export const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
+
+/**
+ * PAN values from sample data and placeholder entries, not from a real income-tax record. Matched against a trimmed,
+ * upper-case value.
+ */
+export const DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+
+/** One letter repeated across the first five characters and the last, such as AAAAA0000A or ZZZZZ9999Z. */
+const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
+
+/** True for a placeholder PAN: a listed sample, or one repeated letter (for example AAAAA0000A). */
+export function isDummyPan(pan: unknown): boolean {
+  if (!pan || typeof pan !== 'string') return false;
+  const clean = pan.trim().toUpperCase();
+  if (!clean) return false;
+  return DUMMY_PANS.has(clean) || REPEATED_LETTER_PAN_PATTERN.test(clean);
+}
+
+/**
+ * The PAN to show on a statutory record: the upper-case value when it has the PAN format and is not a placeholder.
+ * Any other value returns null, and the screen shows the not-applicable marker instead.
+ */
+export function usablePan(pan: unknown): string | null {
+  if (typeof pan !== 'string') return null;
+  const clean = pan.trim().toUpperCase();
+  if (!PAN_PATTERN.test(clean) || isDummyPan(clean)) return null;
+  return clean;
+}
 export const CIN_PATTERN = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
 export const WEBSITE_PATTERN = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
 
@@ -386,11 +433,11 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
   },
 
   extendRFQ: {
-    hours: {
+    days: {
       required: true,
       type: 'number',
-      custom: (val: unknown) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
-      message: 'Extension hours must be 24 or 48.',
+      custom: (val: unknown) => (isWholeExtensionDays(val) ? null : extensionDaysInvalidMessage),
+      message: extensionDaysInvalidMessage,
     },
   },
 
@@ -580,18 +627,28 @@ export async function validatePincode(
 /**
  * City and state from the postal office records returned for a PIN code.
  *
- * Returns '' when no office record is available, so the caller leaves the location blank.
- * The location is never guessed from the PIN digits. An office whose Pincode matches the
- * requested PIN is preferred over the first record.
+ * Both fields are '' when no office record is available, so the caller leaves them blank. They are never guessed from
+ * the PIN digits. An office whose Pincode matches the requested PIN is preferred over the first record.
+ */
+export function resolveCityAndStateFromPostalResult(
+  pincode: string,
+  offices?: PostOfficeDetail[]
+): { city: string; state: string } {
+  if (!offices || offices.length === 0) return { city: '', state: '' };
+  const office = offices.find((candidate) => candidate.Pincode === pincode) ?? offices[0];
+  const city = office.District || office.Division || office.Circle || office.Name || '';
+  const state = office.State || '';
+  return { city, state };
+}
+
+/**
+ * The city and state from resolveCityAndStateFromPostalResult, joined as "City, State" for a single location field.
  */
 export function resolveLocationFromPostalResult(
   pincode: string,
   offices?: PostOfficeDetail[]
 ): string {
-  if (!offices || offices.length === 0) return '';
-  const office = offices.find((candidate) => candidate.Pincode === pincode) ?? offices[0];
-  const city = office.District || office.Division || office.Circle || office.Name || '';
-  const state = office.State || '';
+  const { city, state } = resolveCityAndStateFromPostalResult(pincode, offices);
   return [city, state].filter(Boolean).join(', ');
 }
 
@@ -721,3 +778,56 @@ export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
 export const REQUEST_VENDOR_EVALUATION_SCHEMA = {
   notes: { maxLength: 1000 },
 } as const;
+
+// ==============================================================================
+// HISTORICAL PO DUMP (Step 3 of the vendor ingestion wizard)
+// ==============================================================================
+// Three columns are required: the vendor, the line item description and the
+// specification. Every other PO column is optional, and a complete dump is still
+// accepted. The server applies the same rule in backend/src/config/validationSchemas.js
+// (poLineItemRow).
+
+/** The parsed PO row fields a line must carry before it is accepted. */
+export const PO_DUMP_REQUIRED_FIELDS = ['vendorIdentifier', 'itemName', 'specs'] as const;
+
+export type PoDumpRequiredField = (typeof PO_DUMP_REQUIRED_FIELDS)[number];
+
+/**
+ * Header aliases that satisfy each required column. Headers are compared with spaces and
+ * punctuation removed, and a header matches when it equals an alias or contains one.
+ */
+export const PO_DUMP_REQUIRED_HEADER_ALIASES: Record<PoDumpRequiredField, readonly string[]> = {
+  vendorIdentifier: ['vendorname', 'vendoridentifier', 'vendor', 'suppliername', 'supplier', 'companyname', 'vendorcode', 'vendorid'],
+  itemName: [
+    'lineitemdescription', 'lineitem', 'itemdescription', 'description', 'itemname', 'productdescription',
+    'productname', 'materialdescription', 'material', 'servicedescription', 'service', 'item',
+  ],
+  specs: ['specs', 'specification', 'technicalspecs', 'specifications', 'details', 'itemspecs', 'grade'],
+};
+
+function cleanPoDumpHeader(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function poDumpFieldLabel(field: PoDumpRequiredField): string {
+  const labels = UI_STRINGS.vendorPoIngestion.poDump;
+  if (field === 'vendorIdentifier') return labels.fieldVendor;
+  if (field === 'itemName') return labels.fieldDescription;
+  return labels.fieldSpecs;
+}
+
+/** Labels of the required columns that no header in the sheet satisfies. */
+export function findMissingPoDumpHeaders(headerKeys: readonly string[]): string[] {
+  const cleaned = headerKeys.map(cleanPoDumpHeader);
+  return PO_DUMP_REQUIRED_FIELDS.filter(
+    (field) =>
+      !cleaned.some((header) =>
+        PO_DUMP_REQUIRED_HEADER_ALIASES[field].some((alias) => header === alias || header.includes(alias))
+      )
+  ).map(poDumpFieldLabel);
+}
+
+/** Labels of the required fields a parsed row lacks. An empty list means the row is complete. */
+export function findMissingPoDumpFields(row: Partial<Record<PoDumpRequiredField, string>>): string[] {
+  return PO_DUMP_REQUIRED_FIELDS.filter((field) => String(row[field] ?? '').trim() === '').map(poDumpFieldLabel);
+}

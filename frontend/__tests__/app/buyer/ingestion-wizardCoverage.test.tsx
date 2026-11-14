@@ -13,6 +13,7 @@ import {
 } from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type {
   ExtractedEntity,
   RFQIngestionResponse,
@@ -88,6 +89,7 @@ const MANUAL = UI_STRINGS.manualRfq;
 
 const ALL_CATEGORIES = 'All Categories';
 const MECHANICAL = 'Engineering Spares - Mechanical';
+const MECHANICAL_MINOR = 'Bearings & Accessories';
 // An alphanumeric (international) postcode is accepted by the wizard but is not
 // looked up against the Indian postal service, so it keeps these tests free of
 // the 350 ms lookup debounce.
@@ -221,7 +223,18 @@ function renderWizard(overrides: Partial<WizardProps> = {}) {
 
 const dispatchButton = () => screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
 
+/** A far-future target date, so the date field stays valid whenever the suite runs. */
+const FUTURE_TARGET_DATE = '2099-12-01';
+
+/**
+ * Fill the mandatory header fields. The title and target date are filled only when still blank, so a
+ * test that sets one of them itself keeps its value.
+ */
 function fillDelivery(location = 'Navi Mumbai Plant', pincode = INTL_PINCODE) {
+  const title = screen.getByLabelText(new RegExp(MODAL.titleLabel)) as HTMLInputElement;
+  if (!title.value) fireEvent.change(title, { target: { value: 'Centrifugal pump replacement' } });
+  const targetDate = screen.getByLabelText(new RegExp(MODAL.targetDateLabel)) as HTMLInputElement;
+  if (!targetDate.value) fireEvent.change(targetDate, { target: { value: FUTURE_TARGET_DATE } });
   fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), { target: { value: location } });
   fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), { target: { value: pincode } });
 }
@@ -230,6 +243,7 @@ interface LineItemFields {
   name?: string;
   quantity?: string;
   unit?: string;
+  specs?: string;
   major?: string;
   minor?: string;
 }
@@ -241,8 +255,9 @@ function fillLineItem(index: number, fields: LineItemFields) {
   };
   set(within(row).getByPlaceholderText(MODAL.itemPlaceholder), fields.name);
   set(within(row).getByLabelText(MODAL.colMajor), fields.major);
-  set(within(row).getByLabelText(MODAL.colMinor), fields.minor);
+  if (fields.minor !== undefined) chooseCategory(within(row).getByLabelText(MODAL.colMinor), fields.minor);
   set(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), fields.quantity);
+  set(within(row).getByPlaceholderText(MODAL.specsPlaceholder), fields.specs);
   set(within(row).getByPlaceholderText(MODAL.unitPlaceholder), fields.unit);
 }
 
@@ -250,7 +265,20 @@ function fillLineItem(index: number, fields: LineItemFields) {
 // pincode is what re-ranks the Procucev vendors, and by then the line item's
 // categories (including its minor, which does not re-rank on its own) are all in.
 function fillValidForm(category: { major?: string; minor?: string } = {}) {
-  fillLineItem(0, { name: 'Centrifugal Pump', quantity: '10', unit: 'Nos', ...category });
+  // A row is dispatchable only with its specification and both categories. The default is a valid
+  // Mechanical pair. A test that names a different major category supplies the minor it needs.
+  const row = screen.getAllByPlaceholderText(MODAL.itemPlaceholder)[0].closest('tr') as HTMLElement;
+  const currentMajor = (within(row).getByLabelText(MODAL.colMajor) as HTMLSelectElement).value;
+  const major = category.major ?? (currentMajor || MECHANICAL);
+  const minor = category.minor ?? (major === MECHANICAL ? MECHANICAL_MINOR : undefined);
+  fillLineItem(0, {
+    name: 'Centrifugal Pump',
+    specs: 'Centrifugal, 5 HP, cast iron casing',
+    quantity: '10',
+    unit: 'Nos',
+    major,
+    minor,
+  });
   fillDelivery();
 }
 
@@ -948,16 +976,16 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
   it('lists every blocking header field in the validation toast and leaves valid ones out', () => {
     const store = setupStore();
     renderWizard();
-    fireEvent.change(screen.getByLabelText(MODAL.titleLabel), { target: { value: 'ab' } });
+    fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel)), { target: { value: 'ab' } });
     fillDelivery();
-    fireEvent.change(screen.getByLabelText(MODAL.targetDateLabel), { target: { value: '2020-01-01' } });
+    fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel)), { target: { value: '2020-01-01' } });
     fireEvent.click(screen.getByTitle('Remove line item'));
 
     fireEvent.click(dispatchButton());
 
     expect(store.showToast).toHaveBeenCalledWith(
       'Validation Error',
-      `Validation Error ${EN_DASH} Please complete: Sourcing Mode, RFQ Title, Target Delivery Date (cannot be in the past), At least 1 complete line item.`,
+      `Validation Error ${EN_DASH} Please complete: Sourcing Mode, ${MODAL.titleLabel}, ${MODAL.targetDateMissingLabel}, At least 1 complete line item.`,
       'warning'
     );
     expect(screen.getByText(formatString(MANUAL.titleLength, { min: 3, max: 200 }))).toBeInTheDocument();
@@ -989,8 +1017,13 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
     const store = setupStore({
       currentMode: 'mode_2',
       buyerVendors: [
-        vendor({ source: 'buyer_uploaded' }),
-        vendor({ id: 'net-9', name: 'Network Fabricators', source: 'procucev_network' }),
+        vendor({
+          id: 'buyer-sparse-1',
+          source: 'buyer_uploaded',
+          majorCategory: MECHANICAL,
+          minorCategories: [MECHANICAL_MINOR],
+        }),
+        vendor({ id: 'net-9', name: 'Network Fabricators', source: 'procucev_network', majorCategory: MECHANICAL, minorCategories: [MECHANICAL_MINOR] }),
       ],
     });
     renderWizard();
@@ -1001,7 +1034,7 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
 
     expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([
       {
-        id: undefined,
+        id: 'buyer-sparse-1',
         name: 'Enterprise Vendor',
         email: null,
         contactPerson: null,
@@ -1017,7 +1050,7 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
         vendorCategory: 'Procucev Network',
       },
     ]);
-    // With no category on the RFQ nothing is a mismatch, so no shortlist warning.
+    // Both vendors cover the RFQ's category, so neither is a mismatch and no shortlist warning shows.
     expect(store.showToast).not.toHaveBeenCalledWith('Shortlist Adjusted', expect.anything(), expect.anything());
     expect(store.setCurrentMode).toHaveBeenCalledWith('mode_2');
     expect(store.adoptCreatedRFQ).toHaveBeenCalledWith(expect.objectContaining({ rfqNumber: 'RFQ-2026-00450' }));
@@ -1096,7 +1129,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
     });
     renderWizard();
     chooseSourcingMode('mode_3');
-    fillValidForm({ major: MECHANICAL });
+    fillValidForm({ major: MECHANICAL, minor: 'Pumps & Accessories' });
     fireEvent.click(await cardFor('Dup Network Twin'));
     expect(await screen.findByText('1 of 1 selected')).toBeInTheDocument();
 
@@ -1182,7 +1215,7 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
       });
       renderWizard();
       chooseSourcingMode('mode_3');
-      fillValidForm({ major: MECHANICAL });
+      fillValidForm({ major: MECHANICAL, minor: 'Pumps & Accessories' });
       fireEvent.click(await cardFor('Alpha Pumps'));
       expect(await screen.findByText('1 of 1 selected')).toBeInTheDocument();
 

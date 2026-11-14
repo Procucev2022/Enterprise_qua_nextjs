@@ -19,6 +19,16 @@ function createResponse() {
   };
 }
 
+// One line item with every field the RFQ form requires, so each create request reaches the checks under test.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
+
 describe('RFQ creation acknowledgement persistence', () => {
   afterEach(() => jest.restoreAllMocks());
 
@@ -56,6 +66,7 @@ describe('RFQ creation acknowledgement persistence', () => {
         targetDeliveryDate: '2099-01-01',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
       },
       user: { role: 'buyer', email: buyer.corporateEmail, name: 'Buyer Contact' },
     }, res, jest.fn());
@@ -103,6 +114,7 @@ describe('RFQ creation acknowledgement persistence', () => {
         targetDeliveryDate: '2099-01-01',
         deliveryLocation: 'Mumbai',
         deliveryPincode: '400001',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         source: 'email_gateway',
         sourceEmail: 'buyer@example.test',
         targetGatewayEmail: 'gateway@example.test',

@@ -93,7 +93,6 @@ function LoginPageContent() {
     setCurrentUserSession,
     showToast,
     setInitialSetupModalOpen,
-    initialSetupCompleted,
     addBuyerAccount,
     refreshFromDB,
   } = useApp();
@@ -319,7 +318,7 @@ function LoginPageContent() {
     try {
       const response = await authClient.loginWithPassword(email.toLowerCase(), loginPassword, mobile);
       if (response.success && response.user) {
-        if (response.user.role === 'buyer' && !initialSetupCompleted && !redirectParam) {
+        if (response.user.role === 'buyer' && !response.user.vendorMasterUploaded && !redirectParam) {
           setInitialSetupModalOpen(true);
         }
         establishSession(response.user);
@@ -412,7 +411,7 @@ function LoginPageContent() {
         mobile
       );
       if (response.success && response.user) {
-        if (response.user.role === 'buyer' && !initialSetupCompleted && !redirectParam) {
+        if (response.user.role === 'buyer' && !response.user.vendorMasterUploaded && !redirectParam) {
           setInitialSetupModalOpen(true);
         }
         establishSession(response.user);
@@ -1006,7 +1005,8 @@ function LoginPageContent() {
                           <label htmlFor="reg-name" className={fieldLabel}>
                             {selectedRegRole === 'buyer'
                               ? AUTH.registrationLabels.fullNameBuyer
-                              : AUTH.registrationLabels.fullNameVendor}
+                              : AUTH.registrationLabels.fullNameVendor}{' '}
+                            <span className="text-red-500">*</span>
                           </label>
                           <div className="relative">
                             <Users className={iconClass} size={14} />

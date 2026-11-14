@@ -113,6 +113,52 @@ describe('LoginPage', () => {
     typeInto(/^Password$/i, 'Pass@1234');
   };
 
+  describe('registration form labels', () => {
+    const openVendorRegistration = () => {
+      openRegister();
+      fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
+    };
+
+    /** The label element for a registration input, asterisk included. */
+    const labelFor = (id: string): HTMLElement => {
+      const label = document.querySelector(`label[for="${id}"]`);
+      if (!label) throw new Error(`No label is bound to ${id}`);
+      return label as HTMLElement;
+    };
+
+    it('marks Full Name as mandatory on the buyer form', () => {
+      render(<LoginPage />);
+      openRegister();
+
+      expect(labelFor('reg-name')).toHaveTextContent(AUTH.registrationLabels.fullNameBuyer);
+      expect(labelFor('reg-name').querySelector('span.text-red-500')).toHaveTextContent('*');
+      expect(screen.getByLabelText(/Full Name/i)).toBeRequired();
+    });
+
+    it('marks the vendor representative name as mandatory on the vendor form', () => {
+      render(<LoginPage />);
+      openVendorRegistration();
+
+      expect(labelFor('reg-name')).toHaveTextContent(AUTH.registrationLabels.fullNameVendor);
+      expect(labelFor('reg-name').querySelector('span.text-red-500')).toHaveTextContent('*');
+    });
+
+    it('labels the vendor company field with the vendor enterprise name only', () => {
+      render(<LoginPage />);
+      openVendorRegistration();
+
+      expect(labelFor('reg-org')).toHaveTextContent(AUTH.registrationLabels.companyNameVendor);
+      expect(labelFor('reg-org').textContent).not.toMatch(/company name/i);
+    });
+
+    it('keeps the Company Name label on the buyer form', () => {
+      render(<LoginPage />);
+      openRegister();
+
+      expect(labelFor('reg-org')).toHaveTextContent(AUTH.registrationLabels.companyNameBuyer);
+    });
+  });
+
   describe('no demo credentials are exposed', () => {
     it('renders empty email and password fields', () => {
       render(<LoginPage />);
@@ -183,6 +229,25 @@ describe('LoginPage', () => {
 
       await waitFor(() => {
         expect(mockReplace).toHaveBeenCalledWith('/buyer/rfq-summary');
+      });
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
+    });
+
+    it('does not open the initial setup popup once the buyer organization has uploaded its vendor master', async () => {
+      (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: true },
+        token: 'jwt',
+      });
+
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
+      typeInto(/^Password$/i, 'Pass@123');
+      fireEvent.click(submitButton(/Sign In/i));
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
       });
       expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
     });
@@ -438,6 +503,67 @@ describe('LoginPage', () => {
         );
       });
       expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+    });
+
+    const signInWithOtp = async () => {
+      render(<LoginPage />);
+      switchToOtp();
+      fillOtpIdentity();
+      fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
+      await waitFor(() => {
+        expect(authClient.requestOtp).toHaveBeenCalledWith(BUYER_SESSION.email, LOGIN_MOBILE);
+      });
+      typeInto(/Email Verification Code \(OTP\)/i, OTP_CODE);
+      fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
+    };
+
+    it('opens the initial setup popup on OTP sign-in for a buyer whose organization has not uploaded yet', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.verifyOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: false },
+        token: 'jwt',
+      });
+
+      await signInWithOtp();
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+      });
+      expect(setInitialSetupModalOpen).toHaveBeenCalledWith(true);
+    });
+
+    it('does not open the initial setup popup on OTP sign-in once the vendor master is uploaded', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.verifyOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: true },
+        token: 'jwt',
+      });
+
+      await signInWithOtp();
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+      });
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
+    });
+
+    it('does not open the initial setup popup on OTP sign-in that returns to a redirect target', async () => {
+      mockSearchParams = new URLSearchParams('redirect=/buyer/rfq-summary');
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.verifyOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: false },
+        token: 'jwt',
+      });
+
+      await signInWithOtp();
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith('/buyer/rfq-summary');
+      });
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
     });
 
     it('accepts a code of exactly the configured length', () => {

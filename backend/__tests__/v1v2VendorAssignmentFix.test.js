@@ -31,7 +31,7 @@ describe('V1 & V2 Vendor Assignment and Outreach Dispatch', () => {
       email: 'cement@alphavendor.com',
       phone: '+919876543210',
       majorCategory: 'Civil Works',
-      minorCategories: ['Cement & Concrete'],
+      minorCategories: ['Cement & Concrete', 'TMT BARS'],
       addedByBuyerCompany: 'Alpha Infra Corp',
       source: 'buyer_uploaded',
       buyerAccountId: buyerAccount.id,
@@ -53,7 +53,7 @@ describe('V1 & V2 Vendor Assignment and Outreach Dispatch', () => {
       email: 'network@procucevpartner.com',
       phone: '+919876543220',
       majorCategory: 'Civil Works',
-      minorCategories: ['Cement & Concrete'],
+      minorCategories: ['Cement & Concrete', 'TMT BARS'],
       source: 'procucev_network',
       isProcucevDirect: true,
     });
@@ -238,7 +238,7 @@ describe('V1 & V2 Vendor Assignment and Outreach Dispatch', () => {
           targetDeliveryDate: '2099-01-01',
           deliveryLocation: 'Mumbai',
           deliveryPincode: '400001',
-          lineItems: [{ id: '1', name: 'Cement', majorCategory: 'Civil Works', quantity: 100 }],
+          lineItems: [{ id: '1', itemName: 'TMT bars', technicalSpecs: 'Fe 500D, 12 mm dia', quantity: 100, unit: 'Mt', majorCategory: 'Civil Works', minorCategory: 'TMT BARS' }],
         },
         user: { role: 'buyer', email: buyerAccount.corporateEmail, id: buyerAccount.id },
       };
@@ -263,7 +263,7 @@ describe('V1 & V2 Vendor Assignment and Outreach Dispatch', () => {
           targetDeliveryDate: '2099-01-01',
           deliveryLocation: 'Mumbai',
           deliveryPincode: '400001',
-          lineItems: [{ id: '1', name: 'Cement', majorCategory: 'Civil Works', quantity: 100 }],
+          lineItems: [{ id: '1', itemName: 'TMT bars', technicalSpecs: 'Fe 500D, 12 mm dia', quantity: 100, unit: 'Mt', majorCategory: 'Civil Works', minorCategory: 'TMT BARS' }],
         },
         user: { role: 'buyer', email: buyerAccount.corporateEmail, id: buyerAccount.id },
       };

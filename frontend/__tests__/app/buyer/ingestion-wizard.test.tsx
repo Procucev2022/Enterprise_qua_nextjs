@@ -13,6 +13,7 @@ import {
 } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type { ExtractedEntity, RFQExtractionResult, RFQItem, SourcingMode } from '@/lib/types';
 
 const mockPush = jest.fn();
@@ -131,6 +132,32 @@ function mockCreatedRFQ(): RFQItem {
     quotes: [],
     chasingActive: false,
   };
+}
+
+/** A far-future target date, so the date field stays valid whenever the suite runs. */
+const FUTURE_TARGET_DATE = '2099-12-01';
+// The category the suite's Procucev and buyer vendor fixtures are built around.
+const FIXTURE_MAJOR = 'Engineering Spares - Mechanical';
+const FIXTURE_MINOR = 'Bearings & Accessories';
+
+/**
+ * Fills each mandatory field that is still blank: the title, the target date, every row's specification
+ * and both categories. A field that already holds a value keeps the value the test gave it.
+ */
+function completeRFQFields() {
+  const title = screen.getByLabelText(new RegExp(MODAL.titleLabel)) as HTMLInputElement;
+  if (!title.value) fireEvent.change(title, { target: { value: 'Centrifugal pump replacement' } });
+  const targetDate = screen.getByLabelText(new RegExp(MODAL.targetDateLabel)) as HTMLInputElement;
+  if (!targetDate.value) fireEvent.change(targetDate, { target: { value: FUTURE_TARGET_DATE } });
+  (screen.queryAllByPlaceholderText(MODAL.specsPlaceholder) as HTMLInputElement[]).forEach((spec) => {
+    if (!spec.value) fireEvent.change(spec, { target: { value: 'Centrifugal, 5 HP, cast iron casing' } });
+  });
+  (screen.queryAllByLabelText(MODAL.colMajor) as HTMLSelectElement[]).forEach((major) => {
+    if (!major.value) fireEvent.change(major, { target: { value: FIXTURE_MAJOR } });
+  });
+  (screen.queryAllByLabelText(MODAL.colMinor) as HTMLSelectElement[]).forEach((minor) => {
+    if (!minor.value && !minor.disabled) chooseCategory(minor, FIXTURE_MINOR);
+  });
 }
 
 /** Nothing is preselected, so a test that dispatches picks the sourcing mode it is about. */
@@ -366,7 +393,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
 
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
       target: { value: '10' },
@@ -377,6 +404,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
     // Now choose a mode and submit
     chooseSourcingMode('mode_2');
+    completeRFQFields();
     fireEvent.click(submitBtn);
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -611,7 +639,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
       target: { value: '50' },
     });
@@ -629,6 +657,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
       error: 'Database constraint violation during RFQ creation',
     });
 
+    completeRFQFields();
     const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
     fireEvent.click(submitBtn);
 
@@ -827,13 +856,14 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '5' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
     uploadFile(new File(['file'], 'specs.pdf', { type: 'application/pdf' }));
     mockAttach.mockResolvedValueOnce({ success: false, error: 'rejected' });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -855,7 +885,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '3' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'MT' } });
 
@@ -867,6 +897,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     );
 
     const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+    completeRFQFields();
     fireEvent.click(submitBtn);
     fireEvent.click(submitBtn);
     fireEvent.click(submitBtn);
@@ -891,13 +922,14 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '20' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Rolls' } });
 
     const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
 
     mockCreateRFQ.mockResolvedValueOnce({ success: false });
+    completeRFQFields();
     fireEvent.click(submitBtn);
     await waitFor(() => {
       expect(screen.getByText(/Failed to create RFQ\./i)).toBeInTheDocument();
@@ -998,10 +1030,11 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(screen.getByText(/(Mode 1|Version 1).*requires at least one private vendor/i)).toBeInTheDocument());
@@ -1051,10 +1084,11 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
-    fireEvent.change(minorSelect, { target: { value: 'Abrasives' } });
+    chooseCategory(minorSelect, 'Abrasives');
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -1114,6 +1148,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
         name: 'Apex Industrial Dynamics',
         source: 'historical_purchase_dump',
         majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Abrasives'],
       },
     ]);
     renderWizard();
@@ -1135,10 +1170,11 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
-    fireEvent.change(minorSelect, { target: { value: 'Abrasives' } });
+    chooseCategory(minorSelect, 'Abrasives');
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -1471,6 +1507,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       });
 
       // Submit RFQ
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
       await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -1527,6 +1564,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
         target: { value: 'Boxes' },
       });
 
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
       await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -1571,6 +1609,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
         target: { value: 'Nos' },
       });
 
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
       await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -1766,6 +1805,7 @@ describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)',
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
@@ -1813,6 +1853,7 @@ describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)',
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(screen.getByText('RFQ Dispatched Successfully!')).toBeInTheDocument());
@@ -1900,10 +1941,11 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '5' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(screen.getByText('RFQ Dispatched Successfully!')).toBeInTheDocument());
@@ -1929,10 +1971,11 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     });
     const [maj2, min2] = within(row2).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(maj2, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(min2, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(min2, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row2).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row2).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'MT' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
     await waitFor(() => expect(screen.getByText('RFQ Dispatched Successfully!')).toBeInTheDocument());
 
@@ -1972,6 +2015,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     fireEvent.change(within(row3).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '1' } });
     fireEvent.change(within(row3).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Lot' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => {
@@ -1984,7 +2028,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     expect(onComplete3).toHaveBeenCalledTimes(1);
   });
 
-  it('covers All Categories sanitization on submission and Mode 2 toolbar filtering', async () => {
+  it('sends an All Categories row as chosen and keeps Mode 2 toolbar filtering working', async () => {
     serveBootstrap([
       {
         id: 'v-m2-1',
@@ -2045,10 +2089,11 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), { target: { value: 'Surat Depot' } });
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), { target: { value: '395001' } });
 
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
-    // All Categories sanitized back to ''
-    expect(mockCreateRFQ.mock.calls[0][0].extractedEntities[0].majorCategory).toBe('');
+    // All Categories is sent as chosen. The server stores it as a blank category.
+    expect(mockCreateRFQ.mock.calls[0][0].extractedEntities[0].majorCategory).toBe('All Categories');
   });
 
   it('covers Mode 1 vendor selection toolbar: search, category tabs, card click, and bulk select', async () => {
@@ -2260,7 +2305,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), { target: { value: 'Hydraulic Cylinder' } });
     const [maj, min] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(maj, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(min, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(min, categoriesData[0].minorCategories[0]);
 
     // When already categorized, clicking Auto-Categorize shows info toast without calling API
     const autoCatBtn = screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i });
@@ -2308,6 +2353,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Pcs' } });
 
     // Submit in Mode 1 where the only vendor is mismatched -> triggers shortlist adjustment toast & blocking
+    completeRFQFields();
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
     await waitFor(() => {
       expect(screen.getByText(/(Mode 1|Version 1).*requires at least one private vendor/i)).toBeInTheDocument();
@@ -2344,6 +2390,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         email: 'match@corp.com',
         source: 'buyer_uploaded',
         majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Abrasives'],
       },
       {
         id: 'v-m2-mismatch',
@@ -2621,6 +2668,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
       // Submit
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
       await waitFor(() => {
@@ -2748,6 +2796,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         },
       });
 
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
       await waitFor(() => {
@@ -2817,7 +2866,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         data: {
           title: 'Extracted PO',
           extractedEntities: [
-            entity({ id: 'ex-1', itemName: 'Steel Pipes', majorCategory: 'Civil Works' }),
+            entity({ id: 'ex-1', itemName: 'Steel Pipes', majorCategory: 'Civil Works', minorCategory: 'Bricks' }),
           ],
         },
       });
@@ -2840,6 +2889,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         rfq: mockCreatedRFQ(),
       });
 
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
       await waitFor(() => {
@@ -3283,7 +3333,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         email: 'v1@test.com',
         source: 'buyer_uploaded',
         majorCategory: 'Engineering Spares - Mechanical',
-        minorCategories: ['Pumps & Accessories'],
+        minorCategories: ['Pumps & Accessories', 'Bearings & Accessories'],
         rating: 4.5,
       };
       const v2 = {
@@ -3292,7 +3342,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         email: 'v2@test.com',
         source: 'buyer_uploaded',
         majorCategory: 'Engineering Spares - Mechanical',
-        minorCategories: 'Pumps & Accessories, Valves',
+        minorCategories: 'Pumps & Accessories, Valves, Bearings & Accessories',
         rating: 4.8,
       };
       const v3 = {
@@ -3344,6 +3394,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       fireEvent.change(within(row1).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
       mockCreateRFQ.mockResolvedValueOnce({ success: true, rfq: mockCreatedRFQ() });
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
       await waitFor(() => {
         expect(mockCreateRFQ).toHaveBeenCalled();
@@ -3451,6 +3502,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         },
       });
 
+      completeRFQFields();
       fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
       await waitFor(() => {
@@ -3476,3 +3528,22 @@ describe('IngestionWizard: comprehensive branch booster', () => {
   });
 });
 
+
+describe('IngestionWizard: mandatory fields', () => {
+  it('marks the title and target date as required, and the target date opens its calendar from the whole field', () => {
+    renderWizard();
+
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel))).toBeRequired();
+    const targetDate = screen.getByLabelText(new RegExp(MODAL.targetDateLabel));
+    expect(targetDate).toBeRequired();
+    expect(targetDate).toHaveClass('date-input-whole-field');
+    expect(screen.getByLabelText(/Estimated Budget/i)).not.toBeRequired();
+  });
+
+  it('marks each line item column heading as required', () => {
+    renderWizard();
+
+    const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
+    expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker)).length).toBeGreaterThanOrEqual(6);
+  });
+});

@@ -332,6 +332,7 @@ describe('Authentication against the account records (/api/auth)', () => {
         orgName: 'Navin Chaudhary Enterprises',
         mobile: '+919157154504',
         passwordChangeRequired: false,
+        vendorMasterUploaded: false,
       });
       expect(authService.verifySessionToken(result.token).valid).toBe(true);
     });

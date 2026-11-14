@@ -137,7 +137,8 @@ describe('storeService comprehensive branch boost tests', () => {
       const vMatch = {
         id: 'v-cat-match',
         name: 'Matching Vendor',
-        majorCategory: 'Transformers',
+        majorCategory: 'Engineering Spares - Electrical',
+        minorCategories: ['Transformers'],
       };
       const vMismatch = {
         id: 'v-cat-mismatch',
@@ -618,13 +619,13 @@ describe('storeService comprehensive branch boost tests', () => {
 
       const closedRfq = { id: 'rfq-closed-ext', status: 'Closed', quotes: [] };
       storeService.rfqs = [closedRfq];
-      expect(storeService.extendRFQ('rfq-closed-ext', { hours: 24 })).toEqual(
+      expect(storeService.extendRFQ('rfq-closed-ext', { days: 1 })).toEqual(
         expect.objectContaining({ success: false, reason: 'INVALID_STATUS' })
       );
 
       const alreadyExtendedRfq = { id: 'rfq-already-ext', status: 'Quotes Pending', isExtended: true, quotes: [] };
       storeService.rfqs = [alreadyExtendedRfq];
-      expect(storeService.extendRFQ('rfq-already-ext', { hours: 24 })).toEqual(
+      expect(storeService.extendRFQ('rfq-already-ext', { days: 1 })).toEqual(
         expect.objectContaining({ success: false, reason: 'ALREADY_EXTENDED' })
       );
 
@@ -636,11 +637,11 @@ describe('storeService comprehensive branch boost tests', () => {
       };
       storeService.rfqs = [validRfq];
 
-      expect(storeService.extendRFQ('rfq-valid-ext', { hours: 12 })).toEqual(
+      expect(storeService.extendRFQ('rfq-valid-ext', { days: 0 })).toEqual(
         expect.objectContaining({ success: false, reason: 'VALIDATION' })
       );
 
-      const res24 = storeService.extendRFQ('rfq-valid-ext', { hours: 24, userEmail: 'buyer@ext.com' });
+      const res24 = storeService.extendRFQ('rfq-valid-ext', { days: 1, userEmail: 'buyer@ext.com' });
       expect(res24.success).toBe(true);
       expect(res24.rfq.isExtended).toBe(true);
       expect(res24.rfq.extensionHours).toBe(24);
@@ -1343,7 +1344,7 @@ describe('storeService comprehensive branch boost tests', () => {
       };
       storeService.rfqs = [rfq];
 
-      const res = storeService.extendRFQ('rfq-ext-createdat', { hours: 24, userEmail: 'buyer@corp.com' });
+      const res = storeService.extendRFQ('rfq-ext-createdat', { days: 1, userEmail: 'buyer@corp.com' });
       expect(res.success).toBe(true);
       expect(res.rfq.deadline).toBeDefined();
     });
@@ -1685,7 +1686,8 @@ describe('storeService comprehensive branch boost tests', () => {
         id: 'v-proc-v0-cand',
         name: 'Proc Cand',
         source: 'procucev_network',
-        majorCategory: 'Transformers',
+        majorCategory: 'Engineering Spares - Electrical',
+        minorCategories: ['Transformers'],
       };
       storeService.vendors = [pVendor];
       jest.spyOn(storeService, 'selectVendorsPerCategory').mockReturnValue([]);
@@ -1707,6 +1709,7 @@ describe('storeService comprehensive branch boost tests', () => {
         name: 'Proc V3 Cand',
         source: 'procucev_network',
         majorCategory: 'Industrial Valves',
+        minorCategories: ['Industrial Valves'],
       };
       storeService.vendors = [pVendor];
 

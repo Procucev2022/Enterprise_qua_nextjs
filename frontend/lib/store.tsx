@@ -57,18 +57,23 @@ import {
   RFQ_MODE_LABELS,
   formatCurrency,
   STORE_MESSAGES,
+  AI_FEED_VIEWER_ROLES,
+  REQUEST_ID_HEADER,
 } from './constants';
 
 function logApiResponseFailure(
   message: string,
-  response: Pick<Response, 'status' | 'statusText'>,
+  response: Pick<Response, 'status' | 'statusText'> & Partial<Pick<Response, 'headers'>>,
   category: string,
   metadata: Record<string, unknown> = {}
 ): void {
+  // The backend echoes its request id in X-Request-Id. Recording it lets the failed call be matched to the server's log lines.
+  const requestId = response.headers?.get(REQUEST_ID_HEADER);
   logger.log('ERROR', message, {
     ...metadata,
     status: response.status,
     statusText: response.statusText,
+    ...(requestId ? { requestId } : {}),
   }, category);
 }
 
@@ -775,18 +780,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const isCM = currentRole === 'category_manager' || currentRole === 'admin';
       let result = isCM ? await fetchAllRFQs({ limit: 500 }) : await fetchRFQList({ limit: 500 });
-      if (!result.success && isCM) {
+      // A 401 has just cleared the session. Retrying now would send the request with no token.
+      if (!result.success && isCM && result.reason !== 'UNAUTHORIZED') {
         result = await fetchRFQList({ limit: 500 });
       }
       if (!result.success) {
-        logger.log('ERROR', 'Failed to load RFQs', { error: result.error }, 'RFQ_STORE');
-        if (result.reason === 'UNAUTHORIZED' || (result.error && result.error.includes('Session has been logged out'))) {
+        const sessionEnded = result.reason === 'UNAUTHORIZED' || (result.error && result.error.includes('Session has been logged out'));
+        if (sessionEnded) {
+          // An expired session is expected, so it is not logged as a load failure.
+          logger.log('WARN', 'RFQ list not loaded because the session ended', { reason: result.reason }, 'RFQ_STORE');
           authClient.setSession(null, null);
           setCurrentUserSession(null);
           setRfqs([]);
           setVendorOpportunities([]);
           setSessionCache('rfqs', []);
           loadedEntitiesRef.current.rfqs = false;
+        } else {
+          logger.log('ERROR', 'Failed to load RFQs', { error: result.error }, 'RFQ_STORE');
         }
         return;
       }
@@ -994,6 +1004,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAiFeedError(null);
       setSessionCache('aiFeed', []);
       loadedEntitiesRef.current.aiFeed = false;
+      return;
+    }
+    // Roles outside the feed's audience are not asked for it. The endpoint answers them with a 403
+    // by design, so that is not a failure. An empty feed is the correct answer for this role.
+    if (!AI_FEED_VIEWER_ROLES.includes(currentRole)) {
+      setAiFeed([]);
+      setAiFeedError(null);
+      setSessionCache('aiFeed', []);
+      loadedEntitiesRef.current.aiFeed = true;
       return;
     }
     try {
@@ -1924,6 +1943,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
+        // The server does not hold this supplier for the signed-in buyer. That needs a different message from a send that failed.
+        if (res.status === 404) {
+          showToast(UI_STRINGS.vendorEvaluationRequest.vendorNotFoundTitle, UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody, 'warning');
+          return { success: false, message: UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody };
+        }
         const errMessage = data?.error || UI_STRINGS.vendorEvaluationRequest.requestFailedFallback;
         showToast(UI_STRINGS.vendorEvaluationRequest.requestFailedTitle, errMessage, 'warning');
         return { success: false, message: errMessage };
@@ -1949,18 +1973,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return { success: true, message: data.message, evaluationExists: true, evaluation: savedEvaluation };
       }
 
+      // The server's record of the request is the source for the time, the buyer and the status shown on the row.
+      const sent = data.data && typeof data.data === 'object' ? data.data : {};
+      const requestedAt = typeof sent.evaluationRequestedAt === 'string' ? sent.evaluationRequestedAt : new Date().toISOString();
+      const requestedBy = typeof sent.evaluationRequestedBy === 'string' ? sent.evaluationRequestedBy : activeBuyerAccount?.organizationName || 'Buyer';
       setBuyerVendors((prev) =>
-        prev.map((v) => {
-          if (v.id === vendorId || v.name === targetVendor.name) {
-            return {
-              ...v,
-              evaluationRequested: true,
-              evaluationRequestedAt: new Date().toISOString(),
-              evaluationRequestedBy: activeBuyerAccount?.organizationName || 'Buyer',
-            };
-          }
-          return v;
-        })
+        prev.map((v) =>
+          v.id === vendorId
+            ? {
+                ...v,
+                evaluationRequested: true,
+                evaluationRequestedAt: requestedAt,
+                evaluationRequestedBy: requestedBy,
+                status: typeof sent.status === 'string' ? sent.status : v.status,
+              }
+            : v
+        )
       );
 
       void addFeedItem(

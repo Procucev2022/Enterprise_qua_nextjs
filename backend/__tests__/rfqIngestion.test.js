@@ -942,7 +942,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const vendorRes = await request(app)
         .post('/api/vendors')
         .set(authHeader('vendor'))
-        .send({ name: 'Scoping Test Vendor', majorCategory: 'Civil Works' });
+        .send({ name: 'Scoping Test Vendor', majorCategory: 'Civil Works', minorCategories: ['Plumbing'] });
       vendorId = vendorRes.body.data.id;
 
       const buyerRes = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
@@ -959,6 +959,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const inCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-visible scoped enquiry',
         category: 'Civil Works',
+        extractedEntities: [{ itemName: 'GI pipe fitting set', technicalSpecs: 'Threaded, 50 mm, galvanised', quantity: 4, unit: 'Nos', majorCategory: 'Civil Works', minorCategory: 'Plumbing' }],
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',
@@ -972,6 +973,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const outCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-hidden scoped enquiry',
         category: 'Logistics',
+        extractedEntities: [{ itemName: 'DOL motor starter', technicalSpecs: '5.5 kW, 415 V, three phase', quantity: 2, unit: 'Nos', majorCategory: 'Engineering Spares - Electrical', minorCategory: 'Motors' }],
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',

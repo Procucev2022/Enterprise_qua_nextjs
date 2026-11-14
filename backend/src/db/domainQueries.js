@@ -33,6 +33,7 @@ const {
   RFQ_CHASER_ERROR_MAX_LENGTH,
   D1_NOTIFICATION_INSERT_BATCH_SIZE,
   DATABASE_QUERY_CACHE,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
@@ -521,6 +522,136 @@ async function countPublicVendorsMatchingCategories(signals) {
     }
   );
   return result.rows[0]?.total || 0;
+}
+
+/**
+ * Public (Procucev-network) vendor rows whose MAJOR category is one of the given RFQ
+ * category signals, newest first, capped by `limit`. This is the lookup V0 assignment
+ * uses.
+ *
+ * It reads the indexed major_category column (idx_vendors_major_category_nocase), so it
+ * reads only the matching vendors. The LIKE-based lookups below match the whole raw JSON
+ * and so scan the entire vendors table: on D1 one such scan read about a million rows, and
+ * under the D1 per-window budget that failed, which left V0 RFQs with no vendors. Every
+ * categorised network vendor carries majorCategory in its major_category column
+ * (upsertVendorInDB writes both), so the indexed match finds them. A vendor whose only
+ * category sits in minorCategories is not returned here; the in-memory matcher still checks
+ * those fields.
+ *
+ * @param {string[]} signals Category strings the RFQ carries.
+ * @param {number} limit Max rows to return.
+ * @returns {Promise<object[]>} Matching public vendor records.
+ */
+async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT) {
+  if (!pool.hasStorage()) return [];
+  const cleaned = Array.from(
+    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  if (cleaned.length === 0) return [];
+
+  const safeLimit = Math.min(
+    Math.max(Number(limit) || PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, 1),
+    PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT
+  );
+  const d1Placeholders = cleaned.map((_, index) => `$${index + 1}`).join(', ');
+  const limitIndex = cleaned.length + 1;
+  const result = await pool.query(
+    `SELECT raw FROM vendors
+     WHERE lower(major_category) = ANY($1::text[])
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL
+     ORDER BY created_at DESC LIMIT $2`,
+    [cleaned, safeLimit],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors
+       WHERE major_category COLLATE NOCASE IN (${d1Placeholders})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL
+       ORDER BY created_at DESC LIMIT $${limitIndex}`,
+      d1Params: [...cleaned, safeLimit],
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
+  );
+  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
+}
+
+/**
+ * Public (Procucev-network) vendor rows that carry one of the given minor categories and sit
+ * under one of the given major categories, newest first, capped by `limit`.
+ *
+ * This is the lookup V0 assignment uses for an RFQ that names minor categories. The major
+ * filter reads the indexed major_category column, so the scan covers only the vendors filed
+ * under the minors' parent major rather than the whole table (a LIKE match over the full raw
+ * JSON overloaded D1; see getPublicVendorsByMajorCategoryFromDB). The minor match runs in the
+ * same query, so the row cap applies to vendors that carry a matching minor. The minor match is
+ * a quoted substring test over the JSON text, so callers re-check each row against the exact
+ * minor name. A vendor filed under a different major than the minor's parent is not returned.
+ *
+ * @param {string[]} minorSearchTerms Lower-case minor names, plus their singular/plural stems, the RFQ carries.
+ * @param {string[]} majorCategories Parent major names, including legacy aliases, those minors sit under.
+ * @param {number} limit Max rows to return.
+ * @returns {Promise<object[]>} Matching public vendor records.
+ */
+async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCategories, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT) {
+  if (!pool.hasStorage()) return [];
+  const terms = Array.from(
+    new Set((Array.isArray(minorSearchTerms) ? minorSearchTerms : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const majors = Array.from(
+    new Set((Array.isArray(majorCategories) ? majorCategories : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  if (terms.length === 0 || majors.length === 0) return [];
+
+  const safeLimit = Math.min(
+    Math.max(Number(limit) || PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, 1),
+    PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT
+  );
+  // A term matches an element that starts with it, inside the JSON quotes, so the singular or
+  // plural stem reaches the same vendors the exact minor check accepts.
+  const patterns = terms.map((term) => `%"${term}`);
+
+  // Postgres: one array parameter for the majors, then one quoted pattern per minor, then the limit.
+  const pgParams = [majors, ...patterns, safeLimit];
+  const pgMinorClauses = patterns.map((_, index) => {
+    const p = index + 2;
+    return `(lower((raw->'minorCategories')::text) LIKE $${p}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${p})`;
+  });
+
+  // D1 (SQLite) has no array parameter, so each major gets its own placeholder, then each
+  // pattern, then the limit. Every placeholder is used once, in order, so the bindings line up.
+  const d1Params = [...majors, ...patterns, safeLimit];
+  const d1Majors = majors.map((_, index) => `$${index + 1}`).join(', ');
+  const d1MinorClauses = patterns.map((_, index) => `raw LIKE $${majors.length + index + 1}`);
+  const d1LimitIndex = majors.length + patterns.length + 1;
+
+  const result = await pool.query(
+    `SELECT raw FROM vendors
+     WHERE lower(major_category) = ANY($1::text[])
+       AND (${pgMinorClauses.join(' OR ')})
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL
+     ORDER BY created_at DESC LIMIT $${pgParams.length}`,
+    pgParams,
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors
+       WHERE major_category COLLATE NOCASE IN (${d1Majors})
+         AND (${d1MinorClauses.join(' OR ')})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL
+       ORDER BY created_at DESC LIMIT $${d1LimitIndex}`,
+      d1Params,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
+  );
+  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
 }
 
 /**
@@ -1290,9 +1421,16 @@ async function upsertRFQInDB(rfq) {
 }
 
 /**
- * Atomically close RFQs that have been open for at least 48 hours.
- * The eligibility predicate and status transition share one statement so
- * concurrent schedulers cannot both dispatch closure side effects.
+ * Atomically close RFQs whose closing time has passed. An RFQ with a stored closingDeadline closes when
+ * that time arrives, so a one-time extension keeps it open. An RFQ stored before closingDeadline existed
+ * closes 48 hours after its createdAt, which is the moment cutoffIso marks.
+ *
+ * createdAt is stored to the minute as "YYYY-MM-DD HH:mm UTC", so it is compared as a minute key against
+ * the cutoff. A plain text comparison against the ISO cutoff put an RFQ created on the cutoff's day before
+ * the cutoff, because a space sorts before "T", and closed it up to a day early.
+ *
+ * The eligibility predicate and status transition share one statement so concurrent schedulers cannot
+ * both dispatch closure side effects.
  */
 async function closeExpiredRFQsInDB(cutoffIso, closedAtIso, closeReason) {
   if (!pool.hasStorage()) return [];
@@ -1301,25 +1439,38 @@ async function closeExpiredRFQsInDB(cutoffIso, closedAtIso, closeReason) {
     closedAt: closedAtIso,
     closedReason: closeReason,
   });
+  const createdCutoffKey = String(cutoffIso).slice(0, 16);
   const result = await pool.query(
     `UPDATE rfqs
      SET status = 'Closed', raw = raw || $2::jsonb, updated_at = now()
-     WHERE COALESCE(raw->>'createdAt', '') <> ''
-       AND raw->>'createdAt' <= $1
-       AND COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
+     WHERE COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
        AND COALESCE(raw->>'poFinalised', 'false') <> 'true'
        AND COALESCE(raw->>'poNumber', '') = ''
+       AND (
+         (COALESCE(raw->>'closingDeadline', '') <> '' AND raw->>'closingDeadline' <= $1)
+         OR (
+           COALESCE(raw->>'closingDeadline', '') = ''
+           AND COALESCE(raw->>'createdAt', '') <> ''
+           AND replace(substr(raw->>'createdAt', 1, 16), ' ', 'T') <= $3
+         )
+       )
      RETURNING raw`,
-    [cutoffIso, closurePatch],
+    [closedAtIso, closurePatch, createdCutoffKey],
     {
       d1: true,
       d1Text: `UPDATE rfqs
        SET status = 'Closed', raw = json_patch(raw, $2), updated_at = CURRENT_TIMESTAMP
-       WHERE COALESCE(json_extract(raw, '$.createdAt'), '') <> ''
-         AND json_extract(raw, '$.createdAt') <= $1
-         AND COALESCE(json_extract(raw, '$.status'), status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
+       WHERE COALESCE(json_extract(raw, '$.status'), status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
          AND COALESCE(json_extract(raw, '$.poFinalised'), 0) NOT IN (1, 'true')
          AND COALESCE(json_extract(raw, '$.poNumber'), '') = ''
+         AND (
+           (COALESCE(json_extract(raw, '$.closingDeadline'), '') <> '' AND json_extract(raw, '$.closingDeadline') <= $1)
+           OR (
+             COALESCE(json_extract(raw, '$.closingDeadline'), '') = ''
+             AND COALESCE(json_extract(raw, '$.createdAt'), '') <> ''
+             AND replace(substr(json_extract(raw, '$.createdAt'), 1, 16), ' ', 'T') <= $3
+           )
+         )
        RETURNING raw`,
     }
   );
@@ -2913,6 +3064,8 @@ module.exports = {
   getVendorsPageFromDB,
   countVendorsCreatedBetween,
   countPublicVendorsMatchingCategories,
+  getPublicVendorsByMajorCategoryFromDB,
+  getPublicVendorsByMinorCategoryFromDB,
   getPublicVendorsMatchingCategories,
   getPublicVendorsPerCategoryFromDB,
   getVendorByEmailFromDB,

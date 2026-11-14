@@ -11,7 +11,10 @@ import {
   PINCODE_PATTERN,
   INDIAN_PINCODE_PATTERN,
   isDummyPincode,
+  isDummyPan,
+  usablePan,
   FormSchema,
+  resolveCityAndStateFromPostalResult,
   resolveLocationFromPostalResult,
   PASSWORD_MIN_LENGTH,
   PROCUCEV_EMAIL_PATTERN,
@@ -31,7 +34,10 @@ import {
   ACCOUNT_DOCUMENT_UPLOAD_SCHEMA,
   SELLER_ADD_QUOTE_CREDITS_SCHEMA,
   BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA,
+  findMissingPoDumpFields,
+  findMissingPoDumpHeaders,
 } from '../../lib/validationSchemas';
+import type { PostOfficeDetail } from '../../lib/validationSchemas';
 import { UI_STRINGS } from '../../lib/uiStrings';
 
 describe('Frontend validationSchemas Unit Tests', () => {
@@ -678,12 +684,15 @@ describe('validatePincode async postal API validator', () => {
       expect(res.isValid).toBe(false);
     });
 
-    test('validates extendRFQ schema custom hours validation', () => {
+    test('validates extendRFQ schema whole-day range and names it when it fails', () => {
       const extendRule = FORM_SCHEMAS.extendRFQ;
-      expect(validateFormData(extendRule, { hours: 24 }).isValid).toBe(true);
-      expect(validateFormData(extendRule, { hours: 48 }).isValid).toBe(true);
-      expect(validateFormData(extendRule, { hours: 12 }).isValid).toBe(false);
-      expect(validateFormData(extendRule, { hours: 'abc' }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 1 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { days: 30 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { days: 31 }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 2.5 }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 'abc' }).isValid).toBe(false);
+      expect(validateFormData(extendRule, {}).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 31 }).fieldErrors.days).toContain('from 1 to 30');
     });
   });
 });
@@ -796,5 +805,116 @@ describe('validationSchemas edge branches', () => {
       global.AbortController = originalAbortController;
       global.fetch = originalFetch;
     }
+  });
+});
+
+describe('PO dump required columns', () => {
+  it('reports no missing header when a sheet has the vendor, description and specifications columns', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Vendor Name', 'Line Item Description', 'Specifications', 'Quantity'])).toEqual([]);
+  });
+
+  it('accepts the other spellings of each required column', () => {
+    expect(findMissingPoDumpHeaders(['Vendor Code', 'Item Description', 'Technical Specs'])).toEqual([]);
+  });
+
+  it('names each required column that no header satisfies', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Quantity'])).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
+    ]);
+  });
+
+  it('names only the specifications column when that is the one missing', () => {
+    expect(findMissingPoDumpHeaders(['Vendor Name', 'Item Description'])).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
+    ]);
+  });
+
+  it('reports no missing field for a complete row and names each blank required field', () => {
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: 'Valve', specs: 'DN50' })).toEqual([]);
+    expect(findMissingPoDumpFields({ vendorIdentifier: '  ', itemName: 'Valve', specs: undefined })).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
+    ]);
+  });
+
+  it('treats the description as missing when only the description is blank', () => {
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: '', specs: 'DN50' })).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+    ]);
+  });
+});
+
+describe('isDummyPan and usablePan', () => {
+  it('flags the listed sample PANs, whatever their case or surrounding spaces', () => {
+    expect(isDummyPan('ABCPE1234F')).toBe(true);
+    expect(isDummyPan(' abcde1234f ')).toBe(true);
+    expect(isDummyPan('AAACL1234F')).toBe(true);
+  });
+
+  it('flags a PAN made of one letter repeated', () => {
+    expect(isDummyPan('AAAAA0000A')).toBe(true);
+    expect(isDummyPan('zzzzz9999z')).toBe(true);
+  });
+
+  it('does not flag an ordinary PAN, or a value that is blank or not text', () => {
+    expect(isDummyPan('AAACL0140P')).toBe(false);
+    expect(isDummyPan('')).toBe(false);
+    expect(isDummyPan('   ')).toBe(false);
+    expect(isDummyPan(undefined)).toBe(false);
+    expect(isDummyPan(1234)).toBe(false);
+  });
+
+  it('returns the upper-case PAN when it has the PAN format and is not a placeholder', () => {
+    expect(usablePan(' aaacl0140p ')).toBe('AAACL0140P');
+  });
+
+  it('returns null for a placeholder, a value without the PAN format, or a value that is not text', () => {
+    expect(usablePan('ABCPE1234F')).toBeNull();
+    expect(usablePan('Not Provided')).toBeNull();
+    expect(usablePan('AAACL01400')).toBeNull();
+    expect(usablePan(null)).toBeNull();
+    expect(usablePan(undefined)).toBeNull();
+    expect(usablePan(42)).toBeNull();
+  });
+});
+
+describe('resolveCityAndStateFromPostalResult', () => {
+  const offices = [
+    { Name: 'New Delhi GPO', Pincode: '110001', District: 'New Delhi', State: 'Delhi' },
+    { Name: 'Koramangala', Pincode: '560034', District: 'Bangalore Urban', State: 'Karnataka' },
+  ] as PostOfficeDetail[];
+
+  test('returns blank city and state when no office record is available, without guessing from the PIN', () => {
+    expect(resolveCityAndStateFromPostalResult('560034', [])).toEqual({ city: '', state: '' });
+    expect(resolveCityAndStateFromPostalResult('560034')).toEqual({ city: '', state: '' });
+  });
+
+  test('takes the office whose Pincode matches the requested PIN, and falls back to the first office', () => {
+    expect(resolveCityAndStateFromPostalResult('560034', offices)).toEqual({ city: 'Bangalore Urban', state: 'Karnataka' });
+    expect(resolveCityAndStateFromPostalResult('999999', offices)).toEqual({ city: 'New Delhi', state: 'Delhi' });
+  });
+
+  test('takes the city from District, then Division, then Circle, then Name', () => {
+    const district = [{ Name: 'PO', Division: 'Div', Circle: 'Cir', District: 'Dist', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const division = [{ Name: 'PO', Division: 'Div', Circle: 'Cir', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const circle = [{ Name: 'PO', Circle: 'Cir', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const name = [{ Name: 'PO', State: 'Maharashtra' }] as PostOfficeDetail[];
+
+    expect(resolveCityAndStateFromPostalResult('400701', district)).toEqual({ city: 'Dist', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', division)).toEqual({ city: 'Div', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', circle)).toEqual({ city: 'Cir', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', name)).toEqual({ city: 'PO', state: 'Maharashtra' });
+  });
+
+  test('leaves the state blank when the office record has none', () => {
+    const noState = [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[];
+    expect(resolveCityAndStateFromPostalResult('400701', noState)).toEqual({ city: 'Dist', state: '' });
+  });
+
+  test('resolveLocationFromPostalResult joins the same city and state', () => {
+    expect(resolveLocationFromPostalResult('560034', offices)).toBe('Bangalore Urban, Karnataka');
+    expect(resolveLocationFromPostalResult('999999', [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[])).toBe('Dist');
   });
 });

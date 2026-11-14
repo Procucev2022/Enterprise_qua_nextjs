@@ -55,12 +55,28 @@ function storeMemoryOtp(otpKey, code, expiresMs) {
 // ── OTP codes ────────────────────────────────────────────────────────────────
 
 /**
+ * The email an OTP is issued to: the explicit hint, else the email carried in the OTP key.
+ * Every stored OTP names its email. The live D1 table declares auth_otp_codes.email NOT NULL,
+ * while schema.d1.sql declares it nullable, so writing it always keeps both shapes valid.
+ */
+function resolveOtpEmail(otpKey, emailHint) {
+  const email = String(emailHint || extractEmailFromOtpKey(otpKey) || '').trim();
+  if (email) return email;
+  const error = new Error('An OTP cannot be stored without the email it was issued to.');
+  error.code = 'OTP_EMAIL_REQUIRED';
+  logger.error('OTP storage rejected: no email was supplied for the OTP key', {
+    operation: 'saveOtp',
+    error,
+  }, 'AUTH_SESSION');
+  throw error;
+}
+
+/**
  * Store (or replace) the OTP issued for an email + mobile pair.
  */
 async function saveOtp(otpKey, code, expiresAt, emailHint) {
   const isoExpiry = new Date(expiresAt).toISOString();
   const expiresMs = new Date(expiresAt).getTime();
-  const email = emailHint || extractEmailFromOtpKey(otpKey);
   const hasStorage = pool.hasStorage();
 
   if (!hasStorage) {
@@ -68,52 +84,40 @@ async function saveOtp(otpKey, code, expiresAt, emailHint) {
     return;
   }
 
-  const primaryQuery = `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
-       values ($1, $2, 0, $3, CURRENT_TIMESTAMP)
+  const email = resolveOtpEmail(otpKey, emailHint);
+
+  try {
+    await pool.query(
+      `insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)
+       values ($1, $2, $3, 0, $4, CURRENT_TIMESTAMP)
        on conflict (otp_key) do update set
+         email = excluded.email,
          code = excluded.code,
          attempts = 0,
          expires_at = excluded.expires_at,
-         created_at = CURRENT_TIMESTAMP`;
-
-  try {
-    await pool.query(primaryQuery, [otpKey, code, isoExpiry], { d1: true });
+         created_at = CURRENT_TIMESTAMP`,
+      [otpKey, email, code, isoExpiry],
+      { d1: true }
+    );
     return;
   } catch (err) {
-    const errMsg = String((err && err.message) || err);
+    // The upsert needs the unique index on otp_key. Deleting and inserting works without it.
+    logger.warn('OTP upsert failed; retrying as delete then insert', {
+      operation: 'saveOtp',
+      error: err,
+    }, 'AUTH_SESSION');
+  }
 
-    // If a legacy schema variant has a NOT NULL constraint on email:
-    if (errMsg.includes('auth_otp_codes.email') || errMsg.includes('NOTNULL')) {
-      try {
-        await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
-        await pool.query(
-          `insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)
-           values ($1, $2, $3, 0, $4, CURRENT_TIMESTAMP)`,
-          [otpKey, email, code, isoExpiry],
-          { d1: true }
-        );
-        return;
-      } catch (compatibilityErr) {
-        // proceed to delete-insert fallback
-        logger.warn('OTP compatibility insert failed; trying the standard upsert fallback', {
-          operation: 'saveOtp',
-          error: compatibilityErr,
-        }, 'AUTH_SESSION');
-      }
-    }
-
-    // Standard fallback: delete followed by insert (handles missing ON CONFLICT index)
-    try {
-      await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
-      await pool.query(
-        `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
-         values ($1, $2, 0, $3, CURRENT_TIMESTAMP)`,
-        [otpKey, code, isoExpiry],
-        { d1: true }
-      );
-    } catch (innerErr) {
-      throwPersistenceUnavailable('OTP storage', innerErr);
-    }
+  try {
+    await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
+    await pool.query(
+      `insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)
+       values ($1, $2, $3, 0, $4, CURRENT_TIMESTAMP)`,
+      [otpKey, email, code, isoExpiry],
+      { d1: true }
+    );
+  } catch (innerErr) {
+    throwPersistenceUnavailable('OTP storage', innerErr);
   }
 }
 

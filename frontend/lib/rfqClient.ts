@@ -849,13 +849,13 @@ export async function updateRFQ(
 }
 
 /**
- * Extends the closing deadline of an open RFQ by 24 or 48 hours (strictly one-time).
+ * Extends the closing deadline of an open RFQ by a whole number of days (strictly one-time).
  *
  * Backed by POST /api/rfqs/:id/extend.
  */
 export async function extendRFQ(
   identifier: string,
-  hours: 24 | 48
+  days: number
 ): Promise<RFQExtensionResult> {
   const token = authClient.getToken();
 
@@ -867,7 +867,7 @@ export async function extendRFQ(
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ hours }),
+      body: JSON.stringify({ days }),
     });
   } catch {
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };

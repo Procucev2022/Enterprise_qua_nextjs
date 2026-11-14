@@ -26,6 +26,7 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const r2Client = require('./r2Client');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { logger } = require('./loggerService');
+const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
@@ -367,7 +368,10 @@ function mapRowValues(values, headerMap, type, rowIdx) {
     const itemDescription = get('itemName') || null;
     const specification = get('specs') || null;
     const qtyRaw = get('quantity');
-    const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
+    // A quantity the row does not give stays null. It is never set to 1, because a
+    // made-up quantity would be stored as though the buyer had entered it.
+    const parsedQuantity = qtyRaw ? Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) : 0;
+    const quantity = parsedQuantity > 0 ? parsedQuantity : null;
     const uom = get('unit') || null;
     const unitPriceRaw = get('unitPrice');
     const spendRaw = get('spend');
@@ -375,7 +379,9 @@ function mapRowValues(values, headerMap, type, rowIdx) {
     const parsedUnitPrice = unitPriceRaw && !isNaN(Number(String(unitPriceRaw).replace(/[^0-9.]/g, ''))) ? Number(String(unitPriceRaw).replace(/[^0-9.]/g, '')) : 0;
     const parsedSpend = spendRaw && !isNaN(Number(String(spendRaw).replace(/[^0-9.]/g, ''))) ? Number(String(spendRaw).replace(/[^0-9.]/g, '')) : 0;
 
-    const spend = parsedSpend > 0 ? parsedSpend : parsedUnitPrice * quantity;
+    // Spend comes from the spend column, or from unit price times quantity when both are
+    // given. Otherwise it stays null rather than being guessed as zero.
+    const spend = parsedSpend > 0 ? parsedSpend : quantity !== null && parsedUnitPrice > 0 ? parsedUnitPrice * quantity : null;
     const department = get('department') || null;
 
     return {
@@ -478,48 +484,56 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   const valid = [];
   const invalid = [];
 
-  // Minimum required to process a PO row at all: Vendor identity, Item
-  // Details, and Category (the buyer's own wording for this). Everything
-  // else (date, PO number, spend, UOM...) is accepted as-supplied and left
-  // blank when absent — a PO missing only its spend figure should still be
-  // extracted and processed, not rejected outright.
+  // Required: a vendor (name or code), a line item description and a specification.
+  // Every other PO column is optional. A row that does not give one of them keeps that
+  // value null, and a row that gives more of them is stored with all of them.
   for (const row of batch) {
     const vendorName = row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.companyName || '';
     const vendorCode = row.vendorCode || row.vendor_code || row.supplierCode || '';
     const itemDescription = row.itemDescription || row.itemName || row.description || '';
-    const category = row.department || row.category || '';
+    const specification = row.specification || row.specs || '';
+    const department = row.department || row.category || '';
 
     if (!vendorName && !vendorCode) {
       invalid.push({ row, reason: 'Vendor Name or Vendor Code is required' });
       continue;
     }
-    if (!itemDescription) {
-      invalid.push({ row, reason: 'Item Details are required' });
-      continue;
-    }
-    if (!category) {
-      invalid.push({ row, reason: 'Category is required' });
-      continue;
-    }
 
     const poDate = normalizePoDate(row.poDate || row.date);
+    // Quantity and spend are never invented: a row that does not give them keeps them null.
+    const quantity = Number(row.quantity) > 0 ? Number(row.quantity) : null;
+    const spend = [row.spend, row.totalSpend].map(Number).find((value) => value > 0) ?? null;
 
-    // Stamp inHorizon — a row with no parseable PO date can't be confirmed
-    // inside the buyer's selected window, so it's counted as outside it
-    // rather than silently included.
+    const candidate = {
+      poNumber: row.poNumber,
+      poDate,
+      itemDescription,
+      specification,
+      quantity,
+      uom: row.uom || row.unit,
+      spend,
+      department: department || null,
+    };
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.poLineItemRow, candidate);
+    if (!isValid) {
+      invalid.push({ row, reason: Object.values(errors)[0] });
+      continue;
+    }
+
+    // Stamp inHorizon. With no horizon every row is inside. A row without a PO date is
+    // kept inside as well, because a dump no longer has to carry dates to be used.
     const horizonConfigured = Boolean(session && session.horizonStart && session.horizonEnd);
-    const inHorizon = !horizonConfigured
-      ? true
-      : Boolean(poDate) && poDate >= session.horizonStart && poDate <= session.horizonEnd;
+    const inHorizon = !horizonConfigured || !poDate || (poDate >= session.horizonStart && poDate <= session.horizonEnd);
 
     valid.push({
       ...row,
-      poDate: poDate || row.poDate || null,
+      poDate: poDate || null,
       vendorName: vendorName || `Vendor ${vendorCode}`,
       itemDescription,
-      department: category,
-      quantity: row.quantity !== undefined ? Number(row.quantity) || 1 : 1,
-      spend: row.spend !== undefined ? Number(row.spend) || 0 : (Number(row.totalSpend) || 0),
+      specification: specification || null,
+      department: department || null,
+      quantity,
+      spend,
       inHorizon,
     });
   }
@@ -539,6 +553,22 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   }
 
   return { imported, skipped, failed: invalid.length, errors: invalid.slice(0, 5) };
+}
+
+/**
+ * Stamp the organization's first vendor master upload once a VENDOR_MASTER job has stored rows.
+ * A job that stored nothing does not count, so the buyer stays in setup until a usable file lands.
+ */
+async function recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored }) {
+  if (totalStored <= 0) return;
+  const firstUpload = await queries.markVendorMasterUploaded(organizationId);
+  if (firstUpload) {
+    logger.info(
+      'Organization vendor master upload recorded for the first time',
+      { jobId, sessionId, organizationId, totalStored },
+      LOG_CATEGORY
+    );
+  }
 }
 
 /**
@@ -689,6 +719,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
               : session.status,
           currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
         });
+        await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
       } else {
         const counts = await queries.countPoLineItems(sessionId, organizationId);
         await queries.updateSession(sessionId, organizationId, {
@@ -799,6 +830,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
             : session.status,
         currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
       });
+      await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
     } else {
       const counts = await queries.countPoLineItems(sessionId, organizationId);
       await queries.updateSession(sessionId, organizationId, {

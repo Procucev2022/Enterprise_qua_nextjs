@@ -521,15 +521,16 @@ describe('Backend Validation Schemas Unit Tests', () => {
       expect(updateRes.sanitizedData.isExtended).toBe(true);
     });
 
-    test('extendRFQ custom hours validator allows 24 or 48 and rejects others', () => {
-      const customFn = VALIDATION_SCHEMAS.extendRFQ.hours.custom;
-      expect(customFn(24)).toBeNull();
-      expect(customFn(48)).toBeNull();
-      expect(customFn(36)).toMatch(/Extension duration must be either 24 or 48 hours/);
+    test('extendRFQ custom days validator allows whole days 1 to 30 and rejects others', () => {
+      const customFn = VALIDATION_SCHEMAS.extendRFQ.days.custom;
+      expect(customFn(1)).toBeNull();
+      expect(customFn(30)).toBeNull();
+      expect(customFn(31)).toMatch(/whole number of days from 1 to 30/);
+      expect(customFn(2.5)).toMatch(/whole number of days from 1 to 30/);
 
-      const res = validatePayload(VALIDATION_SCHEMAS.extendRFQ, { hours: 36 });
+      const res = validatePayload(VALIDATION_SCHEMAS.extendRFQ, { days: 31 });
       expect(res.isValid).toBe(false);
-      expect(res.errors.hours).toMatch(/Extension duration must be either 24 or 48 hours/);
+      expect(res.errors.days).toMatch(/whole number of days from 1 to 30/);
     });
 
     test('completeBuyerOnboarding mobile validator flags placeholder 9999999999', () => {

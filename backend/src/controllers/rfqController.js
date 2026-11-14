@@ -41,6 +41,7 @@ const {
   AUTH_MESSAGES,
   RFQ_CREATION_ERRORS,
 } = require('../config/constants');
+const { validateRFQLineItemsForCreate } = require('../config/validationSchemas');
 
 // A number the vendor entered, or null when the field was left out. Zero is a real answer
 // (for example, no warranty) and is kept. A missing value is never replaced by zero.
@@ -208,15 +209,7 @@ function canVendorViewRfq(vendor, rfq) {
   // RFQ details should be visible to all vendors (including buyer-uploaded vendors behaving as normal vendors)
   // across network modes (V0, V2, V3), even if they have not received an explicit invitation.
   if (isV0 || isV2 || isV3) {
-    const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
-    const signals = storeService._rfqCategorySignals(rfq);
-    if (
-      signals.length === 0 ||
-      isUncategorized ||
-      signals.some((c) => storeService.vendorCoversCategory(vendor, c))
-    ) {
-      return true;
-    }
+    if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
   }
 
   return false;
@@ -397,6 +390,11 @@ function scopedRfqList(scope) {
 // edit, or a malicious body could hand an RFQ to another buyer or fabricate
 // quotes — storeService.updateRFQ merges whatever object it's given, with
 // no column whitelist of its own.
+//
+// The closing time and the one-time extension record (closingDeadline, isExtended, extensionHours,
+// extendedAt) are written only by the extension endpoint. Closure follows closingDeadline, so a plain
+// edit that could set these fields could keep an RFQ open indefinitely, or clear the extension flags
+// and extend again.
 const RFQ_UPDATABLE_FIELDS = [
   'title',
   'category',
@@ -407,10 +405,6 @@ const RFQ_UPDATABLE_FIELDS = [
   'deliveryLocation',
   'deliveryPincode',
   'deadline',
-  'closingDeadline',
-  'isExtended',
-  'extensionHours',
-  'extendedAt',
   'extractedEntities',
   'attachments',
   'inquiries',
@@ -896,6 +890,19 @@ async function createRFQ(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
+    // Every line item must be complete. The form asks for the same fields, and a vendor cannot
+    // quote against a row that leaves any of them out.
+    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const lineItemValidation = validateRFQLineItemsForCreate(lineItems);
+    if (!lineItemValidation.isValid) {
+      logger.warn('Failed to create RFQ: line item validation failed', { errors: lineItemValidation.errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: Object.values(lineItemValidation.errors)[0],
+        fieldErrors: lineItemValidation.errors,
+      });
+    }
+
     if (isPastDate(body.targetDeliveryDate)) {
       logger.warn('Failed to create RFQ: targetDeliveryDate is in the past', { targetDeliveryDate: body.targetDeliveryDate }, 'RFQ_CONTROLLER');
       return res.status(400).json({
@@ -905,7 +912,6 @@ async function createRFQ(req, res, next) {
       });
     }
 
-    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
     await rfqIngestionService.ensureTaxonomyLoaded();
 
     const declaredMajor = (body.category || body.majorCategory || '').trim();
@@ -922,6 +928,10 @@ async function createRFQ(req, res, next) {
       }
       body.category = canonical;
       if (body.majorCategory) body.majorCategory = canonical;
+    } else if (declaredMajor === 'All Categories') {
+      // All Categories is a complete choice that means no category. It is stored blank, as it always was.
+      body.category = '';
+      if (body.majorCategory) body.majorCategory = '';
     }
     if (declaredMinor) {
       if (!declaredMajor) {
@@ -965,27 +975,20 @@ async function createRFQ(req, res, next) {
           });
         }
         item.majorCategory = canonical;
+      } else if (major === 'All Categories') {
+        // Stored blank, as it always was: the row is not narrowed to a category.
+        item.majorCategory = '';
       }
       if (minor) {
-        const effectiveLineMajor = item.majorCategory || declaredMajor;
-        if (!effectiveLineMajor) {
-          logger.warn(`Failed to create RFQ: minor category "${minor}" without major category on line item ${idx + 1}`, {}, 'RFQ_CONTROLLER');
-          return res.status(400).json({
-            success: false,
-            error: `Line item ${idx + 1} specifies minor category "${minor}" without a major category. Please select a major category first.`,
-            fieldErrors: { [`lineItems[${idx}].minorCategory`]: `Major category required for "${minor}"` },
-          });
-        }
-        if (effectiveLineMajor !== 'All Categories' && !rfqIngestionService.isMinorUnderMajor(effectiveLineMajor, minor)) {
+        // Validation guarantees a real major category on any row that names a minor one.
+        const effectiveLineMajor = item.majorCategory;
+        if (!rfqIngestionService.isMinorUnderMajor(effectiveLineMajor, minor)) {
           logger.warn(`Failed to create RFQ: invalid category combination ("${effectiveLineMajor}" / "${minor}") on line item ${idx + 1}`, {}, 'RFQ_CONTROLLER');
           return res.status(400).json({
             success: false,
             error: `Line item ${idx + 1} has an invalid category combination: "${minor}" does not belong to "${effectiveLineMajor}".`,
             fieldErrors: { [`lineItems[${idx}].minorCategory`]: `Minor category "${minor}" does not belong to "${effectiveLineMajor}"` },
           });
-        }
-        if (!item.majorCategory && effectiveLineMajor) {
-          item.majorCategory = rfqIngestionService.canonicalMajor(effectiveLineMajor) || effectiveLineMajor;
         }
       }
     }
@@ -1113,32 +1116,21 @@ async function createRFQ(req, res, next) {
       // count, so the success modal, buyer panel and CM tabs all agree (and the
       // inflated directory tally is never shown for V0).
       try {
-        finalRFQ = await storeService.augmentV0AssignmentsFromDB(created);
+        // notifyShortfall: a minor category with fewer network vendors than the target is reported to the
+        // Procucev team from this path too, not only from the email gateway and the other modes.
+        finalRFQ = await storeService.augmentV0AssignmentsFromDB(created, { notifyShortfall: true });
       } catch (err) {
         logger.warn('Could not apply DB-backed V0 vendor assignment', { error: err.message }, 'RFQ_CONTROLLER');
       }
     } else {
-      const isHybridOrAuto =
-        createdMode === 'mode_2' ||
-        createdMode === 'v2' ||
-        createdMode === 'version_2' ||
-        createdMode === 'mode_3' ||
-        createdMode === 'v3' ||
-        createdMode === 'version_3';
-      const hasProcucevAssigned = (finalRFQ.assignedVendors || []).some((v) =>
-        storeService.isProcucevVendor(
-          (v && v.id ? storeService.getVendorById(v.id, 'all') : null) || v
-        )
-      );
-
-      if (
-        (!Array.isArray(finalRFQ.assignedVendors) ||
-          finalRFQ.assignedVendors.length === 0 ||
-          (isHybridOrAuto && !hasProcucevAssigned)) &&
-        typeof storeService.autoAssignVendorsFromDB === 'function'
-      ) {
+      // Mode 2 and Mode 3 top up from the database on every create, so each minor reaches its target
+      // even when the in-memory pass already assigned some vendors. Mode 1 keeps the original rule:
+      // only when nothing is assigned, so an explicit roster list is never topped up.
+      const createdIsV1 = createdMode === 'mode_1' || createdMode === 'v1' || createdMode === 'version_1';
+      const needsTopUp = !createdIsV1 || !Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0;
+      if (needsTopUp && typeof storeService.autoAssignVendorsFromDB === 'function') {
         try {
-          finalRFQ = await storeService.autoAssignVendorsFromDB(finalRFQ);
+          finalRFQ = await storeService.autoAssignVendorsFromDB(finalRFQ || created, { notifyShortfall: true });
         } catch (err) {
           logger.warn('Could not apply DB-backed vendor auto-assignment', { error: err.message }, 'RFQ_CONTROLLER');
         }
@@ -1258,7 +1250,10 @@ async function createRFQ(req, res, next) {
       consumedFreeTrial,
     });
   } catch (err) {
-    logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
+    // A 4xx is a rule the caller broke (for example, exhausted free credits). The error handler
+    // answers it, so it is logged here as a warning rather than an error.
+    const isClientError = Number.isInteger(err?.statusCode) && err.statusCode >= 400 && err.statusCode < 500;
+    logger[isClientError ? 'warn' : 'error']('Error creating RFQ', err, 'RFQ_CONTROLLER');
     next(err);
   }
 }
@@ -1921,7 +1916,7 @@ async function updateRFQ(req, res, next) {
 }
 
 /**
- * Extend an open RFQ's closing deadline by 24 or 48 hours (one-time only).
+ * Extend an open RFQ's closing deadline by a whole number of days (one-time only).
  */
 async function extendRFQ(req, res, next) {
   const { id } = req.params;
@@ -1938,9 +1933,9 @@ async function extendRFQ(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
-    const hours = Number(req.body.hours);
+    const days = Number(req.body.days);
     const userEmail = req.user && req.user.email;
-    const result = await storeService.extendRFQDurably(existing.id, { hours, userEmail });
+    const result = await storeService.extendRFQDurably(existing.id, { days, userEmail });
 
     if (!result.success) {
       const statusCode = result.reason === 'NOT_FOUND' ? 404 : 400;
@@ -1948,9 +1943,9 @@ async function extendRFQ(req, res, next) {
       return res.status(statusCode).json({ success: false, error: result.error });
     }
 
-    logger.info(`Extended RFQ ${existing.rfqNumber} by ${hours} hours`, {
+    logger.info(`Extended RFQ ${existing.rfqNumber} by ${days} day(s)`, {
       rfqNumber: existing.rfqNumber,
-      hours,
+      days,
       newDeadline: result.rfq.closingDeadline,
     }, 'RFQ_CONTROLLER');
 

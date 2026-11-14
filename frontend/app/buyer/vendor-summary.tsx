@@ -43,14 +43,29 @@ import {
   Filter,
   ArrowLeft,
 } from 'lucide-react';
-import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import {
+  validatePincode,
+  resolveCityAndStateFromPostalResult,
+  PostOfficeDetail,
+  PINCODE_PATTERN,
+  isDummyPincode,
+  usablePan,
+} from '@/lib/validationSchemas';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
 interface VendorSummaryProps {
   onViewEvaluation: (record: VendorEvaluationRecord) => void;
   onNavigateToWizard?: () => void;
 }
+
+// Shown for a statutory value the vendor record does not hold. A placeholder PAN goes through usablePan first, so it
+// is shown the same way.
+const statutoryText = (value: unknown): string => {
+  if (typeof value !== 'string') return UI_STRINGS.recordPlaceholders.notApplicable;
+  const clean = value.trim();
+  return clean === '' ? UI_STRINGS.recordPlaceholders.notApplicable : clean;
+};
 
 // Classification helper: Uploaded by Buyer. Reads only the ownership fields the
 // vendor record carries (source, buyerId, buyerAccountId, addedByBuyerCompany).
@@ -174,7 +189,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
   const isSubmittingRevisionRef = useRef(false);
   const [isRequestingEvaluation, setIsRequestingEvaluation] = useState(false);
-  const [evaluationRequestDispatched, setEvaluationRequestDispatched] = useState(false);
 
   // CRUD Form State
   const [formName, setFormName] = useState('');
@@ -195,11 +209,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formPincodeError, setFormPincodeError] = useState<string | null>(null);
   const [formPincodeValidating, setFormPincodeValidating] = useState(false);
   const [formPincodePostOffices, setFormPincodePostOffices] = useState<PostOfficeDetail[]>([]);
-  const formPincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  // The PIN the form holds now. A lookup that returns after the PIN has changed is ignored.
+  const formPincodeLatestRef = useRef('');
+  // True while the Add Vendor form is open, so a verified PIN fills its City and State. Opening an existing vendor's
+  // edit form turns it off, so a lookup never overwrites the City and State already on record.
+  const pincodeFillsLocationRef = useRef(false);
+  // Shown when the postal service could not verify the PIN. The PIN is not treated as invalid.
+  const [formPincodeNotice, setFormPincodeNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const raw = formPincode.trim();
-    if (formPincodeDebounceRef.current) clearTimeout(formPincodeDebounceRef.current);
+    formPincodeLatestRef.current = raw;
+    setFormPincodeNotice(null);
     if (!raw) {
       setFormPincodeError(null);
       setFormPincodeValidating(false);
@@ -220,33 +241,47 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     }
     if (/^\d{6}$/.test(raw)) {
       setFormPincodeValidating(true);
-      formPincodeDebounceRef.current = setTimeout(async () => {
+      const lookupTimer = setTimeout(async () => {
         try {
+          // The same postal lookup the Create RFQ page uses for its delivery PIN code.
           const res = await validatePincode(raw);
-          if (!res.isValid) {
+          // A PIN typed after this lookup started has replaced it, so this result must not fill the form.
+          if (formPincodeLatestRef.current !== raw) return;
+          if (!res.isValid && res.unverified) {
+            // The postal service could not be reached. The PIN is not judged invalid, and the form can still be saved.
+            setFormPincodeError(null);
+            setFormPincodeNotice(UI_STRINGS.pincodeVerification.unverifiedFillManually);
+            setFormPincodePostOffices([]);
+          } else if (!res.isValid) {
             setFormPincodeError(res.message || 'Invalid PIN code');
             setFormPincodePostOffices([]);
           } else {
+            const offices = res.postOffices || [];
             setFormPincodeError(null);
-            setFormPincodePostOffices(res.postOffices || []);
+            setFormPincodePostOffices(offices);
+            if (pincodeFillsLocationRef.current) {
+              const { city, state } = resolveCityAndStateFromPostalResult(raw, offices);
+              if (city) setFormCity(city);
+              if (state) setFormState(state);
+            }
           }
         } catch {
           setFormPincodeError(null);
         } finally {
-          setFormPincodeValidating(false);
+          if (formPincodeLatestRef.current === raw) setFormPincodeValidating(false);
         }
       }, 350);
-    } else {
-      setFormPincodeError(null);
-      setFormPincodeValidating(false);
-      setFormPincodePostOffices([]);
+      // Cancels the pending lookup when the PIN changes again or the form unmounts, so it cannot run afterwards.
+      return () => clearTimeout(lookupTimer);
     }
+    setFormPincodeError(null);
+    setFormPincodeValidating(false);
+    setFormPincodePostOffices([]);
   }, [formPincode]);
   const [formGst, setFormGst] = useState('');
   const [formPan, setFormPan] = useState('');
   const [formMsme, setFormMsme] = useState('');
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
-  const [isEditingStatutorySection, setIsEditingStatutorySection] = useState(false);
   // Null until the user enters a rating (1.0 - 5.0). No default rating is assumed.
   const [formRating, setFormRating] = useState<number | null>(null);
 
@@ -370,6 +405,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormMsme('');
     setFormAnnualTurnover('');
     setFormRating(null);
+    pincodeFillsLocationRef.current = true;
     setAddModalOpen(true);
   };
 
@@ -461,13 +497,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormCity(vendor.city || '');
     setFormState(vendor.state || '');
     setFormCountry(vendor.country || 'India');
+    pincodeFillsLocationRef.current = false;
     setFormPincode(vendor.pincode || '');
-    setFormGst(vendor.gst || vendor.gstin || '');
-    setFormPan(vendor.pan || '');
-    setFormMsme(vendor.msme || '');
-    setFormAnnualTurnover(vendor.annualTurnover || '');
     setFormRating(typeof vendor.rating === 'number' ? vendor.rating : null);
-    setIsEditingStatutorySection(false);
     setEditModalOpen(true);
   };
 
@@ -537,43 +569,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       state: formState.trim(),
       country: formCountry.trim() || 'India',
       pincode: formPincode.trim(),
-      gst: formGst.trim().toUpperCase(),
-      gstin: formGst.trim().toUpperCase(),
-      pan: formPan.trim().toUpperCase(),
-      msme: formMsme.trim(),
-      annualTurnover: formAnnualTurnover.trim(),
-      // Rating and score change only when the user enters a rating. Status is not
-      // edited here, so it is not sent.
+      // Statutory identifiers are locked and are not sent from this form. Rating and score change only when the user
+      // enters a rating. Status is not edited here, so it is not sent.
       ...(formRating !== null ? { rating: formRating, score: Math.round(formRating * 20) } : {}),
     };
 
     updateBuyerVendor(selectedVendorForCrud.id, updates);
     setEditModalOpen(false);
     setSelectedVendorForCrud(null);
-  };
-
-  // Save Section 3 (Statutory & Commercial Identifiers) independently
-  const handleSaveStatutorySectionIndependently = (e?: React.MouseEvent) => {
-    if (e) e.preventDefault();
-    if (!selectedVendorForCrud) return;
-
-    const cleanGst = formGst.trim().toUpperCase();
-    const cleanPan = formPan.trim().toUpperCase();
-    const cleanMsme = formMsme.trim();
-    const cleanTurnover = formAnnualTurnover.trim();
-
-    const statutoryUpdates: Partial<VendorEntry> = {
-      gst: cleanGst,
-      gstin: cleanGst,
-      pan: cleanPan,
-      msme: cleanMsme,
-      annualTurnover: cleanTurnover,
-    };
-
-    updateBuyerVendor(selectedVendorForCrud.id, statutoryUpdates);
-    setSelectedVendorForCrud((prev: any) => (prev ? { ...prev, ...statutoryUpdates } : prev));
-    setIsEditingStatutorySection(false);
-    showToast('Statutory Details Saved', 'Statutory & commercial identifiers have been updated independently.', 'success');
   };
 
   // Confirm Delete Vendor
@@ -721,7 +724,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setCostScore(vendor.latestRatingRevision?.costScore ?? '');
     setDeliveryScore(vendor.latestRatingRevision?.deliveryScore ?? '');
     setRemarks(vendor.latestRatingRevision?.remarks ?? '');
-    setEvaluationRequestDispatched(Boolean(vendor.evaluationRequested));
+  };
+
+  // Closes the rating and profile popups that an evaluation request was sent from.
+  const closeEvaluationRequestPopups = () => {
+    setSelectedVendorForRevision(null);
+    setRemarks('');
+    setViewModalOpen(false);
+    setSelectedVendorForCrud(null);
   };
 
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
@@ -732,16 +742,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     try {
       // The store asks the server to look for a saved evaluation before it sends any request.
       const res = await requestVendorEvaluation(targetVendor.id);
-      if (res.success && res.evaluationExists && res.evaluation) {
-        // A saved evaluation was returned. Open it. No request was sent, so the dispatched badge stays off.
-        setSelectedVendorForRevision(null);
-        setViewModalOpen(false);
+      // A request that did not go out keeps the popup open. The store has already said why.
+      if (!res.success) return;
+      if (res.evaluationExists && res.evaluation) {
+        // A saved evaluation was returned, so no request was sent. Open it.
+        closeEvaluationRequestPopups();
         onViewEvaluation(res.evaluation);
         return;
       }
-      if (res.success) {
-        setEvaluationRequestDispatched(true);
-      }
+      // The request was sent. The popup closes, and the supplier row shows the requested state from the server.
+      closeEvaluationRequestPopups();
     } catch (err: any) {
       logger.log('ERROR', 'Failed to request vendor evaluation', { error: err }, 'VENDOR_SUMMARY');
       showToast(
@@ -1174,6 +1184,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               ? 'BUYER ROSTER (NO EVAL)'
               : vendor.status}
           </span>
+          {vendor.evaluationRequested && (
+            <span className="mt-1 block text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+              {vendor.evaluationRequestedAt
+                ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
+                    date: new Date(vendor.evaluationRequestedAt).toLocaleDateString(),
+                  })
+                : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+            </span>
+          )}
         </td>
 
         {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
@@ -1741,7 +1760,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </label>
                     {formPincodeValidating && (
                       <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
-                        <Loader2 size={10} className="animate-spin" /> Checking
+                        <Loader2 size={10} className="animate-spin" /> {UI_STRINGS.pincodeVerification.checking}
                       </span>
                     )}
                     {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
@@ -1769,6 +1788,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   />
                   {formPincodeError && formPincode.trim().length >= 6 && (
                     <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
+                  )}
+                  {formPincodeNotice && formPincode.trim().length >= 6 && (
+                    <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 font-medium">{formPincodeNotice}</p>
                   )}
                 </div>
               </div>
@@ -2155,7 +2177,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <label className="block font-semibold text-slate-700 dark:text-gray-300">Pincode</label>
                       {formPincodeValidating && (
                         <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
-                          <Loader2 size={10} className="animate-spin" /> Checking
+                          <Loader2 size={10} className="animate-spin" /> {UI_STRINGS.pincodeVerification.checking}
                         </span>
                       )}
                       {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
@@ -2181,6 +2203,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     {formPincodeError && formPincode.trim().length >= 6 && (
                       <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
                     )}
+                    {formPincodeNotice && formPincode.trim().length >= 6 && (
+                      <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 font-medium">{formPincodeNotice}</p>
+                    )}
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Country</label>
@@ -2194,129 +2219,60 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </div>
               </div>
 
-              {/* Section 3: Statutory & Commercial Identifiers */}
+              {/* Section 3: Statutory & Commercial Identifiers. Locked: these come from the supplier registration. */}
               <div className="space-y-3 p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
                 <div className="flex items-center justify-between pb-1 border-b border-slate-200 dark:border-gray-800">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
-                    <FileText size={13} className="text-indigo-600 dark:text-indigo-400" /> 3. Statutory &amp; Commercial Identifiers
+                    <FileText size={13} className="text-indigo-600 dark:text-indigo-400" /> {UI_STRINGS.vendorStatutory.editHeading}
                   </span>
-                  <div className="flex items-center gap-1.5">
-                    {!isEditingStatutorySection ? (
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingStatutorySection(true)}
-                        className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 text-[11px] hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
-                        title="Edit statutory and commercial identifiers independently"
-                        data-testid="edit-statutory-section-button"
-                      >
-                        <Pencil size={11} /> Edit
-                      </button>
-                    ) : (
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (selectedVendorForCrud) {
-                              setFormGst(selectedVendorForCrud.gst || selectedVendorForCrud.gstin || '');
-                              setFormPan(selectedVendorForCrud.pan || '');
-                              setFormMsme(selectedVendorForCrud.msme || '');
-                              setFormAnnualTurnover(selectedVendorForCrud.annualTurnover || '');
-                            }
-                            setIsEditingStatutorySection(false);
-                          }}
-                          data-testid="cancel-statutory-section-button"
-                          className="btn btn-ghost btn-xs text-[10px] text-slate-500 hover:text-slate-700 dark:text-gray-400"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleSaveStatutorySectionIndependently}
-                          data-testid="save-statutory-section-button"
-                          className="btn btn-primary btn-xs font-bold flex items-center gap-1 text-[10px] shadow-xs"
-                        >
-                          <Check size={11} /> Save Section
-                        </button>
-                      </div>
-                    )}
+                  <span
+                    data-testid="statutory-locked-badge"
+                    className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center gap-1"
+                  >
+                    <Lock size={11} /> {UI_STRINGS.vendorStatutory.lockedBadge}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-gray-400">{UI_STRINGS.vendorStatutory.lockedNote}</p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <span className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">{UI_STRINGS.vendorStatutory.editGstLabel}</span>
+                    <span
+                      data-testid="edit-statutory-gstin"
+                      className="block w-full text-xs p-2 font-mono rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400"
+                    >
+                      {statutoryText(selectedVendorForCrud.gst || selectedVendorForCrud.gstin)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">{UI_STRINGS.vendorStatutory.editPanLabel}</span>
+                    <span
+                      data-testid="edit-statutory-pan"
+                      className="block w-full text-xs p-2 font-mono rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400"
+                    >
+                      {statutoryText(usablePan(selectedVendorForCrud.pan))}
+                    </span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="edit-vendor-gst" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                      GSTIN Number
-                    </label>
-                    <input
-                      id="edit-vendor-gst"
-                      data-testid="edit-vendor-gst-input"
-                      type="text"
-                      value={formGst}
-                      onChange={(e) => setFormGst(e.target.value)}
-                      readOnly={!isEditingStatutorySection}
-                      className={`w-full text-xs p-2 font-mono uppercase rounded-lg border transition-all ${
-                        !isEditingStatutorySection
-                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
-                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
-                      }`}
-                    />
+                    <span className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">{UI_STRINGS.vendorStatutory.editMsmeLabel}</span>
+                    <span
+                      data-testid="edit-statutory-msme"
+                      className="block w-full text-xs p-2 font-mono rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400"
+                    >
+                      {statutoryText(selectedVendorForCrud.msme)}
+                    </span>
                   </div>
                   <div>
-                    <label htmlFor="edit-vendor-pan" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                      PAN Card Number
-                    </label>
-                    <input
-                      id="edit-vendor-pan"
-                      data-testid="edit-vendor-pan-input"
-                      type="text"
-                      value={formPan}
-                      onChange={(e) => setFormPan(e.target.value)}
-                      readOnly={!isEditingStatutorySection}
-                      className={`w-full text-xs p-2 font-mono uppercase rounded-lg border transition-all ${
-                        !isEditingStatutorySection
-                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
-                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
-                      }`}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label htmlFor="edit-vendor-msme" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                      MSME / UDYAM Reg. Number
-                    </label>
-                    <input
-                      id="edit-vendor-msme"
-                      data-testid="edit-vendor-msme-input"
-                      type="text"
-                      value={formMsme}
-                      onChange={(e) => setFormMsme(e.target.value)}
-                      readOnly={!isEditingStatutorySection}
-                      className={`w-full text-xs p-2 font-mono rounded-lg border transition-all ${
-                        !isEditingStatutorySection
-                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
-                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
-                      }`}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="edit-vendor-turnover" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                      Annual Turnover
-                    </label>
-                    <input
-                      id="edit-vendor-turnover"
-                      data-testid="edit-vendor-turnover-input"
-                      type="text"
-                      value={formAnnualTurnover}
-                      onChange={(e) => setFormAnnualTurnover(e.target.value)}
-                      readOnly={!isEditingStatutorySection}
-                      className={`w-full text-xs p-2 rounded-lg border transition-all ${
-                        !isEditingStatutorySection
-                          ? 'bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400 cursor-default border-slate-200 dark:border-gray-700'
-                          : 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white border-indigo-400 focus:ring-1 focus:ring-indigo-500'
-                      }`}
-                    />
+                    <span className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">{UI_STRINGS.vendorStatutory.editTurnoverLabel}</span>
+                    <span
+                      data-testid="edit-statutory-turnover"
+                      className="block w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400"
+                    >
+                      {statutoryText(selectedVendorForCrud.annualTurnover)}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2496,47 +2452,27 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </div>
               </div>
 
-              {/* Statutory & Financial Compliance */}
+              {/* Statutory & Financial Compliance: read-only, from the supplier's registration */}
               <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
-                    <FileCheck size={13} className="text-indigo-600 dark:text-indigo-400" /> Statutory &amp; Financial Registration
-                  </span>
-                  {isBuyerUploaded(selectedVendorForCrud) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const vendor = selectedVendorForCrud;
-                        setViewModalOpen(false);
-                        handleOpenEditModal(vendor);
-                        setIsEditingStatutorySection(true);
-                      }}
-                      className="btn btn-ghost btn-xs text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
-                      title="Edit statutory details"
-                      data-testid="view-modal-edit-statutory-button"
-                    >
-                      <Pencil size={10} /> Edit Statutory
-                    </button>
-                  )}
-                </div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                  <FileCheck size={13} className="text-indigo-600 dark:text-indigo-400" /> {UI_STRINGS.vendorStatutory.viewHeading}
+                </span>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-700 dark:text-gray-300 font-mono text-[11px]">
                   <div>
-                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">GSTIN:</span>
-                    <strong>{selectedVendorForCrud.gst || selectedVendorForCrud.gstin || 'Not Provided'}</strong>
+                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.gstLabel}</span>
+                    <strong data-testid="view-statutory-gstin">{statutoryText(selectedVendorForCrud.gst || selectedVendorForCrud.gstin)}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">PAN:</span>
-                    <strong>{selectedVendorForCrud.pan || 'Not Provided'}</strong>
+                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.panLabel}</span>
+                    <strong data-testid="view-statutory-pan">{statutoryText(usablePan(selectedVendorForCrud.pan))}</strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">MSME / UDYAM:</span>
-                    <span>{selectedVendorForCrud.msme || 'Not Provided'}</span>
+                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.msmeLabel}</span>
+                    <span data-testid="view-statutory-msme">{statutoryText(selectedVendorForCrud.msme)}</span>
                   </div>
                   <div>
-                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">Turnover:</span>
-                    <span className="font-sans font-semibold">
-                      {selectedVendorForCrud.annualTurnover || 'Not Disclosed'}
-                    </span>
+                    <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.turnoverLabel}</span>
+                    <span className="font-sans font-semibold" data-testid="view-statutory-turnover">{statutoryText(selectedVendorForCrud.annualTurnover)}</span>
                   </div>
                 </div>
               </div>
@@ -2869,7 +2805,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       </button>
                     </div>
 
-                    {(evaluationRequestDispatched || vendor.evaluationRequested) && (
+                    {vendor.evaluationRequested && (
                       <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-700 dark:text-emerald-300 font-medium">
                         <Check size={12} className="text-emerald-600 dark:text-emerald-400" />
                         <span>{UI_STRINGS.vendorEvaluationRequest.requestDispatchedBadge}</span>

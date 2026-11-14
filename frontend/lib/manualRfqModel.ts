@@ -14,11 +14,10 @@
 //   that get dispatched to vendors unnoticed, so every field starts empty and
 //   `quantity` starts null.
 //
-//   The budget stays optional while the destination does not. A document can price
-//   nothing, and requiring a figure only made buyers invent a ceiling that vendors
-//   then quoted against. Delivery location and pincode are mandatory because
-//   vendors rate freight on them, so a quote raised without them cannot be
-//   compared against one that has them.
+//   Every field is mandatory except the budget. A document can price nothing, and
+//   requiring a figure only made buyers invent a ceiling that vendors then quoted
+//   against. Each other field is something a vendor quotes against or routes on, so
+//   a quote raised without one cannot be compared against a complete one.
 // ==============================================================================
 
 import {
@@ -57,6 +56,12 @@ export const MANUAL_ENTRY_CONFIDENCE = 0;
 // Read from the taxonomy registry at call time rather than captured into module
 // constants at import time: the master is fetched from the database now, so it is
 // not available when this module is first evaluated.
+
+/**
+ * The major category a buyer picks when no single category applies. It satisfies the
+ * major requirement, and its minor category is not applicable, so none is required.
+ */
+const ALL_CATEGORIES = 'All Categories';
 
 const TITLE_MIN_LENGTH = 3;
 const TITLE_MAX_LENGTH = 200;
@@ -127,6 +132,9 @@ export function validateManualRFQLineItem(item: ManualRFQLineItem): ManualRFQLin
   if (clean(item.itemName) === '') {
     errors.itemName = MANUAL.itemNameRequired;
   }
+  if (clean(item.technicalSpecs) === '') {
+    errors.technicalSpecs = MANUAL.specsRequired;
+  }
   // null and 0 are both rejected, but only null means "unanswered".
   if (item.quantity === null || Number.isNaN(item.quantity) || Number(item.quantity) <= 0) {
     errors.quantity = MANUAL.quantityRequired;
@@ -135,16 +143,28 @@ export function validateManualRFQLineItem(item: ManualRFQLineItem): ManualRFQLin
     errors.unit = MANUAL.unitRequired;
   }
 
-  // Validate category relationships when specified
-  if (item.majorCategory && item.majorCategory !== 'All Categories') {
+  // A row routes to vendors by its major category, and its minor category narrows that
+  // route. All Categories means no narrowing, so it needs no minor category.
+  const major = clean(item.majorCategory);
+  const minor = clean(item.minorCategory);
+  if (major === '') {
+    errors.majorCategory = MANUAL.majorCategoryRequired;
+    if (minor !== '') {
+      errors.minorCategory = MANUAL.minorWithoutMajor;
+    }
+  } else if (major === ALL_CATEGORIES) {
+    if (minor !== '') {
+      errors.minorCategory = MANUAL.minorNotApplicable;
+    }
+  } else {
     if (!hasMajorCategory(item.majorCategory)) {
-      errors.majorCategory = 'Selected major category does not exist in category master.';
+      errors.majorCategory = MANUAL.majorCategoryUnknown;
     }
-    if (item.minorCategory && !hasMinorCategory(item.majorCategory, item.minorCategory)) {
-      errors.minorCategory = 'Selected minor category does not belong to the selected major category.';
+    if (minor === '') {
+      errors.minorCategory = MANUAL.minorCategoryRequired;
+    } else if (!hasMinorCategory(item.majorCategory, item.minorCategory)) {
+      errors.minorCategory = MANUAL.minorCategoryNotUnderMajor;
     }
-  } else if (item.minorCategory) {
-    errors.minorCategory = 'Cannot select minor category without a valid major category.';
   }
 
   return errors;
@@ -168,15 +188,15 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
   const items = Array.isArray(form.lineItems) ? form.lineItems : [];
 
   // Validate header category if provided
-  if (form.majorCategory && form.majorCategory !== 'All Categories' && !hasMajorCategory(form.majorCategory)) {
-    formErrors.majorCategory = 'Selected major category does not exist in category master.';
+  if (form.majorCategory && form.majorCategory !== ALL_CATEGORIES && !hasMajorCategory(form.majorCategory)) {
+    formErrors.majorCategory = MANUAL.majorCategoryUnknown;
   }
 
-  // The title may be left blank: it falls back to the leading line item's
-  // description on submission, matching how the server derives one. It is only
-  // rejected when the buyer typed something too short to be a real title.
+  // The title is required. The server rejects an RFQ without one, so the form says so before submitting.
   const title = clean(form.title);
-  if (title !== '' && (title.length < TITLE_MIN_LENGTH || title.length > TITLE_MAX_LENGTH)) {
+  if (title === '') {
+    formErrors.title = MANUAL.titleRequired;
+  } else if (title.length < TITLE_MIN_LENGTH || title.length > TITLE_MAX_LENGTH) {
     formErrors.title = formatString(MANUAL.titleLength, {
       min: TITLE_MIN_LENGTH,
       max: TITLE_MAX_LENGTH,
@@ -212,7 +232,10 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
     formErrors.estimatedBudget = MANUAL.budgetNegative;
   }
 
-  if (form.targetDeliveryDate && isPastDateString(form.targetDeliveryDate)) {
+  // Mandatory, and a date that has already passed cannot be the delivery target.
+  if (clean(form.targetDeliveryDate) === '') {
+    formErrors.targetDeliveryDate = MANUAL.targetDateRequired;
+  } else if (isPastDateString(form.targetDeliveryDate)) {
     formErrors.targetDeliveryDate = MANUAL.targetDateCannotBePast;
   }
 
@@ -295,10 +318,7 @@ export function toRFQCreatePayload(
   const leading = items[0];
 
   return {
-    // Falls back to the leading item's description, the way the server's
-    // deriveTitle does, because the API requires a title and manual entry may
-    // legitimately not have one.
-    title: clean(form.title) || (leading ? leading.itemName : ''),
+    title: clean(form.title),
     // Taken from the leading row rather than the header field: validation
     // guarantees every row carries a major category, so this is always set.
     category: clean(form.majorCategory) || (leading ? leading.majorCategory : ''),
@@ -310,7 +330,7 @@ export function toRFQCreatePayload(
     // Zero rather than null: the column is NOT NULL, and zero is rendered as
     // "not set" rather than as a real ceiling of nothing.
     budget: form.estimatedBudget === null ? 0 : Number(form.estimatedBudget),
-    targetDeliveryDate: clean(form.targetDeliveryDate) || (leading ? leading.targetDate : ''),
+    targetDeliveryDate: clean(form.targetDeliveryDate),
     deliveryLocation: clean(form.deliveryLocation),
     deliveryPincode: clean(form.deliveryPincode),
     extractedEntities: items,

@@ -363,6 +363,8 @@ describe('PostgreSQL migration runner', () => {
         '0030_drop_vendors_search_fts',
         '0031_public_vendor_listing_index',
         '0032_public_vendor_listing_index_v2',
+        '0033_vendor_major_category_index',
+        '0034_organization_vendor_master_uploaded',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

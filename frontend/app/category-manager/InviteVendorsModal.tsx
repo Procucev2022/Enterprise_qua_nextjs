@@ -31,6 +31,7 @@ import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
 import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
+import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 
 // "All Vendors" can legitimately span tens of thousands of rows (the real
 // directory is 80k+ vendors) — fetched and rendered a page at a time rather
@@ -61,8 +62,30 @@ function rfqCategorySignals(rfq: RFQItem): string[] {
   return signals;
 }
 
-/** Mirrors storeService.vendorCoversCategory's case-insensitive exact match. */
-function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[]): boolean {
+/** The minor categories the RFQ names, from its header and its line items. */
+function rfqMinorCategories(rfq: RFQItem): string[] {
+  const names = [rfq.minorCategory];
+  for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
+    names.push(ent.minorCategory);
+  }
+  return Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)));
+}
+
+/**
+ * Whether the vendor carries one of the RFQ's categories. When the RFQ names minor
+ * categories only a minor match counts, mirroring storeService.vendorCoversMinorCategory.
+ * Otherwise the vendor matches on its major or minor category, case-insensitively.
+ */
+function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[], minors: string[]): boolean {
+  if (minors.length > 0) {
+    const pools = [vendor.majorCategory, ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])]
+      .map((c) => normalizeCategory(c))
+      .filter(Boolean);
+    return minors.some((minor) => {
+      const key = normalizeCategory(minor);
+      return pools.some((pool) => minorNamesMatch(pool, key));
+    });
+  }
   const pools = [vendor.majorCategory, ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])].map(
     (c) => String(c || '').trim().toLowerCase()
   );
@@ -249,6 +272,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   };
 
   const categorySignals = useMemo(() => (rfq ? rfqCategorySignals(rfq) : []), [rfq]);
+  const categoryMinors = useMemo(() => (rfq ? rfqMinorCategories(rfq) : []), [rfq]);
 
   const effectiveCategoryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -912,7 +936,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
                 <div className="space-y-2">
                   {visibleVendors.map((c) => {
-                    const outsideCategory = tab === 'all' && !vendorCoversAnySignal(c, categorySignals);
+                    const outsideCategory = tab === 'all' && !vendorCoversAnySignal(c, categorySignals, categoryMinors);
                     const missingEmail = !c.email;
                     return (
                       <label

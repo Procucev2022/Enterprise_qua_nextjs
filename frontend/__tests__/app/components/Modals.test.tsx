@@ -641,7 +641,7 @@ describe('Modals.tsx', () => {
       assignedVendors: [{ id: 'av-quiet', name: 'Quiet Vendor', contactPerson: '', phone: '' }],
     } as unknown as RFQItem;
 
-    it('marks every channel not dispatched and invents no attempt count, escalation, time or statistic', () => {
+    it('marks every channel not dispatched and invents no attempt count, escalation or statistic', () => {
       render(<RFQFollowUpDeepDiveModal isOpen={true} onClose={jest.fn()} rfq={rfqWithoutOutreach} />);
 
       // Call, WhatsApp, SMS and 24h email each show the not-dispatched badge.
@@ -654,7 +654,11 @@ describe('Modals.tsx', () => {
       expect(screen.queryByText('0 / 0')).not.toBeInTheDocument();
       // The stat cards and tab counts read "Not available" where the server sent no count.
       expect(screen.getAllByText(new RegExp(UI_STRINGS.recordPlaceholders.notAvailable)).length).toBeGreaterThan(0);
-      expect(screen.getByText(UI_STRINGS.recordPlaceholders.notRecorded, { selector: 'strong' })).toBeInTheDocument();
+      // The footer is gone. Each channel shows its next follow-up, counted from the RFQ creation time (2026-08-29).
+      expect(screen.queryByText(/Next Automated Follow-Up Wave/)).not.toBeInTheDocument();
+      expect(screen.getByTestId('next-follow-up-call')).toHaveTextContent(
+        `${UI_STRINGS.modals.followUp.nextFollowUpLabel} 29 Aug 2026, 04:00 pm IST`
+      );
     });
   });
 
@@ -916,11 +920,43 @@ describe('Modals.tsx', () => {
       const { unmount: unmountNull } = render(
         <RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={nullFollowUpRfq} />
       );
-      // No next chaser time is recorded, so the footer shows the placeholder rather than an invented time.
-      expect(screen.getByText(UI_STRINGS.recordPlaceholders.notRecorded, { selector: 'strong' })).toBeInTheDocument();
+      // The next follow-up times come from the RFQ creation time, so they show even without follow-up data.
+      expect(screen.getByTestId('next-follow-up-call')).toHaveTextContent(
+        `${UI_STRINGS.modals.followUp.nextFollowUpLabel} 29 Aug 2026, 04:00 pm IST`
+      );
       expect(screen.queryByText('Today 03:00 PM')).not.toBeInTheDocument();
       expect(screen.getByText('Assigned Vendor 1')).toBeInTheDocument();
       unmountNull();
+    });
+
+    it('shows the next follow-up for each channel, counted from the RFQ creation time', () => {
+      render(<RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={sampleRfq} />);
+
+      // sampleRfq is created on 2026-08-29 at 05:30 IST, before the business window opens at 10:00.
+      expect(screen.getByTestId('next-follow-up-call')).toHaveTextContent(
+        `${UI_STRINGS.modals.followUp.nextFollowUpLabel} 29 Aug 2026, 04:00 pm IST`
+      );
+      expect(screen.getByTestId('next-follow-up-whatsapp')).toHaveTextContent(
+        `${UI_STRINGS.modals.followUp.nextFollowUpLabel} 30 Aug 2026, 02:00 pm IST`
+      );
+      expect(screen.getByTestId('next-follow-up-sms')).toHaveTextContent(
+        `${UI_STRINGS.modals.followUp.nextFollowUpLabel} 29 Aug 2026, 05:35 am IST`
+      );
+      expect(screen.getByTestId('next-follow-up-email')).toHaveTextContent(
+        `${UI_STRINGS.modals.followUp.nextFollowUpLabel} 30 Aug 2026, 05:30 am IST`
+      );
+      // Only the AI call and WhatsApp times count business hours, so only their tiles carry the note.
+      expect(screen.getAllByText(UI_STRINGS.modals.followUp.businessHoursNote)).toHaveLength(2);
+    });
+
+    it('shows the not-recorded placeholder on every channel when the RFQ creation time is unreadable', () => {
+      render(<RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={{ ...sampleRfq, createdAt: '' }} />);
+
+      for (const channel of ['call', 'whatsapp', 'sms', 'email']) {
+        expect(screen.getByTestId(`next-follow-up-${channel}`)).toHaveTextContent(
+          `${UI_STRINGS.modals.followUp.nextFollowUpLabel} ${UI_STRINGS.recordPlaceholders.notRecorded}`
+        );
+      }
     });
   });
 

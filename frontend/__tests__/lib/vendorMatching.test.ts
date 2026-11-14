@@ -6,6 +6,7 @@ import {
   selectVendorsForCategories,
   scoreVendorLocation,
   rankProcucevVendorsForV3,
+  minorNamesMatch,
 } from '@/lib/vendorMatching';
 import type { VendorEntry } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -32,13 +33,19 @@ describe('vendorMatching module', () => {
         ],
       };
 
-      const { signals, rawSignals } = extractRfqCategorySignals(form);
+      const { signals, rawSignals, minorOnly } = extractRfqCategorySignals(form);
       expect(rawSignals).toContain('Mechanical');
       expect(rawSignals).toContain('Centrifugal Pumps');
       expect(rawSignals).toContain('Motors & Drives');
-      expect(signals).toContain('mechanical');
-      expect(signals).toContain('centrifugal pumps');
-      expect(signals).toContain('motors and drives');
+      // An RFQ that names minor categories is matched by those minors only.
+      expect(minorOnly).toBe(true);
+      expect(signals).toEqual(['centrifugal pumps', 'motors and drives']);
+    });
+
+    it('matches on the major and category labels when the RFQ names no minor category', () => {
+      const { signals, minorOnly } = extractRfqCategorySignals({ majorCategory: 'Mechanical', category: 'Pumps' });
+      expect(minorOnly).toBe(false);
+      expect(signals).toEqual(['mechanical', 'pumps']);
     });
 
     it('handles empty forms safely', () => {
@@ -534,5 +541,108 @@ describe('vendorMatching edge branches', () => {
     ];
     const selected = selectVendorsForCategories(vendors, ['Pumps', 'Valves'], 10);
     expect(selected.map((s) => s.vendor.id)).toEqual(['m1', 'v1', 'm4', 'm3', 'm2']);
+  });
+});
+
+describe('vendorMatching minor-only matching', () => {
+  const vendorWithMinor = {
+    id: 'v-min',
+    name: 'Minor Vendor',
+    majorCategory: 'Mechanical',
+    minorCategories: ['Bearings & Accessories'],
+    rating: 4,
+    source: 'procucev_network',
+  } as unknown as VendorEntry;
+  const vendorMajorOnly = {
+    id: 'v-maj',
+    name: 'Major Vendor',
+    majorCategory: 'Engineering Spares - Mechanical',
+    minorCategories: [],
+    rating: 5,
+    source: 'procucev_network',
+  } as unknown as VendorEntry;
+  const vendorSibling = {
+    id: 'v-sib',
+    name: 'Accessory Vendor',
+    majorCategory: 'Engineering Spares - Mechanical',
+    minorCategories: ['Accessories'],
+    rating: 4,
+    source: 'procucev_network',
+  } as unknown as VendorEntry;
+
+  it('minorNamesMatch accepts the same name or its plural, and rejects a name that only contains the other', () => {
+    expect(minorNamesMatch('bearings and accessories', 'bearings and accessories')).toBe(true);
+    expect(minorNamesMatch('box', 'boxes')).toBe(true);
+    expect(minorNamesMatch('boxes', 'box')).toBe(true);
+    expect(minorNamesMatch('steel', 'steels')).toBe(true);
+    expect(minorNamesMatch('steels', 'steel')).toBe(true);
+    expect(minorNamesMatch('accessories', 'bearings and accessories')).toBe(false);
+    expect(minorNamesMatch('', 'steel')).toBe(false);
+  });
+
+  it('matches only a minor-level label, never the major or a sibling minor', () => {
+    const signals = ['bearings and accessories'];
+    const minorMatch = matchVendorAgainstSignals(vendorWithMinor, signals, true);
+    expect(minorMatch.isMatch).toBe(true);
+    expect(minorMatch.matchScore).toBe(98);
+    expect(matchVendorAgainstSignals(vendorMajorOnly, signals, true).isMatch).toBe(false);
+    expect(matchVendorAgainstSignals(vendorSibling, signals, true).isMatch).toBe(false);
+  });
+
+  it('accepts the plural of a minor, and a major that is itself named like the minor', () => {
+    const plural = { ...vendorWithMinor, minorCategories: ['Steel'] } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(plural, ['steels'], true).isMatch).toBe(true);
+    const majorNamed = { id: 'v-mn', name: 'Named', majorCategory: 'Steels', minorCategories: [] } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(majorNamed, ['steels'], true).matchScore).toBe(95);
+  });
+
+  it('scores selected and client-mapped labels exactly in minor-only mode, never by token', () => {
+    const selected = {
+      id: 'v-sel',
+      name: 'Selected',
+      majorCategory: 'Mechanical',
+      vendorSelectedCategories: ['Safety Valves'],
+      minorCategories: [],
+    } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(selected, ['safety valves'], true).matchScore).toBe(94);
+    expect(matchVendorAgainstSignals(selected, ['valves'], true).isMatch).toBe(false);
+
+    const mapped = {
+      id: 'v-map',
+      name: 'Mapped',
+      majorCategory: 'Mechanical',
+      clientMappedCategories: ['Industrial Turbines'],
+      minorCategories: [],
+    } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(mapped, ['industrial turbines'], true).matchScore).toBe(96);
+    expect(matchVendorAgainstSignals(mapped, ['turbines'], true).isMatch).toBe(false);
+  });
+
+  it('does not reach a vendor through the taxonomy parent of a minor-only signal', () => {
+    const parentMajor = {
+      id: 'v-parent',
+      name: 'Parent',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategories: ['Pumps & Accessories'],
+    } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(parentMajor, ['bearings and accessories'], true).isMatch).toBe(false);
+  });
+
+  it('selects, matches and ranks only the vendors carrying the minor', () => {
+    const pool = [vendorWithMinor, vendorMajorOnly, vendorSibling];
+    const signals = ['bearings and accessories'];
+    expect(selectVendorsForCategories(pool, signals, 5, undefined, true).map((r) => r.vendor.id)).toEqual(['v-min']);
+    expect(getCategoryMatchedProcucevVendors(pool, signals, 80, true).map((r) => r.vendor.id)).toEqual(['v-min']);
+
+    const ranked = rankProcucevVendorsForV3(
+      pool,
+      signals,
+      { location: null, pincode: null },
+      10,
+      ['Bearings & Accessories'],
+      true
+    );
+    expect(ranked.map((r) => r.vendor.id)).toEqual(['v-min']);
+    expect(ranked[0].hasMinorMatch).toBe(true);
   });
 });

@@ -163,13 +163,15 @@ function mapRowToUser(row) {
     isSelfClient: flag(row.self_client),
     resetPasswordRequired: flag(row.reset_password),
     verificationStatus: row.verification_status || null,
+    // Set on the organization once it stores a vendor master. A timestamp in PostgreSQL, text in D1.
+    vendorMasterUploaded: Boolean(row.vendor_master_uploaded_at),
   };
 }
 
 const USER_SELECT = `
   select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name,
          u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status,
-         u.org_uuid, r.role_name, o.organization_name
+         u.org_uuid, r.role_name, o.organization_name, o.vendor_master_uploaded_at
     from "user" u
     left join role r on r.uuid = u.role_uuid
     left join organization o on o.uuid = u.org_uuid
@@ -430,6 +432,7 @@ async function insertBuyerAccount({
           streetAddress,
           addressCity,
           addressState,
+          addressPincode,
           addressPincode,
           addressCountry,
           taxGstin,
@@ -1018,7 +1021,6 @@ async function insertVendorAccount({
         displayName,
         displayName,
         normalizedPhone,
-        orgName,
         orgName,
         roleUuid,
         resetPasswordRequired ? 1 : 0,

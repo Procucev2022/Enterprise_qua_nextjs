@@ -371,7 +371,7 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     mockFetchAllVendors.mockResolvedValue({
       success: true,
       candidates: [
-        candidate({ id: 'v-1', name: 'Matches RFQ', majorCategory: 'Cables' }),
+        candidate({ id: 'v-1', name: 'Matches RFQ', majorCategory: 'Cables', minorCategories: ['Copper Wire'] }),
         candidate({ id: 'v-2', name: 'No Match', majorCategory: 'Fasteners', minorCategories: ['Screws'] }),
         candidate({ id: 'v-3', name: 'Matches Minor', majorCategory: 'Copper Wire' }),
         candidate({ id: 'v-4', name: 'Matches Entity Category', majorCategory: 'Insulation' }),
@@ -387,10 +387,14 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     fireEvent.click(screen.getByTestId('invite-tab-all'));
     await waitFor(() => expect(screen.getByText('Matches RFQ')).toBeInTheDocument());
 
+    // The RFQ names the minor 'Copper Wire', so only a vendor carrying that minor (or named
+    // 'Copper Wire' as its major) is inside. A vendor whose major alone is 'Insulation' is outside.
     const badges = screen.getAllByTestId('outside-category-badge');
-    expect(badges).toHaveLength(1);
+    expect(badges).toHaveLength(2);
     expect(screen.getByText('No Match').closest('label')).toContainElement(badges[0]);
+    expect(screen.getByText('Matches Entity Category').closest('label')).toContainElement(badges[1]);
     expect(screen.getByText('Matches RFQ').closest('label')?.querySelector('[data-testid="outside-category-badge"]')).toBeNull();
+    expect(screen.getByText('Matches Minor').closest('label')?.querySelector('[data-testid="outside-category-badge"]')).toBeNull();
   });
 
   it('derives alreadyInvited for all-vendor rows from the RFQ\'s own assignedVendors, hiding the outside-category badge for them', async () => {

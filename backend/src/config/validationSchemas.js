@@ -124,6 +124,17 @@ const PROCUCEV_EMAIL_MESSAGE = 'Enter a valid corporate Procucev email address e
 // migrated from the previous schema may hold shorter passwords, and rejecting
 // them at login would lock those users out instead of prompting a change.
 const PASSWORD_MIN_LENGTH = 8;
+// One-time RFQ closing-deadline extension, chosen by the buyer in whole days. The frontend
+// validationSchemas.ts mirrors these bounds, so the form and the server agree on the range.
+const EXTENSION_MIN_DAYS = 1;
+const EXTENSION_MAX_DAYS = 30;
+const EXTENSION_DAYS_MESSAGE = `Extension must be a whole number of days from ${EXTENSION_MIN_DAYS} to ${EXTENSION_MAX_DAYS}.`;
+/** True for a whole number of days inside the extension range. Blank or non-numeric input is false. */
+function isWholeExtensionDays(value) {
+  if (value === null || value === undefined || value === '') return false;
+  const num = Number(value);
+  return Number.isInteger(num) && num >= EXTENSION_MIN_DAYS && num <= EXTENSION_MAX_DAYS;
+}
 const CLIENT_LOG_LIMITS = Object.freeze({
   MESSAGE_LENGTH: 5000,
   CATEGORY_LENGTH: 100,
@@ -392,6 +403,48 @@ const VALIDATION_SCHEMAS = {
     notes: { type: 'string', required: false, maxLength: 2000 },
   },
 
+  // One line item of an RFQ being created. A row is complete only when a vendor can quote
+  // against it: what is wanted, how it is specified, how many and in which unit, and the
+  // category it routes under. The minor category is checked by validateRFQLineItemsForCreate
+  // because it does not apply when the major category is All Categories.
+  createRFQLineItem: {
+    itemName: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 200,
+      message: 'Each line item needs a description of the item.',
+    },
+    technicalSpecs: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 2000,
+      message: 'Each line item needs a specification, such as material, size or standard.',
+    },
+    quantity: {
+      type: 'number',
+      required: true,
+      custom: (val) => (Number(val) > 0 ? null : 'Each line item needs a quantity above zero.'),
+      message: 'Each line item needs a quantity above zero.',
+    },
+    unit: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 40,
+      message: 'Each line item needs a unit, for example Nos, Kg or Mtr.',
+    },
+    majorCategory: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 200,
+      message: 'Each line item needs a major category.',
+    },
+    minorCategory: { type: 'string', required: false, maxLength: 200 },
+  },
+
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
     // A buyer may not know the exact taxonomy slot for every line item up
@@ -459,7 +512,9 @@ const VALIDATION_SCHEMAS = {
   //
   // Ownership fields are absent on purpose. rfqNumber, rfqId, buyer identity and
   // createdAt are not editable, and the query layer whitelists columns as well, so
-  // sending them here changes nothing.
+  // sending them here changes nothing. The closing time and extension fields
+  // (closingDeadline, isExtended, extensionHours, extendedAt) are absent too: only
+  // the extension endpoint writes them.
   updateRFQ: {
     title: { type: 'string', required: false, minLength: 3, maxLength: 200 },
     category: { type: 'string', required: false, minLength: 2 },
@@ -482,22 +537,18 @@ const VALIDATION_SCHEMAS = {
     },
     targetDeliveryDate: { type: 'string', required: false },
     deadline: { type: 'string', required: false },
-    closingDeadline: { type: 'string', required: false },
-    isExtended: { type: 'boolean', required: false },
-    extensionHours: { type: 'number', required: false },
-    extendedAt: { type: 'string', required: false },
     extractedEntities: { type: 'array', required: false },
     attachments: { type: 'array', required: false },
     assignedVendors: { type: 'array', required: false },
   },
 
-  // Schema for extending an RFQ closing deadline (strictly one-time, 24h or 48h)
+  // Schema for extending an RFQ closing deadline (strictly one-time, whole days within the range above)
   extendRFQ: {
-    hours: {
+    days: {
       type: 'number',
       required: true,
-      custom: (val) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
-      message: 'Extension hours must be 24 or 48.',
+      custom: (val) => (isWholeExtensionDays(val) ? null : EXTENSION_DAYS_MESSAGE),
+      message: EXTENSION_DAYS_MESSAGE,
     },
   },
 
@@ -963,12 +1014,13 @@ const VALIDATION_SCHEMAS = {
     rating: { type: 'number', required: false, min: 0, max: 100 },
   },
 
-  // One historical PO line item. The description is the single most important
-  // field in the whole module — it is the evidence the categoriser reads — so a
-  // line with no description is invalid rather than merely unhelpful.
+  // One historical PO line item. Three fields are required: the vendor (a name or a
+  // code, checked by the service), the line item description and the specification.
+  // Every other PO column is optional, so a dump with only those three is accepted,
+  // and a complete dump is accepted too.
   poLineItemRow: {
-    poNumber: { type: 'string', required: true, minLength: 1, maxLength: 120, message: 'PO Number is required.' },
-    poDate: { type: 'string', required: true, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
+    poNumber: { type: 'string', required: false, minLength: 1, maxLength: 120 },
+    poDate: { type: 'string', required: false, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
     itemDescription: {
       type: 'string',
       required: true,
@@ -976,16 +1028,22 @@ const VALIDATION_SCHEMAS = {
       maxLength: 4000,
       message: 'Line Item Description is required — it is the evidence the categoriser reads.',
     },
-    quantity: { type: 'number', required: true, min: 0, message: 'Quantity is required.' },
-    uom: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'UOM is required.' },
-    spend: { type: 'number', required: true, min: 0, message: 'Spend / Amount is required.' },
-    department: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Department is required.' },
+    quantity: { type: 'number', required: false, min: 0 },
+    uom: { type: 'string', required: false, minLength: 1, maxLength: 64 },
+    spend: { type: 'number', required: false, min: 0 },
+    department: { type: 'string', required: false, minLength: 1, maxLength: 255 },
     // Either identifier is enough to join to the vendor master; the service
     // rejects a row that supplies neither, because it cannot be attributed.
     vendorCode: { type: 'string', required: false, maxLength: 120 },
     vendorName: { type: 'string', required: false, maxLength: 512 },
     vendorGstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
-    specification: { type: 'string', required: false, maxLength: 4000 },
+    specification: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 4000,
+      message: 'Specifications is required.',
+    },
     materialCode: { type: 'string', required: false, maxLength: 120 },
     existingCategory: { type: 'string', required: false, maxLength: 255 },
     existingSubcategory: { type: 'string', required: false, maxLength: 255 },
@@ -1555,7 +1613,51 @@ function validatePayload(schema, data = {}) {
   };
 }
 
+/** The major category that means "not narrowed". A row under it needs no minor category. */
+const RFQ_ALL_CATEGORIES = 'All Categories';
+
+/**
+ * Validates the line items of an RFQ being created.
+ *
+ * Returns field errors keyed `lineItems` when there is no row, and `lineItems[n].field` for
+ * row n (zero-based). These keys match the category errors the RFQ controller already returns.
+ *
+ * @param {Array<object>} lineItems The rows as submitted (extractedEntities or lineItems).
+ * @returns {{ isValid: boolean, errors: Record<string, string> }}
+ */
+function validateRFQLineItemsForCreate(lineItems) {
+  const rows = Array.isArray(lineItems) ? lineItems : [];
+  if (rows.length === 0) {
+    return {
+      isValid: false,
+      errors: { lineItems: 'Add at least one line item so vendors have something to quote against.' },
+    };
+  }
+
+  const errors = {};
+  rows.forEach((row, index) => {
+    const rowResult = validatePayload(VALIDATION_SCHEMAS.createRFQLineItem, row || {});
+    Object.entries(rowResult.errors).forEach(([field, message]) => {
+      errors[`lineItems[${index}].${field}`] = message;
+    });
+
+    const major = String((row && row.majorCategory) || '').trim();
+    // The controller reads a row's minor category from minorCategory, falling back to category.
+    const minor = String((row && (row.minorCategory || row.category)) || '').trim();
+    if (major === RFQ_ALL_CATEGORIES) {
+      if (minor) {
+        errors[`lineItems[${index}].minorCategory`] = 'A minor category does not apply to All Categories. Clear the minor category to continue.';
+      }
+    } else if (major && !minor) {
+      errors[`lineItems[${index}].minorCategory`] = 'Each line item needs a minor category under its major category.';
+    }
+  });
+
+  return { isValid: Object.keys(errors).length === 0, errors };
+}
+
 module.exports = {
+  validateRFQLineItemsForCreate,
   EMAIL_REGEX,
   PROCUCEV_EMAIL_REGEX,
   PROCUCEV_EMAIL_MESSAGE,
@@ -1571,6 +1673,10 @@ module.exports = {
   OTP_CODE_REGEX,
   OTP_CODE_MESSAGE,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  EXTENSION_DAYS_MESSAGE,
+  isWholeExtensionDays,
   CLIENT_LOG_LIMITS,
   PAN_REGEX,
   PAN_MESSAGE,

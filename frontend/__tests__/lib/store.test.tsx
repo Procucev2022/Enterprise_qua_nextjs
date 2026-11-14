@@ -1749,6 +1749,49 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(unreachable).toEqual({ success: false, message: undefined });
     });
 
+    // A request the server sent takes its time, status and buyer from the server's record
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        message: 'Evaluation request sent',
+        data: {
+          vendorId: 'v-001',
+          evaluationRequested: true,
+          evaluationRequestedAt: '2026-11-14T06:00:00.000Z',
+          evaluationRequestedBy: 'Server Buyer Ltd',
+          status: 'PENDING EVALUATION',
+        },
+      }),
+    });
+    await act(async () => {
+      const res = await contextValue.requestVendorEvaluation('v-001');
+      expect(res).toEqual({ success: true, message: 'Evaluation request sent' });
+    });
+    expect(contextValue.buyerVendors.find((v: { id: string }) => v.id === 'v-001')).toEqual(
+      expect.objectContaining({
+        evaluationRequested: true,
+        evaluationRequestedAt: '2026-11-14T06:00:00.000Z',
+        evaluationRequestedBy: 'Server Buyer Ltd',
+        status: 'PENDING EVALUATION',
+      })
+    );
+
+    // A supplier the server does not hold for this buyer gets the not-found message and the next step
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({ success: false, error: 'Vendor with ID v-001 not found.' }),
+    });
+    await act(async () => {
+      const res = await contextValue.requestVendorEvaluation('v-001');
+      expect(res).toEqual({ success: false, message: UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody });
+    });
+    expect(contextValue.toastMessage).toEqual(
+      expect.objectContaining({ title: UI_STRINGS.vendorEvaluationRequest.vendorNotFoundTitle, type: 'warning' })
+    );
+
     // Request evaluation for non-existent vendor
     await act(async () => {
       const res = await contextValue.requestVendorEvaluation('nonexistent-vendor');

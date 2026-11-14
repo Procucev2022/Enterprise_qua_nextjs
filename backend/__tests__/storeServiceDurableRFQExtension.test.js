@@ -29,7 +29,7 @@ describe('storeService.extendRFQDurably', () => {
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(fresh);
     jest.spyOn(domainQueries, 'extendRFQOnceInDB').mockImplementation(async (id, updates) => ({ ...fresh, ...updates }));
 
-    const result = await storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 24, userEmail: 'buyer@example.com' });
+    const result = await storeService.extendRFQDurably(TEST_RFQ_ID, { days: 1, userEmail: 'buyer@example.com' });
 
     expect(result.success).toBe(true);
     expect(result.rfq.isExtended).toBe(true);
@@ -42,7 +42,7 @@ describe('storeService.extendRFQDurably', () => {
   test('returns not found when the durable RFQ does not exist', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(null);
-    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 24 })).resolves.toMatchObject({
+    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { days: 1 })).resolves.toMatchObject({
       success: false,
       reason: 'NOT_FOUND',
     });
@@ -57,7 +57,7 @@ describe('storeService.extendRFQDurably', () => {
   ])('rejects an RFQ that is no longer eligible: %p', async (overrides, reason) => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(createRFQ(overrides));
-    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 24 })).resolves.toMatchObject({
+    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { days: 1 })).resolves.toMatchObject({
       success: false,
       reason,
     });
@@ -67,7 +67,7 @@ describe('storeService.extendRFQDurably', () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(createRFQ());
     const updateSpy = jest.spyOn(domainQueries, 'extendRFQOnceInDB');
-    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 36 })).resolves.toMatchObject({
+    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { days: 31 })).resolves.toMatchObject({
       success: false,
       reason: 'VALIDATION',
     });
@@ -77,7 +77,7 @@ describe('storeService.extendRFQDurably', () => {
   test('maps a failed fresh read to a retryable persistence error', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockRejectedValue(new Error('database unavailable'));
-    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 24 })).rejects.toMatchObject({
+    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { days: 1 })).rejects.toMatchObject({
       statusCode: 503,
       code: 'PERSISTENCE_UNAVAILABLE',
     });
@@ -87,7 +87,7 @@ describe('storeService.extendRFQDurably', () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(createRFQ());
     jest.spyOn(domainQueries, 'extendRFQOnceInDB').mockRejectedValue(new Error('write failed'));
-    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 24 })).rejects.toMatchObject({
+    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { days: 1 })).rejects.toMatchObject({
       statusCode: 503,
       code: 'PERSISTENCE_UNAVAILABLE',
     });
@@ -104,7 +104,7 @@ describe('storeService.extendRFQDurably', () => {
       .mockResolvedValueOnce(createRFQ())
       .mockResolvedValueOnce(latest);
     jest.spyOn(domainQueries, 'extendRFQOnceInDB').mockResolvedValue(null);
-    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 24 })).resolves.toMatchObject({
+    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { days: 1 })).resolves.toMatchObject({
       success: false,
       reason,
     });
@@ -116,7 +116,7 @@ describe('storeService.extendRFQDurably', () => {
       .mockResolvedValueOnce(createRFQ())
       .mockRejectedValueOnce(new Error('verification failed'));
     jest.spyOn(domainQueries, 'extendRFQOnceInDB').mockResolvedValue(null);
-    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 24 })).rejects.toMatchObject({
+    await expect(storeService.extendRFQDurably(TEST_RFQ_ID, { days: 1 })).rejects.toMatchObject({
       statusCode: 503,
       code: 'PERSISTENCE_UNAVAILABLE',
     });
@@ -125,7 +125,7 @@ describe('storeService.extendRFQDurably', () => {
   test('retains the in-memory mode when no database is configured', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     storeService.rfqs.push(createRFQ());
-    const result = await storeService.extendRFQDurably(TEST_RFQ_ID, { hours: 48 });
+    const result = await storeService.extendRFQDurably(TEST_RFQ_ID, { days: 2 });
     expect(result.success).toBe(true);
     expect(result.rfq.extensionHours).toBe(48);
   });

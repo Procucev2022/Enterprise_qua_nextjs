@@ -3,6 +3,7 @@ import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type {
   ExtractedEntity,
   RFQAttachment,
@@ -51,6 +52,7 @@ jest.mock('@/lib/store', () => ({
         // never match any RFQ's category and every generic save test in this
         // file (not specifically testing category-matching) would break.
         majorCategory: require('../../../test-fixtures/categoryTaxonomy').CATEGORY_TAXONOMY_FIXTURE[0].majorCategory,
+        minorCategories: [require('../../../test-fixtures/categoryTaxonomy').CATEGORY_TAXONOMY_FIXTURE[0].minorCategories[0]],
       },
     ],
   })),
@@ -123,15 +125,22 @@ function fillRow() {
   fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
     target: { value: categoriesData[0].majorCategory },
   });
-  fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-    target: { value: categoriesData[0].minorCategories[0] },
+  chooseCategory(within(row).getByLabelText(MODAL.colMinor), categoriesData[0].minorCategories[0]);
+  fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
+    target: { value: 'SS316 impeller, 2 HP' },
   });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
 }
 
-/** Fill the mandatory delivery destination. */
-function fillDelivery() {
+/** Fill the mandatory header fields: the title, the target delivery date and the destination. */
+function fillHeaderFields() {
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+    target: { value: 'Centrifugal pump replacement' },
+  });
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
+    target: { value: '2099-12-01' },
+  });
   fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
     target: { value: 'Navi Mumbai Plant, Gate 3' },
   });
@@ -208,10 +217,10 @@ beforeEach(() => {
         name: 'Default Enterprise Vendor',
         email: 'vendor@test.com',
         source: 'buyer_uploaded',
-        // Matches categoriesData[0], the category fillRow()/extractionResult()
-        // always set — Mode 1 assignment is category-scoped now, so a vendor
-        // with no category would never match any RFQ's category here.
+        // Carries the minor fillRow()/extractionResult() always set on the RFQ row. Mode 1
+        // assignment is minor-scoped, so a vendor without that minor would never match here.
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       },
     ],
   });
@@ -324,7 +333,7 @@ describe('ManualRFQModal: line items', () => {
     const minor = within(row).getByLabelText(MODAL.colMinor) as HTMLSelectElement;
 
     fireEvent.change(major, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minor, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minor, categoriesData[0].minorCategories[0]);
     expect(minor.value).toBe(categoriesData[0].minorCategories[0]);
 
     fireEvent.change(major, { target: { value: categoriesData[1].majorCategory } });
@@ -345,11 +354,13 @@ describe('ManualRFQModal: validation', () => {
     renderModal();
     clickSave();
 
+    expect(screen.getByText(MANUAL.titleRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.targetDateRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.itemNameRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.specsRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.quantityRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.unitRequired)).toBeInTheDocument();
-    // Category is optional now — no error shown for a blank major/minor category.
-    expect(screen.queryByText(MANUAL.majorCategoryRequired)).not.toBeInTheDocument();
+    expect(screen.getByText(MANUAL.majorCategoryRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryLocationRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryPincodeRequired)).toBeInTheDocument();
   });
@@ -397,7 +408,7 @@ describe('ManualRFQModal: saving', () => {
   it('posts the form and hands back the server record', async () => {
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -425,7 +436,7 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -444,7 +455,7 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -473,7 +484,7 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -539,7 +550,7 @@ describe('ManualRFQModal: supporting documents', () => {
     await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -553,6 +564,9 @@ describe('ManualRFQModal: header and item fields', () => {
     // Relative to today: the date input has min=today, so a fixed date goes stale.
     const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     renderModal();
+    fillRow();
+    fillHeaderFields();
+    // Set after the shared header fill, so these values are the ones the payload carries.
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
       target: { value: 'Monsoon Pump Overhaul' },
     });
@@ -560,8 +574,6 @@ describe('ManualRFQModal: header and item fields', () => {
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
       target: { value: futureDate },
     });
-    fillRow();
-    fillDelivery();
     chooseMode('mode_1');
     clickSave();
 
@@ -579,7 +591,7 @@ describe('ManualRFQModal: header and item fields', () => {
     fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
       target: { value: 'SS316 impeller, 415V' },
     });
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -616,7 +628,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(mode1).not.toBeChecked();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_3');
@@ -629,7 +641,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     });
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     expect(rfqClient.createRFQ).not.toHaveBeenCalled();
@@ -654,7 +666,7 @@ describe('ManualRFQModal: sourcing mode', () => {
 
   it('locks Mode 2 and Mode 3 for a version_1 buyer and blocks selecting them', async () => {
     (useApp as jest.Mock).mockReturnValue({
-      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded', majorCategory: categoriesData[0].majorCategory }],
+      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] }],
       activeBuyerAccount: { subscriptionPlan: 'version_1' },
     });
     renderModal();
@@ -672,7 +684,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(mode2).not.toBeChecked();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -931,7 +943,7 @@ describe('ManualRFQModal: extraction from an attached document', () => {
       expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
     );
 
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -952,7 +964,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     expect(screen.getByText('0 Suppliers Found')).toBeInTheDocument();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => {
@@ -972,11 +984,12 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           phone: '+91 98200 11111',
           source: 'historical_purchase_dump',
           majorCategory: categoriesData[0].majorCategory,
+          minorCategories: [categoriesData[0].minorCategories[0]],
         },
         // No name/email/phone/contactPerson: the payload carries an empty name, never an invented one.
-        { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory },
+        { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] },
         // Not buyer-uploaded: must be excluded from both the preview and the payload.
-        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory },
+        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] },
       ],
     });
     renderModal();
@@ -990,7 +1003,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     expect(screen.queryByText('Category Manager Vendor')).not.toBeInTheDocument();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -1024,7 +1037,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     fireEvent.click(mode3Checkbox);
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -1053,7 +1066,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     // fillRow() sets the RFQ's category to categoriesData[0] ('Civil Works'),
     // which the IT vendor above does not cover at all.
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     chooseMode('mode_1');
     clickSave();
 
@@ -1081,9 +1094,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
         target: { value: testMajor },
       });
-      fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-        target: { value: testMinor },
-      });
+      chooseCategory(within(row).getByLabelText(MODAL.colMinor), testMinor);
 
       // Select Mode 2
       const mode2Checkbox = screen.getByLabelText(/(Mode 2|Version 2)/i);
@@ -1256,7 +1267,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
       fireEvent.click(mode0Radio);
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1279,7 +1290,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
       fireEvent.click(mode0Radio);
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1299,7 +1310,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         rfq: savedRFQ({ sourcingMode: 'mode_0', category: '' }),
       });
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
       await waitFor(() => {
@@ -1577,7 +1588,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
 
       // Initially quota exhausted banner and bottom upgrade link are both present
       expect(screen.getByTestId('manual-rfq-quota-exhausted-banner')).toBeInTheDocument();
@@ -1620,6 +1631,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'alpha@eng.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-matched-2',
@@ -1627,6 +1639,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'beta@auto.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v3 = {
         id: 'v-other-3',
@@ -1684,6 +1697,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'omega@elec.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-mode2-2',
@@ -1778,7 +1792,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Submit with only mismatched vendor in candidate pool
@@ -1809,7 +1823,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Attach file (first upload fails, keeping file in pendingFilesRef)
@@ -1875,7 +1889,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     it('covers categoryFetchSignals debounced fetchAllVendors execution', async () => {
       (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
         success: true,
-        candidates: [{ id: 'cand-1', name: 'Auto Fetched Vendor', majorCategory: categoriesData[0].majorCategory }],
+        candidates: [{ id: 'cand-1', name: 'Auto Fetched Vendor', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] }],
       });
       renderModal();
       fillRow();
@@ -2061,6 +2075,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
               id: 'non-matching-id',
               itemName: 'Something Else',
               majorCategory: categoriesData[0].majorCategory,
+              minorCategories: [categoriesData[0].minorCategories[0]],
             },
             {
               id: items[0]?.id,
@@ -2222,7 +2237,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Test top useV0 button
       const { unmount: unmount1 } = renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const useV0Btns = screen.getAllByRole('button', { name: MODAL.useV0Action });
       expect(useV0Btns).toHaveLength(2);
       fireEvent.click(useV0Btns[0]);
@@ -2232,7 +2247,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Test bottom useV0 button
       const { unmount: unmount2 } = renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const useV0Btns2 = screen.getAllByRole('button', { name: MODAL.useV0Action });
       fireEvent.click(useV0Btns2[1]);
       expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
@@ -2253,7 +2268,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       const majorSelect = within(row).getByLabelText(MODAL.colMajor);
       fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
       const minorSelect = within(row).getByLabelText(MODAL.colMinor);
-      fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+      chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
       fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
 
       // Document extraction with a custom category not in taxonomy
@@ -2326,6 +2341,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         mobile: '9876543210',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-mode1-select-2',
@@ -2335,6 +2351,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         mobileNumber: '9123456789',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       useApp.mockReturnValue({
         activeSubscription: 'version_3',
@@ -2356,7 +2373,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Click vendor card for v1 (which has no name, so card displays contactPerson)
@@ -2392,7 +2409,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_1');
 
       // Attach document so pendingFilesRef has files
@@ -2426,7 +2443,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -2453,7 +2470,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -2480,7 +2497,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       chooseMode('mode_0');
 
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -2493,3 +2510,25 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 });
 
 
+
+describe('ManualRFQModal: mandatory fields', () => {
+  it('marks every field except the budget as required, and the target date opens its calendar from the whole field', () => {
+    renderModal();
+
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toBeRequired();
+    const targetDate = screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i'));
+    expect(targetDate).toBeRequired();
+    expect(targetDate).toHaveClass('date-input-whole-field');
+    expect(within(firstRow()).getByLabelText(MODAL.colSpecs)).toBeRequired();
+    expect(within(firstRow()).getByLabelText(MODAL.colMajor)).toBeRequired();
+    expect(within(firstRow()).getByLabelText(MODAL.colMinor)).toBeRequired();
+    expect(screen.getByLabelText(/Estimated Budget/i)).not.toBeRequired();
+  });
+
+  it('shows the required mark beside each mandatory column heading', () => {
+    renderModal();
+
+    const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
+    expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker))).toHaveLength(6);
+  });
+});

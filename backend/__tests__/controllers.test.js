@@ -14,6 +14,17 @@ const { logger } = require('../src/services/loggerService');
 const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 
+// One line item with every field the RFQ form requires. Spread into create payloads so each
+// request reaches the checks under test instead of stopping at line-item validation.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
+
 function mockRes() {
   const res = {};
   res.status = jest.fn().mockReturnValue(res);
@@ -332,6 +343,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
           targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         },
       }),
       res,
@@ -348,7 +360,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     expect(res.status).toHaveBeenCalledWith(400);
 
     // Line items arrive as `extractedEntities` from the wizard, but the API also
-    // accepts `lineItems`, and an RFQ with neither must still save.
+    // accepts `lineItems`. Either shape must carry a complete row, and an RFQ with
+    // neither is refused, because every RFQ needs at least one line item to quote against.
     const validBody = {
       title: 'Line item shapes',
       category: 'Mechanical',
@@ -360,7 +373,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     const withLineItems = mockRes();
     await rfqController.createRFQ(
-      buyerReq({ body: { ...validBody, lineItems: [{ itemName: 'Pump', quantity: 1 }] } }),
+      buyerReq({ body: { ...validBody, lineItems: [{ ...COMPLETE_LINE_ITEM }] } }),
       withLineItems,
       next
     );
@@ -369,8 +382,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     const withNoItems = mockRes();
     await rfqController.createRFQ(buyerReq({ body: validBody }), withNoItems, next);
-    expect(withNoItems.status).toHaveBeenCalledWith(201);
-    expect(withNoItems.json.mock.calls[0][0].data.extractedEntities).toEqual([]);
+    expect(withNoItems.status).toHaveBeenCalledWith(400);
+    expect(withNoItems.json.mock.calls[0][0].fieldErrors).toHaveProperty('lineItems');
 
     // An explicit status wins over the default, and a session with no orgName
     // still produces a summary.
@@ -378,7 +391,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await rfqController.createRFQ(
       {
         user: { sub: 'usr-buyer-001', orgId: TEST_ORG_ID, email: 'buyer@procucev.com', role: 'buyer' },
-        body: { ...validBody, status: 'In Evaluation' },
+        body: { ...validBody, status: 'In Evaluation', lineItems: [{ ...COMPLETE_LINE_ITEM }] },
       },
       withStatus,
       next
@@ -407,6 +420,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
           targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         },
         user: { role: 'buyer', email: 'sourcing.commercial@tatamotors.com' },
       },
@@ -1106,8 +1120,22 @@ describe('rfqController scope and fallback branches', () => {
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
           extractedEntities: [
-            { itemName: 'Pump', quantity: 2, unit: 'Nos', minorCategory: 'Pumps' },
-            { itemName: 'Valve', quantity: 1, unit: 'Nos', minorCategory: 'Valves' },
+            {
+              itemName: 'Pump',
+              technicalSpecs: 'Centrifugal, 5 HP',
+              quantity: 2,
+              unit: 'Nos',
+              majorCategory: 'Engineering Spares - Mechanical',
+              minorCategory: 'Pumps & Accessories',
+            },
+            {
+              itemName: 'Valve',
+              technicalSpecs: 'DN50, flanged',
+              quantity: 1,
+              unit: 'Nos',
+              majorCategory: 'Engineering Spares - Mechanical',
+              minorCategory: 'Hoses, Valves & Fittings',
+            },
           ],
         },
       }),

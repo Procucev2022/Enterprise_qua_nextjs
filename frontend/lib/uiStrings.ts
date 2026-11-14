@@ -700,13 +700,20 @@ sellerDirectory: {
 
     // Line item
     itemNameRequired: 'Describe the item. Vendors quote against this text, so it cannot be blank.',
+    specsRequired: 'Describe the specification, such as material, size or standard. Vendors quote against it.',
     quantityRequired: 'Enter a quantity above zero.',
     unitRequired: 'Enter a unit, for example Nos, Kg or Mtr.',
-    majorCategoryRequired: 'Choose a major category so the RFQ routes to the right vendors.',
-    minorCategoryRequired: 'Choose a minor category.',
+    majorCategoryRequired: 'Choose a division so the RFQ routes to the right vendors.',
+    majorCategoryUnknown: 'The selected division is not in the category master. Choose one from the list.',
+    minorCategoryRequired: 'Choose a category under the selected division.',
+    minorCategoryNotUnderMajor:
+      'The selected category does not belong to the selected division. Choose a category under that division.',
+    minorWithoutMajor: 'A category needs a division. Choose a division first, or clear the category.',
+    minorNotApplicable: 'A category does not apply to All Categories. Clear the category to continue.',
 
     // Header
-    titleLength: 'The RFQ title must be between {min} and {max} characters, or left blank to use the first line item.',
+    titleRequired: 'Enter an RFQ title. It is the first thing vendors read about this requirement.',
+    titleLength: 'The RFQ title must be between {min} and {max} characters.',
     deliveryLocationRequired:
       'Enter the delivery location. Vendors price freight against it, so it cannot be left blank.',
     deliveryLocationLength: 'The delivery location must be between {min} and {max} characters.',
@@ -720,6 +727,7 @@ sellerDirectory: {
       'PIN code not found in postal directory. Please enter a valid delivery PIN code.',
     budgetNegative: 'An estimated budget cannot be negative. Leave it blank to publish no ceiling.',
     lineItemsRequired: 'Add at least one line item so vendors have something to quote against.',
+    targetDateRequired: 'Choose a target delivery date. Vendors plan their delivery against it.',
     targetDateCannotBePast: 'Target date cannot be earlier than today.',
   },
 
@@ -729,9 +737,11 @@ sellerDirectory: {
     subtitle:
       '',
     closeAria: 'Close manual RFQ entry',
+    /** Shown beside the label of every mandatory field. Every field except the budget is mandatory. */
+    requiredMarker: '*',
 
     titleLabel: 'RFQ Title',
-    titlePlaceholder: 'Leave blank to use the first line item',
+    titlePlaceholder: 'For example, Mechanical seal replacement for pump P-101',
     budgetLabel: 'Estimated Budget ({symbol})',
     budgetPlaceholder: 'Leave blank to publish no ceiling',
     optionalTag: 'Optional',
@@ -745,11 +755,12 @@ sellerDirectory: {
 
     lineItemsHeading: 'Line Items ({count})',
     addItemAction: 'Add Line Item',
+    autoCategorizeTitle: 'Auto-identify and assign divisions and categories for all items',
     noItemsMessage: 'No line items yet. Add at least one so vendors have something to quote against.',
     colItem: 'Item Description',
     colSpecs: 'Specification',
-    colMajor: 'Major Category',
-    colMinor: 'Minor Category',
+    colMajor: 'Division',
+    colMinor: 'Category',
     colQty: 'Quantity',
     colUnit: 'Unit',
     colTargetDate: 'Target Date',
@@ -780,6 +791,10 @@ sellerDirectory: {
     shortlistMismatchNotice:
       '{count} vendor(s) have a category mismatch and were left out of this RFQ shortlist. Use the category update request on each of them to ask them to update their categories.',
     itemsCount: '{count} items',
+    /** Names of incomplete line items in the dispatch summary, e.g. "2 line item(s) incomplete". */
+    lineItemsIncompleteLabel: '{count} line item(s) incomplete',
+    /** Names the target date in the dispatch summary. It is mandatory and must not be in the past. */
+    targetDateMissingLabel: 'Target Delivery Date (required, not in the past)',
 
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',
@@ -809,7 +824,7 @@ sellerDirectory: {
     successToast: '{accepted} line items extracted from {fileName}.',
     fallbackTitle: 'Line Items Could Not Be Read',
     errorDetailLabel: 'Exact reason (for debugging):',
-    fallbackHint: 'Add each line item below, assign its minor category, then continue to sourcing.',
+    fallbackHint: 'Add each line item below, assign its category, then continue to sourcing.',
     unreadableResponse:
       'The extraction service returned an unexpected response. Add the line items manually to continue.',
 
@@ -857,8 +872,8 @@ sellerDirectory: {
     itemSpecsPlaceholder: 'Material grade, standard, class or rating',
     itemQtyPlaceholder: 'Qty',
     itemUnitPlaceholder: 'e.g. Nos',
-    categoryPlaceholder: 'Select major category',
-    minorCategoryPlaceholder: 'Select minor category',
+    categoryPlaceholder: 'Select division',
+    minorCategoryPlaceholder: 'Select category',
     confidenceUnset: '—',
 
     // Step 2 empty state
@@ -934,9 +949,9 @@ sellerDirectory: {
       },
       {
         number: 2,
-        label: 'STEP 2: MINOR CATEGORIZATION',
+        label: 'STEP 2: CATEGORIZATION',
         tag: 'Taxonomy Mapping',
-        hint: 'Classify into 280+ Minor Categories',
+        hint: 'Classify into 280+ Categories',
       },
       {
         number: 3,
@@ -951,11 +966,11 @@ sellerDirectory: {
     classifyingLabel: 'Re-categorizing line items…',
     classifyEmptyTitle: 'Nothing to Categorize',
     classifyEmptyMessage: 'Add at least one line item with a description first.',
-    classifySuccessTitle: 'Minor Categories Updated',
+    classifySuccessTitle: 'Categories Updated',
     classifySuccessMessage:
       '{accepted} line items re-categorized against the shared taxonomy. {needsReview} could not be matched and kept the default category.',
     classifyFailed:
-      'Categories could not be refreshed just now. Set the major and minor category on each line item manually, or try again.',
+      'Categories could not be refreshed just now. Set the division and category on each line item manually, or try again.',
 
     // Step strip gating
     stepLockedTitle: 'Finish the Current Step First',
@@ -967,7 +982,7 @@ sellerDirectory: {
     // Step 1 manual intake
     manualMethodLabel: 'Manual RFQ Entry',
     manualStartAction: 'Add Manual RFQ',
-    manualHint: 'You will add each line item and its minor category in Step 2.',
+    manualHint: 'You will add each line item and its category in Step 2.',
     // The Manual tab now opens a dialog rather than routing through the review
     // step, so the tab itself just explains the path and offers the way in.
     manualPanelTitle: 'Enter RFQ Details Manually',
@@ -1041,7 +1056,7 @@ sellerDirectory: {
 
     // Commercial & logistics
     commercialHeading: 'Commercial & Delivery',
-    categoryLabel: 'Major Category',
+    categoryLabel: 'Division',
     budgetLabel: 'Estimated Budget',
     targetDateLabel: 'Target Delivery',
     statusLabel: 'Current Status',
@@ -1057,15 +1072,15 @@ sellerDirectory: {
     lineItemsSubtitle: 'Package requirement specification',
     lineItemSearchPlaceholder: 'Search line items…',
     lineItemSearchAria: 'Search the line items of this RFQ',
-    allMinorCategories: 'All Minor Categories',
-    minorFilterAria: 'Filter line items by minor category',
+    allMinorCategories: 'All Categories',
+    minorFilterAria: 'Filter line items by category',
     exportCsvAction: 'Export CSV',
     exportCsvAria: 'Download the line items of {rfqNumber} as CSV',
     colIndex: '#',
     colItem: 'Item Description',
     colSpecs: 'Technical Specification',
-    colMajor: 'Major Category',
-    colMinor: 'Minor Category',
+    colMajor: 'Division',
+    colMinor: 'Category',
     colCategory: 'Category',
     colQty: 'Qty',
     colUnit: 'Unit',
@@ -1110,28 +1125,33 @@ sellerDirectory: {
     vendorOnline: 'Online',
     vendorOffline: 'Offline',
 
-    // Extend RFQ (one-time 24h or 48h deadline extension for open RFQs)
+    // Extend RFQ: one-time closing-deadline extension, chosen by the buyer in whole days
     extendRfqAction: 'Extend RFQ',
-    extendRfqAria: 'Extend deadline for RFQ {rfqNumber} by 24 or 48 hours',
+    extendRfqAria: 'Extend the closing deadline for RFQ {rfqNumber} by {min} to {max} days',
     extendModalTitle: 'Extend RFQ Closing Deadline',
-    extendModalSubtitle: 'Grant suppliers a one-time extension of 24 or 48 hours for {rfqNumber}.',
+    extendModalSubtitle: 'Grant suppliers a one-time extension for {rfqNumber}.',
     currentDeadlineLabel: 'Current Closing Deadline',
     revisedDeadlineLabel: 'Revised Closing Deadline',
+    revisedDeadlineUnavailable: 'Enter {min} to {max} days',
     closingDeadlineLabel: 'Closing Deadline',
-    selectExtensionDurationLabel: 'Select Extension Duration',
+    extensionDaysLabel: 'Extension Duration (Days)',
+    extensionDaysDecreaseAria: 'Reduce the extension by one day',
+    extensionDaysIncreaseAria: 'Increase the extension by one day',
+    extensionDaysInvalid: 'Enter a whole number of days from {min} to {max}, for example 3.',
+    extensionHoursPreview: 'Adds {hours} hours to the current closing deadline.',
+    dayCountOne: '{count} day',
+    dayCountOther: '{count} days',
     hoursUnit: 'Hours',
-    oneDayLabel: '24 Hours (+1 Day)',
-    twoDaysLabel: '48 Hours (+2 Days)',
     oneTimeNotice: 'This is a strictly one-time extension. Once confirmed, this RFQ deadline cannot be extended again.',
-    confirmExtensionAction: 'Confirm Extension (+{hours}h)',
+    confirmExtensionAction: 'Confirm Extension (+{duration})',
+    confirmExtensionDisabledAction: 'Confirm Extension',
     extendingAction: 'Extending Deadline…',
     extensionSuccessTitle: 'RFQ Deadline Extended',
-    extensionSuccessMessage: 'Closing deadline for {rfqNumber} has been extended by {hours} hours to {newDeadline}.',
+    extensionSuccessMessage: 'Closing deadline for {rfqNumber} has been extended by {duration} to {newDeadline}.',
     extensionFailedTitle: 'Extension Failed',
-    extendedBadge: 'Extended (+{hours}h)',
-    alreadyExtendedTooltip: 'A one-time extension of {hours} hours has already been applied to this RFQ.',
+    extendedBadge: 'Extended (+{duration})',
+    alreadyExtendedTooltip: 'A one-time extension of {duration} has already been applied to this RFQ.',
     revisedDeadlineNote: 'One-time extension applied',
-    oneTimeExtensionAvailable: 'One-time extension (+24h / +48h) available',
 
     // Vendor clarifications and buyer replies. A message counts as sent only after the server confirms it.
     clarificationSentTitle: 'Clarification Sent',
@@ -1419,7 +1439,7 @@ sellerDirectory: {
       fullNameBuyer: 'Full Name',
       fullNameVendor: 'Authorized Representative Name',
       companyNameBuyer: 'Company Name',
-      companyNameVendor: 'Vendor Enterprise / Company Name',
+      companyNameVendor: 'Vendor Enterprise',
       gstNumber: 'GST Number',
       pincode: 'Pincode',
       city: 'City',
@@ -1496,7 +1516,7 @@ sellerDirectory: {
     dialogSubtitle:
       'Change the title, terms, line items and documents of {rfqNumber}. Only what you change is sent.',
     titleLabel: 'RFQ Title',
-    categoryLabel: 'RFQ Major Category',
+    categoryLabel: 'RFQ Division',
     statusLabel: 'Status',
     budgetLabel: 'Estimated Budget ({symbol})',
     targetDateLabel: 'Target Delivery Date',
@@ -1520,21 +1540,22 @@ sellerDirectory: {
 
     // Line items
     addItemAction: 'Add Line Item',
+    autoCategorizeTitle: 'Auto-identify and assign divisions and categories for all items',
     removeItemAria: 'Remove line item {item}',
     untitledItem: 'this row',
     noItemsMessage: 'This RFQ has no line items. Add at least one before saving.',
     colItem: 'Item Description',
     colSpecs: 'Technical Specification',
-    colMajor: 'Major Category',
-    colMinor: 'Minor Category',
+    colMajor: 'Division',
+    colMinor: 'Category',
     colQty: 'Qty',
     colUnit: 'Unit',
     colTargetDate: 'Required By',
-    selectMajorFirst: 'Select a major category first',
+    selectMajorFirst: 'Select a division first',
     itemNameRequired: 'Every line item needs a description.',
     quantityRequired: 'Every line item needs a quantity above zero.',
     unitRequired: 'Every line item needs a unit.',
-    majorCategoryRequired: 'Every line item needs a major category.',
+    majorCategoryRequired: 'Every line item needs a division.',
     lineItemsRequired: 'An RFQ needs at least one line item.',
     lineItemErrorSummary: 'Row {row}: {message}',
 
@@ -1554,7 +1575,7 @@ sellerDirectory: {
     // Validation. Same rules as creation, so an edit cannot introduce a value that
     // could not have been created.
     titleRequired: 'RFQ Title is required and must be at least 3 characters.',
-    categoryRequired: 'Major Category is required.',
+    categoryRequired: 'Division is required.',
     budgetNegative: 'Estimated Budget cannot be negative. Leave it blank if no ceiling is set.',
     deliveryLocationRequired: 'Delivery Location is required so vendors can price freight.',
     deliveryPincodeRequired: 'PIN / ZIP Code is required so vendors can price freight.',
@@ -1582,7 +1603,7 @@ sellerDirectory: {
     deleteFailedTitle: 'RFQ Not Deleted',
     deleteFailed: 'The RFQ could not be deleted. Try again, and if it persists the API may be unavailable.',
     classifyFailed:
-      'Categories could not be refreshed just now. Set the major and minor category on each line item manually, or try again.',
+      'Categories could not be refreshed just now. Set the division and category on each line item manually, or try again.',
   },
 
   vendorFeed: {
@@ -1911,8 +1932,7 @@ sellerDirectory: {
       timeHorizon: { number: 1, label: 'Time Horizon', tag: 'Step 1' },
       vendorMaster: { number: 2, label: 'Vendor Master', tag: 'Step 2' },
       poDump: { number: 3, label: 'PO Dump', tag: 'Step 3' },
-      aiCategoryJoin: { number: 4, label: 'AI Category Join', tag: 'Step 4' },
-      dispatch: { number: 5, label: 'Dispatch Emails', tag: 'Step 5' },
+      dispatch: { number: 4, label: 'Dispatch Emails', tag: 'Step 4' },
     },
 
     horizon: {
@@ -1960,7 +1980,15 @@ sellerDirectory: {
 
     poDump: {
       heading: 'Step 3 — Upload File 2: Historical PO Purchase Dump',
-      hint: 'Required columns: PO Number, PO Date, Vendor Code or Vendor Name, Line Item Description, Quantity, UOM, Spend, Category. Material Code, Subcategory, Department and Currency are optional.',
+      hint: 'Required columns: Vendor Name, Line Item Description and Specifications. Vendor Code can be used instead of Vendor Name. PO Number, PO Date, Quantity, UOM, Spend and Category are optional, and so are Department, Material Code, Subcategory and Currency.',
+      requiredColumnsBadge: 'Required Columns',
+      requiredColumnsBanner: 'Vendor Name, Line Item Description & Specifications',
+      fieldVendor: 'Vendor Name',
+      fieldDescription: 'Line Item Description',
+      fieldSpecs: 'Specifications',
+      missingColumnsTemplate: 'Missing required columns: {columns}. (Found: [{found}]). Download the PO Dump template and use its headers.',
+      invalidHeadersTitle: 'Invalid PO Sheet Headers',
+      noHeadersFound: 'None',
       dropzone: 'Click to browse or drag and drop your PO dump (.xlsx, .xls, .csv)',
       dropzoneParsing: 'Reading and validating PO line items…',
       templateAction: 'Download Template',
@@ -2001,81 +2029,8 @@ sellerDirectory: {
       columnItems: 'Purchased Items',
     },
 
-    ai: {
-      heading: 'Step 4 — AI category join & buyer review',
-      hint: 'Suppliers are categorised from their PO line items, purchase frequency and spend — never from the company name alone.',
-      startAction: 'Start AI Categorisation',
-      resumeAction: 'Resume AI Categorisation',
-      progressTemplate: 'Processing {processed} / {total} vendors',
-      completedTemplate: 'Categorised {processed} of {total} vendors',
-      runningLabel: 'Categorising…',
-      idleLabel: 'Not started',
-      completedLabel: 'Complete',
-      failedLabel: 'Failed',
-      categoryMasterEmptyTitle: 'Your category master is empty',
-      reRunAction: 'Re-run AI',
-      reRunning: 'Re-running…',
-      approveAction: 'Approve',
-      editAction: 'Edit Category',
-      rejectAction: 'Reject',
-      saveEditAction: 'Save Category',
-      cancelEditAction: 'Cancel',
-      aiSuggestedLabel: 'AI suggested',
-      buyerFinalLabel: 'Your approved category',
-      reasonLabel: 'Why',
-      confidenceLabel: 'Confidence',
-      confidenceHigh: 'High confidence',
-      confidenceMedium: 'Review recommended',
-      confidenceNeedsReview: 'Needs buyer review',
-      confidenceUnstated: 'No confidence score returned',
-      newCategoryBadge: 'New category suggestion',
-      newCategoryExplain:
-        'The categoriser could not place this supplier in your category master. Choose a category yourself — nothing is created automatically.',
-      noPoHistoryBadge: 'No PO history',
-      failedBadge: 'Categorisation failed',
-      reviewedByTemplate: 'Reviewed by {email} on {date}',
-      majorCategoryLabel: 'Primary major category',
-      minorCategoryLabel: 'Minor categories',
-      relevantProductsLabel: 'Relevant products',
-      addMinorAction: 'Add',
-      removeMinorAction: 'Remove',
-      rejectConfirmTitle: 'Reject this suggestion?',
-      rejectConfirmBody:
-        'The supplier will be moved to self-mapping and asked to select its own categories. The AI suggestion is kept for the audit trail.',
-      continueAction: 'Continue to Dispatch',
-    },
-
-    filters: {
-      searchPlaceholder: 'Search vendor, code, email or category',
-      statusAll: 'All',
-      statusMapped: 'Mapped',
-      statusPendingReview: 'Needs Review',
-      statusApproved: 'Approved',
-      statusSelfMap: 'Self-Map Required',
-      statusFailed: 'Failed',
-      confidenceAll: 'Any confidence',
-      confidenceHigh: 'High (90-100)',
-      confidenceMedium: 'Medium (70-89)',
-      confidenceNeedsReview: 'Below 70',
-      poHistoryAll: 'Any PO history',
-      poHistoryYes: 'Has PO history',
-      poHistoryNo: 'No PO history',
-      clearAction: 'Clear filters',
-      resultsTemplate: 'Showing {from}-{to} of {total}',
-      previousPage: 'Previous',
-      nextPage: 'Next',
-      noResults: 'No suppliers match these filters.',
-    },
-
-    segmentation: {
-      heading: 'Vendors by category',
-      selfMapHeading: 'Self Mapping Required',
-      vendorCountTemplate: '{count} vendors',
-      empty: 'No categories assigned yet.',
-    },
-
     dispatch: {
-      heading: 'Step 5 — Dispatch emails',
+      heading: 'Step 4 — Dispatch emails',
       hint: 'Select who to email, preview the recipient list, then confirm. Nobody is ever sent the same email twice.',
       templateLabel: 'Email template',
       templateCategoryMapped: 'Category mapping confirmation',
@@ -3100,6 +3055,9 @@ sellerDirectory: {
   /** PIN code checks against the postal records service. */
   pincodeVerification: {
     unverified: 'Could not verify this PIN code with the postal records service. Check your connection and try again.',
+    unverifiedFillManually:
+      'Could not verify this PIN code, so City and State were not filled in. Enter them by hand, or check your connection and try again.',
+    checking: 'Checking',
     formatValid: 'PIN code format is valid. It has not been checked against postal records.',
     notFound: 'PIN Code is not found or invalid in postal records.',
     required: 'PIN code is required.',
@@ -3124,6 +3082,23 @@ sellerDirectory: {
     notAvailable: 'Not available',
     notEvaluated: 'Not evaluated',
     notDispatched: 'Not dispatched',
+    notApplicable: 'NA',
+  },
+
+  /** Statutory identifiers on the buyer's vendor profile. They come from the supplier's own registration and are read-only here. */
+  vendorStatutory: {
+    viewHeading: 'Statutory & Financial Registration',
+    editHeading: '3. Statutory & Commercial Identifiers',
+    lockedBadge: 'Locked',
+    lockedNote: 'Set from the supplier registration. Buyers can view these details but cannot change them.',
+    gstLabel: 'GSTIN:',
+    panLabel: 'PAN:',
+    msmeLabel: 'MSME / UDYAM:',
+    turnoverLabel: 'Turnover:',
+    editGstLabel: 'GSTIN Number',
+    editPanLabel: 'PAN Card Number',
+    editMsmeLabel: 'MSME / UDYAM Reg. Number',
+    editTurnoverLabel: 'Annual Turnover',
   },
 
   /** Buyer evaluation summary (Screen 2.3). Scores, remarks and contact values come only from the evaluation record or the supplier record. */
@@ -3217,9 +3192,11 @@ sellerDirectory: {
     requestFailedFallback: 'Failed to send evaluation request. Please try again.',
     unreachableFallback: 'Could not reach the server. Please try again.',
     vendorNotFoundTitle: 'Vendor Not Found',
-    vendorNotFoundBody: 'Could not locate the requested vendor in your directory.',
+    vendorNotFoundBody: 'Could not locate the requested vendor in your directory. Refresh the supplier list and try again.',
     existingTitle: 'Saved Evaluation Found',
     existingBody: 'A saved evaluation for {vendorName} already exists. It is shown now, and no new evaluation request was sent.',
+    requestedLabel: 'Evaluation requested',
+    requestedOnLabel: 'Evaluation requested {date}',
   },
 
   addVendorModal: {
@@ -3244,6 +3221,18 @@ sellerDirectory: {
     selectCategory: 'Select category',
   },
 
+  /** The category search field in the RFQ line item tables. It lists the categories of the chosen division. */
+  categorySearch: {
+    searchPlaceholder: 'Search category…',
+    noMatches: 'No matching categories.',
+    countAll: '{total} categories',
+    countMatching: '{total} matching categories',
+    countShowingAll: 'Showing {shown} of {total} categories. Keep typing to narrow the list.',
+    countShowingMatches: 'Showing {shown} of {total} matching categories. Keep typing to narrow the list.',
+    clearAria: 'Clear category',
+    notRequired: 'Not required',
+  },
+
   /** Shared modals in app/components/Modals.tsx. Each value comes from the server, or it shows one of the placeholders above. */
   modals: {
     purchaseOrder: {
@@ -3265,6 +3254,8 @@ sellerDirectory: {
     },
     followUp: {
       escalationQueued: 'Follow-up escalation queue',
+      nextFollowUpLabel: 'Next follow-up:',
+      businessHoursNote: 'Counted in business hours only, 10:00 AM to 6:00 PM IST.',
     },
     subscriptionPayment: {
       gstLabel: 'GST',
