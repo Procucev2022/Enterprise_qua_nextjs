@@ -527,6 +527,17 @@ async function confirmVendorMaster(sessionUser, sessionId, { rows, fileName, rep
     currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
   });
 
+  if (totalStored > 0) {
+    const firstUpload = await queries.markVendorMasterUploaded(context.organizationId);
+    if (firstUpload) {
+      logger.info(
+        'Organization vendor master upload recorded for the first time',
+        { sessionId, organizationId: context.organizationId, totalStored },
+        LOG_CATEGORY
+      );
+    }
+  }
+
   await recordAudit(context, {
     sessionId,
     action: VENDOR_INGESTION_AUDIT_ACTION.VENDOR_MASTER_UPLOADED,

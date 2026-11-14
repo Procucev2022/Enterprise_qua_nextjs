@@ -2095,6 +2095,11 @@ export interface UserSession {
   mobile?: string;
   passwordChangeRequired?: boolean;
   onboardingRequired?: boolean;
+  /**
+   * Buyers only. True once the buyer's organization has stored its vendor master.
+   * The sign-in page opens the initial setup popup only while this is false.
+   */
+  vendorMasterUploaded?: boolean;
   authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
 }
 

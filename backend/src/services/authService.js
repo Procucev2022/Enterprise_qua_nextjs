@@ -395,6 +395,10 @@ function toPublicUser(user) {
   if (onboardingReq) {
     result.onboardingRequired = true;
   }
+  // The sign-in page opens the buyer initial setup popup only while this is false.
+  if (user.role === 'buyer') {
+    result.vendorMasterUploaded = user.vendorMasterUploaded === true;
+  }
   return result;
 }
 

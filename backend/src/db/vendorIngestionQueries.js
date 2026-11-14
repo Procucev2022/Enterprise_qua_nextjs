@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const pool = require('./pool');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
 const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_AI_STATUS,
@@ -718,6 +719,30 @@ async function deleteVendorMasterRecords(sessionId, organizationId) {
     { d1: true }
   );
   return result.rowCount || 0;
+}
+
+/**
+ * Stamp the organization's first vendor master upload.
+ *
+ * The `is null` guard means only the first call writes. Later uploads keep the original timestamp, so the
+ * buyer initial setup popup does not return. Resolves true on the call that set the timestamp.
+ *
+ * The sign-in user row joins this column (identityQueries USER_SELECT), and those rows are cached under the
+ * `user` tag. pool.query clears only the tag named after the written table, so the `user` tag is cleared
+ * here. Otherwise a buyer who signs in again within the cache TTL would read the unset value and see the
+ * popup again.
+ */
+async function markVendorMasterUploaded(organizationId, uploadedAt = new Date().toISOString()) {
+  if (!pool.hasStorage() || !organizationId) return false;
+  const result = await pool.query(
+    `update organization
+        set vendor_master_uploaded_at = $1
+      where uuid = $2 and vendor_master_uploaded_at is null`,
+    [uploadedAt, organizationId],
+    { d1: true }
+  );
+  queryCache.invalidate('user');
+  return (result.rowCount || 0) > 0;
 }
 
 // ------------------------------------------------------------------------------
@@ -2248,6 +2273,7 @@ module.exports = {
   findVendorMasterRecord,
   countVendorMasterRecords,
   deleteVendorMasterRecords,
+  markVendorMasterUploaded,
   // po data
   bulkInsertPoLineItems,
   countPoLineItems,

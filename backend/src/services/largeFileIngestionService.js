@@ -556,6 +556,22 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
 }
 
 /**
+ * Stamp the organization's first vendor master upload once a VENDOR_MASTER job has stored rows.
+ * A job that stored nothing does not count, so the buyer stays in setup until a usable file lands.
+ */
+async function recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored }) {
+  if (totalStored <= 0) return;
+  const firstUpload = await queries.markVendorMasterUploaded(organizationId);
+  if (firstUpload) {
+    logger.info(
+      'Organization vendor master upload recorded for the first time',
+      { jobId, sessionId, organizationId, totalStored },
+      LOG_CATEGORY
+    );
+  }
+}
+
+/**
  * Execute background streaming ingestion of a CSV or TXT file
  */
 async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, fileName, jobType, batchSize = DEFAULT_BATCH_SIZE }) {
@@ -703,6 +719,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
               : session.status,
           currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
         });
+        await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
       } else {
         const counts = await queries.countPoLineItems(sessionId, organizationId);
         await queries.updateSession(sessionId, organizationId, {
@@ -813,6 +830,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
             : session.status,
         currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
       });
+      await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
     } else {
       const counts = await queries.countPoLineItems(sessionId, organizationId);
       await queries.updateSession(sessionId, organizationId, {

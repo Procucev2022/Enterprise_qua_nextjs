@@ -5817,3 +5817,9 @@ If the RFQ is created before 10:00 AM, start the countdown at 10:00 AM on the sa
 UI change only, rename Major Category to Division and Minor Category to Category. Apart from the minor Category dropdown and implement a search-based input: showing matching categories.
 ```
 ---
+### Prompt 209
+**Timestamp**: 2026-11-14T08:30:02+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Buyer Initial Setup modal was attached.)
+```text
+Currently, the popup appears on every login. Please fix the condition: show this page only until the buyer uploads their own vendor for the first time. Once the buyer successfully uploads their vendor, never show this popup again on future logins .
+```
+---

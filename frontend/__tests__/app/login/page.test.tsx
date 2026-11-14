@@ -233,6 +233,25 @@ describe('LoginPage', () => {
       expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
     });
 
+    it('does not open the initial setup popup once the buyer organization has uploaded its vendor master', async () => {
+      (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: true },
+        token: 'jwt',
+      });
+
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
+      typeInto(/^Password$/i, 'Pass@123');
+      fireEvent.click(submitButton(/Sign In/i));
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+      });
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
+    });
+
     it('sanitizes legacy /buyer/rfqs redirect to /buyer/rfq-summary', async () => {
       mockSearchParams = new URLSearchParams('redirect=/buyer/rfqs');
 
@@ -484,6 +503,67 @@ describe('LoginPage', () => {
         );
       });
       expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+    });
+
+    const signInWithOtp = async () => {
+      render(<LoginPage />);
+      switchToOtp();
+      fillOtpIdentity();
+      fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
+      await waitFor(() => {
+        expect(authClient.requestOtp).toHaveBeenCalledWith(BUYER_SESSION.email, LOGIN_MOBILE);
+      });
+      typeInto(/Email Verification Code \(OTP\)/i, OTP_CODE);
+      fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
+    };
+
+    it('opens the initial setup popup on OTP sign-in for a buyer whose organization has not uploaded yet', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.verifyOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: false },
+        token: 'jwt',
+      });
+
+      await signInWithOtp();
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+      });
+      expect(setInitialSetupModalOpen).toHaveBeenCalledWith(true);
+    });
+
+    it('does not open the initial setup popup on OTP sign-in once the vendor master is uploaded', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.verifyOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: true },
+        token: 'jwt',
+      });
+
+      await signInWithOtp();
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+      });
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
+    });
+
+    it('does not open the initial setup popup on OTP sign-in that returns to a redirect target', async () => {
+      mockSearchParams = new URLSearchParams('redirect=/buyer/rfq-summary');
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.verifyOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        user: { ...BUYER_SESSION, vendorMasterUploaded: false },
+        token: 'jwt',
+      });
+
+      await signInWithOtp();
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith('/buyer/rfq-summary');
+      });
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
     });
 
     it('accepts a code of exactly the configured length', () => {
