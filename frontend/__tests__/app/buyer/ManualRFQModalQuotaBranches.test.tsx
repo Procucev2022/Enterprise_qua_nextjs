@@ -5,6 +5,7 @@ import * as rfqClient from '@/lib/rfqClient';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type { RFQItem, SourcingMode, VendorEntry } from '@/lib/types';
 
 jest.mock('next/navigation', () => ({
@@ -122,7 +123,7 @@ function fillRow() {
     target: { value: 'Centrifugal Water Pump' },
   });
   fireEvent.change(within(row).getByLabelText(MODAL.colMajor), { target: { value: HOME_CATEGORY.majorCategory } });
-  fireEvent.change(within(row).getByLabelText(MODAL.colMinor), { target: { value: HOME_CATEGORY.minorCategories[0] } });
+  chooseCategory(within(row).getByLabelText(MODAL.colMinor), HOME_CATEGORY.minorCategories[0]);
   fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), { target: { value: 'SS316 impeller, 2 HP' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
@@ -152,6 +153,8 @@ beforeEach(() => {
   jest.resetAllMocks();
   setCategoryTaxonomy(categoriesData);
   createRFQ.mockResolvedValue({ success: true, rfq: savedRFQ() });
+  // Choosing a category starts a vendor lookup. Its result is read on a timer, so it must always resolve.
+  (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({ success: true, candidates: [] });
 });
 
 describe('ManualRFQModal: quota and plan come only from the store', () => {

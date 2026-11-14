@@ -5811,3 +5811,9 @@ If the RFQ is created after 6:00 PM, start the countdown at 10:00 AM the next da
 If the RFQ is created before 10:00 AM, start the countdown at 10:00 AM on the same day.
 ```
 ---
+### Prompt 208
+**Timestamp**: 2026-11-14T08:00:37+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Line Items Specification table was attached.)
+```text
+UI change only, rename Major Category to Division and Minor Category to Category. Apart from the minor Category dropdown and implement a search-based input: showing matching categories.
+```
+---

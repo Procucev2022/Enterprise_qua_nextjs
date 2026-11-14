@@ -13,6 +13,7 @@ import {
 } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type { ExtractedEntity, RFQExtractionResult, RFQItem, SourcingMode } from '@/lib/types';
 
 const mockPush = jest.fn();
@@ -155,7 +156,7 @@ function completeRFQFields() {
     if (!major.value) fireEvent.change(major, { target: { value: FIXTURE_MAJOR } });
   });
   (screen.queryAllByLabelText(MODAL.colMinor) as HTMLSelectElement[]).forEach((minor) => {
-    if (!minor.value && !minor.disabled) fireEvent.change(minor, { target: { value: FIXTURE_MINOR } });
+    if (!minor.value && !minor.disabled) chooseCategory(minor, FIXTURE_MINOR);
   });
 }
 
@@ -392,7 +393,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
 
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
       target: { value: '10' },
@@ -638,7 +639,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
       target: { value: '50' },
     });
@@ -855,7 +856,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '5' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
@@ -884,7 +885,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '3' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'MT' } });
 
@@ -921,7 +922,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '20' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Rolls' } });
 
@@ -1029,7 +1030,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
@@ -1083,7 +1084,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
-    fireEvent.change(minorSelect, { target: { value: 'Abrasives' } });
+    chooseCategory(minorSelect, 'Abrasives');
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
@@ -1169,7 +1170,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
-    fireEvent.change(minorSelect, { target: { value: 'Abrasives' } });
+    chooseCategory(minorSelect, 'Abrasives');
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
@@ -1940,7 +1941,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '5' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
@@ -1970,7 +1971,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     });
     const [maj2, min2] = within(row2).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(maj2, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(min2, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(min2, categoriesData[0].minorCategories[0]);
     fireEvent.change(within(row2).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row2).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'MT' } });
 
@@ -2304,7 +2305,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), { target: { value: 'Hydraulic Cylinder' } });
     const [maj, min] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
     fireEvent.change(maj, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(min, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(min, categoriesData[0].minorCategories[0]);
 
     // When already categorized, clicking Auto-Categorize shows info toast without calling API
     const autoCatBtn = screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i });

@@ -703,13 +703,13 @@ sellerDirectory: {
     specsRequired: 'Describe the specification, such as material, size or standard. Vendors quote against it.',
     quantityRequired: 'Enter a quantity above zero.',
     unitRequired: 'Enter a unit, for example Nos, Kg or Mtr.',
-    majorCategoryRequired: 'Choose a major category so the RFQ routes to the right vendors.',
-    majorCategoryUnknown: 'The selected major category is not in the category master. Choose one from the list.',
-    minorCategoryRequired: 'Choose a minor category under the selected major category.',
+    majorCategoryRequired: 'Choose a division so the RFQ routes to the right vendors.',
+    majorCategoryUnknown: 'The selected division is not in the category master. Choose one from the list.',
+    minorCategoryRequired: 'Choose a category under the selected division.',
     minorCategoryNotUnderMajor:
-      'The selected minor category does not belong to the selected major category. Choose a minor category under that major category.',
-    minorWithoutMajor: 'A minor category needs a major category. Choose a major category first, or clear the minor category.',
-    minorNotApplicable: 'A minor category does not apply to All Categories. Clear the minor category to continue.',
+      'The selected category does not belong to the selected division. Choose a category under that division.',
+    minorWithoutMajor: 'A category needs a division. Choose a division first, or clear the category.',
+    minorNotApplicable: 'A category does not apply to All Categories. Clear the category to continue.',
 
     // Header
     titleRequired: 'Enter an RFQ title. It is the first thing vendors read about this requirement.',
@@ -755,11 +755,12 @@ sellerDirectory: {
 
     lineItemsHeading: 'Line Items ({count})',
     addItemAction: 'Add Line Item',
+    autoCategorizeTitle: 'Auto-identify and assign divisions and categories for all items',
     noItemsMessage: 'No line items yet. Add at least one so vendors have something to quote against.',
     colItem: 'Item Description',
     colSpecs: 'Specification',
-    colMajor: 'Major Category',
-    colMinor: 'Minor Category',
+    colMajor: 'Division',
+    colMinor: 'Category',
     colQty: 'Quantity',
     colUnit: 'Unit',
     colTargetDate: 'Target Date',
@@ -823,7 +824,7 @@ sellerDirectory: {
     successToast: '{accepted} line items extracted from {fileName}.',
     fallbackTitle: 'Line Items Could Not Be Read',
     errorDetailLabel: 'Exact reason (for debugging):',
-    fallbackHint: 'Add each line item below, assign its minor category, then continue to sourcing.',
+    fallbackHint: 'Add each line item below, assign its category, then continue to sourcing.',
     unreadableResponse:
       'The extraction service returned an unexpected response. Add the line items manually to continue.',
 
@@ -871,8 +872,8 @@ sellerDirectory: {
     itemSpecsPlaceholder: 'Material grade, standard, class or rating',
     itemQtyPlaceholder: 'Qty',
     itemUnitPlaceholder: 'e.g. Nos',
-    categoryPlaceholder: 'Select major category',
-    minorCategoryPlaceholder: 'Select minor category',
+    categoryPlaceholder: 'Select division',
+    minorCategoryPlaceholder: 'Select category',
     confidenceUnset: '—',
 
     // Step 2 empty state
@@ -948,9 +949,9 @@ sellerDirectory: {
       },
       {
         number: 2,
-        label: 'STEP 2: MINOR CATEGORIZATION',
+        label: 'STEP 2: CATEGORIZATION',
         tag: 'Taxonomy Mapping',
-        hint: 'Classify into 280+ Minor Categories',
+        hint: 'Classify into 280+ Categories',
       },
       {
         number: 3,
@@ -965,11 +966,11 @@ sellerDirectory: {
     classifyingLabel: 'Re-categorizing line items…',
     classifyEmptyTitle: 'Nothing to Categorize',
     classifyEmptyMessage: 'Add at least one line item with a description first.',
-    classifySuccessTitle: 'Minor Categories Updated',
+    classifySuccessTitle: 'Categories Updated',
     classifySuccessMessage:
       '{accepted} line items re-categorized against the shared taxonomy. {needsReview} could not be matched and kept the default category.',
     classifyFailed:
-      'Categories could not be refreshed just now. Set the major and minor category on each line item manually, or try again.',
+      'Categories could not be refreshed just now. Set the division and category on each line item manually, or try again.',
 
     // Step strip gating
     stepLockedTitle: 'Finish the Current Step First',
@@ -981,7 +982,7 @@ sellerDirectory: {
     // Step 1 manual intake
     manualMethodLabel: 'Manual RFQ Entry',
     manualStartAction: 'Add Manual RFQ',
-    manualHint: 'You will add each line item and its minor category in Step 2.',
+    manualHint: 'You will add each line item and its category in Step 2.',
     // The Manual tab now opens a dialog rather than routing through the review
     // step, so the tab itself just explains the path and offers the way in.
     manualPanelTitle: 'Enter RFQ Details Manually',
@@ -1055,7 +1056,7 @@ sellerDirectory: {
 
     // Commercial & logistics
     commercialHeading: 'Commercial & Delivery',
-    categoryLabel: 'Major Category',
+    categoryLabel: 'Division',
     budgetLabel: 'Estimated Budget',
     targetDateLabel: 'Target Delivery',
     statusLabel: 'Current Status',
@@ -1071,15 +1072,15 @@ sellerDirectory: {
     lineItemsSubtitle: 'Package requirement specification',
     lineItemSearchPlaceholder: 'Search line items…',
     lineItemSearchAria: 'Search the line items of this RFQ',
-    allMinorCategories: 'All Minor Categories',
-    minorFilterAria: 'Filter line items by minor category',
+    allMinorCategories: 'All Categories',
+    minorFilterAria: 'Filter line items by category',
     exportCsvAction: 'Export CSV',
     exportCsvAria: 'Download the line items of {rfqNumber} as CSV',
     colIndex: '#',
     colItem: 'Item Description',
     colSpecs: 'Technical Specification',
-    colMajor: 'Major Category',
-    colMinor: 'Minor Category',
+    colMajor: 'Division',
+    colMinor: 'Category',
     colCategory: 'Category',
     colQty: 'Qty',
     colUnit: 'Unit',
@@ -1508,7 +1509,7 @@ sellerDirectory: {
     dialogSubtitle:
       'Change the title, terms, line items and documents of {rfqNumber}. Only what you change is sent.',
     titleLabel: 'RFQ Title',
-    categoryLabel: 'RFQ Major Category',
+    categoryLabel: 'RFQ Division',
     statusLabel: 'Status',
     budgetLabel: 'Estimated Budget ({symbol})',
     targetDateLabel: 'Target Delivery Date',
@@ -1532,21 +1533,22 @@ sellerDirectory: {
 
     // Line items
     addItemAction: 'Add Line Item',
+    autoCategorizeTitle: 'Auto-identify and assign divisions and categories for all items',
     removeItemAria: 'Remove line item {item}',
     untitledItem: 'this row',
     noItemsMessage: 'This RFQ has no line items. Add at least one before saving.',
     colItem: 'Item Description',
     colSpecs: 'Technical Specification',
-    colMajor: 'Major Category',
-    colMinor: 'Minor Category',
+    colMajor: 'Division',
+    colMinor: 'Category',
     colQty: 'Qty',
     colUnit: 'Unit',
     colTargetDate: 'Required By',
-    selectMajorFirst: 'Select a major category first',
+    selectMajorFirst: 'Select a division first',
     itemNameRequired: 'Every line item needs a description.',
     quantityRequired: 'Every line item needs a quantity above zero.',
     unitRequired: 'Every line item needs a unit.',
-    majorCategoryRequired: 'Every line item needs a major category.',
+    majorCategoryRequired: 'Every line item needs a division.',
     lineItemsRequired: 'An RFQ needs at least one line item.',
     lineItemErrorSummary: 'Row {row}: {message}',
 
@@ -1566,7 +1568,7 @@ sellerDirectory: {
     // Validation. Same rules as creation, so an edit cannot introduce a value that
     // could not have been created.
     titleRequired: 'RFQ Title is required and must be at least 3 characters.',
-    categoryRequired: 'Major Category is required.',
+    categoryRequired: 'Division is required.',
     budgetNegative: 'Estimated Budget cannot be negative. Leave it blank if no ceiling is set.',
     deliveryLocationRequired: 'Delivery Location is required so vendors can price freight.',
     deliveryPincodeRequired: 'PIN / ZIP Code is required so vendors can price freight.',
@@ -1594,7 +1596,7 @@ sellerDirectory: {
     deleteFailedTitle: 'RFQ Not Deleted',
     deleteFailed: 'The RFQ could not be deleted. Try again, and if it persists the API may be unavailable.',
     classifyFailed:
-      'Categories could not be refreshed just now. Set the major and minor category on each line item manually, or try again.',
+      'Categories could not be refreshed just now. Set the division and category on each line item manually, or try again.',
   },
 
   vendorFeed: {
@@ -3210,6 +3212,18 @@ sellerDirectory: {
     masterCountBadge: '305+ in Master',
     addCustomTag: 'Add as custom category tag',
     selectCategory: 'Select category',
+  },
+
+  /** The category search field in the RFQ line item tables. It lists the categories of the chosen division. */
+  categorySearch: {
+    searchPlaceholder: 'Search category…',
+    noMatches: 'No matching categories.',
+    countAll: '{total} categories',
+    countMatching: '{total} matching categories',
+    countShowingAll: 'Showing {shown} of {total} categories. Keep typing to narrow the list.',
+    countShowingMatches: 'Showing {shown} of {total} matching categories. Keep typing to narrow the list.',
+    clearAria: 'Clear category',
+    notRequired: 'Not required',
   },
 
   /** Shared modals in app/components/Modals.tsx. Each value comes from the server, or it shows one of the placeholders above. */

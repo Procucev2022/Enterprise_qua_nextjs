@@ -6,6 +6,7 @@ import { buildExtractionRequest } from '@/lib/documentExtraction';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type { ExtractedEntity, RFQAttachment, RFQExtractionResult, RFQItem, SourcingMode } from '@/lib/types';
 
 const mockPush = jest.fn();
@@ -199,9 +200,7 @@ function fillRow() {
   fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
     target: { value: HOME_CATEGORY.majorCategory },
   });
-  fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-    target: { value: HOME_CATEGORY.minorCategories[0] },
-  });
+  chooseCategory(within(row).getByLabelText(MODAL.colMinor), HOME_CATEGORY.minorCategories[0]);
   fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), { target: { value: 'SS316 impeller, 2 HP' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });

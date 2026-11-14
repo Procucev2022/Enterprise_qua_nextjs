@@ -3,6 +3,7 @@ import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type {
   ExtractedEntity,
   RFQAttachment,
@@ -124,9 +125,7 @@ function fillRow() {
   fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
     target: { value: categoriesData[0].majorCategory },
   });
-  fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-    target: { value: categoriesData[0].minorCategories[0] },
-  });
+  chooseCategory(within(row).getByLabelText(MODAL.colMinor), categoriesData[0].minorCategories[0]);
   fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
     target: { value: 'SS316 impeller, 2 HP' },
   });
@@ -334,7 +333,7 @@ describe('ManualRFQModal: line items', () => {
     const minor = within(row).getByLabelText(MODAL.colMinor) as HTMLSelectElement;
 
     fireEvent.change(major, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minor, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minor, categoriesData[0].minorCategories[0]);
     expect(minor.value).toBe(categoriesData[0].minorCategories[0]);
 
     fireEvent.change(major, { target: { value: categoriesData[1].majorCategory } });
@@ -1095,9 +1094,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
         target: { value: testMajor },
       });
-      fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-        target: { value: testMinor },
-      });
+      chooseCategory(within(row).getByLabelText(MODAL.colMinor), testMinor);
 
       // Select Mode 2
       const mode2Checkbox = screen.getByLabelText(/(Mode 2|Version 2)/i);
@@ -2271,7 +2268,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       const majorSelect = within(row).getByLabelText(MODAL.colMajor);
       fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
       const minorSelect = within(row).getByLabelText(MODAL.colMinor);
-      fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+      chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
       fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
 
       // Document extraction with a custom category not in taxonomy

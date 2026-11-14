@@ -2,8 +2,9 @@ import React from 'react';
 import { act, render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
 import { RFQDeleteDialog, RFQEditModal, changedFields, toFormState, validateRFQEdit } from '@/app/buyer/RFQEditModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { formatIndianDateTime } from '@/lib/constants';
+import { CATEGORY_SEARCH_RESULT_LIMIT, formatIndianDateTime } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type { ExtractedEntity, RFQAttachment, RFQEditFormState, RFQItem } from '@/lib/types';
 import * as validationSchemas from '@/lib/validationSchemas';
 
@@ -647,7 +648,7 @@ describe('RFQEditModal: line items', () => {
     renderEdit(buildRFQ({ extractedEntities: [entity({ majorCategory: '', minorCategory: '' })] }));
 
     expect(within(firstRow()).getByLabelText(EDIT.colMinor)).toBeDisabled();
-    expect(screen.getByText(EDIT.selectMajorFirst)).toBeInTheDocument();
+    expect(within(firstRow()).getByLabelText(EDIT.colMinor)).toHaveAttribute('placeholder', EDIT.selectMajorFirst);
 
     fireEvent.change(within(firstRow()).getByLabelText(EDIT.colMajor), { target: { value: MAJOR } });
     expect(within(firstRow()).getByLabelText(EDIT.colMinor)).toBeEnabled();
@@ -667,9 +668,10 @@ describe('RFQEditModal: line items', () => {
   it('offers only the minors belonging to the chosen major', () => {
     renderEdit();
 
-    const minor = within(firstRow()).getByLabelText(EDIT.colMinor) as HTMLSelectElement;
-    const offered = Array.from(minor.options).map((o) => o.value).filter(Boolean);
-    expect(offered).toEqual(categoriesData[0].minorCategories);
+    fireEvent.click(within(firstRow()).getByLabelText(EDIT.colMinor));
+    const listbox = screen.getByRole('listbox', { name: EDIT.colMinor });
+    const offered = within(listbox).getAllByRole('option').map((option) => option.textContent);
+    expect(offered).toEqual(categoriesData[0].minorCategories.slice(0, CATEGORY_SEARCH_RESULT_LIMIT));
   });
 
   // ── Off-taxonomy categories on a stored row ────────────────────────────────
@@ -720,7 +722,7 @@ describe('RFQEditModal: line items', () => {
       renderEdit(offTaxonomy());
 
       fireEvent.change(within(firstRow()).getByLabelText(EDIT.colMajor), { target: { value: MAJOR } });
-      fireEvent.change(within(firstRow()).getByLabelText(EDIT.colMinor), { target: { value: MINOR } });
+      chooseCategory(within(firstRow()).getByLabelText(EDIT.colMinor), MINOR);
       clickSave();
 
       await waitFor(() => expect(onSave).toHaveBeenCalled());

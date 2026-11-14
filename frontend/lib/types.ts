@@ -199,6 +199,29 @@ export interface RFQNextFollowUpTimes {
   email: string | null;
 }
 
+/** The categories a category search matched. `shown` is capped at the result limit, and `total` counts every match. */
+export interface CategorySearchResult {
+  shown: string[];
+  total: number;
+}
+
+/** Props for the category search field in the RFQ line item tables. */
+export interface CategorySearchInputProps {
+  /** Accessible name of the field, for example "Category". */
+  label: string;
+  /** Every category the field can choose from, in display order. */
+  options: string[];
+  /** The chosen category, or '' when none is chosen. */
+  value: string;
+  /** Called with the chosen category, or with '' when the choice is cleared. */
+  onChange: (category: string) => void;
+  /** Shown while the field is empty and no category is chosen. */
+  placeholder: string;
+  disabled?: boolean;
+  required?: boolean;
+  invalid?: boolean;
+}
+
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry' | 'ai_extraction';
 
 // ==============================================================================

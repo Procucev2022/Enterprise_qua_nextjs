@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import BuyerProfilePage from '@/app/buyer/buyer-profile';
 import RFQDetails from '@/app/buyer/rfq-details';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
@@ -9,6 +9,8 @@ import { authClient } from '@/lib/authClient';
 import * as rfqClientModule from '@/lib/rfqClient';
 import * as buyerProfileClientModule from '@/lib/buyerProfileClient';
 import type { RFQItem, VendorOpportunity, BuyerProfile } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import { chooseCategory } from '../test-fixtures/categorySearch';
 
 jest.mock('@/lib/store');
 jest.mock('@/lib/authClient', () => ({
@@ -359,7 +361,7 @@ describe('Frontend Deep Coverage Booster Test Suite', () => {
     if (dateInput) fireEvent.change(dateInput, { target: { value: '2099-12-01' } });
 
     // Fill in all line item rows
-    const rows = document.querySelectorAll('tr[data-testid^="manual-row-"]');
+    const rows = document.querySelectorAll<HTMLElement>('tr[data-testid^="manual-row-"]');
     rows.forEach((row, idx) => {
       const inputs = row.querySelectorAll('input');
       const selects = row.querySelectorAll('select');
@@ -367,9 +369,10 @@ describe('Frontend Deep Coverage Booster Test Suite', () => {
       if (inputs.length > 0) fireEvent.change(inputs[0], { target: { value: `Submersible Pump Item ${idx + 1}` } });
       if (inputs.length > 1) fireEvent.change(inputs[1], { target: { value: 'SS316 impeller, 2 HP' } });
       if (selects.length > 0) fireEvent.change(selects[0], { target: { value: 'Engineering Spares - Mechanical' } });
-      if (selects.length > 1) fireEvent.change(selects[1], { target: { value: 'Pumps & Accessories' } });
-      if (inputs.length > 2) fireEvent.change(inputs[2], { target: { value: '5' } });
-      if (inputs.length > 3) fireEvent.change(inputs[3], { target: { value: 'Nos' } });
+      chooseCategory(within(row).getByRole('combobox', { name: UI_STRINGS.manualRfqModal.colMinor }), 'Pumps & Accessories');
+      // The category field is an input too, so quantity and unit come after it.
+      if (inputs.length > 3) fireEvent.change(inputs[3], { target: { value: '5' } });
+      if (inputs.length > 4) fireEvent.change(inputs[4], { target: { value: 'Nos' } });
     });
 
     (rfqClientModule.createRFQ as jest.Mock).mockResolvedValue({

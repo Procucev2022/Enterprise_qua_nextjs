@@ -1917,7 +1917,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <div className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-gray-950/50 border border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
-                    MAJOR CATEGORY
+                    {DETAILS.colMajor}
                   </div>
                   <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-full">
                     {v.majorCategory || 'General'}
@@ -1925,7 +1925,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
-                    MINOR CATEGORY
+                    {DETAILS.colMinor}
                   </div>
                   <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60 truncate max-w-full">
                     {v.minorCategory || 'General'}
@@ -1986,7 +1986,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <div className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-gray-950/50 border border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
-                    MAJOR CATEGORY
+                    {DETAILS.colMajor}
                   </div>
                   <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-full">
                     {v.majorCategory || 'General Industrial'}
@@ -1994,7 +1994,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
-                    MINOR CATEGORY
+                    {DETAILS.colMinor}
                   </div>
                   <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60 truncate max-w-full">
                     {v.minorCategory || 'General'}

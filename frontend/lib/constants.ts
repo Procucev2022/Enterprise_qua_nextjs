@@ -1756,3 +1756,9 @@ export const DEFAULT_APPROVAL_COLUMNS: Array<{
   { key: 'actions', label: 'Actions', visible: true, locked: true, order: 9 },
 ];
 
+
+/**
+ * The most category matches the RFQ line item category search lists at once. Typing narrows the list,
+ * so the keyboard never has to scroll past this many options.
+ */
+export const CATEGORY_SEARCH_RESULT_LIMIT = 10;

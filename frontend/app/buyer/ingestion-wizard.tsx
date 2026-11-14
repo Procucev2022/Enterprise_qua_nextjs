@@ -44,6 +44,7 @@ import {
 } from '@/lib/vendorMatching';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
 import RequiredMarker from '@/app/components/RequiredMarker';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -119,6 +120,13 @@ function withStoredValue(options: string[], value: string): string[] {
   const trimmed = (value || '').trim();
   if (trimmed === '' || options.some((o) => o.toLowerCase() === trimmed.toLowerCase())) return options;
   return [trimmed, ...options];
+}
+
+/** Placeholder for a line item's category field: not needed for All Categories, and waits for a division otherwise. */
+function categoryFieldPlaceholder(major: string): string {
+  if (major === ALL_CATEGORIES_OPTION) return UI_STRINGS.categorySearch.notRequired;
+  if (!major) return MODAL.selectPlaceholder;
+  return UI_STRINGS.categorySearch.searchPlaceholder;
 }
 
 /**
@@ -1851,28 +1859,17 @@ export default function IngestionWizard({
                         <FieldError message={errors.majorCategory} />
                       </td>
 
-                      {/* Minor Category */}
+                      {/* Category: a search field that lists the matching categories of the chosen division */}
                       <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMinor}
-                          aria-invalid={!!errors.minorCategory}
+                        <CategorySearchInput
+                          label={MODAL.colMinor}
+                          invalid={!!errors.minorCategory}
                           value={item.minorCategory}
-                          disabled={
-                            !item.majorCategory ||
-                            item.majorCategory === ALL_CATEGORIES_OPTION
-                          }
-                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">
-                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
-                          </option>
-                          {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
-                            <option key={minor} value={minor}>
-                              {minor}
-                            </option>
-                          ))}
-                        </select>
+                          options={withStoredValue(minorsFor(item.majorCategory), item.minorCategory)}
+                          onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
+                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
+                          placeholder={categoryFieldPlaceholder(item.majorCategory)}
+                        />
                         <FieldError message={errors.minorCategory} />
                       </td>
 

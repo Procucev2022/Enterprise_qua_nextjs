@@ -49,6 +49,7 @@ import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVen
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
 import RequiredMarker from '@/app/components/RequiredMarker';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import {
   addManualRFQLineItem,
   createEmptyManualRFQForm,
@@ -1173,7 +1174,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   onClick={handleAutoCategorizeAll}
                   disabled={isCategorizing || form.lineItems.length === 0}
                   className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
-                  title="Auto-identify and assign major/minor categories for all items"
+                  title={MODAL.autoCategorizeTitle}
                 >
                   {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                   {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
@@ -1260,22 +1261,16 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <FieldError message={errors.majorCategory} />
                           </td>
                           <td className="px-2 py-2 align-top">
-                            <select
-                              aria-label={MODAL.colMinor}
-                              aria-required
-                              aria-invalid={!!errors.minorCategory}
+                            <CategorySearchInput
+                              label={MODAL.colMinor}
+                              required
+                              invalid={!!errors.minorCategory}
                               value={item.minorCategory}
+                              options={minorsFor(item.majorCategory)}
+                              onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
                               disabled={!item.majorCategory}
-                              onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                              className="w-44 disabled:opacity-50"
-                            >
-                              <option value="">{MODAL.selectPlaceholder}</option>
-                              {minorsFor(item.majorCategory).map((minor) => (
-                                <option key={minor} value={minor}>
-                                  {minor}
-                                </option>
-                              ))}
-                            </select>
+                              placeholder={item.majorCategory ? UI_STRINGS.categorySearch.searchPlaceholder : MODAL.selectPlaceholder}
+                            />
                             <FieldError message={errors.minorCategory} />
                           </td>
                           <td className="px-2 py-2 align-top">

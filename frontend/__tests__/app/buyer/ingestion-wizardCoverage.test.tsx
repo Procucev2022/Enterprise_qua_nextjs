@@ -13,6 +13,7 @@ import {
 } from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type {
   ExtractedEntity,
   RFQIngestionResponse,
@@ -254,7 +255,7 @@ function fillLineItem(index: number, fields: LineItemFields) {
   };
   set(within(row).getByPlaceholderText(MODAL.itemPlaceholder), fields.name);
   set(within(row).getByLabelText(MODAL.colMajor), fields.major);
-  set(within(row).getByLabelText(MODAL.colMinor), fields.minor);
+  if (fields.minor !== undefined) chooseCategory(within(row).getByLabelText(MODAL.colMinor), fields.minor);
   set(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), fields.quantity);
   set(within(row).getByPlaceholderText(MODAL.specsPlaceholder), fields.specs);
   set(within(row).getByPlaceholderText(MODAL.unitPlaceholder), fields.unit);
