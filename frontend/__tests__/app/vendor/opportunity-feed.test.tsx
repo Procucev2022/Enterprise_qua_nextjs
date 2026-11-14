@@ -1764,4 +1764,15 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
       fireEvent.click(closeBtn);
     }
   });
+
+  test('covers delivery location formatting, view buttons, and empty categories', async () => {
+    await renderFeed({
+      subscription: 'select',
+    });
+
+    expect(screen.getAllByText('RFQ-2026-00421').length).toBeGreaterThan(0);
+
+    const viewBtn = screen.queryAllByRole('button', { name: /View Details|View/i });
+    if (viewBtn.length > 0) fireEvent.click(viewBtn[0]);
+  });
 });

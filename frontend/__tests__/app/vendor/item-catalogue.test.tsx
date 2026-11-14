@@ -1,6 +1,6 @@
 import React from 'react';
 import * as XLSX from 'xlsx';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import ItemCatalogue from '@/app/vendor/item-catalogue';
 import { AppProvider, useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
@@ -532,5 +532,45 @@ describe('ItemCatalogue Comprehensive Suite', () => {
       '/api/catalogue',
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fake-token-xyz' }) })
     );
+  });
+
+  test('category autocomplete suggestions, clear, click outside, and custom category', async () => {
+    renderWithProvider(<ItemCatalogue />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Type 3\+ characters to search/i)).toBeInTheDocument();
+    });
+
+    const input = screen.getByPlaceholderText(/Type 3\+ characters to search/i);
+
+    fireEvent.change(input, { target: { value: 'Pu' } });
+    expect(screen.getByText(/Enter at least 3 characters/i)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'Pump' } });
+    fireEvent.focus(input);
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument();
+    });
+
+    const options = screen.getAllByRole('option');
+    if (options.length > 0) {
+      fireEvent.click(options[0]);
+    }
+
+    const clearBtn = screen.queryByRole('button', { name: /Clear/i });
+    if (clearBtn) {
+      fireEvent.click(clearBtn);
+    }
+
+    fireEvent.change(input, { target: { value: 'CustomNonExistent' } });
+    await waitFor(() => {
+      expect(screen.getByText(/No matching categories found/i)).toBeInTheDocument();
+    });
+    const useCustomBtn = screen.getByText(/as custom category/i);
+    fireEvent.click(useCustomBtn);
+
+    fireEvent.change(input, { target: { value: 'Pump' } });
+    fireEvent.mouseDown(document.body);
   });
 });

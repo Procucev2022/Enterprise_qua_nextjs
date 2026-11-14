@@ -58,8 +58,8 @@ const OPEN_RFQ = {
 const mockShowToast = jest.fn();
 const mockRefreshFromDB = jest.fn();
 
-function renderDetails(rfq: RFQItem = OPEN_RFQ) {
-  return render(<RFQDetails rfq={rfq} onBack={jest.fn()} />);
+function renderDetails(rfq: RFQItem = OPEN_RFQ, isVendorView: boolean = false) {
+  return render(<RFQDetails rfq={rfq} onBack={jest.fn()} isVendorView={isVendorView} />);
 }
 
 /** Opens the extension dialog from the header button and returns it. */
@@ -234,5 +234,40 @@ describe('RFQ details extension dialog (whole days)', () => {
     renderDetails({ ...OPEN_RFQ, isExtended: true, extensionHours: 48 } as unknown as RFQItem);
 
     expect(screen.getByText(formatString(DETAILS.extendedBadge, { duration: formatExtensionDayCount(2) }))).toBeInTheDocument();
+  });
+
+  it('renders vendor view with submitted quote details, line items, and attachments', () => {
+    const quote = {
+      vendorId: 'v-1',
+      vendorName: 'Vendor Co',
+      unitPrice: 1000,
+      totalPrice: 5000,
+      leadTimeDays: 14,
+      warrantyYears: 2,
+      paymentTerms: '30 days net',
+      remarks: 'All items comply with standards',
+      lineItemQuotes: [
+        { lineItemId: 'li-1', itemName: 'Widget A', unitPrice: 1000, totalPrice: 5000 },
+      ],
+      attachments: [
+        { id: 'att-1', fileName: 'quote-doc.pdf' },
+      ],
+    };
+    renderDetails(
+      {
+        ...OPEN_RFQ,
+        quotes: [quote],
+      } as unknown as RFQItem,
+      true
+    );
+
+    expect(screen.getAllByText('Your Submitted Quotation').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Quote Submitted').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('14 Days').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2 Years').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('30 days net').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('All items comply with standards').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Widget A').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('quote-doc.pdf').length).toBeGreaterThan(0);
   });
 });

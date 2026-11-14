@@ -1131,6 +1131,7 @@ describe('app/buyer/command-center.tsx', () => {
         buyerAccountId: 'active-acc-1',
         assignedVendors: [
           null,
+          'Simple Vendor String',
           {
             id: 'v-101',
             vendorName: 'Apex Metals',
@@ -1162,6 +1163,8 @@ describe('app/buyer/command-center.tsx', () => {
               email: 'sales@apexmetals.com',
               whatsapp: { status: 'read' },
               sms: { status: 'delivered' },
+              call: { status: 'answered', lastAttempt: '2026-11-01T10:00:00.000Z' },
+              bidStatus: 'Submitted',
               emailSent: true,
             },
           ],

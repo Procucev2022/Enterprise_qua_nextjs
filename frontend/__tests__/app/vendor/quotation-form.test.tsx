@@ -1599,4 +1599,70 @@ describe("QuotationForm Comprehensive Suite", () => {
       expect(screen.getByText(/All enquiries/i)).toBeInTheDocument();
     });
   });
+
+  test("Resubmit Bid opens form and pre-populates existing quote details", async () => {
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      if (/\/api\/rfqs(\?|$)/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: [
+              {
+                ...DEFAULT_RFQ,
+                quotes: [
+                  {
+                    vendorId: "org-1",
+                    vendorEmail: "vendor@test.com",
+                    vendorName: "Test Vendor Co",
+                    unitPrice: 1500,
+                    totalPrice: 15000,
+                    leadTimeDays: 10,
+                    warrantyYears: 1,
+                    paymentTerms: "50% advance",
+                    remarks: "Fast delivery",
+                    lineItemQuotes: [{ lineItemId: "li-1", unitPrice: 1500 }],
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    authClient.setSession(
+      {
+        id: "user-1",
+        email: "vendor@test.com",
+        name: "Test Vendor Co",
+        role: "vendor",
+        orgId: "org-1",
+        orgName: "Test Vendor Co",
+      },
+      "fake-token-123",
+    );
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={jest.fn()}
+        withSession
+        customSubscription="select"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Resubmit Bid/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Resubmit Bid/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Submit Quotation/i })).toBeInTheDocument();
+    });
+
+    const cancelBtn = screen.getByRole("button", { name: /Cancel/i });
+    fireEvent.click(cancelBtn);
+  });
 });

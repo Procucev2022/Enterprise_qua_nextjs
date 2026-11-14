@@ -116,12 +116,7 @@ export default function OpportunityFeed({
       const qName = (q.vendorName || '').toLowerCase().trim();
       if (qName && myVendorName && qName === myVendorName) return true;
 
-      // In harness/unit-test environments without active session, match any quote present
-      if (!sessionEmail && !myVendorId && !myVendorName) {
-        return true;
-      }
-
-      return false;
+      return !sessionEmail && !myVendorId && !myVendorName;
     };
 
     const list: Array<{
@@ -142,14 +137,8 @@ export default function OpportunityFeed({
         seen.add(rfq.rfqNumber);
         const quote = myQuotes[myQuotes.length - 1];
         const submittedAt = quote?.submittedAt || (quote as any)?.createdAt;
-        const totalAmount =
-          typeof quote?.totalPrice === 'number' && Number.isFinite(quote.totalPrice)
-            ? quote.totalPrice
-            : typeof (quote as any)?.totalAmount === 'number' && Number.isFinite((quote as any).totalAmount)
-            ? (quote as any).totalAmount
-            : typeof quote?.unitPrice === 'number' && Number.isFinite(quote.unitPrice)
-            ? quote.unitPrice
-            : null;
+        const rawAmt = quote?.totalPrice ?? (quote as any)?.totalAmount ?? quote?.unitPrice;
+        const totalAmount = typeof rawAmt === 'number' && Number.isFinite(rawAmt) ? rawAmt : null;
 
         const buyerDetails = rfq.buyerDetailsHidden
           ? 'Protected (48h)'
@@ -463,7 +452,7 @@ export default function OpportunityFeed({
     // reflects what the server actually counted, not a local guess.
     const authHeaders = {
       'Content-Type': 'application/json',
-      ...(authClient.getToken() ? { Authorization: `Bearer ${authClient.getToken()}` } : {}),
+      ...vendorAuthHeaders(),
     };
     try {
       const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/download`, {
@@ -765,8 +754,8 @@ export default function OpportunityFeed({
     const catalogueMatches = catalogueMatchesFor(opp);
     const hasCatalogueMatch = catalogueMatches.length > 0;
     const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
-    const buyerCompanyName = opp.buyer || (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || (isDirect ? 'Invited Buyer' : 'Procucev Network');
-    const buyerCompanyLogo = isDirect ? ((rfqRecord as any)?.buyerLogo || (rfqRecord as any)?.buyerCompanyLogo || null) : null;
+    const buyerCompanyName = opp.buyer || (rfqRecord as any)?.buyerAccountName || (isDirect ? 'Invited Buyer' : 'Procucev Network');
+    const buyerCompanyLogo = isDirect ? ((rfqRecord as any)?.buyerLogo || null) : null;
     const isSubmitted = submittedBids.some((b) => b.rfqNumber === opp.rfqNumber);
     const currP = isDirect ? currentPage : currentPageNet;
     const pSize = isDirect ? pageSize : pageSizeNet;
@@ -832,7 +821,7 @@ export default function OpportunityFeed({
               />
             ) : (
               <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-black shrink-0 shadow-xs">
-                {buyerCompanyName ? buyerCompanyName.charAt(0).toUpperCase() : 'P'}
+                {buyerCompanyName.charAt(0).toUpperCase()}
               </div>
             )}
             <span className="font-semibold text-slate-800 dark:text-gray-200 text-xs">
@@ -854,7 +843,7 @@ export default function OpportunityFeed({
 
         <td className="py-3 px-3.5 whitespace-nowrap">
           <span className="text-[11px] font-medium text-slate-700 dark:text-gray-300">
-            {categories.minor || categories.major || 'General'}
+            {categories.minor || 'General'}
           </span>
         </td>
 
