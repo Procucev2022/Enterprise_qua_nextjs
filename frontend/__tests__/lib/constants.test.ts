@@ -18,6 +18,7 @@ import {
   RFQ_STATUSES,
   formatIndianDate,
   formatIndianDateTime,
+  parseRfqTimestamp,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
   entitledSourcingModes,
@@ -544,5 +545,23 @@ describe('getVendorCreditBalance', () => {
     expect(getVendorCreditBalance({ freeQuotationCredits: 0 })).toBe(0);
     expect(getVendorCreditBalance({})).toBeNull();
     expect(getVendorCreditBalance({ subscriptionPlan: 'premium' })).toBeNull();
+  });
+});
+
+describe('parseRfqTimestamp', () => {
+  it('reads an ISO instant and a zone-less MySQL DATETIME as the same UTC moment', () => {
+    expect(parseRfqTimestamp('2026-09-02T11:07:16.000Z')).toBe(parseRfqTimestamp('2026-09-02 11:07:16'));
+  });
+
+  it('reads a UTC-tagged string as UTC', () => {
+    expect(parseRfqTimestamp('2026-11-10 03:17 UTC')).toBe(Date.parse('2026-11-10T03:17:00.000Z'));
+  });
+
+  it('reads a date-only value as midnight UTC', () => {
+    expect(parseRfqTimestamp('2026-08-29')).toBe(Date.parse('2026-08-29T00:00:00.000Z'));
+  });
+
+  it.each([[undefined], [null], [''], ['   '], ['not a date']])('returns null for %p', (value) => {
+    expect(parseRfqTimestamp(value)).toBeNull();
   });
 });

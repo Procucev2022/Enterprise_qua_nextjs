@@ -5787,3 +5787,27 @@ After clicking Request Vendor Evaluation, the request is showing an error and th
 Please reuse the existing Pincode API functionality from the Create RFQ page in the Invite Vendor form. When a valid pincode is entered, automatically fetch and populate the City and State fields.
 ```
 ---
+### Prompt 207
+**Timestamp**: 2026-11-14T06:25:02+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Vendor Follow-Up Details modal was attached.)
+```text
+Remove the *“Next Automated Follow-Up Wave: Not recorded”* section. Instead, display the next follow-up time separately for each channel, calculated from the RFQ creation timestamp:
+
+- *AI Voice Call:* RFQ creation time + 6 hours
+
+- *WhatsApp:* RFQ creation time + 12 hours
+
+- *SMS:* RFQ creation time + 5 minutes
+
+- *Email:* RFQ creation time + 24 hours
+
+Show the next follow-up date and time in the respective channel sections.
+
+ For AI Calls and WhatsApp, calculate the follow-up countdown only within the business hours of 10:00 AM to 6:00 PM (IST).
+
+If the RFQ is created between 10:00 AM and 6:00 PM, start the countdown from the RFQ creation time, counting only within this time window.
+
+If the RFQ is created after 6:00 PM, start the countdown at 10:00 AM the next day.
+
+If the RFQ is created before 10:00 AM, start the countdown at 10:00 AM on the same day.
+```
+---

@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord, VendorModuleScore } from '@/lib/types';
-import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE } from '@/lib/constants';
+import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE, formatIndianDateTime } from '@/lib/constants';
+import { computeRFQFollowUpTimes } from '@/lib/followUpSchedule';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   X,
@@ -958,6 +959,11 @@ export function MultiChannelChaserModal({
 // Backward compatibility export
 export const WhatsAppChaserModal = MultiChannelChaserModal;
 
+/** A channel's next follow-up time, or the not-recorded placeholder when the RFQ creation time is unreadable. */
+function formatNextFollowUp(iso: string | null): string {
+  return iso ? formatIndianDateTime(iso) : UI_STRINGS.recordPlaceholders.notRecorded;
+}
+
 /* RFQ-WISE MULTI-CHANNEL FOLLOW-UP DEEP DIVE MODAL */
 interface RFQFollowUpDeepDiveModalProps {
   isOpen: boolean;
@@ -976,6 +982,8 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   if (!isOpen || !rfq) return null;
 
   const followUp = rfq.followUpData;
+  // Each channel's next follow-up counts from the RFQ creation time, so it does not depend on follow-up data.
+  const nextFollowUps = computeRFQFollowUpTimes(rfq.createdAt);
   const totalInvitedVendors = followUp?.totalInvited ?? (followUp?.vendors?.length || rfq.assignedVendors?.length || 0);
 
   // A channel with no outreach record is not dispatched. No attempt count, escalation or time is invented for it.
@@ -1142,6 +1150,13 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             <p className="text-[11px] text-purple-600 dark:text-purple-400 mt-0.5">
               Autonomous intent & transcription
             </p>
+            <p data-testid="next-follow-up-call" className="text-[11px] font-semibold text-purple-800 dark:text-purple-200 mt-1.5">
+              {UI_STRINGS.modals.followUp.nextFollowUpLabel}{' '}
+              <span>{formatNextFollowUp(nextFollowUps.call)}</span>
+            </p>
+            <p className="text-[10px] text-purple-600 dark:text-purple-400">
+              {UI_STRINGS.modals.followUp.businessHoursNote}
+            </p>
           </div>
 
           {/* Channel 2: WhatsApp */}
@@ -1163,6 +1178,13 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
               1-click bid submission & receipts
             </p>
+            <p data-testid="next-follow-up-whatsapp" className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-200 mt-1.5">
+              {UI_STRINGS.modals.followUp.nextFollowUpLabel}{' '}
+              <span>{formatNextFollowUp(nextFollowUps.whatsapp)}</span>
+            </p>
+            <p className="text-[10px] text-emerald-600 dark:text-emerald-400">
+              {UI_STRINGS.modals.followUp.businessHoursNote}
+            </p>
           </div>
 
           {/* Channel 3: SMS Direct */}
@@ -1180,6 +1202,10 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <p className="text-[11px] text-sky-600 dark:text-cyan-400 mt-0.5">
               Carrier priority sales alerts
+            </p>
+            <p data-testid="next-follow-up-sms" className="text-[11px] font-semibold text-sky-800 dark:text-cyan-200 mt-1.5">
+              {UI_STRINGS.modals.followUp.nextFollowUpLabel}{' '}
+              <span>{formatNextFollowUp(nextFollowUps.sms)}</span>
             </p>
           </div>
 
@@ -1201,6 +1227,10 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5">
               Automated BOQ re-attachment
+            </p>
+            <p data-testid="next-follow-up-email" className="text-[11px] font-semibold text-amber-800 dark:text-amber-200 mt-1.5">
+              {UI_STRINGS.modals.followUp.nextFollowUpLabel}{' '}
+              <span>{formatNextFollowUp(nextFollowUps.email)}</span>
             </p>
           </div>
         </div>
@@ -1438,11 +1468,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
         </div>
 
         {/* Modal Footer */}
-        <div className="flex items-center justify-between pt-3.5 mt-1 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="live-dot" />
-            <span>Next Automated Follow-Up Wave: <strong className="text-slate-800 dark:text-gray-200">{followUp?.nextScheduledChaser || UI_STRINGS.recordPlaceholders.notRecorded}</strong></span>
-          </div>
+        <div className="flex items-center justify-end pt-3.5 mt-1 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
           <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">
             Close Vendor Follow-Up Details
           </button>

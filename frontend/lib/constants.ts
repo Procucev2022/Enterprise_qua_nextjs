@@ -889,6 +889,57 @@ export function formatCurrency(amount: number): string {
  */
 export const DISPLAY_TIMEZONE = 'Asia/Kolkata';
 
+/** Milliseconds in one minute and in one day. */
+export const MILLISECONDS_PER_MINUTE = 60 * 1000;
+export const MILLISECONDS_PER_DAY = 24 * 60 * MILLISECONDS_PER_MINUTE;
+
+/** India Standard Time is UTC+05:30 all year. It has no daylight saving. */
+export const IST_UTC_OFFSET_MINUTES = 5 * 60 + 30;
+
+/**
+ * Minutes from RFQ creation to each follow-up channel. These match the backend defaults in
+ * backend/src/config/constants.js (CHASER_DELAYS). A deployment that sets a CHASER_*_DELAY_MS
+ * variable changes when messages are really sent, but not these displayed times.
+ */
+export const RFQ_FOLLOW_UP_DELAY_MINUTES = {
+  CALL: 6 * 60,
+  WHATSAPP: 12 * 60,
+  SMS: 5,
+  EMAIL: 24 * 60,
+} as const;
+
+/**
+ * The IST business window, in minutes after midnight. AI calls and WhatsApp follow-ups count only
+ * the time inside this window.
+ */
+export const FOLLOW_UP_BUSINESS_HOURS = {
+  OPEN_MINUTE_OF_DAY: 10 * 60,
+  CLOSE_MINUTE_OF_DAY: 18 * 60,
+} as const;
+
+/**
+ * An RFQ timestamp as epoch milliseconds, or null when the value is absent or unreadable.
+ *
+ * Reads the same forms as formatIndianDateTime. A zone-less "YYYY-MM-DD HH:mm:ss" value and a value
+ * tagged UTC are both read as UTC. A date-only value is read as midnight UTC.
+ */
+export function parseRfqTimestamp(value?: string | null): number | null {
+  if (!value || value.trim() === '') return null;
+  const trimmed = value.trim();
+
+  // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
+  // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
+  let normalized = trimmed;
+  if (/(\s+|_)UTC$/i.test(normalized)) {
+    normalized = `${normalized.replace(/(\s+|_)UTC$/i, '').trim().replace(' ', 'T')}Z`;
+  } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = `${normalized.replace(' ', 'T')}Z`;
+  }
+
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 /**
  * An RFQ timestamp as an Indian date and time, e.g. "04 Sep 2026, 02:55 pm IST".
  *
@@ -904,17 +955,8 @@ export function formatIndianDateTime(value?: string): string {
   const trimmed = value.trim();
   if (trimmed.endsWith(' IST')) return trimmed;
 
-  // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
-  // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
-  let normalized = trimmed;
-  if (/(\s+|_)UTC$/i.test(normalized)) {
-    normalized = `${normalized.replace(/(\s+|_)UTC$/i, '').trim().replace(' ', 'T')}Z`;
-  } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
-    normalized = `${normalized.replace(' ', 'T')}Z`;
-  }
-
-  const parsed = Date.parse(normalized);
-  if (Number.isNaN(parsed)) return value;
+  const parsed = parseRfqTimestamp(trimmed);
+  if (parsed === null) return value;
 
   const formatted = new Intl.DateTimeFormat(CURRENCY.LOCALE, {
     timeZone: DISPLAY_TIMEZONE,

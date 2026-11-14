@@ -3233,6 +3233,8 @@ sellerDirectory: {
     },
     followUp: {
       escalationQueued: 'Follow-up escalation queue',
+      nextFollowUpLabel: 'Next follow-up:',
+      businessHoursNote: 'Counted in business hours only, 10:00 AM to 6:00 PM IST.',
     },
     subscriptionPayment: {
       gstLabel: 'GST',

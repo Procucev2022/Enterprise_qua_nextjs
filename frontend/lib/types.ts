@@ -188,6 +188,17 @@ export interface RFQFollowUpBreakdown {
   autoChasingEnabled: boolean;
 }
 
+/**
+ * The next follow-up instant for each channel, as ISO-8601 text. Each value is null when the RFQ
+ * creation time cannot be read. See computeRFQFollowUpTimes in followUpSchedule.ts.
+ */
+export interface RFQNextFollowUpTimes {
+  call: string | null;
+  whatsapp: string | null;
+  sms: string | null;
+  email: string | null;
+}
+
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry' | 'ai_extraction';
 
 // ==============================================================================
