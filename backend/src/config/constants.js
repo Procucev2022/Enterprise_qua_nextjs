@@ -312,6 +312,8 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   COMMUNICATION_DELIVERY: 'communication_delivery',
   RFQ_CREATED_EMAIL: 'rfq_created_email',
   RFQ_VENDOR_INVITE_EMAIL: 'rfq_vendor_invite_email',
+  // Plans the vendors of a minor-scoped RFQ whose database read failed when the RFQ was created.
+  RFQ_VENDOR_PLAN: 'rfq_vendor_plan',
   RFQ_GATEWAY_NOTIFICATION_EMAIL: 'rfq_gateway_notification_email',
   RFQ_QUOTE_RECEIVED_EMAIL: 'rfq_quote_received_email',
   RFQ_VENDOR_QUOTE_ACK_EMAIL: 'rfq_vendor_quote_ack_email',

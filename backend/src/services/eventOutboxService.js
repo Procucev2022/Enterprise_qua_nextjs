@@ -717,6 +717,21 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.RFQ_VENDOR_PLAN: {
+      const rfqId = job.raw?.rfqId;
+      if (typeof rfqId !== 'string' || !rfqId) {
+        const error = new Error('RFQ vendor plan retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      if (!rfq) return;
+      // Loaded here because storeService already requires this module at load time.
+      const storeService = require('./storeService');
+      // Rethrows database failures, so the outbox retries this attempt with backoff instead of ending it.
+      await storeService.completeRFQVendorPlan(rfq, { notifyShortfall: true, rethrowOnDatabaseError: true });
+      return;
+    }
     case EVENT_OUTBOX_TYPES.RFQ_VENDOR_INVITE_EMAIL: {
       const rfqId = job.raw?.rfqId;
       const target = job.raw?.target;

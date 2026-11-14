@@ -1,6 +1,8 @@
 const storeService = require('../src/services/storeService');
 const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
+const eventOutboxService = require('../src/services/eventOutboxService');
+const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 const { logger } = require('../src/services/loggerService');
 
@@ -155,7 +157,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       expect(updated.assignedVendors.length).toBe(0);
     });
 
-    test('handles DB query errors gracefully and falls back to in-memory candidates', async () => {
+    test('handles DB query errors by queuing a plan retry instead of planning from in-memory vendors', async () => {
       domainPool.pool = { query: jest.fn() };
       const rfq = storeService.createRFQ({
         id: 'rfq-auto-test-3',
@@ -166,7 +168,9 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
 
       jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockRejectedValue(new Error('DB failure'));
       jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('Fallback DB failure'));
-      // 'Hardware' is a taxonomy minor, so this RFQ is minor-level and reads every visible in-memory vendor.
+      // 'Hardware' is a taxonomy minor, so this RFQ is minor-level. With storage, its plan is never built from
+      // the in-memory vendors, so the failed read queues a retry and nothing is assigned.
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({ id: 'queued' });
       const originalVendors = storeService.vendors;
       storeService.vendors = [
         { id: 'v-mem', name: 'Memory Vendor', category: 'Hardware', majorCategory: 'Hardware', source: 'procucev_network' },
@@ -175,7 +179,12 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
 
       try {
         const updated = await storeService.autoAssignVendorsFromDB(rfq);
-        expect(updated.assignedVendors.some((v) => v.id === 'v-mem')).toBe(true);
+        expect(updated.assignedVendors ?? []).toEqual([]);
+        expect(enqueueSpy).toHaveBeenCalledWith(
+          EVENT_OUTBOX_TYPES.RFQ_VENDOR_PLAN,
+          expect.stringContaining('rfq-auto-test-3:'),
+          expect.objectContaining({ rfqId: 'rfq-auto-test-3', path: 'auto-assign' })
+        );
       } finally {
         storeService.vendors = originalVendors;
       }

@@ -3,6 +3,8 @@ const domainQueries = require('../src/db/domainQueries');
 const pool = require('../src/db/pool');
 const rfqController = require('../src/controllers/rfqController');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+const eventOutboxService = require('../src/services/eventOutboxService');
+const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 const { logger } = require('../src/services/loggerService');
 
 // RFQ invitations follow the minor category the RFQ names, not its major category.
@@ -289,21 +291,27 @@ describe('RFQ invitations follow the minor category', () => {
       expect(updateSpy).not.toHaveBeenCalled();
     });
 
-    test('a V0 RFQ with a minor falls back to the in-memory minor and major candidates when the lookup fails', async () => {
+    test('a V0 RFQ with a minor queues a plan retry and assigns nothing from memory when the lookup fails', async () => {
       storeService.vendors = [];
       const created = createQuietRfq({ sourcingMode: 'mode_0', id: 'rfq-minor-v0-err', rfqNumber: 'RFQ-MINOR-V0-ERR' });
       storeService.vendors = procucevVendors();
       jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockRejectedValue(new Error('D1 DB is overloaded.'));
-      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({ id: 'queued' });
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       const updated = await storeService.augmentV0AssignmentsFromDB(created);
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        'V0 DB-backed minor category lookup failed',
-        expect.objectContaining({ rfqNumber: 'RFQ-MINOR-V0-ERR' }),
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('queued a retry'),
+        expect.objectContaining({ rfqNumber: 'RFQ-MINOR-V0-ERR', path: 'v0-augment' }),
         'STORE_SERVICE'
       );
-      expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major', 'v-other', 'v-accessory']);
+      expect(enqueueSpy).toHaveBeenCalledWith(
+        EVENT_OUTBOX_TYPES.RFQ_VENDOR_PLAN,
+        expect.stringContaining('rfq-minor-v0-err:'),
+        expect.objectContaining({ rfqId: 'rfq-minor-v0-err' })
+      );
+      expect(updated.assignedVendors ?? []).toEqual([]);
     });
 
     test('a mode_2 RFQ auto-assigns from the database the vendor carrying the minor first, topped up from the parent major', async () => {

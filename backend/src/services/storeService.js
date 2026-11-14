@@ -7076,9 +7076,10 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    *
    * Vendors already on the RFQ (`seedVendors`) stay selected. They count toward every minor they
    * carry and toward the top-up of their parent major, so a later pass adds only what is missing.
-   * Each minor is planned on its own: a vendor picked for one minor does not count toward another
-   * minor's target, so one parent-major vendor can appear in several minors' sets. A vendor that serves
-   * several minors is listed once. An RFQ without minor
+   * Minors take turns in the RFQ's order. Each minor first takes the vendors no earlier minor has taken,
+   * best ranked first, so a vendor is invited for one minor where possible. Only when a minor has no
+   * unclaimed vendor left does it count vendors an earlier minor took (no new invitation). It then tops
+   * up from its parent major. A vendor that serves several minors is listed once. An RFQ without minor
    * categories has no plan: the result is the seeds with no shortfalls.
    *
    * @param {Object} rfq
@@ -7087,7 +7088,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    * @param {Array<Object>} [options.seedVendors] Vendors already on the RFQ.
    * @param {Object|null} [options.targetLocation] Delivery pincode and location, used to rank vendors.
    * @param {number|null} [options.limit] Vendors wanted per minor. Defaults to MAX_PROCUCEV_PER_CATEGORY.
-   * @returns {{ selected: Object[], shortfalls: Array<{ minorCategory: string, majorCategory: string|null, minorMatched: number, majorFilled: number, target: number }> }}
+   * @returns {{ selected: Object[], pickedFor: Map<string, string>, shortfalls: Array<{ minorCategory: string, majorCategory: string|null, minorMatched: number, majorFilled: number, target: number }> }}
+   *   `pickedFor` maps each vendor key to the minor that picked the vendor (seeds and top-ups have no entry).
    */
   planMinorInvites(rfq, { candidatePool = [], seedVendors = [], targetLocation = null, limit = null } = {}) {
     const target = limit && limit > 0 ? limit : VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
@@ -7119,50 +7121,85 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     };
 
     const shortfalls = [];
-    // Each minor gets its own invite set. It starts from the seeds and is filled from the pool without
-    // counting the vendors chosen for another minor, so a minor is never left short because an earlier
-    // minor already reached the target. The result is the union of the sets, with each vendor listed once.
+    // Each minor takes its own vendors first. A vendor is invited once, so a vendor an earlier minor has
+    // already taken is used for this minor only when this minor has no unclaimed vendor left. Seeds count
+    // toward every minor they cover. The result is the union of the choices, with each vendor listed once.
     const selected = new Map(seeds);
+    // The minor each vendor was picked for, keyed by vendorKey. Used to order the invitations by minor.
+    const pickedFor = new Map();
     for (const minor of minors) {
       const majorKeys = new Set(this._majorCategoriesForMinors([minor]));
       const coversMinor = (entry) => this.vendorCoversMinorCategory(entry.view, minor);
       const inParentMajor = (entry) => majorKeys.size > 0 && vendorMajorKeys(entry.view).some((key) => majorKeys.has(key));
-      const set = new Map(seeds);
-      const isAvailable = (entry) => !set.has(vendorKey(entry.vendor));
+      const chosenBefore = new Set(selected.keys());
 
-      let minorMatched = Array.from(set.values()).filter(coversMinor).length;
-      if (minorMatched < target) {
-        const minorCandidates = Array.from(pool.values()).filter((entry) => isAvailable(entry) && coversMinor(entry)).sort(rank);
-        for (const entry of minorCandidates) {
-          if (minorMatched >= target) break;
-          set.set(vendorKey(entry.vendor), entry);
-          minorMatched += 1;
+      // The vendors this minor counts toward its target, each once: the seeds that cover it, then the
+      // vendors it picks or reuses below.
+      const counted = new Set(Array.from(seeds.entries()).filter(([, entry]) => coversMinor(entry)).map(([key]) => key));
+      // 1. Vendors no earlier minor has taken, best ranked first.
+      if (counted.size < target) {
+        const unclaimed = Array.from(pool.values())
+          .filter((entry) => !chosenBefore.has(vendorKey(entry.vendor)) && coversMinor(entry))
+          .sort(rank);
+        for (const entry of unclaimed) {
+          if (counted.size >= target) break;
+          const key = vendorKey(entry.vendor);
+          selected.set(key, entry);
+          pickedFor.set(key, minor);
+          counted.add(key);
         }
       }
 
+      // 2. Still short: vendors an earlier minor took that also cover this one. They are already invited,
+      //    so they add no invitation, but they count toward this minor.
+      if (counted.size < target) {
+        const reusable = Array.from(pool.values())
+          .filter((entry) => chosenBefore.has(vendorKey(entry.vendor))
+            && !seeds.has(vendorKey(entry.vendor))
+            && coversMinor(entry))
+          .sort(rank);
+        for (const entry of reusable) {
+          if (counted.size >= target) break;
+          counted.add(vendorKey(entry.vendor));
+        }
+      }
+      const minorMatched = counted.size;
+
+      // 3. Still short: a top-up from the parent major. Parent-major vendors count toward it as well, so a seed
+      //    there is not replaced. The top-up takes vendors no minor has taken first, then earlier picks there,
+      //    which add no invitation.
       if (minorMatched < target) {
-        let inSet = Array.from(set.values()).filter((entry) => coversMinor(entry) || inParentMajor(entry)).length;
-        const majorCandidates = Array.from(pool.values()).filter((entry) => isAvailable(entry) && inParentMajor(entry)).sort(rank);
-        for (const entry of majorCandidates) {
+        let inSet = minorMatched + Array.from(seeds.values()).filter((entry) => !coversMinor(entry) && inParentMajor(entry)).length;
+        const unclaimedMajor = Array.from(pool.values())
+          .filter((entry) => !selected.has(vendorKey(entry.vendor)) && inParentMajor(entry))
+          .sort(rank);
+        for (const entry of unclaimedMajor) {
           if (inSet >= target) break;
-          set.set(vendorKey(entry.vendor), entry);
+          selected.set(vendorKey(entry.vendor), entry);
+          inSet += 1;
+        }
+        const earlierMajor = Array.from(pool.values())
+          .filter((entry) => chosenBefore.has(vendorKey(entry.vendor))
+            && !seeds.has(vendorKey(entry.vendor))
+            && !coversMinor(entry)
+            && inParentMajor(entry))
+          .sort(rank);
+        for (const entry of earlierMajor) {
+          if (inSet >= target) break;
           inSet += 1;
         }
         shortfalls.push({
           minorCategory: minor,
           majorCategory: MINOR_TO_MAJOR_MAP.get(taxonomyKeyOf(minor)) || null,
           minorMatched,
+          // Every parent-major vendor counted toward the top-up: seeds, earlier picks and vendors added now.
           majorFilled: inSet - minorMatched,
           target,
         });
       }
-
-      for (const [key, entry] of set) {
-        if (!selected.has(key)) selected.set(key, entry);
-      }
     }
 
-    return { selected: Array.from(selected.values(), (entry) => entry.vendor), shortfalls };
+    return { selected: Array.from(selected.values(), (entry) => entry.vendor), shortfalls, pickedFor };
   }
 
   /**
@@ -7176,11 +7213,15 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    * @param {string[]} minors The RFQ's minor categories, in the RFQ's order.
    * @returns {Object[]}
    */
-  _interleaveVendorsByMinor(vendors, minors) {
+  _interleaveVendorsByMinor(vendors, minors, pickedFor = null) {
     const lanes = minors.map(() => []);
     const uncovered = [];
     for (const vendor of Array.isArray(vendors) ? vendors : []) {
-      const index = minors.findIndex((minor) => this.vendorCoversMinorCategory(vendor, minor));
+      // A vendor goes to the minor that picked it. Without a pick (a seed, or a top-up) it goes to the first minor it covers.
+      const picked = pickedFor ? pickedFor.get(vendorKey(vendor)) : undefined;
+      const index = picked !== undefined && minors.includes(picked)
+        ? minors.indexOf(picked)
+        : minors.findIndex((minor) => this.vendorCoversMinorCategory(vendor, minor));
       if (index === -1) uncovered.push(vendor);
       else lanes[index].push(vendor);
     }
@@ -7218,13 +7259,50 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    * @param {{ notifyShortfall?: boolean }} [options]
    * @returns {Promise<Object>} The RFQ with its assigned vendors.
    */
-  async completeRFQVendorPlan(rfq, { notifyShortfall = false } = {}) {
+  async completeRFQVendorPlan(rfq, { notifyShortfall = false, rethrowOnDatabaseError = false } = {}) {
     if (!rfq || !this._isDbPlannedRFQ(rfq)) return rfq;
+    // Only the outbox retry asks for rethrowOnDatabaseError. The other callers pass the options they always did.
+    const options = rethrowOnDatabaseError ? { notifyShortfall, rethrowOnDatabaseError } : { notifyShortfall };
     const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
     if (mode === 'mode_0' || mode === 'v0' || mode === 'version_0') {
-      return this.augmentV0AssignmentsFromDB(rfq, { notifyShortfall });
+      return this.augmentV0AssignmentsFromDB(rfq, options);
     }
-    return this.autoAssignVendorsFromDB(rfq, { notifyShortfall });
+    return this.autoAssignVendorsFromDB(rfq, options);
+  }
+
+  /**
+   * Handles a database read that failed while a minor-scoped RFQ was being planned. The plan is not built
+   * from the in-memory subset, because that subset holds only the newest vendors and can cover one minor.
+   * Inside a request the failure is queued as an outbox retry, and the RFQ is returned with no vendors
+   * assigned yet. The outbox retry passes rethrowOnDatabaseError, so the outbox retries that attempt with backoff.
+   *
+   * @param {Object} rfq
+   * @param {string} path Which planner hit the failure, for the logs.
+   * @param {Error} error
+   * @param {{ rethrowOnDatabaseError?: boolean }} [options]
+   * @returns {Promise<Object>} The RFQ, unchanged.
+   */
+  async _deferMinorVendorPlan(rfq, path, error, { rethrowOnDatabaseError = false } = {}) {
+    if (rethrowOnDatabaseError) throw error;
+    logger.error(
+      'RFQ vendor plan could not read the database; queued a retry instead of planning from the in-memory subset',
+      { rfqNumber: rfq.rfqNumber, path, error: error?.message },
+      'STORE_SERVICE'
+    );
+    try {
+      await eventOutboxService.enqueueEventOutbox(
+        EVENT_OUTBOX_TYPES.RFQ_VENDOR_PLAN,
+        `${rfq.id}:${Date.now()}`,
+        { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, path }
+      );
+    } catch (queueError) {
+      logger.error(
+        'Failed to queue the RFQ vendor plan retry',
+        { rfqNumber: rfq.rfqNumber, path, error: queueError?.message },
+        'STORE_SERVICE'
+      );
+    }
+    return rfq;
   }
 
   /**
@@ -7503,7 +7581,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    * @param {Object} rfq The RFQ created by createRFQ.
    * @returns {Promise<Object>} The RFQ with DB-backed V0 assignments applied.
    */
-  async augmentV0AssignmentsFromDB(rfq, { deferChasers = false, notifyShortfall } = {}) {
+  async augmentV0AssignmentsFromDB(rfq, { deferChasers = false, notifyShortfall, rethrowOnDatabaseError = false } = {}) {
     if (!rfq) return rfq;
     const mode = rfq.sourcingMode || '';
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
@@ -7550,11 +7628,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
           const majorRows = await this._fetchMajorFallbackFromDB(minors);
           dbMatches = [...minorRows, ...majorRows];
         } catch (err) {
-          logger.warn(
-            'V0 DB-backed minor category lookup failed',
-            { rfqNumber: rfq.rfqNumber, error: err.message },
-            'STORE_SERVICE'
-          );
+          return this._deferMinorVendorPlan(rfq, 'v0-augment', err, { rethrowOnDatabaseError });
         }
       } else {
         // 1. Category-matched public vendors from the whole directory.
@@ -7591,9 +7665,10 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       }
     }
 
-    // Fallback to in-memory candidates if storage is unavailable or returned 0 matches. A minor-level
-    // RFQ reads every visible vendor, so the top-up can reach vendors under the parent major.
-    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+    // Fallback to in-memory candidates when storage is unavailable, or when a legacy RFQ got no rows. A
+    // minor-level RFQ with storage is planned from the database only: the in-memory subset holds the newest
+    // vendors, so it can cover one minor and under-invite the others.
+    if ((!Array.isArray(dbMatches) || dbMatches.length === 0) && (!minorScoped || !pool.hasStorage())) {
       const inMemory = minorScoped ? this._visibleVendorsForRFQ(rfq) : this.candidateVendorsForRFQ(rfq);
       dbMatches = inMemory.filter((v) => this.isProcucevVendor(v));
     }
@@ -7616,7 +7691,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
         targetLocation,
         limit: maxProcucevPerCat,
       });
-      sorted = this._interleaveVendorsByMinor(plan.selected, minors);
+      sorted = this._interleaveVendorsByMinor(plan.selected, minors, plan.pickedFor);
       planShortfalls = plan.shortfalls;
       if (notifyShortfall) this._alertRfqMinorShortfall(rfq, plan.shortfalls);
     } else {
@@ -7818,7 +7893,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    * @param {Object} rfq The RFQ to assign vendors to.
    * @returns {Promise<Object>} The updated RFQ with assigned vendors.
    */
-  async autoAssignVendorsFromDB(rfq, { deferChasers = false, notifyShortfall } = {}) {
+  async autoAssignVendorsFromDB(rfq, { deferChasers = false, notifyShortfall, rethrowOnDatabaseError = false } = {}) {
     if (!rfq) return rfq;
     const mode = String(rfq.sourcingMode || '');
     const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
@@ -7881,14 +7956,19 @@ let clientCandidates = [];
 
     const existingAssigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     let sortedClient = [];
+    // The minor each planned vendor was picked for, from the client and Procucev plans, so the
+    // invitations are ordered by the minor that picked them.
+    const pickedFor = new Map();
     if (minorScoped) {
       if (isV1 || isV2) {
-        sortedClient = this.planMinorInvites(rfq, {
+        const clientPlan = this.planMinorInvites(rfq, {
           candidatePool: clientCandidates,
           seedVendors: existingAssigned.filter((v) => !this.isProcucevVendor(this._storedVendorRecord(v))),
           targetLocation,
           limit: maxClientPerCat,
-        }).selected;
+        });
+        sortedClient = clientPlan.selected;
+        for (const [key, minor] of clientPlan.pickedFor) pickedFor.set(key, minor);
       }
     } else if (clientCandidates.length > 0) {
       sortedClient = this.selectVendorsForRFQ(
@@ -7920,6 +8000,7 @@ let clientCandidates = [];
             dbMatches = await domainQueries.getPublicVendorsMatchingCategories(this._rfqMatchSignals(rfq), limit * 2);
           }
         } catch (err) {
+          if (minorScoped) return this._deferMinorVendorPlan(rfq, 'auto-assign', err, { rethrowOnDatabaseError });
           logger.warn(
             'Auto-assign DB-backed vendor assignment query failed',
             { rfqNumber: rfq.rfqNumber, error: err.message },
@@ -7928,7 +8009,8 @@ let clientCandidates = [];
         }
       }
 
-      if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+      // A minor-level RFQ with storage is planned from the database only (see augmentV0AssignmentsFromDB).
+      if ((!Array.isArray(dbMatches) || dbMatches.length === 0) && (!minorScoped || !pool.hasStorage())) {
         const inMemory = minorScoped ? this._visibleVendorsForRFQ(rfq) : this.candidateVendorsForRFQ(rfq);
         dbMatches = inMemory.filter((v) => this.isProcucevVendor(v));
       }
@@ -7942,6 +8024,7 @@ let clientCandidates = [];
           limit: maxProcucevPerCat,
         });
         sortedProcucev = plan.selected;
+        for (const [key, minor] of plan.pickedFor) pickedFor.set(key, minor);
         procucevShortfalls = plan.shortfalls;
         if (notifyShortfall) this._alertRfqMinorShortfall(rfq, plan.shortfalls);
       } else {
@@ -7955,7 +8038,7 @@ let clientCandidates = [];
     const combinedCandidates = [...sortedClient, ...sortedProcucev];
     // Minor-level RFQs queue and send invitations in turn across the minors (see _interleaveVendorsByMinor).
     const candidatePool = minorScoped
-      ? this._interleaveVendorsByMinor(combinedCandidates, minors)
+      ? this._interleaveVendorsByMinor(combinedCandidates, minors, pickedFor)
       : combinedCandidates;
     if (candidatePool.length === 0) {
       return rfq;
