@@ -30,8 +30,9 @@ import type {
   VendorOpportunity,
 } from '@/lib/types';
 
+const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: jest.fn() }),
+  useRouter: () => ({ push: mockPush }),
 }));
 
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
@@ -1315,5 +1316,270 @@ describe('upgrade and payment modals', () => {
     view.rerender(<QuotationForm onBack={view.onBack} />);
     expect(within(planCard(modal, SELECT_PLAN_TITLE)).getByText('Active')).toBeInTheDocument();
     expect(within(planCard(modal, CONNECT_PLAN_TITLE)).queryByText('Active')).not.toBeInTheDocument();
+  });
+
+  describe('tabs and pagination controls', () => {
+    test('switches tabs between My Enquiries and Public Enquiries', async () => {
+      const directRfq = makeRfq({
+        id: 'rfq-direct',
+        rfqNumber: 'RFQ-DIRECT-1',
+        title: 'Direct requirement',
+        buyerAccountName: 'Own Buyer Ltd',
+        assignedVendors: [{ email: 'vendor@example.com', name: 'Vendor Co' }],
+        quotes: [],
+      });
+      const publicRfq = makeRfq({
+        id: 'rfq-public',
+        rfqNumber: 'RFQ-PUBLIC-1',
+        title: 'Public requirement',
+        sourcingMode: 'mode_0',
+        quotes: [],
+      });
+      const directOpp = makeOpportunity(directRfq);
+      const publicOpp = makeOpportunity(publicRfq);
+
+      installApp({
+        rfqs: [directRfq, publicRfq],
+        vendorOpportunities: [directOpp, publicOpp],
+        currentUserSession: { email: 'vendor@example.com' } as any,
+      });
+      await renderForm();
+
+      expect(screen.getByRole('button', { name: /My Enquiries/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Public Enquiries/i })).toBeInTheDocument();
+
+      // By default with direct enquiries, My Enquiries is active
+      expect(screen.getByText('RFQ-DIRECT-1')).toBeInTheDocument();
+      expect(screen.queryByText('RFQ-PUBLIC-1')).not.toBeInTheDocument();
+
+      // Switch to Public Enquiries
+      fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+      expect(screen.getByText('RFQ-PUBLIC-1')).toBeInTheDocument();
+      expect(screen.queryByText('RFQ-DIRECT-1')).not.toBeInTheDocument();
+
+      // Switch back to My Enquiries
+      fireEvent.click(screen.getByRole('button', { name: /My Enquiries/i }));
+      expect(screen.getByText('RFQ-DIRECT-1')).toBeInTheDocument();
+    });
+
+    test('clicking RFQ number and View button navigates to rfq-details', async () => {
+      const rfq = makeRfq({ id: 'rfq-nav', rfqNumber: 'RFQ-NAV-1', quotes: [] });
+      const opp = makeOpportunity(rfq);
+      installApp({ rfqs: [rfq], vendorOpportunities: [opp] });
+      await renderForm();
+
+      fireEvent.click(screen.getByRole('button', { name: 'RFQ-NAV-1' }));
+      expect(mockPush).toHaveBeenCalledWith('/vendor/rfq-details?rfq=RFQ-NAV-1');
+
+      mockPush.mockReset();
+      fireEvent.click(screen.getByRole('button', { name: 'View RFQ' }));
+      expect(mockPush).toHaveBeenCalledWith('/vendor/rfq-details?rfq=RFQ-NAV-1');
+    });
+
+    test('navigates pages and adjusts rows per page in pagination', async () => {
+      const rfqs: RFQItem[] = Array.from({ length: 12 }, (_, i) =>
+        makeRfq({ id: `rfq-page-${i + 1}`, rfqNumber: `RFQ-PAGE-${i + 1}`, title: `Item ${i + 1}`, quotes: [] })
+      );
+      const opps: VendorOpportunity[] = rfqs.map((r) => makeOpportunity(r));
+      installApp({ rfqs, vendorOpportunities: opps });
+      await renderForm();
+
+      // Default is 10 per page: page 1 shows items 1-10
+      expect(screen.getByText(/Displaying 1 - 10 of 12 items/i)).toBeInTheDocument();
+      expect(screen.getByText('RFQ-PAGE-1')).toBeInTheDocument();
+
+      // Change rows per page to 5
+      fireEvent.change(screen.getByRole('combobox', { name: 'Rows per page' }), { target: { value: '5' } });
+      expect(screen.getByText(/Displaying 1 - 5 of 12 items/i)).toBeInTheDocument();
+      expect(screen.queryByText('RFQ-PAGE-6')).not.toBeInTheDocument();
+
+      // Click Next page
+      fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+      expect(screen.getByText(/Displaying 6 - 10 of 12 items/i)).toBeInTheDocument();
+      expect(screen.getByText('RFQ-PAGE-6')).toBeInTheDocument();
+
+      // Click Previous page
+      fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
+      expect(screen.getByText(/Displaying 1 - 5 of 12 items/i)).toBeInTheDocument();
+
+      // Click Last page
+      fireEvent.click(screen.getByRole('button', { name: 'Last page' }));
+      expect(screen.getByText(/Displaying 11 - 12 of 12 items/i)).toBeInTheDocument();
+
+      // Click First page
+      fireEvent.click(screen.getByRole('button', { name: 'First page' }));
+      expect(screen.getByText(/Displaying 1 - 5 of 12 items/i)).toBeInTheDocument();
+
+      // Click specific page 2
+      fireEvent.click(screen.getByRole('button', { name: '2' }));
+      expect(screen.getByText(/Displaying 6 - 10 of 12 items/i)).toBeInTheDocument();
+
+      // Change rows per page to 10
+      fireEvent.change(screen.getByRole('combobox', { name: 'Rows per page' }), { target: { value: '10' } });
+      expect(screen.getByText(/Displaying 1 - 10 of 12 items/i)).toBeInTheDocument();
+    });
+
+    test('handles pagination with many pages (> 7) and ellipsis', async () => {
+      const rfqs: RFQItem[] = Array.from({ length: 50 }, (_, i) =>
+        makeRfq({ id: `rfq-p-${i + 1}`, rfqNumber: `RFQ-P-${i + 1}`, title: `Item ${i + 1}`, quotes: [] })
+      );
+      const opps = rfqs.map((r) => makeOpportunity(r));
+      installApp({ rfqs, vendorOpportunities: opps });
+      await renderForm();
+
+      // Change rows per page to 5 => 10 total pages
+      fireEvent.change(screen.getByRole('combobox', { name: 'Rows per page' }), { target: { value: '5' } });
+      expect(screen.getByText('...')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '10' })).toBeInTheDocument();
+
+      // Jump to page 2 and page 3
+      fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+      expect(screen.getByText(/Displaying 11 - 15 of 50 items/i)).toBeInTheDocument();
+    });
+
+    test('downloading an already unlocked public RFQ does not deduct credits', async () => {
+      const rfq = makeRfq({ id: 'rfq-unlocked', rfqNumber: 'RFQ-UNLOCKED-1', sourcingMode: 'mode_0', quotes: [] });
+      const opp = makeOpportunity(rfq);
+      const app = installApp({
+        rfqs: [rfq],
+        vendorOpportunities: [opp],
+        vendorUnlockedRfqIds: ['RFQ-UNLOCKED-1'],
+      });
+      await renderForm();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Download RFQ' }));
+      await waitFor(() => {
+        expect(app.showToast).toHaveBeenCalledWith(
+          'RFQ Downloaded',
+          expect.stringContaining('Already unlocked (0 credits deducted)'),
+          'success'
+        );
+      });
+    });
+
+    test('reopening bid form for previously submitted quote restores line-item prices', async () => {
+      const rfq = makeRfq({
+        id: 'rfq-resubmit',
+        rfqNumber: 'RFQ-RESUB-1',
+        assignedVendors: [{ email: VENDOR_EMAIL, name: VENDOR_RECORD.name }],
+        extractedEntities: [
+          makeEntity({ id: 'line-1', itemName: 'Item 1' }),
+          makeEntity({ id: 'line-2', itemName: 'Item 2' }),
+        ],
+        quotes: [
+          {
+            id: 'q-1',
+            vendorId: VENDOR_RECORD.id,
+            vendorEmail: VENDOR_EMAIL,
+            vendorName: VENDOR_RECORD.name,
+            unitPrice: 100,
+            totalPrice: 200,
+            paymentTerms: '30 Days Net',
+            remarks: 'Special offer',
+            lineItemQuotes: [
+              { lineItemId: 'line-1', unitPrice: 100 },
+              { lineItemId: 'line-2', unitPrice: 100 },
+            ],
+            submittedAt: '2026-09-02T10:00:00Z',
+            submittedDate: '2026-09-02',
+            submissionMethod: 'portal',
+            status: 'Submitted',
+          } as any,
+        ],
+      });
+      const opp = makeOpportunity(rfq, { status: 'submitted' });
+      installApp({
+        rfqs: [rfq],
+        vendorOpportunities: [opp],
+        currentUserSession: SESSION,
+      });
+      await renderForm();
+
+      const resubmitBtn = screen.getByRole('button', { name: /Resubmit Bid/i });
+      fireEvent.click(resubmitBtn);
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('30 Days Net')).toBeInTheDocument();
+        expect(screen.getByDisplayValue('Special offer')).toBeInTheDocument();
+      });
+    });
+
+    test('handles failed subscription pricing and allows retry', async () => {
+      jest.mocked(fetchSubscriptionPricing).mockResolvedValueOnce(null);
+      installLockedScenario();
+      await renderForm();
+
+      await openUpgradeModalFromRow();
+      await waitFor(() => {
+        expect(screen.getByText(UI_STRINGS.vendorWorkspace.pricesUnavailableNotice)).toBeInTheDocument();
+      });
+
+      // Click retry
+      jest.mocked(fetchSubscriptionPricing).mockResolvedValueOnce(PRICING_RESPONSE);
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorWorkspace.pricesRetryAction }));
+      await waitFor(() => {
+        expect(screen.getByText(CONNECT_PLAN_TITLE)).toBeInTheDocument();
+      });
+    });
+
+    test('hides buyer logo image if it fails to load', async () => {
+      const rfq = makeRfq({
+        id: 'rfq-logo',
+        rfqNumber: 'RFQ-LOGO-1',
+        buyerAccountName: 'Logo Buyer',
+        buyerCompanyLogo: 'https://example.com/logo.png',
+        assignedVendors: [{ email: VENDOR_EMAIL, name: VENDOR_RECORD.name }],
+        quotes: [],
+      } as any);
+      const opp = makeOpportunity(rfq, { buyer: 'Logo Buyer' });
+      installApp({
+        rfqs: [rfq],
+        vendorOpportunities: [opp],
+        currentUserSession: SESSION,
+      });
+      await renderForm();
+
+      const logoImg = screen.getByAltText('Logo Buyer');
+      expect(logoImg).toBeInTheDocument();
+      fireEvent.error(logoImg);
+      expect(logoImg.style.display).toBe('none');
+    });
+
+    test('identifies own buyer RFQ when assigned by vendor id or vendor name', async () => {
+      const rfqIdMatch = makeRfq({
+        id: 'rfq-by-id',
+        rfqNumber: 'RFQ-BY-ID-1',
+        assignedVendors: [{ id: 'my-vendor-id', name: 'Other Name', email: 'other@example.com' }],
+        quotes: [],
+      });
+      const rfqNameMatch = makeRfq({
+        id: 'rfq-by-name',
+        rfqNumber: 'RFQ-BY-NAME-1',
+        assignedVendors: [{ id: 'other-id', name: 'My Vendor Company', email: 'other@example.com' }],
+        quotes: [],
+      });
+      const opp1 = makeOpportunity(rfqIdMatch);
+      const opp2 = makeOpportunity(rfqNameMatch);
+
+      installApp({
+        rfqs: [rfqIdMatch, rfqNameMatch],
+        vendorOpportunities: [opp1, opp2],
+        currentUserSession: { email: 'vendor@example.com' } as any,
+      });
+      fetchHandler = async (url) => {
+        if (url.includes('/api/vendors/lookup')) {
+          return new Response(JSON.stringify({
+            vendor: { id: 'my-vendor-id', name: 'My Vendor Company', companyName: 'My Vendor Company' }
+          }), { status: 200 });
+        }
+        return defaultFetchHandler(url);
+      };
+      await renderForm();
+
+      // Both should appear in My Enquiries because of ID and Name match
+      expect(screen.getByText('RFQ-BY-ID-1')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-BY-NAME-1')).toBeInTheDocument();
+    });
   });
 });

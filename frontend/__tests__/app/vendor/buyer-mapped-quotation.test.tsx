@@ -198,18 +198,21 @@ describe('Buyer-Mapped Vendor Access & Unlimited Quotation in QuotationForm', ()
       );
     });
 
-    // Wait for RFQs to render in table
+    // Wait for buyer-mapped RFQ in My Enquiries tab
     await waitFor(() => {
       expect(screen.getByText('RFQ-ALPHA-101')).toBeInTheDocument();
-      expect(screen.getByText('RFQ-BETA-202')).toBeInTheDocument();
     });
 
     // The buyer-mapped row (RFQ-ALPHA-101) should have Submit Quote button available even with 0 credits
     const submitButtons = screen.getAllByRole('button', { name: /Submit Quote/i });
     expect(submitButtons.length).toBeGreaterThanOrEqual(1);
 
-    // The unmapped external buyer row (RFQ-BETA-202) should show Premium Locked badge
-    expect(screen.getByText(/🔒 Premium Locked/i)).toBeInTheDocument();
+    // Switch to Public Enquiries tab to verify unmapped external buyer row (RFQ-BETA-202) is locked
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    await waitFor(() => {
+      expect(screen.getByText('RFQ-BETA-202')).toBeInTheDocument();
+      expect(screen.getByText(/🔒 Premium Locked/i)).toBeInTheDocument();
+    });
   });
 
   test('submitting a quote on mapped buyer RFQ opens bid form and successfully submits without subscription', async () => {
