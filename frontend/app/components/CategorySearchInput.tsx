@@ -34,6 +34,9 @@ export default function CategorySearchInput({
   disabled = false,
   required = false,
   invalid = false,
+  minChars = 0,
+  className = 'w-44 max-w-full',
+  dropdownClassName,
 }: CategorySearchInputProps) {
   const listId = useId();
   // Until the user types, the field shows the chosen category and the list shows every category.
@@ -42,10 +45,14 @@ export default function CategorySearchInput({
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const searching = typing && typed.trim() !== '';
-  const { shown, total } = searchCategoryOptions(options, searching ? typed : '');
+  const query = typing ? typed.trim() : '';
+  const meetsMinChars = minChars === 0 || query.length >= minChars;
+  const searching = typing && query !== '';
+  const { shown, total } = meetsMinChars
+    ? searchCategoryOptions(options, searching ? query : '')
+    : { shown: [], total: 0 };
   const expanded = open && !disabled;
-  const hasList = expanded && shown.length > 0;
+  const hasList = expanded && meetsMinChars && shown.length > 0;
   const highlighted = Math.min(activeIndex, Math.max(shown.length - 1, 0));
   const text = typing ? typed : value;
 
@@ -103,7 +110,7 @@ export default function CategorySearchInput({
   };
 
   return (
-    <div className="w-44 max-w-full">
+    <div className={`relative ${className}`}>
       <div className="relative">
         <input
           type="text"
@@ -134,7 +141,7 @@ export default function CategorySearchInput({
             aria-label={UI_STRINGS.categorySearch.clearAria}
             title={UI_STRINGS.categorySearch.clearAria}
             onClick={() => choose('')}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-slate-700 dark:hover:text-gray-200"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 cursor-pointer"
           >
             <X size={11} />
           </button>
@@ -142,8 +149,16 @@ export default function CategorySearchInput({
       </div>
 
       {expanded && (
-        <div className="mt-1 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-md overflow-hidden">
-          {shown.length > 0 ? (
+        <div
+          className={`mt-1 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-md overflow-hidden ${
+            dropdownClassName || ''
+          }`}
+        >
+          {!meetsMinChars ? (
+            <p className="px-2.5 py-2 text-xs text-slate-500 dark:text-gray-400">
+              {formatString(UI_STRINGS.categorySearch.minCharsHint, { minChars })}
+            </p>
+          ) : shown.length > 0 ? (
             <>
               <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-gray-400">
                 {describeMatches(shown.length, total, searching)}

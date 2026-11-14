@@ -220,6 +220,12 @@ export interface CategorySearchInputProps {
   disabled?: boolean;
   required?: boolean;
   invalid?: boolean;
+  /** Minimum characters to type before suggestions appear. Default is 0. */
+  minChars?: number;
+  /** Optional custom container CSS classes */
+  className?: string;
+  /** Optional custom dropdown CSS classes */
+  dropdownClassName?: string;
 }
 
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry' | 'ai_extraction';

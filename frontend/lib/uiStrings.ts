@@ -3238,6 +3238,7 @@ sellerDirectory: {
   /** The category search field in the RFQ line item tables. It lists the categories of the chosen division. */
   categorySearch: {
     searchPlaceholder: 'Search category…',
+    minCharsHint: 'Type at least {minChars} characters to search…',
     noMatches: 'No matching categories.',
     countAll: '{total} categories',
     countMatching: '{total} matching categories',

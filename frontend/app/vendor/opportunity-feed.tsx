@@ -8,6 +8,7 @@ import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl } from '@/lib/rfqClient';
 import { logger } from '@/lib/logger';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import { VendorOpportunity } from '@/lib/types';
 import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import {
@@ -360,6 +361,46 @@ export default function OpportunityFeed({
 
   const [statusFilter, setStatusFilter] = React.useState<'all' | 'open' | 'submitted' | 'closed'>('all');
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false);
+  const [statusModalFilter, setStatusModalFilter] = React.useState<'all' | 'open' | 'closed' | null>(null);
+  const [statusModalSearch, setStatusModalSearch] = React.useState('');
+
+  const handleStatFilterClick = (status: 'all' | 'open' | 'closed') => {
+    setStatusFilter(status);
+    setCurrentPage(1);
+    setCurrentPageNet(1);
+    setStatusModalSearch('');
+    setStatusModalFilter(status);
+  };
+
+  React.useEffect(() => {
+    if (!statusModalFilter) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setStatusModalFilter(null);
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [statusModalFilter]);
+
+  const statusModalRfqs = React.useMemo(() => {
+    if (!statusModalFilter) return [];
+    let list = vendorOpportunities;
+    if (statusModalFilter === 'open') {
+      list = list.filter((o) => o.status !== 'Closed' && o.status !== 'Expired');
+    } else if (statusModalFilter === 'closed') {
+      list = list.filter((o) => o.status === 'Closed' || o.status === 'Expired');
+    }
+    if (statusModalSearch.trim()) {
+      const q = statusModalSearch.toLowerCase().trim();
+      list = list.filter((o) => {
+        const title = (o.title || '').toLowerCase();
+        const rfqNum = (o.rfqNumber || '').toLowerCase();
+        const buyer = (o.buyer || '').toLowerCase();
+        const cat = `${o.majorCategory || ''} ${o.minorCategory || ''}`.toLowerCase();
+        return title.includes(q) || rfqNum.includes(q) || buyer.includes(q) || cat.includes(q);
+      });
+    }
+    return list;
+  }, [statusModalFilter, vendorOpportunities, statusModalSearch]);
 
   const handleResetFilters = () => {
     setSelectedBuyerDirect('all');
@@ -724,7 +765,7 @@ export default function OpportunityFeed({
         >
           ‹
         </button>
-        {Array.from({ length: totalP > 0 ? totalP : 1 }, (_, i) => i + 1).map((pageNum) => (
+        {Array.from({ length: Number.isFinite(totalP) && totalP > 0 ? Math.min(totalP, 1000) : 1 }, (_, i) => i + 1).map((pageNum) => (
           <button
             key={pageNum}
             type="button"
@@ -960,7 +1001,16 @@ export default function OpportunityFeed({
       {/* 4 Stat Cards Row (Total RFQs, Open RFQs, Closed RFQs, Due Today + Submit Quote Now) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3.5 items-stretch">
         {/* Card 1: Total RFQs */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+        <button
+          type="button"
+          onClick={() => handleStatFilterClick('all')}
+          className={`bg-white dark:bg-gray-900 rounded-2xl p-4 border transition-all text-left flex items-center gap-3.5 cursor-pointer hover:shadow-md hover:scale-[1.01] ${
+            statusFilter === 'all'
+              ? 'border-blue-500 ring-2 ring-blue-500/30 shadow-sm'
+              : 'border-slate-200/80 dark:border-gray-800 shadow-xs'
+          }`}
+          title="Filter to all RFQs and view popup list"
+        >
           <div className="w-11 h-11 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-100 dark:border-blue-900/40">
             <FileText size={20} />
           </div>
@@ -970,10 +1020,19 @@ export default function OpportunityFeed({
               {totalRfqsCount}
             </span>
           </div>
-        </div>
+        </button>
 
         {/* Card 2: Open RFQs */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+        <button
+          type="button"
+          onClick={() => handleStatFilterClick('open')}
+          className={`bg-white dark:bg-gray-900 rounded-2xl p-4 border transition-all text-left flex items-center gap-3.5 cursor-pointer hover:shadow-md hover:scale-[1.01] ${
+            statusFilter === 'open'
+              ? 'border-emerald-500 ring-2 ring-emerald-500/30 shadow-sm'
+              : 'border-slate-200/80 dark:border-gray-800 shadow-xs'
+          }`}
+          title="Filter to Open RFQs and view popup list"
+        >
           <div className="w-11 h-11 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900/40">
             <Send size={20} />
           </div>
@@ -983,10 +1042,19 @@ export default function OpportunityFeed({
               {openRfqsCount}
             </span>
           </div>
-        </div>
+        </button>
 
         {/* Card 3: Closed RFQs */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+        <button
+          type="button"
+          onClick={() => handleStatFilterClick('closed')}
+          className={`bg-white dark:bg-gray-900 rounded-2xl p-4 border transition-all text-left flex items-center gap-3.5 cursor-pointer hover:shadow-md hover:scale-[1.01] ${
+            statusFilter === 'closed'
+              ? 'border-slate-500 ring-2 ring-slate-500/30 shadow-sm'
+              : 'border-slate-200/80 dark:border-gray-800 shadow-xs'
+          }`}
+          title="Filter to Closed RFQs and view popup list"
+        >
           <div className="w-11 h-11 rounded-xl bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 flex items-center justify-center shrink-0 border border-slate-200 dark:border-gray-700">
             <Clock size={20} />
           </div>
@@ -996,7 +1064,7 @@ export default function OpportunityFeed({
               {closedRfqsCount}
             </span>
           </div>
-        </div>
+        </button>
 
         {/* Card 4: Due Today Deadline RFQ */}
         <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
@@ -1151,6 +1219,7 @@ export default function OpportunityFeed({
                     {UI_STRINGS.vendorFeed.buyerFilterLabel}
                   </span>
                   <select
+                    aria-label={UI_STRINGS.vendorFeed.buyerFilterLabel}
                     value={selectedBuyerDirect}
                     onChange={handleBuyerChangeDirect}
                     className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
@@ -1164,6 +1233,7 @@ export default function OpportunityFeed({
                 <div className="sr-only">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Major Category</span>
                   <select
+                    aria-label="Major Category"
                     value={selectedMajorCategoryDirect}
                     onChange={handleMajorCategoryDirect}
                     className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
@@ -1175,13 +1245,32 @@ export default function OpportunityFeed({
                   </select>
                 </div>
 
-                {/* Category Filter (All 310 Minor Categories) */}
-                <div className="flex flex-col gap-1">
+                {/* Category Filter with 3-char autocomplete search */}
+                <div className="flex flex-col gap-1 relative">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Category</span>
+                  <CategorySearchInput
+                    label="Category"
+                    options={allMinorCategories}
+                    value={selectedMinorCategoryDirect === 'all' ? '' : selectedMinorCategoryDirect}
+                    onChange={(minor) => {
+                      const next = minor || 'all';
+                      setSelectedMinorCategoryDirect(next);
+                      setSelectedMinorCategory(next);
+                      setCurrentPage(1);
+                    }}
+                    placeholder="Search category (min 3 chars)..."
+                    minChars={3}
+                    className="w-full min-w-[200px]"
+                    dropdownClassName="absolute z-30 left-0 right-0 min-w-[240px]"
+                  />
+                  {/* Preserved hidden select for backwards-compatibility */}
                   <select
+                    aria-label="Direct Minor Category"
+                    aria-hidden="true"
+                    tabIndex={-1}
                     value={selectedMinorCategoryDirect}
                     onChange={handleMinorCategoryDirect}
-                    className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
+                    className="sr-only"
                   >
                     <option value="all">All Categories</option>
                     {selectedMajorCategoryDirect !== 'all' ? (
@@ -1328,6 +1417,7 @@ export default function OpportunityFeed({
               <div className="sr-only">
                 <span className="text-[9px] uppercase font-bold text-slate-400">Major Category</span>
                 <select
+                  aria-label="Network Major Category"
                   value={selectedMajorCategoryNet}
                   onChange={handleMajorCategoryNet}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
@@ -1339,13 +1429,32 @@ export default function OpportunityFeed({
                 </select>
               </div>
 
-              {/* Minor Category Dropdown */}
-              <div className="flex flex-col gap-1">
+              {/* Minor Category Dropdown with 3-char autocomplete search */}
+              <div className="flex flex-col gap-1 relative">
                 <span className="text-[9px] uppercase font-bold text-slate-400">Category</span>
+                <CategorySearchInput
+                  label="Category"
+                  options={allMinorCategories}
+                  value={selectedMinorCategoryNet === 'all' ? '' : selectedMinorCategoryNet}
+                  onChange={(minor) => {
+                    const next = minor || 'all';
+                    setSelectedMinorCategoryNet(next);
+                    setSelectedMinorCategory(next);
+                    setCurrentPageNet(1);
+                  }}
+                  placeholder="Search category (min 3 chars)..."
+                  minChars={3}
+                  className="w-full min-w-[200px]"
+                  dropdownClassName="absolute z-30 left-0 right-0 min-w-[240px]"
+                />
+                {/* Preserved hidden select for backwards-compatibility */}
                 <select
+                  aria-label="Network Minor Category"
+                  aria-hidden="true"
+                  tabIndex={-1}
                   value={selectedMinorCategoryNet}
                   onChange={handleMinorCategoryNet}
-                  className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
+                  className="sr-only"
                 >
                   <option value="all">All Categories</option>
                   {selectedMajorCategoryNet !== 'all' ? (
@@ -1725,6 +1834,198 @@ export default function OpportunityFeed({
               >
                 <span>Open Full RFQ Workspace</span>
                 <ExternalLink size={13} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RFQ STATUS FILTER POPUP MODAL */}
+      {statusModalFilter && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="status-modal-title"
+          onClick={() => setStatusModalFilter(null)}
+        >
+          <div
+            className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-3xl p-6 max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex justify-between items-center border-b border-slate-100 dark:border-gray-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                    statusModalFilter === 'open'
+                      ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400'
+                      : statusModalFilter === 'closed'
+                      ? 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
+                      : 'bg-blue-50 text-blue-600 dark:bg-blue-950/50 dark:text-blue-400'
+                  }`}
+                >
+                  {statusModalFilter === 'open' ? (
+                    <Send size={18} />
+                  ) : statusModalFilter === 'closed' ? (
+                    <Clock size={18} />
+                  ) : (
+                    <FileText size={18} />
+                  )}
+                </div>
+                <div>
+                  <h3 id="status-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                    {statusModalFilter === 'open'
+                      ? 'Open RFQs'
+                      : statusModalFilter === 'closed'
+                      ? 'Closed RFQs'
+                      : 'Total RFQs'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                    {statusModalFilter === 'open'
+                      ? 'Active RFQs currently accepting quotes and responses'
+                      : statusModalFilter === 'closed'
+                      ? 'RFQs that are closed or expired'
+                      : 'All available RFQs across invitations and marketplace'}
+                  </p>
+                </div>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                    statusModalFilter === 'open'
+                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
+                      : statusModalFilter === 'closed'
+                      ? 'bg-slate-200 text-slate-700 dark:bg-gray-700 dark:text-gray-300'
+                      : 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300'
+                  }`}
+                >
+                  {statusModalRfqs.length} RFQ{statusModalRfqs.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setStatusModalFilter(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1.5 rounded-lg cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Quick Search inside Modal */}
+            <div className="relative">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                <Search size={14} />
+              </span>
+              <input
+                type="text"
+                placeholder="Search by RFQ number, title, buyer, or category..."
+                value={statusModalSearch}
+                onChange={(e) => setStatusModalSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 rounded-xl text-xs font-medium text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            {/* Modal RFQ Table / Scrollable list */}
+            <div className="flex-1 overflow-y-auto border border-slate-100 dark:border-gray-800 rounded-2xl">
+              {statusModalRfqs.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 dark:text-gray-500">
+                  <p className="font-semibold text-sm">No matching RFQs found</p>
+                  <p className="text-xs mt-1">Try adjusting your search criteria</p>
+                </div>
+              ) : (
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-gray-800/80 sticky top-0 border-b border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 font-bold text-[11px] uppercase tracking-wider">
+                    <tr>
+                      <th className="py-2.5 px-3">RFQ Number</th>
+                      <th className="py-2.5 px-3">Title / Requirement</th>
+                      <th className="py-2.5 px-3">Buyer</th>
+                      <th className="py-2.5 px-3">Category</th>
+                      <th className="py-2.5 px-3">Deadline</th>
+                      <th className="py-2.5 px-3">Status</th>
+                      <th className="py-2.5 px-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                    {statusModalRfqs.map((opp) => {
+                      const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
+                      return (
+                        <tr
+                          key={opp.id}
+                          className="hover:bg-slate-50/70 dark:hover:bg-gray-800/40 transition-colors"
+                        >
+                          <td className="py-3 px-3 mono font-bold text-indigo-600 dark:text-indigo-400">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStatusModalFilter(null);
+                                router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`);
+                              }}
+                              className="hover:underline cursor-pointer text-left"
+                            >
+                              {opp.rfqNumber}
+                            </button>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-slate-900 dark:text-white block line-clamp-1">
+                              {opp.title}
+                            </span>
+                            {opp.deliveryLocation && (
+                              <span className="text-[10px] text-slate-400">{opp.deliveryLocation}</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 font-medium text-slate-700 dark:text-gray-300">
+                            {opp.buyerDetailsHidden ? 'Protected (48h)' : opp.buyer || 'Procurement Team'}
+                          </td>
+                          <td className="py-3 px-3 text-slate-600 dark:text-gray-400">
+                            <span className="badge badge-subtle">
+                              {opp.minorCategory || opp.majorCategory || opp.category || 'General'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-slate-600 dark:text-gray-400 whitespace-nowrap">
+                            {opp.deadline ? opp.deadline.split('T')[0] : 'Open'}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`badge ${isClosed ? 'badge-slate' : 'badge-emerald'}`}>
+                              {isClosed ? 'Closed' : 'Open'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStatusModalFilter(null);
+                                router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`);
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-bold hover:bg-indigo-100 transition-colors inline-block cursor-pointer"
+                            >
+                              View Details
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-between items-center pt-2">
+              <span className="text-[11px] text-slate-400">
+                Showing {statusModalRfqs.length} of{' '}
+                {statusModalFilter === 'open'
+                  ? openRfqsCount
+                  : statusModalFilter === 'closed'
+                  ? closedRfqsCount
+                  : totalRfqsCount}{' '}
+                RFQs
+              </span>
+              <button
+                type="button"
+                onClick={() => setStatusModalFilter(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-gray-800 hover:bg-slate-200 dark:hover:bg-gray-700 font-bold text-slate-700 dark:text-gray-200 transition-colors cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>

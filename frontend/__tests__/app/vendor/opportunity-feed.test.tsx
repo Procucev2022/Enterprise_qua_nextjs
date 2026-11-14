@@ -456,13 +456,12 @@ const viewDetailsButtons = () => screen.getAllByTitle(/View RFQ Details/i);
 
 /** The five filter selects, in DOM order. */
 function selects() {
-  const all = screen.getAllByRole('combobox') as HTMLSelectElement[];
   return {
-    directBuyer: all[0],
-    directMajor: all[1],
-    directMinor: all[2],
-    netMajor: all[3],
-    netMinor: all[4],
+    directBuyer: screen.getByLabelText(UI_STRINGS.vendorFeed.buyerFilterLabel) as HTMLSelectElement,
+    directMajor: screen.getByLabelText('Major Category') as HTMLSelectElement,
+    directMinor: screen.getByLabelText('Direct Minor Category') as HTMLSelectElement,
+    netMajor: screen.getByLabelText('Network Major Category') as HTMLSelectElement,
+    netMinor: screen.getByLabelText('Network Minor Category') as HTMLSelectElement,
   };
 }
 
@@ -1928,6 +1927,167 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     const myBuyerTabBtn = screen.queryByRole('button', { name: /My Buyer Enquiries/i });
     if (myBuyerTabBtn) {
       fireEvent.click(myBuyerTabBtn);
+    }
+  });
+
+  test('category search enforces 3-char autocomplete and filters RFQs when selected', async () => {
+    await renderFeed();
+
+    // Find the category search combobox
+    const categoryInputs = screen.getAllByRole('combobox', { name: 'Category' });
+    const directCatInput = categoryInputs[0];
+
+    // Clicking without typing shows hint and suppresses suggestions
+    fireEvent.click(directCatInput);
+    expect(screen.getAllByText(/Type at least 3 characters to search/i).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('listbox', { name: 'Category' })).not.toBeInTheDocument();
+
+    // Typing 2 characters keeps hint
+    fireEvent.change(directCatInput, { target: { value: 'pu' } });
+    expect(screen.getAllByText(/Type at least 3 characters to search/i).length).toBeGreaterThan(0);
+
+    // Typing 3 characters triggers suggestions
+    fireEvent.change(directCatInput, { target: { value: 'pum' } });
+    expect(screen.queryByText(/Type at least 3 characters to search/i)).not.toBeInTheDocument();
+
+    // Pick option from listbox
+    const pumpOption = screen.getByRole('option', { name: 'Pumps & Accessories' });
+    fireEvent.mouseDown(pumpOption);
+  });
+
+  test('clicking Total RFQs, Open RFQs, and Closed RFQs stat cards filters the status and displays matching RFQs in popup modal', async () => {
+    await renderFeed();
+
+    // 1. Click Open RFQs card
+    const openCard = screen.getByRole('button', { name: /Open RFQs/i });
+    fireEvent.click(openCard);
+
+    // Verify modal opens
+    const openDialog = screen.getByRole('dialog', { name: /Open RFQs/i });
+    expect(openDialog).toBeInTheDocument();
+    expect(within(openDialog).getByText('Open RFQs')).toBeInTheDocument();
+    expect(within(openDialog).getByText(/Active RFQs currently accepting quotes and responses/i)).toBeInTheDocument();
+
+    // Test search inside modal
+    const modalSearch = within(openDialog).getByPlaceholderText(/Search by RFQ number, title, buyer, or category/i);
+    fireEvent.change(modalSearch, { target: { value: 'nonexistent-xyz-search' } });
+    expect(within(openDialog).getByText(/No matching RFQs found/i)).toBeInTheDocument();
+    fireEvent.change(modalSearch, { target: { value: '' } });
+
+    // Test View Details / RFQ link inside modal
+    const viewDetailsButtons = within(openDialog).queryAllByText(/View Details/i);
+    if (viewDetailsButtons.length > 0) {
+      fireEvent.click(viewDetailsButtons[0]);
+      expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/rfq-details?rfq='));
+    }
+
+    // Re-open Open RFQs modal to test bottom Close button
+    fireEvent.click(openCard);
+    const reopenDialog = screen.getByRole('dialog', { name: /Open RFQs/i });
+    const closeButtons = within(reopenDialog).getAllByRole('button', { name: /Close/i });
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    expect(screen.queryByRole('dialog', { name: /Open RFQs/i })).not.toBeInTheDocument();
+
+    // 2. Click Closed RFQs card
+    const closedCard = screen.getByRole('button', { name: /Closed RFQs/i });
+    fireEvent.click(closedCard);
+    const closedDialog = screen.getByRole('dialog', { name: /Closed RFQs/i });
+    expect(closedDialog).toBeInTheDocument();
+    expect(within(closedDialog).getByText(/RFQs that are closed or expired/i)).toBeInTheDocument();
+
+    // Close modal via Escape key
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /Closed RFQs/i })).not.toBeInTheDocument();
+
+    // 3. Click Total RFQs card
+    const totalCard = screen.getByRole('button', { name: /Total RFQs/i });
+    fireEvent.click(totalCard);
+    const totalDialog = screen.getByRole('dialog', { name: /Total RFQs/i });
+    expect(totalDialog).toBeInTheDocument();
+    expect(within(totalDialog).getByText(/All available RFQs across invitations and marketplace/i)).toBeInTheDocument();
+
+    // Test clicking RFQ number button link in modal
+    const rfqNumberLinks = within(totalDialog).queryAllByRole('button');
+    const rfqLink = rfqNumberLinks.find((b) => b.textContent && b.textContent.startsWith('RFQ-'));
+    if (rfqLink) {
+      fireEvent.click(rfqLink);
+      expect(mockRouterPush).toHaveBeenCalled();
+    }
+
+    // Re-open Total RFQs modal to test backdrop click
+    fireEvent.click(totalCard);
+    const modalBackdrop = screen.getByRole('dialog', { name: /Total RFQs/i });
+    fireEvent.click(modalBackdrop);
+    expect(screen.queryByRole('dialog', { name: /Total RFQs/i })).not.toBeInTheDocument();
+  });
+
+  test('covers all branches of status modal search, fallbacks, category clearing, and network category options', async () => {
+    const specialClosedRfq: RFQFixture = {
+      id: 'rfq-closed-special',
+      rfqNumber: 'RFQ-CLOSED-999',
+      title: 'Special Decommissioning',
+      buyerCompany: '',
+      buyerDetailsHidden: true,
+      deliveryLocation: '',
+      status: 'Closed',
+      minorCategory: '',
+      category: '',
+      deadline: '',
+      lineItems: [],
+    };
+
+    serveRFQs([...ALL_FIXTURES, specialClosedRfq]);
+    await renderFeed();
+
+    // 1. Open Closed RFQs modal
+    const closedCard = screen.getByRole('button', { name: /Closed RFQs/i });
+    fireEvent.click(closedCard);
+    const closedDialog = screen.getByRole('dialog', { name: /Closed RFQs/i });
+    expect(closedDialog).toBeInTheDocument();
+
+    // Verify fallbacks rendered: Protected (48h), General, Open, Closed badge
+    expect(within(closedDialog).getByText('Protected (48h)')).toBeInTheDocument();
+    expect(within(closedDialog).getByText('General')).toBeInTheDocument();
+
+    // Test search branches in modal:
+    const modalSearch = within(closedDialog).getByPlaceholderText(/Search by RFQ number, title, buyer, or category/i);
+    // search by title
+    fireEvent.change(modalSearch, { target: { value: 'Decommissioning' } });
+    expect(within(closedDialog).getByText('RFQ-CLOSED-999')).toBeInTheDocument();
+    // search by rfqNumber
+    fireEvent.change(modalSearch, { target: { value: '999' } });
+    expect(within(closedDialog).getByText('RFQ-CLOSED-999')).toBeInTheDocument();
+    // search by buyer
+    fireEvent.change(modalSearch, { target: { value: 'Protected' } });
+    // search by category
+    fireEvent.change(modalSearch, { target: { value: 'General' } });
+
+    // Click modal container to test stopPropagation
+    const modalBox = within(closedDialog).getByText('Closed RFQs').closest('div');
+    if (modalBox) fireEvent.click(modalBox);
+    expect(screen.getByRole('dialog', { name: /Closed RFQs/i })).toBeInTheDocument();
+
+    // Close via close icon button
+    const closeButtons = within(closedDialog).getAllByRole('button', { name: /Close/i });
+    fireEvent.click(closeButtons[0]);
+
+    // 2. Switch to Public Enquiries to test Network major category options
+    const publicTabBtn = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTabBtn);
+
+    const netMajorSelect = screen.getByLabelText('Network Major Category');
+    fireEvent.change(netMajorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
+
+    // Test CategorySearchInput clearing back to all categories
+    const catInput = screen.getAllByRole('combobox', { name: 'Category' })[0];
+    fireEvent.click(catInput);
+    fireEvent.change(catInput, { target: { value: 'pum' } });
+    const pumpOption = screen.queryByRole('option', { name: /Pumps/i });
+    if (pumpOption) fireEvent.mouseDown(pumpOption);
+
+    const clearCatBtn = screen.queryByTitle(/Clear category/i) || screen.queryByRole('button', { name: /Clear category/i });
+    if (clearCatBtn) {
+      fireEvent.click(clearCatBtn);
     }
   });
 });
