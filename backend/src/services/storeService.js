@@ -36,7 +36,9 @@ const {
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   RFQ_MINOR_INVITE_LOOKUP,
   RFQ_MINOR_SHORTFALL_ALERT,
+  EXTENSION_HOURS_PER_DAY,
 } = require('../config/constants');
+const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
@@ -64,6 +66,17 @@ const eventOutboxService = require('./eventOutboxService');
 const eventOutboxQueries = require('../db/eventOutboxQueries');
 const cryptoService = require('./cryptoService');
 const { logger } = require('./loggerService');
+
+/**
+ * The failure for a closing-deadline extension whose day count is outside the allowed range, or null
+ * when it is allowed. Both extension paths call this, so they reject the same values as the route schema.
+ */
+function extensionDurationFailure(days) {
+  const check = validatePayload(VALIDATION_SCHEMAS.extendRFQ, { days });
+  return check.isValid
+    ? null
+    : { success: false, reason: 'VALIDATION', error: Object.values(check.errors)[0] };
+}
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
 // same cap the bootstrap payload already applies (MAX_BOOTSTRAP_VENDORS
@@ -5178,7 +5191,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     }
   }
 
-  extendRFQ(id, { hours, userEmail } = {}) {
+  extendRFQ(id, { days, userEmail } = {}) {
     const rfq = this.getRFQById(id);
     if (!rfq) return { success: false, reason: 'NOT_FOUND', error: `RFQ with ID ${id} not found.` };
 
@@ -5190,10 +5203,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       return { success: false, reason: 'ALREADY_EXTENDED', error: 'This RFQ has already received its one-time deadline extension.' };
     }
 
-    const extHours = Number(hours);
-    if (![24, 48].includes(extHours)) {
-      return { success: false, reason: 'VALIDATION', error: 'Extension duration must be either 24 or 48 hours.' };
-    }
+    const durationFailure = extensionDurationFailure(days);
+    if (durationFailure) return durationFailure;
+    const extHours = Number(days) * EXTENSION_HOURS_PER_DAY;
 
     const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
     let baseMs = Date.now();
@@ -5220,7 +5232,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     return { success: true, rfq: updated };
   }
 
-  async extendRFQDurably(id, { hours, userEmail } = {}) {
+  async extendRFQDurably(id, { days, userEmail } = {}) {
     const storageConfigured = pool.hasStorage();
     let rfq;
     try {
@@ -5248,10 +5260,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const initialFailure = extensionFailure(rfq);
     if (initialFailure) return initialFailure;
 
-    const extHours = Number(hours);
-    if (![24, 48].includes(extHours)) {
-      return { success: false, reason: 'VALIDATION', error: 'Extension duration must be either 24 or 48 hours.' };
-    }
+    const durationFailure = extensionDurationFailure(days);
+    if (durationFailure) return durationFailure;
+    const extHours = Number(days) * EXTENSION_HOURS_PER_DAY;
     const now = new Date();
     const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
     let baseMs = now.getTime();

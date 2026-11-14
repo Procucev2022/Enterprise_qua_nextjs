@@ -1895,7 +1895,7 @@ async function updateRFQ(req, res, next) {
 }
 
 /**
- * Extend an open RFQ's closing deadline by 24 or 48 hours (one-time only).
+ * Extend an open RFQ's closing deadline by a whole number of days (one-time only).
  */
 async function extendRFQ(req, res, next) {
   const { id } = req.params;
@@ -1912,9 +1912,9 @@ async function extendRFQ(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
-    const hours = Number(req.body.hours);
+    const days = Number(req.body.days);
     const userEmail = req.user && req.user.email;
-    const result = await storeService.extendRFQDurably(existing.id, { hours, userEmail });
+    const result = await storeService.extendRFQDurably(existing.id, { days, userEmail });
 
     if (!result.success) {
       const statusCode = result.reason === 'NOT_FOUND' ? 404 : 400;
@@ -1922,9 +1922,9 @@ async function extendRFQ(req, res, next) {
       return res.status(statusCode).json({ success: false, error: result.error });
     }
 
-    logger.info(`Extended RFQ ${existing.rfqNumber} by ${hours} hours`, {
+    logger.info(`Extended RFQ ${existing.rfqNumber} by ${days} day(s)`, {
       rfqNumber: existing.rfqNumber,
-      hours,
+      days,
       newDeadline: result.rfq.closingDeadline,
     }, 'RFQ_CONTROLLER');
 

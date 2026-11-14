@@ -967,13 +967,13 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       // Invalid payload
       storeService.getRFQByIdAsync.mockResolvedValue({ id: 'rfq-ext-1' });
       const resBad = mockRes();
-      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 'invalid' }, user: { role: 'admin' } }, resBad, next);
+      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { days: 'invalid' }, user: { role: 'admin' } }, resBad, next);
       expect(resBad.statusCode).toBe(400);
 
       // extendRFQ returns failure
       jest.spyOn(storeService, 'extendRFQDurably').mockResolvedValue({ success: false, reason: 'ALREADY_EXTENDED', error: 'Already extended' });
       const resFail = mockRes();
-      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 24 }, user: { role: 'admin' } }, resFail, next);
+      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { days: 1 }, user: { role: 'admin' } }, resFail, next);
       expect(resFail.statusCode).toBe(400);
 
       // extendRFQ returns success
@@ -982,7 +982,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         rfq: { id: 'rfq-ext-1', closingDeadline: '2026-12-01' },
       });
       const resOk = mockRes();
-      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 24 }, user: { role: 'admin', email: 'b@test.com' } }, resOk, next);
+      await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { days: 1 }, user: { role: 'admin', email: 'b@test.com' } }, resOk, next);
       expect(resOk.statusCode).toBe(200);
       expect(storeService.getRFQByIdAsync).toHaveBeenCalledWith('rfq-ext-1');
 

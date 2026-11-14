@@ -6,9 +6,15 @@ import { authClient } from '@/lib/authClient';
 import {
   SOURCING_MODES,
   PRESENCE_POLL_INTERVAL_MS,
-  ALLOWED_EXTENSION_HOURS,
-  DEFAULT_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_DAYS,
+  EXTENSION_HOURS_PER_DAY,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
   calculateExtendedDeadline,
+  extensionDaysFromHours,
+  formatExtensionDayCount,
+  parseExtensionDays,
+  stepExtensionDays,
   formatCurrency,
   formatFileSize,
   formatIndianDate,
@@ -59,6 +65,8 @@ import {
   Lock,
   CheckCircle2,
   Check,
+  Minus,
+  Plus,
   Building2,
   MessageSquare,
   Reply,
@@ -458,7 +466,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
-  const [extensionHours, setExtensionHours] = useState<24 | 48>(DEFAULT_EXTENSION_HOURS);
+  // The day count typed in the extension dialog, and its parsed value (null while blank, fractional or out of range).
+  const [extensionDaysInput, setExtensionDaysInput] = useState<string>(String(DEFAULT_EXTENSION_DAYS));
+  const extensionDays = parseExtensionDays(extensionDaysInput);
   const [isExtending, setIsExtending] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   // Category-manager assigned-suppliers tab: 'procucev' | 'own'.
@@ -518,11 +528,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     }
   };
 
+  const openExtendModal = () => {
+    setExtensionDaysInput(String(DEFAULT_EXTENSION_DAYS));
+    setExtendModalOpen(true);
+  };
+
   const handleExtendRFQ = async () => {
-    if (!activeRfq || isExtending) return;
+    if (!activeRfq || isExtending || extensionDays === null) return;
     setIsExtending(true);
     try {
-      const result = await extendRFQ(activeRfq.id, extensionHours);
+      const result = await extendRFQ(activeRfq.id, extensionDays);
       if (result.success) {
         setLocalRfq(result.rfq);
         const deadlineStr = result.rfq.closingDeadline || result.rfq.deadline || '';
@@ -531,7 +546,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           DETAILS.extensionSuccessTitle,
           formatString(DETAILS.extensionSuccessMessage, {
             rfqNumber: activeRfq.rfqNumber,
-            hours: extensionHours,
+            duration: formatExtensionDayCount(extensionDays),
             newDeadline: formattedDeadline,
           }),
           'success'
@@ -1289,17 +1304,17 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 {activeRfq.isExtended ? (
                   <span
                     className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60"
-                    title={formatString(DETAILS.alreadyExtendedTooltip, { hours: activeRfq.extensionHours || 24 })}
+                    title={formatString(DETAILS.alreadyExtendedTooltip, { duration: formatExtensionDayCount(extensionDaysFromHours(activeRfq.extensionHours)) })}
                   >
                     <Clock size={12} className="text-amber-600 dark:text-amber-400" />
-                    {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })}
+                    {formatString(DETAILS.extendedBadge, { duration: formatExtensionDayCount(extensionDaysFromHours(activeRfq.extensionHours)) })}
                   </span>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setExtendModalOpen(true)}
+                    onClick={openExtendModal}
                     className="btn btn-xs font-bold inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-xs"
-                    title={formatString(DETAILS.extendRfqAria, { rfqNumber: activeRfq.rfqNumber })}
+                    title={formatString(DETAILS.extendRfqAria, { rfqNumber: activeRfq.rfqNumber, min: EXTENSION_MIN_DAYS, max: EXTENSION_MAX_DAYS })}
                   >
                     <Clock size={12} /> {DETAILS.extendRfqAction}
                   </button>
@@ -1441,7 +1456,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               </span>
               {activeRfq.isExtended && (
                 <span className="block text-[10px] font-semibold text-amber-700 dark:text-amber-400 mt-0.5">
-                  {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })} — {DETAILS.revisedDeadlineNote}
+                  {formatString(DETAILS.extendedBadge, { duration: formatExtensionDayCount(extensionDaysFromHours(activeRfq.extensionHours)) })} — {DETAILS.revisedDeadlineNote}
                 </span>
               )}
             </span>
@@ -3112,43 +3127,66 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <div className="flex justify-between items-center pt-2 border-t border-slate-200 dark:border-gray-700">
                 <span className="text-amber-600 dark:text-amber-400 font-semibold">{DETAILS.revisedDeadlineLabel}</span>
                 <span className="mono font-bold text-amber-600 dark:text-amber-400">
-                  {formatIndianDateTime(
-                    calculateExtendedDeadline(activeRfq.closingDeadline || activeRfq.deadline, extensionHours)
-                  )}
+                  {extensionDays === null
+                    ? formatString(DETAILS.revisedDeadlineUnavailable, { min: EXTENSION_MIN_DAYS, max: EXTENSION_MAX_DAYS })
+                    : formatIndianDateTime(calculateExtendedDeadline(activeRfq.closingDeadline || activeRfq.deadline, extensionDays))}
                 </span>
               </div>
             </div>
 
-            {/* Duration Selector */}
+            {/* Duration: whole days, chosen by the buyer. The calendar above and the hint below update as it changes. */}
             <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300">
-                {DETAILS.selectExtensionDurationLabel}
+              <label htmlFor="extend-rfq-days" className="block text-xs font-semibold text-slate-700 dark:text-gray-300">
+                {DETAILS.extensionDaysLabel}
               </label>
-              <div className="grid grid-cols-2 gap-3">
-                {ALLOWED_EXTENSION_HOURS.map((hours) => {
-                  const isSelected = extensionHours === hours;
-                  const label = hours === 24 ? DETAILS.oneDayLabel : DETAILS.twoDaysLabel;
-                  return (
-                    <button
-                      key={hours}
-                      type="button"
-                      onClick={() => setExtensionHours(hours)}
-                      disabled={isExtending}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        isSelected
-                          ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/30'
-                          : 'border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-sm">+{hours}h</span>
-                        {isSelected && <Check size={14} className="text-amber-600 dark:text-amber-400" />}
-                      </div>
-                      <span className="text-[11px] text-slate-500 dark:text-gray-400 block mt-1">{label}</span>
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExtensionDaysInput(String(stepExtensionDays(extensionDaysInput, -1)))}
+                  disabled={isExtending || extensionDays === EXTENSION_MIN_DAYS}
+                  aria-label={DETAILS.extensionDaysDecreaseAria}
+                  className="p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300 disabled:opacity-40"
+                >
+                  <Minus size={14} />
+                </button>
+                <input
+                  id="extend-rfq-days"
+                  type="number"
+                  inputMode="numeric"
+                  min={EXTENSION_MIN_DAYS}
+                  max={EXTENSION_MAX_DAYS}
+                  step={1}
+                  value={extensionDaysInput}
+                  onChange={(event) => setExtensionDaysInput(event.target.value)}
+                  disabled={isExtending}
+                  aria-invalid={extensionDays === null}
+                  aria-describedby="extend-rfq-days-help"
+                  className={`w-24 text-center font-bold text-sm rounded-lg border px-2 py-2 bg-white dark:bg-gray-800 ${
+                    extensionDays === null
+                      ? 'border-rose-400 text-rose-700 dark:text-rose-300'
+                      : 'border-amber-500 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/30'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setExtensionDaysInput(String(stepExtensionDays(extensionDaysInput, 1)))}
+                  disabled={isExtending || extensionDays === EXTENSION_MAX_DAYS}
+                  aria-label={DETAILS.extensionDaysIncreaseAria}
+                  className="p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300 disabled:opacity-40"
+                >
+                  <Plus size={14} />
+                </button>
               </div>
+              <p
+                id="extend-rfq-days-help"
+                className={`text-[11px] ${
+                  extensionDays === null ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-500 dark:text-gray-400'
+                }`}
+              >
+                {extensionDays === null
+                  ? formatString(DETAILS.extensionDaysInvalid, { min: EXTENSION_MIN_DAYS, max: EXTENSION_MAX_DAYS })
+                  : formatString(DETAILS.extensionHoursPreview, { hours: extensionDays * EXTENSION_HOURS_PER_DAY })}
+              </p>
             </div>
 
             {/* One-time Warning Alert */}
@@ -3170,14 +3208,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <button
                 type="button"
                 onClick={handleExtendRFQ}
-                disabled={isExtending}
+                disabled={isExtending || extensionDays === null}
                 className="btn btn-sm text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs inline-flex items-center gap-1.5 disabled:opacity-50"
               >
                 <Clock size={12} />
                 <span>
                   {isExtending
                     ? DETAILS.extendingAction
-                    : formatString(DETAILS.confirmExtensionAction, { hours: extensionHours })}
+                    : extensionDays === null
+                      ? DETAILS.confirmExtensionDisabledAction
+                      : formatString(DETAILS.confirmExtensionAction, { duration: formatExtensionDayCount(extensionDays) })}
                 </span>
               </button>
             </div>

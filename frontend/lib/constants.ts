@@ -11,7 +11,8 @@ import type {
   OrganizationType,
   SourcingMode,
 } from './types';
-import { UI_STRINGS } from './uiStrings';
+import { UI_STRINGS, formatString } from './uiStrings';
+import { EXTENSION_MIN_DAYS, EXTENSION_MAX_DAYS, isWholeExtensionDays } from './validationSchemas';
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -994,16 +995,19 @@ export function formatIndianDate(value?: string): string {
   }).format(new Date(parsed));
 }
 
-export const ALLOWED_EXTENSION_HOURS = [24, 48] as const;
-export const DEFAULT_EXTENSION_HOURS = 24 as const;
+/** Hours in one day. A closing-deadline extension is stored in hours, so day counts convert through this. */
+export const EXTENSION_HOURS_PER_DAY = 24;
+
+/** The extension the dialog starts on. The allowed range is EXTENSION_MIN_DAYS to EXTENSION_MAX_DAYS. */
+export const DEFAULT_EXTENSION_DAYS = 1;
 
 /**
- * Calculates a revised RFQ deadline extended by 24 or 48 hours.
+ * Calculates a revised RFQ deadline extended by a whole number of days.
  * If the current deadline is in the past, extensions are measured from now.
  */
 export function calculateExtendedDeadline(
   currentDeadline?: string,
-  hours: 24 | 48 = 24,
+  days: number = DEFAULT_EXTENSION_DAYS,
   baseCreatedAt?: string
 ): string {
   let baseMs: number;
@@ -1016,7 +1020,36 @@ export function calculateExtendedDeadline(
   } else {
     baseMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
   }
-  return new Date(baseMs + hours * 60 * 60 * 1000).toISOString();
+  return new Date(baseMs + days * EXTENSION_HOURS_PER_DAY * 60 * 60 * 1000).toISOString();
+}
+
+/** The day count typed into the dialog, or null when it is blank, fractional or outside the range. */
+export function parseExtensionDays(input: string): number | null {
+  const trimmed = input.trim();
+  return isWholeExtensionDays(trimmed) ? Number(trimmed) : null;
+}
+
+/**
+ * The day count after one stepper click. A blank or non-numeric entry steps from the default, and the
+ * result is always kept between EXTENSION_MIN_DAYS and EXTENSION_MAX_DAYS.
+ */
+export function stepExtensionDays(input: string, delta: number): number {
+  const trimmed = input.trim();
+  const parsed = trimmed === '' ? Number.NaN : Number(trimmed);
+  const base = Number.isFinite(parsed) ? Math.trunc(parsed) : DEFAULT_EXTENSION_DAYS;
+  return Math.min(EXTENSION_MAX_DAYS, Math.max(EXTENSION_MIN_DAYS, base + delta));
+}
+
+/** Whole days for a stored extension in hours. A missing or non-positive value reads as the default. */
+export function extensionDaysFromHours(hours?: number): number {
+  if (!hours || hours <= 0) return DEFAULT_EXTENSION_DAYS;
+  return Math.max(EXTENSION_MIN_DAYS, Math.round(hours / EXTENSION_HOURS_PER_DAY));
+}
+
+/** A day count as buyers read it: "1 day", "3 days". */
+export function formatExtensionDayCount(days: number): string {
+  const template = days === 1 ? UI_STRINGS.rfqDetails.dayCountOne : UI_STRINGS.rfqDetails.dayCountOther;
+  return formatString(template, { count: days });
 }
 
 /**
@@ -1194,6 +1227,9 @@ export {
   PHONE_PATTERN,
   PINCODE_PATTERN,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  isWholeExtensionDays,
 } from './validationSchemas';
 
 export const QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES = {

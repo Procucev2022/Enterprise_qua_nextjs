@@ -591,7 +591,8 @@ export interface RFQItem {
   deadline?: string;
   closingDeadline?: string;
   isExtended?: boolean;
-  extensionHours?: 24 | 48;
+  /** Hours added by the one-time extension. Always a whole number of days times 24. */
+  extensionHours?: number;
   extendedAt?: string;
   extendedByEmail?: string | null;
   buyerDetailsHidden?: boolean;
@@ -606,7 +607,8 @@ export interface RFQItem {
 }
 
 export interface RFQExtensionPayload {
-  hours: 24 | 48;
+  /** Whole days to extend the closing deadline by, between the allowed minimum and maximum. */
+  days: number;
 }
 
 export type RFQExtensionResult =

@@ -684,12 +684,15 @@ describe('validatePincode async postal API validator', () => {
       expect(res.isValid).toBe(false);
     });
 
-    test('validates extendRFQ schema custom hours validation', () => {
+    test('validates extendRFQ schema whole-day range and names it when it fails', () => {
       const extendRule = FORM_SCHEMAS.extendRFQ;
-      expect(validateFormData(extendRule, { hours: 24 }).isValid).toBe(true);
-      expect(validateFormData(extendRule, { hours: 48 }).isValid).toBe(true);
-      expect(validateFormData(extendRule, { hours: 12 }).isValid).toBe(false);
-      expect(validateFormData(extendRule, { hours: 'abc' }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 1 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { days: 30 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { days: 31 }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 2.5 }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 'abc' }).isValid).toBe(false);
+      expect(validateFormData(extendRule, {}).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 31 }).fieldErrors.days).toContain('from 1 to 30');
     });
   });
 });

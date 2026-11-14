@@ -5823,3 +5823,9 @@ UI change only, rename Major Category to Division and Minor Category to Category
 Currently, the popup appears on every login. Please fix the condition: show this page only until the buyer uploads their own vendor for the first time. Once the buyer successfully uploads their vendor, never show this popup again on future logins .
 ```
 ---
+### Prompt 210
+**Timestamp**: 2026-11-14T09:51:00+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Extend RFQ Closing Deadline modal was attached.)
+```text
+change this +24 and +48 to give calender and timer how many days buyer want can change this
+```
+---

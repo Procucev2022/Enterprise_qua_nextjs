@@ -3,7 +3,7 @@
  * Single source of truth for all form validations, user input limits, and payload verification.
  */
 
-import { UI_STRINGS } from './uiStrings';
+import { UI_STRINGS, formatString } from './uiStrings';
 
 /**
  * Shortest password accepted when an account holder changes their own password.
@@ -17,6 +17,25 @@ import { UI_STRINGS } from './uiStrings';
  * for callers that expect to find constants there.
  */
 export const PASSWORD_MIN_LENGTH = 8;
+
+/**
+ * Bounds for the one-time closing-deadline extension, in whole days. These mirror EXTENSION_MIN_DAYS and
+ * EXTENSION_MAX_DAYS in backend/src/config/validationSchemas.js, so the form and the server agree.
+ */
+export const EXTENSION_MIN_DAYS = 1;
+export const EXTENSION_MAX_DAYS = 30;
+
+/** True for a whole number of days inside the extension range. Blank and non-numeric input is false. */
+export function isWholeExtensionDays(value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return false;
+  const num = Number(value);
+  return Number.isInteger(num) && num >= EXTENSION_MIN_DAYS && num <= EXTENSION_MAX_DAYS;
+}
+
+const extensionDaysInvalidMessage = formatString(UI_STRINGS.rfqDetails.extensionDaysInvalid, {
+  min: EXTENSION_MIN_DAYS,
+  max: EXTENSION_MAX_DAYS,
+});
 
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
@@ -414,11 +433,11 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
   },
 
   extendRFQ: {
-    hours: {
+    days: {
       required: true,
       type: 'number',
-      custom: (val: unknown) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
-      message: 'Extension hours must be 24 or 48.',
+      custom: (val: unknown) => (isWholeExtensionDays(val) ? null : extensionDaysInvalidMessage),
+      message: extensionDaysInvalidMessage,
     },
   },
 

@@ -1832,20 +1832,20 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(storeService.extendRFQ('non-existent-id')).toEqual(expect.objectContaining({ success: false, reason: 'NOT_FOUND' }));
 
     const rfqForExt = storeService.createRFQ({ title: 'Extendable RFQ', category: 'Pumps', sourcingMode: 'mode_0' });
-    // Invalid hours
-    expect(storeService.extendRFQ(rfqForExt.id, { hours: 12 })).toEqual(expect.objectContaining({ success: false, reason: 'VALIDATION' }));
+    // Day count outside the allowed range
+    expect(storeService.extendRFQ(rfqForExt.id, { days: 0 })).toEqual(expect.objectContaining({ success: false, reason: 'VALIDATION' }));
 
     // Closed RFQ
     storeService.updateRFQ(rfqForExt.id, { status: 'Closed' });
-    expect(storeService.extendRFQ(rfqForExt.id, { hours: 24 })).toEqual(expect.objectContaining({ success: false, reason: 'INVALID_STATUS' }));
+    expect(storeService.extendRFQ(rfqForExt.id, { days: 1 })).toEqual(expect.objectContaining({ success: false, reason: 'INVALID_STATUS' }));
 
-    // Valid 24h extension
+    // Valid one-day extension
     storeService.updateRFQ(rfqForExt.id, { status: 'Quotes Pending' });
-    const extOk = storeService.extendRFQ(rfqForExt.id, { hours: 24 });
+    const extOk = storeService.extendRFQ(rfqForExt.id, { days: 1 });
     expect(extOk.success).toBe(true);
 
     // Already extended
-    expect(storeService.extendRFQ(rfqForExt.id, { hours: 24 })).toEqual(expect.objectContaining({ success: false, reason: 'ALREADY_EXTENDED' }));
+    expect(storeService.extendRFQ(rfqForExt.id, { days: 1 })).toEqual(expect.objectContaining({ success: false, reason: 'ALREADY_EXTENDED' }));
 
     // 7. addQuoteToRFQ with non-existent RFQ
     expect(storeService.addQuoteToRFQ('ghost-rfq-id', {})).toBeNull();
@@ -2130,7 +2130,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     const nextExt = jest.fn();
     const spyGetExt = jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValueOnce({ id: 'rfq-ext-crash' });
     const spyExtend = jest.spyOn(storeService, 'extendRFQDurably').mockRejectedValueOnce(new Error('extend crash'));
-    await rfqController.extendRFQ({ params: { id: 'rfq-ext-crash' }, body: { hours: 24 }, user: { role: 'admin' } }, mockRes(), nextExt);
+    await rfqController.extendRFQ({ params: { id: 'rfq-ext-crash' }, body: { days: 1 }, user: { role: 'admin' } }, mockRes(), nextExt);
     expect(nextExt).toHaveBeenCalled();
     spyGetExt.mockRestore();
     spyExtend.mockRestore();

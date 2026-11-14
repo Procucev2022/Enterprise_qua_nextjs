@@ -254,7 +254,7 @@ describe('storeService vendor request and evaluation branches', () => {
     ];
 
     for (const id of ['rfq-ext-deadline', 'rfq-ext-target', 'rfq-ext-created', 'rfq-ext-bare', 'rfq-ext-invalid']) {
-      const result = await storeService.extendRFQDurably(id, { hours: 24, userEmail: 'buyer@example.test' });
+      const result = await storeService.extendRFQDurably(id, { days: 1, userEmail: 'buyer@example.test' });
       expect(result.success).toBe(true);
       expect(result.rfq).toEqual(expect.objectContaining({
         isExtended: true,

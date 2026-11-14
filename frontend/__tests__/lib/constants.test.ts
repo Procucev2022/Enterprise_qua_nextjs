@@ -23,8 +23,15 @@ import {
   resolveBuyerSourcingMode,
   entitledSourcingModes,
   normalizePoDate,
-  ALLOWED_EXTENSION_HOURS,
-  DEFAULT_EXTENSION_HOURS,
+  EXTENSION_HOURS_PER_DAY,
+  DEFAULT_EXTENSION_DAYS,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  isWholeExtensionDays,
+  parseExtensionDays,
+  stepExtensionDays,
+  extensionDaysFromHours,
+  formatExtensionDayCount,
   calculateExtendedDeadline,
 } from '@/lib/constants';
 
@@ -419,31 +426,86 @@ describe('normalizePoDate', () => {
   });
 
   describe('RFQ Extension Constants & Helper', () => {
-    it('exports allowed extension hours and defaults', () => {
-      expect(ALLOWED_EXTENSION_HOURS).toEqual([24, 48]);
-      expect(DEFAULT_EXTENSION_HOURS).toBe(24);
+    it('exports the extension day range, the default, and the hours in a day', () => {
+      expect(EXTENSION_HOURS_PER_DAY).toBe(24);
+      expect(EXTENSION_MIN_DAYS).toBe(1);
+      expect(EXTENSION_MAX_DAYS).toBe(30);
+      expect(DEFAULT_EXTENSION_DAYS).toBe(1);
     });
 
     it('calculates deadline extension with valid existing deadline', () => {
       const futureDeadline = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-      const extended24 = calculateExtendedDeadline(futureDeadline, 24);
-      expect(new Date(extended24).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
+      const extendedOneDay = calculateExtendedDeadline(futureDeadline, 1);
+      expect(new Date(extendedOneDay).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
 
-      const extended48 = calculateExtendedDeadline(futureDeadline, 48);
-      expect(new Date(extended48).getTime()).toBe(new Date(futureDeadline).getTime() + 48 * 60 * 60 * 1000);
+      const extendedThreeDays = calculateExtendedDeadline(futureDeadline, 3);
+      expect(new Date(extendedThreeDays).getTime()).toBe(new Date(futureDeadline).getTime() + 72 * 60 * 60 * 1000);
+    });
+
+    it('extends by one day when no day count is passed', () => {
+      const futureDeadline = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+      const extended = calculateExtendedDeadline(futureDeadline);
+      expect(new Date(extended).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
     });
 
     it('calculates deadline extension from baseCreatedAt when deadline is not provided', () => {
       const createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
-      const extended = calculateExtendedDeadline(undefined, 24, createdAt);
+      const extended = calculateExtendedDeadline(undefined, 1, createdAt);
       expect(new Date(extended).getTime()).toBeGreaterThan(Date.now());
     });
 
     it('calculates deadline extension from current time when neither deadline nor createdAt is provided', () => {
       const before = Date.now();
-      const extended = calculateExtendedDeadline(undefined, 24);
+      const extended = calculateExtendedDeadline(undefined, 1);
       const extendedMs = new Date(extended).getTime();
       expect(extendedMs).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000 - 1000);
+    });
+
+    it('accepts only whole days inside the range', () => {
+      expect(isWholeExtensionDays(1)).toBe(true);
+      expect(isWholeExtensionDays(30)).toBe(true);
+      expect(isWholeExtensionDays('7')).toBe(true);
+      expect(isWholeExtensionDays(0)).toBe(false);
+      expect(isWholeExtensionDays(31)).toBe(false);
+      expect(isWholeExtensionDays(2.5)).toBe(false);
+      expect(isWholeExtensionDays('')).toBe(false);
+      expect(isWholeExtensionDays(null)).toBe(false);
+      expect(isWholeExtensionDays(undefined)).toBe(false);
+    });
+
+    it('parses a typed day count and returns null for anything that is not a valid whole-day count', () => {
+      expect(parseExtensionDays(' 3 ')).toBe(3);
+      expect(parseExtensionDays('30')).toBe(30);
+      expect(parseExtensionDays('')).toBeNull();
+      expect(parseExtensionDays('0')).toBeNull();
+      expect(parseExtensionDays('31')).toBeNull();
+      expect(parseExtensionDays('1.5')).toBeNull();
+      expect(parseExtensionDays('abc')).toBeNull();
+    });
+
+    it('steps the day count by one and keeps the result inside the range', () => {
+      expect(stepExtensionDays('3', 1)).toBe(4);
+      expect(stepExtensionDays('3', -1)).toBe(2);
+      expect(stepExtensionDays('1', -1)).toBe(1);
+      expect(stepExtensionDays('30', 1)).toBe(30);
+      expect(stepExtensionDays('45', 1)).toBe(30);
+      expect(stepExtensionDays('0', -1)).toBe(1);
+      expect(stepExtensionDays('2.7', 1)).toBe(3);
+      expect(stepExtensionDays('', 1)).toBe(2);
+      expect(stepExtensionDays('abc', -1)).toBe(1);
+    });
+
+    it('reads a stored extension in hours back as whole days', () => {
+      expect(extensionDaysFromHours(24)).toBe(1);
+      expect(extensionDaysFromHours(72)).toBe(3);
+      expect(extensionDaysFromHours(720)).toBe(30);
+      expect(extensionDaysFromHours(undefined)).toBe(1);
+      expect(extensionDaysFromHours(0)).toBe(1);
+    });
+
+    it('labels a day count in the singular for one day and the plural otherwise', () => {
+      expect(formatExtensionDayCount(1)).toBe('1 day');
+      expect(formatExtensionDayCount(3)).toBe('3 days');
     });
   });
 

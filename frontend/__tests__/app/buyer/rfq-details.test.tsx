@@ -4,7 +4,13 @@ import RFQDetails, { daysUntil, lineItemsToCsv, resolveVendorCategories } from '
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { SOURCING_MODES, formatCurrency, formatIndianDate, formatIndianDateTime } from '@/lib/constants';
+import {
+  SOURCING_MODES,
+  formatCurrency,
+  formatExtensionDayCount,
+  formatIndianDate,
+  formatIndianDateTime,
+} from '@/lib/constants';
 import type { ExtractedEntity, QuoteComparison, RFQAttachment, RFQItem } from '@/lib/types';
 
 const mockPush = jest.fn();
@@ -1510,7 +1516,7 @@ function makeInquiry(overrides: any = {}): any {
   // Extend RFQ, Close RFQ Advanced Workflows, and Header Actions
   // ══════════════════════════════════════════════════════════════════════════════
   describe('Extend & Close RFQ workflows', () => {
-    it('opens extend modal, switches duration to +48h, and successfully extends RFQ', async () => {
+    it('opens extend modal, sets the extension to two days, and successfully extends RFQ', async () => {
       const mockRefresh = jest.fn().mockResolvedValue(undefined);
       (useApp as jest.Mock).mockReturnValue({
         showToast: mockShowToast,
@@ -1536,14 +1542,15 @@ function makeInquiry(overrides: any = {}): any {
       expect(modal).toBeInTheDocument();
       expect(screen.getByText(DETAILS.extendModalTitle)).toBeInTheDocument();
 
-      const btn48 = screen.getByText('+48h');
-      fireEvent.click(btn48);
+      fireEvent.change(within(modal).getByLabelText(DETAILS.extensionDaysLabel), { target: { value: '2' } });
 
-      const confirmBtn = within(modal).getByRole('button', { name: /Confirm Extension/i });
+      const confirmBtn = within(modal).getByRole('button', {
+        name: formatString(DETAILS.confirmExtensionAction, { duration: formatExtensionDayCount(2) }),
+      });
       fireEvent.click(confirmBtn);
 
       await waitFor(() => {
-        expect(mockExtendRFQ).toHaveBeenCalledWith('rfq-ext-1', 48);
+        expect(mockExtendRFQ).toHaveBeenCalledWith('rfq-ext-1', 2);
       });
       expect(mockShowToast).toHaveBeenCalledWith(
         DETAILS.extensionSuccessTitle,
@@ -1603,7 +1610,7 @@ function makeInquiry(overrides: any = {}): any {
         })
       );
 
-      expect(screen.getByText(formatString(DETAILS.extendedBadge, { hours: 24 }))).toBeInTheDocument();
+      expect(screen.getByText(formatString(DETAILS.extendedBadge, { duration: formatExtensionDayCount(1) }))).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Extend RFQ/i })).not.toBeInTheDocument();
     });
 

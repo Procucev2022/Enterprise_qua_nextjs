@@ -124,6 +124,17 @@ const PROCUCEV_EMAIL_MESSAGE = 'Enter a valid corporate Procucev email address e
 // migrated from the previous schema may hold shorter passwords, and rejecting
 // them at login would lock those users out instead of prompting a change.
 const PASSWORD_MIN_LENGTH = 8;
+// One-time RFQ closing-deadline extension, chosen by the buyer in whole days. The frontend
+// validationSchemas.ts mirrors these bounds, so the form and the server agree on the range.
+const EXTENSION_MIN_DAYS = 1;
+const EXTENSION_MAX_DAYS = 30;
+const EXTENSION_DAYS_MESSAGE = `Extension must be a whole number of days from ${EXTENSION_MIN_DAYS} to ${EXTENSION_MAX_DAYS}.`;
+/** True for a whole number of days inside the extension range. Blank or non-numeric input is false. */
+function isWholeExtensionDays(value) {
+  if (value === null || value === undefined || value === '') return false;
+  const num = Number(value);
+  return Number.isInteger(num) && num >= EXTENSION_MIN_DAYS && num <= EXTENSION_MAX_DAYS;
+}
 const CLIENT_LOG_LIMITS = Object.freeze({
   MESSAGE_LENGTH: 5000,
   CATEGORY_LENGTH: 100,
@@ -533,13 +544,13 @@ const VALIDATION_SCHEMAS = {
     assignedVendors: { type: 'array', required: false },
   },
 
-  // Schema for extending an RFQ closing deadline (strictly one-time, 24h or 48h)
+  // Schema for extending an RFQ closing deadline (strictly one-time, whole days within the range above)
   extendRFQ: {
-    hours: {
+    days: {
       type: 'number',
       required: true,
-      custom: (val) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
-      message: 'Extension hours must be 24 or 48.',
+      custom: (val) => (isWholeExtensionDays(val) ? null : EXTENSION_DAYS_MESSAGE),
+      message: EXTENSION_DAYS_MESSAGE,
     },
   },
 
@@ -1664,6 +1675,10 @@ module.exports = {
   OTP_CODE_REGEX,
   OTP_CODE_MESSAGE,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  EXTENSION_DAYS_MESSAGE,
+  isWholeExtensionDays,
   CLIENT_LOG_LIMITS,
   PAN_REGEX,
   PAN_MESSAGE,
