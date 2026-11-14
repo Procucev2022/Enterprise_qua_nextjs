@@ -36,6 +36,7 @@ const categorizationService = require('./vendorCategorizationService');
 const mailerService = require('./mailerService');
 const storeService = require('./storeService');
 const { logger } = require('./loggerService');
+const { getWaitUntil } = require('../db/d1Bridge');
 const {
   VALIDATION_SCHEMAS,
   validatePayload,
@@ -55,6 +56,10 @@ const {
   VENDOR_CONFIDENCE_BANDS,
   VENDOR_INGESTION_CONFIG,
   VENDOR_INGESTION_MESSAGES,
+  VENDOR_INGESTION_JOB_TYPE,
+  VENDOR_INGESTION_JOB_STATUS,
+  VENDOR_CATEGORY_MASTER_SOURCE,
+  DEFAULT_CATEGORY_TAXONOMY,
   normalizePoDate,
 } = require('../config/constants');
 
@@ -336,13 +341,13 @@ async function getResumeState(sessionUser, sessionId) {
   const session = sessionId
     ? await requireSession(context, sessionId)
     : await queries.findLatestSession(context.organizationId);
+  const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
 
   if (!session) {
-    return { session: null, categoryMaster: await queries.findOrganizationCategoryMaster(context.organizationId) };
+    return { session: null, categoryMaster };
   }
 
-  const [categoryMaster, mappingSummary, emailSummary, poCounts] = await Promise.all([
-    queries.findOrganizationCategoryMaster(context.organizationId),
+  const [mappingSummary, emailSummary, poCounts] = await Promise.all([
     queries.summarizeCategoryMappings(session.id, context.organizationId),
     queries.summarizeEmailLogs(session.id, context.organizationId),
     queries.countPoLineItems(session.id, context.organizationId),
@@ -764,18 +769,19 @@ async function runVendorPoJoin(sessionUser, sessionId) {
 // ------------------------------------------------------------------------------
 
 /**
- * Load the buyer's category master, refusing to proceed when it is empty.
+ * The category list the model and the buyer's reviewer choose from.
  *
- * An empty master would leave the model with nothing to choose from, and the one
- * thing it must not do is invent a taxonomy (RULE 10). Failing loudly here is
- * better than producing a session full of NEW_CATEGORY_SUGGESTION rows.
+ * The organisation's own master wins when it has one. Otherwise the platform's
+ * standard taxonomy is used, so a buyer does not have to save categories before
+ * the AI can run. Either way the model may only pick from this list (RULE 10),
+ * and the source is returned so callers can say which list applies.
  */
-async function requireCategoryMaster(organizationId) {
-  const categoryMaster = await queries.findOrganizationCategoryMaster(organizationId);
-  if (categoryMaster.length === 0) {
-    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.CATEGORY_MASTER_EMPTY, 409);
+async function resolveCategoryMaster(organizationId) {
+  const organizationMaster = await queries.findOrganizationCategoryMaster(organizationId);
+  if (organizationMaster.length > 0) {
+    return { categoryMaster: organizationMaster, source: VENDOR_CATEGORY_MASTER_SOURCE.ORGANIZATION };
   }
-  return categoryMaster;
+  return { categoryMaster: DEFAULT_CATEGORY_TAXONOMY, source: VENDOR_CATEGORY_MASTER_SOURCE.PLATFORM_DEFAULT };
 }
 
 /**
@@ -798,7 +804,7 @@ async function processCategorizationBatch(sessionUser, sessionId, { batchSize } 
     throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.JOIN_REQUIRED_FIRST, 409);
   }
 
-  const categoryMaster = await requireCategoryMaster(context.organizationId);
+  const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
   const limit = Math.min(
     Number(batchSize) > 0 ? Number(batchSize) : VENDOR_INGESTION_CONFIG.AI_BATCH_SIZE,
     VENDOR_INGESTION_CONFIG.AI_BATCH_SIZE
@@ -917,6 +923,135 @@ async function processCategorizationBatch(sessionUser, sessionId, { batchSize } 
   };
 }
 
+// ------------------------------------------------------------------------------
+// STEP 4b — BACKGROUND AI CATEGORIZATION JOB
+// ------------------------------------------------------------------------------
+
+/**
+ * True when a job has not reported progress for AI_JOB_STALE_AFTER_MS.
+ *
+ * Every batch writes progress, so a healthy run keeps its updated_at fresh. An
+ * old one belongs to a worker that was stopped, and must not block a new run.
+ */
+function isJobStale(job) {
+  const lastProgress = Date.parse(job.updatedAt || job.startedAt || '');
+  return !Number.isFinite(lastProgress) || Date.now() - lastProgress > VENDOR_INGESTION_CONFIG.AI_JOB_STALE_AFTER_MS;
+}
+
+/**
+ * Run the join, then every AI batch, for one session, recording progress on the job.
+ *
+ * This runs after the HTTP response has gone out, so it cannot rely on the
+ * request. Progress is written to ingestion_jobs, which the wizard polls. Nothing
+ * here throws: a failure becomes a FAILED job with a readable message, because
+ * nothing awaits this promise and an escaped error would be lost.
+ */
+async function runCategorizationJob({ sessionUser, sessionId, organizationId, jobId }) {
+  let processed = 0;
+  let failed = 0;
+  let firstError = null;
+
+  try {
+    const join = await runVendorPoJoin(sessionUser, sessionId);
+    await queries.updateIngestionJobProgress(jobId, organizationId, {
+      status: VENDOR_INGESTION_JOB_STATUS.PROCESSING,
+      totalRecords: join.matchedVendorCount,
+    });
+
+    // At least one batch always runs, so a session with no PO-matched suppliers
+    // still reaches AI_COMPLETED instead of staying at JOINED.
+    let batch;
+    do {
+      batch = await processCategorizationBatch(sessionUser, sessionId, {
+        batchSize: VENDOR_INGESTION_CONFIG.AI_BATCH_SIZE,
+      });
+      const batchFailures = batch.outcomes.filter(
+        (outcome) => outcome.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS
+      );
+      processed += batch.processedInBatch;
+      failed += batchFailures.length;
+      firstError = firstError || (batchFailures.length > 0 ? batchFailures[0].error : null);
+      await queries.updateIngestionJobProgress(jobId, organizationId, {
+        processedRecords: processed,
+        failedRecords: failed,
+      });
+      // Each batch moves the queued suppliers out of the queue, so zero progress
+      // with work still queued means the queue is stuck. Stop rather than spin.
+      if (!batch.done && batch.processedInBatch === 0) {
+        throw new Error(`AI categorization stalled for session ${sessionId} with suppliers still queued.`);
+      }
+    } while (!batch.done);
+
+    const everyAttemptFailed = batch.session.aiStatus === VENDOR_INGESTION_AI_STATUS.FAILED;
+    await queries.updateIngestionJobProgress(jobId, organizationId, {
+      status: everyAttemptFailed ? VENDOR_INGESTION_JOB_STATUS.FAILED : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+      ...(everyAttemptFailed ? { errorMessage: firstError || VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED } : {}),
+      completedAt: new Date().toISOString(),
+    });
+    logger.info('AI categorization job finished', { sessionId, jobId, processed, failed, everyAttemptFailed }, LOG_CATEGORY);
+  } catch (err) {
+    logger.error(`AI categorization job ${jobId} stopped`, err, LOG_CATEGORY);
+    const message = err instanceof VendorIngestionError ? err.message : VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED;
+    await queries
+      .updateIngestionJobProgress(jobId, organizationId, {
+        status: VENDOR_INGESTION_JOB_STATUS.FAILED,
+        errorMessage: message,
+        processedRecords: processed,
+        failedRecords: failed,
+        completedAt: new Date().toISOString(),
+      })
+      .catch((updateErr) => {
+        logger.error(`Could not record the failure of AI categorization job ${jobId}`, updateErr, LOG_CATEGORY);
+      });
+  }
+}
+
+/**
+ * Start the AI categorization job for a session, or return the one already running.
+ *
+ * Returns the job row at once. The browser polls the job for progress, and the
+ * work runs on the worker's wait-until hook, so it survives the response and the
+ * buyer closing the page. A run that is in progress and not stale is returned
+ * instead of a second one, so a double click cannot classify the same suppliers
+ * twice.
+ */
+async function startCategorizationJob(sessionUser, sessionId) {
+  const context = await resolveBuyerContext(sessionUser);
+  const session = await requireSession(context, sessionId);
+
+  if (session.poRowCount === 0) {
+    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.PO_DUMP_REQUIRED_FIRST, 409);
+  }
+
+  const active = await queries.findActiveIngestionJobs(sessionId, context.organizationId);
+  const running = active.find((job) => job.jobType === VENDOR_INGESTION_JOB_TYPE.AI_CATEGORY && !isJobStale(job));
+  if (running) {
+    logger.info('AI categorization already running; returning the active job', { sessionId, jobId: running.id }, LOG_CATEGORY);
+    return running;
+  }
+
+  const job = await queries.createIngestionJob({
+    sessionId,
+    organizationId: context.organizationId,
+    jobType: VENDOR_INGESTION_JOB_TYPE.AI_CATEGORY,
+    fileName: session.poFileName,
+    totalRecords: 0,
+  });
+  logger.info('AI categorization job started', { sessionId, jobId: job.id }, LOG_CATEGORY);
+
+  // The promise is registered with the wait-until hook synchronously, but the
+  // work is deferred so the response is not held behind the first round trip.
+  const background = new Promise((resolve) => {
+    setImmediate(() => {
+      runCategorizationJob({ sessionUser, sessionId, organizationId: context.organizationId, jobId: job.id }).then(resolve);
+    });
+  });
+  const waitUntil = getWaitUntil();
+  if (waitUntil) waitUntil(background);
+
+  return job;
+}
+
 /**
  * Re-run classification for one supplier.
  *
@@ -929,7 +1064,7 @@ async function processCategorizationBatch(sessionUser, sessionId, { batchSize } 
 async function reRunCategorization(sessionUser, sessionId, vendorRecordId) {
   const context = await resolveBuyerContext(sessionUser);
   const session = await requireSession(context, sessionId);
-  const categoryMaster = await requireCategoryMaster(context.organizationId);
+  const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
 
   const mapping = await queries.findCategoryMappingByVendorRecord(sessionId, context.organizationId, vendorRecordId);
   if (!mapping) {
@@ -1069,7 +1204,7 @@ async function reviewMapping(sessionUser, sessionId, vendorRecordId, payload) {
     };
     auditAction = VENDOR_INGESTION_AUDIT_ACTION.BUYER_REJECTION;
   } else if (action === 'EDIT') {
-    const categoryMaster = await requireCategoryMaster(context.organizationId);
+    const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
     const requestedMajor = String(sanitizedData.majorCategory || '').trim();
     if (requestedMajor === '') {
       throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.EDIT_REQUIRES_CATEGORY, 400, {
@@ -1704,19 +1839,19 @@ async function getDispatchStatus(sessionUser, sessionId, { status, limit } = {})
 // ------------------------------------------------------------------------------
 
 /**
- * The organisation's category master, for the review screen's category pickers.
+ * The category list in use for this organisation, for the review screen's pickers.
  *
- * Returned even when empty, with an explicit flag, so the UI can explain *why*
- * classification is unavailable instead of rendering an empty dropdown.
+ * It is the same list the AI chooses from, so a reviewer can always pick the
+ * category the model picked. `source` says whether that list is the buyer's own
+ * master or the platform default.
  */
 async function getCategoryMaster(sessionUser) {
   const context = await resolveBuyerContext(sessionUser);
-  const categoryMaster = await queries.findOrganizationCategoryMaster(context.organizationId);
+  const { categoryMaster, source } = await resolveCategoryMaster(context.organizationId);
   return {
     categories: categoryMaster,
     total: categoryMaster.length,
-    isEmpty: categoryMaster.length === 0,
-    reason: categoryMaster.length === 0 ? VENDOR_INGESTION_MESSAGES.CATEGORY_MASTER_EMPTY : null,
+    source,
   };
 }
 
@@ -1781,7 +1916,7 @@ module.exports = {
   partitionRows,
   rejectDuplicateKeys,
   assertCategoriesInMaster,
-  requireCategoryMaster,
+  resolveCategoryMaster,
   buildDispatchMessage,
   resolveDispatchRecipients,
   deliverToRecipients,
@@ -1797,6 +1932,8 @@ module.exports = {
   // join & AI
   runVendorPoJoin,
   processCategorizationBatch,
+  startCategorizationJob,
+  runCategorizationJob,
   reRunCategorization,
   // review
   reviewMapping,

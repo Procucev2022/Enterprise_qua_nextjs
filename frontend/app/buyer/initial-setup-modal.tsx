@@ -3,16 +3,23 @@
 import React, { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp, getLastHistoricalDataError } from '@/lib/store';
-import { formatCurrency, normalizePoDate } from '@/lib/constants';
+import {
+  formatCurrency,
+  normalizePoDate,
+  PERIOD_BY_VENDOR_INGESTION_HORIZON,
+  VENDOR_INGESTION_HORIZON_BY_PERIOD,
+  VENDOR_MAPPING_PAGE_SIZE,
+} from '@/lib/constants';
 import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,
   HistoricalPurchaseVendorRecord,
   IngestionSummary,
+  VendorCategoryMapping,
+  VendorIngestionSession,
 } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
-import { resolveMinorCategory, findMajorForMinor } from '@/lib/categoryTaxonomy';
 import { findMissingPoDumpFields, findMissingPoDumpHeaders } from '@/lib/validationSchemas';
 import {
   UploadCloud,
@@ -49,7 +56,7 @@ import {
 
 export interface IngestionJobState {
   id: string;
-  jobType: 'VENDOR_MASTER' | 'PO_DUMP';
+  jobType: 'VENDOR_MASTER' | 'PO_DUMP' | 'AI_CATEGORY';
   fileName: string;
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   totalRecords: number;
@@ -254,6 +261,28 @@ export const parseVendorMobile = (phone: string | undefined | null): ParsedVendo
   return { isValid: false, nationalNumber: '', storedNumber: trimmed };
 };
 
+/**
+ * Every supplier mapping the server holds for a session, read in pages of VENDOR_MAPPING_PAGE_SIZE.
+ * Throws when a page cannot be read, so the caller can tell the buyer the results are unavailable.
+ */
+async function fetchVendorMappingPages(sessionId: string, headers: Record<string, string>): Promise<VendorCategoryMapping[]> {
+  const mappings: VendorCategoryMapping[] = [];
+  let total = Number.POSITIVE_INFINITY;
+  while (mappings.length < total) {
+    const res = await fetch(
+      `/api/vendor-ingestion/${sessionId}/vendors?limit=${VENDOR_MAPPING_PAGE_SIZE}&offset=${mappings.length}`,
+      { headers }
+    );
+    if (!res.ok) throw new Error(`Supplier categories could not be loaded (HTTP ${res.status}).`);
+    const json = await res.json();
+    const page: VendorCategoryMapping[] = Array.isArray(json?.data?.vendors) ? json.data.vendors : [];
+    total = Number(json?.data?.total) || 0;
+    if (page.length === 0) break;
+    mappings.push(...page);
+  }
+  return mappings;
+}
+
 export default function InitialSetupModal() {
   const {
     initialSetupModalOpen,
@@ -313,6 +342,13 @@ export default function InitialSetupModal() {
   const [isConfirmingIngestion, setIsConfirmingIngestion] = useState(false);
   const [apiJoinedVendors, setApiJoinedVendors] = useState<HistoricalPurchaseVendorRecord[] | null>(null);
 
+  // Background AI category job for this session. The server reads the stored PO rows and extracts a
+  // category per supplier, so the wizard polls its progress the same way it polls the upload jobs.
+  const [aiJob, setAiJob] = useState<IngestionJobState | null>(null);
+  const isAiRunning = aiJob?.status === 'PENDING' || aiJob?.status === 'PROCESSING';
+  // The PO dump is optional. A dump counts when the browser holds its lines or the server holds stored rows.
+  const hasPoDump = poDataUploaded || poLineItems.length > 0;
+
   // Validate vendor mobile number: accepts with or without +91, exactly 10 numeric digits after country code
   const isValidVendorMobile = (phone: string | undefined | null): boolean => {
     if (!phone || typeof phone !== 'string') return true;
@@ -339,6 +375,56 @@ export default function InitialSetupModal() {
 
   const invalidVendors = storedVendors.filter((v) => getVendorRowErrors(v).length > 0);
 
+  /** PO lines that name this supplier by company name or vendor code. Shown for context only, never used for categories. */
+  const matchPoLinesForVendor = (v: VendorMasterUploadRecord): PurchaseOrderLineItemRecord[] =>
+    poLineItems.filter(
+      (po) =>
+        po.vendorIdentifier.toLowerCase().includes(v.companyName.toLowerCase()) ||
+        v.companyName.toLowerCase().includes(po.vendorIdentifier.toLowerCase()) ||
+        (v.vendorCode && po.vendorIdentifier.toLowerCase().includes(v.vendorCode.toLowerCase()))
+    );
+
+  /**
+   * Step 4 vendor records built from the server's AI results. Categories are the supplier's final category
+   * from the AI job. Contact details come from the local Vendor Master, matched by vendor code or email.
+   */
+  const recordsFromMappings = (mappings: VendorCategoryMapping[]): HistoricalPurchaseVendorRecord[] =>
+    mappings.map((mapping) => {
+      const local = storedVendors.find(
+        (v) =>
+          (mapping.vendorCode !== '' && v.vendorCode === mapping.vendorCode) ||
+          (mapping.email !== '' && (v.email || '').toLowerCase() === mapping.email.toLowerCase())
+      );
+      return {
+        id: mapping.vendorRecordId,
+        vendorCode: mapping.vendorCode || undefined,
+        companyName: mapping.companyName,
+        email: mapping.email,
+        contactPerson: local?.contactPerson,
+        phone: local?.phone ?? '',
+        address: local?.address ?? '',
+        gstNumber: local?.gstNumber ?? '',
+        vendorRatingScore: local?.vendorRatingScore,
+        hasPoHistory: mapping.hasPoHistory,
+        categoriesMappedByBuyer: mapping.finalMajorCategory !== '',
+        itemsSupplied: local ? matchPoLinesForVendor(local).map((p) => p.itemName) : [],
+        pastPoSpend: mapping.hasPoHistory
+          ? `${formatCurrency(mapping.totalSpend)} (${mapping.poCount} POs)`
+          : 'No PO History in Dump',
+        poCount: mapping.poCount,
+        firstSetMajorCategory: mapping.finalMajorCategory,
+        secondSetMinorCategories: mapping.finalMinorCategories,
+        secondSetSecondaryMajors: [],
+      };
+    });
+
+  /** Refuse PO changes while the AI job reads the stored rows. Shows the PO banner and returns true when blocked. */
+  const blockIfAiRunning = (): boolean => {
+    if (!isAiRunning) return false;
+    setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.blockedWhileRunning);
+    return true;
+  };
+
   const navigateToStep = (targetStep: 1 | 2 | 3 | 4): boolean => {
     // Backward navigation to Step 1 or 2 is always allowed
     if (targetStep <= 2) {
@@ -364,19 +450,18 @@ export default function InitialSetupModal() {
       return false;
     }
 
-    // Moving forward to Step 4 (dispatch) requires PO Dump data
-    if (targetStep >= 4 && (!poDataUploaded || poLineItems.length === 0)) {
-      const msg = 'Historical PO Dump is required. Please upload your PO purchase dump spreadsheet before running AI Category Cross-Match.';
-      setPoUploadError(msg);
-      showToast('PO Dump Required', msg, 'warning');
-      setStep(3);
-      return false;
-    }
-
     // If ingestion was completed in the current session, allow viewing the Step 4 (dispatch) summary
-    if (targetStep === 4 && (completionSummary || (lastIngestionSummary && poDataUploaded && poLineItems.length > 0))) {
+    if (targetStep === 4 && (completionSummary || (lastIngestionSummary && hasPoDump))) {
       setStep(4);
       return true;
+    }
+
+    // The PO dump is optional. Once one is stored, its suppliers' categories come from the AI job, so review
+    // waits for that job. Without a PO dump there is nothing to extract and review can open straight away.
+    if (targetStep === 4 && hasPoDump && apiJoinedVendors === null) {
+      setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.runFirst);
+      setStep(3);
+      return false;
     }
 
     setVendorUploadError(null);
@@ -406,9 +491,10 @@ export default function InitialSetupModal() {
   // status (or the session/modal goes away).
   React.useEffect(() => {
     if (!sessionId) return;
-    const pollableJobs: Array<['vendor' | 'po', IngestionJobState | null]> = [
+    const pollableJobs: Array<['vendor' | 'po' | 'ai', IngestionJobState | null]> = [
       ['vendor', vendorJob],
       ['po', poJob],
+      ['ai', aiJob],
     ];
     const active = pollableJobs.filter(
       ([, job]) => job && (job.status === 'PENDING' || job.status === 'PROCESSING')
@@ -428,7 +514,8 @@ export default function InitialSetupModal() {
           const freshJob: IngestionJobState | undefined = json?.data?.job;
           if (!freshJob || cancelled) continue;
           if (which === 'vendor') setVendorJob(freshJob);
-          else setPoJob(freshJob);
+          else if (which === 'po') setPoJob(freshJob);
+          else setAiJob(freshJob);
         } catch (err) {
           logger.log('WARN', 'Could not refresh ingestion job progress', { error: err, jobType: which }, 'VENDOR_INGESTION');
         }
@@ -440,7 +527,32 @@ export default function InitialSetupModal() {
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, vendorJob?.id, vendorJob?.status, poJob?.id, poJob?.status]);
+  }, [sessionId, vendorJob?.id, vendorJob?.status, poJob?.id, poJob?.status, aiJob?.id, aiJob?.status]);
+
+  // When the AI category job completes, read the supplier mappings it stored and open the review.
+  React.useEffect(() => {
+    if (!sessionId || aiJob?.status !== 'COMPLETED') return;
+    let cancelled = false;
+    const loadResults = async () => {
+      try {
+        const mappings = await fetchVendorMappingPages(sessionId, authFetchHeaders());
+        if (cancelled) return;
+        setApiJoinedVendors(recordsFromMappings(mappings));
+        setStep(4);
+        logger.log('INFO', 'AI category results loaded', { sessionId, suppliers: mappings.length }, 'VENDOR_INGESTION');
+      } catch (err) {
+        if (cancelled) return;
+        logger.log('ERROR', 'Could not load AI category results', { error: err }, 'VENDOR_INGESTION');
+        setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.resultsFailed);
+        showToast('AI Category Results', UI_STRINGS.vendorPoIngestion.aiCategory.resultsFailed, 'warning');
+      }
+    };
+    loadResults();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, aiJob]);
 
   const handleCloseModal = async () => {
     if (sessionId && (vendorJob?.status === 'PROCESSING' || poJob?.status === 'PROCESSING')) {
@@ -455,34 +567,50 @@ export default function InitialSetupModal() {
     }
     setVendorJob(null);
     setPoJob(null);
+    setAiJob(null);
     setInitialSetupModalOpen(false);
   };
 
-  // Re-establish session on mount
+  // Re-establish the session on open. A first visit has none, so one is created here: uploads and the AI
+  // job are stored against it, and the server needs the chosen period as its time horizon.
   React.useEffect(() => {
     if (!initialSetupModalOpen) {
       setVendorJob(null);
       setPoJob(null);
+      setAiJob(null);
       return;
     }
 
     const initSession = async () => {
       try {
         const res = await fetch('/api/vendor-ingestion/session', { headers: authFetchHeaders() });
-        if (res.ok) {
-          const json = await res.json();
-          if (json?.data?.session?.id) {
-            const sess = json.data.session;
-            setSessionId(sess.id);
-            if (sess.vendorMasterFileName && sess.vendorMasterRowCount > 0) {
-              setVendorFileName(sess.vendorMasterFileName);
-              setVendorMasterUploaded(true);
-            }
-            if (sess.poFileName && sess.poRowCount > 0) {
-              setPoFileName(sess.poFileName);
-              setPoDataUploaded(true);
-            }
-          }
+        if (!res.ok) return;
+        const json = await res.json();
+        let sess: VendorIngestionSession | null = json?.data?.session ?? null;
+        if (!sess?.id) {
+          const created = await fetch('/api/vendor-ingestion/session', {
+            method: 'POST',
+            headers: authFetchHeaders(),
+            body: JSON.stringify({ horizonType: VENDOR_INGESTION_HORIZON_BY_PERIOD[selectedPeriod] }),
+          });
+          if (!created.ok) return;
+          sess = (await created.json())?.data ?? null;
+        }
+        if (!sess?.id) return;
+        setSessionId(sess.id);
+        // The saved session's period wins, so the buyer sees the window the server actually uses.
+        const savedPeriod = sess.horizonType ? PERIOD_BY_VENDOR_INGESTION_HORIZON[sess.horizonType] : undefined;
+        if (savedPeriod) {
+          setSelectedPeriod(savedPeriod);
+          setHistoricalPurchaseDataPeriod(savedPeriod);
+        }
+        if (sess.vendorMasterFileName && sess.vendorMasterRowCount > 0) {
+          setVendorFileName(sess.vendorMasterFileName);
+          setVendorMasterUploaded(true);
+        }
+        if (sess.poFileName && sess.poRowCount > 0) {
+          setPoFileName(sess.poFileName);
+          setPoDataUploaded(true);
         }
       } catch (err) {
         logger.log('WARN', 'Could not initialize vendor ingestion session', { error: err }, 'VENDOR_INGESTION');
@@ -490,6 +618,7 @@ export default function InitialSetupModal() {
     };
 
     initSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSetupModalOpen]);
 
 
@@ -875,6 +1004,7 @@ export default function InitialSetupModal() {
   // Real File Upload & SheetJS/CSV Parsing for File 2: PO Purchase Dump
   const handlePODataFileUpload = (file: File) => {
     if (!file) return;
+    if (blockIfAiRunning()) return;
     if (!isAllowedSpreadsheetFile(file)) {
       showToast('Unsupported File Type', `"${file.name}" is not a supported spreadsheet file. Accepted: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}.`, 'warning');
       return;
@@ -1036,12 +1166,11 @@ export default function InitialSetupModal() {
             // With neither a unit price nor a spend figure, the row is rejected below. It is not priced at a guess.
 
             const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'function']);
-            const categoryInput = getVal(['minor category', 'category', 'minor', 'sub category', 'sub-category', 'sub_category']);
-            const resolvedCategory = resolveMinorCategory(itemName, specs, categoryInput || department);
 
             // Rows the filter below would drop as blank are skipped here. Any other row must name every
-            // required field it lacks. Nothing is substituted for a missing value.
-            const isBlankRow = !vendorIdentifier && !itemName && !department && !categoryInput;
+            // required field it lacks. Nothing is substituted for a missing value. Category is not read from the
+            // file: the AI job extracts it per supplier from the stored PO history.
+            const isBlankRow = !vendorIdentifier && !itemName && !department;
             const missingFields = findMissingPoDumpFields({ vendorIdentifier, itemName, specs });
             if (!isBlankRow && missingFields.length > 0) {
               invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
@@ -1064,12 +1193,9 @@ export default function InitialSetupModal() {
               totalSpend,
               spend: totalSpend,
               department: department || '',
-              category: resolvedCategory || '',
-              minorCategory: resolvedCategory || '',
-              categoryStatus: resolvedCategory ? ('MAPPED' as const) : ('UNMAPPED' as const),
             };
           })
-            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.category?.trim() || p.department?.trim()))
+            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.department?.trim()))
             .sort((a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime());
 
           // Any incomplete row rejects the whole file, so no partial PO dump is stored.
@@ -1096,6 +1222,9 @@ export default function InitialSetupModal() {
           setPoUploadError(null);
           setPoLineItems(parsedPOs);
           setPoDataUploaded(true);
+          // A new dump replaces the PO history that an earlier AI result was built from.
+          setApiJoinedVendors(null);
+          setAiJob(null);
 
           if (sessionId && !isCsvOrText) {
             try {
@@ -1199,93 +1328,64 @@ export default function InitialSetupModal() {
     showToast('Selection Cleared', 'Vendor Master selection has been removed. Please upload a file.', 'info');
   };
 
-  const resetPoUpload = () => {
+  /** Clear the PO dump held in the browser, and any AI result or job built from it. */
+  const clearPoDumpState = (period: '1_year' | '2_years' | '3_years') => {
     setPoLineItems([]);
     setApiJoinedVendors(null);
-    setPoFileName(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
+    setAiJob(null);
+    setPoJob(null);
+    setPoFileName(`PO_Purchase_Dump_${period}.xlsx`);
     setPoDataUploaded(false);
     setPoUploadError(null);
     if (poFileInputRef.current) {
       poFileInputRef.current.value = '';
     }
+  };
+
+  const resetPoUpload = () => {
+    if (blockIfAiRunning()) return;
+    clearPoDumpState(selectedPeriod);
     showToast('Reset Complete', 'PO Dump line items cleared. Please upload your spreadsheet.', 'info');
   };
 
-  // Compute Joined Records between Vendor Master & PO Line Items
+  /**
+   * Save the chosen period on the server, which is the window the AI job reads. The server clears any stored
+   * PO rows when the window changes, so the browser clears its copy to match.
+   */
+  const choosePeriod = async (period: '1_year' | '2_years' | '3_years') => {
+    if (isAiRunning) {
+      showToast('Period Locked', UI_STRINGS.vendorPoIngestion.aiCategory.blockedWhileRunning, 'warning');
+      return;
+    }
+    setSelectedPeriod(period);
+    setHistoricalPurchaseDataPeriod(period);
+    if (!sessionId) return;
+    try {
+      const res = await fetch(`/api/vendor-ingestion/session/${sessionId}/time-horizon`, {
+        method: 'PUT',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ horizonType: VENDOR_INGESTION_HORIZON_BY_PERIOD[period] }),
+      });
+      if (!res.ok) throw new Error(`Time horizon update failed with HTTP ${res.status}.`);
+      const json = await res.json();
+      if (json?.poDataCleared) {
+        clearPoDumpState(period);
+        showToast('PO Dump Cleared', UI_STRINGS.vendorPoIngestion.horizon.changeWarning, 'info');
+      }
+    } catch (err) {
+      logger.log('WARN', 'Could not save the historical period on the server', { error: err }, 'VENDOR_INGESTION');
+      showToast('Period Not Saved', UI_STRINGS.vendorPoIngestion.aiCategory.periodNotSaved, 'warning');
+    }
+  };
+
+  // Browser-side join between the Vendor Master and the PO lines. It records which suppliers have PO history and
+  // what they bought. It assigns no categories: categories come only from the server's AI category job.
   const computeJoinedRecords = (): HistoricalPurchaseVendorRecord[] => {
     return storedVendors.map((v) => {
-      // Find matching POs
-      const matchingPOs = poLineItems.filter(
-        (po) =>
-          po.vendorIdentifier.toLowerCase().includes(v.companyName.toLowerCase()) ||
-          v.companyName.toLowerCase().includes(po.vendorIdentifier.toLowerCase()) ||
-          (v.vendorCode && po.vendorIdentifier.toLowerCase().includes(v.vendorCode.toLowerCase()))
-      );
-
+      const matchingPOs = matchPoLinesForVendor(v);
       const hasMatchingPOs = matchingPOs.length > 0;
       const items = matchingPOs.map((p) => p.itemName);
       const totalAmount = matchingPOs.reduce((acc, p) => acc + p.totalSpend, 0);
-
-      let firstSetMajor = '';
-      let secondSetMinors: string[] = [];
-
-      if (hasMatchingPOs) {
-        // AI Category mapping based on purchased items & vendor names
-        const itemText = (items.join(' ') + ' ' + v.companyName).toLowerCase();
-        if (
-          itemText.includes('microsoft') ||
-          itemText.includes('google') ||
-          itemText.includes('azure') ||
-          itemText.includes('workspace') ||
-          itemText.includes('cloud') ||
-          itemText.includes('license') ||
-          itemText.includes('software') ||
-          itemText.includes('power bi') ||
-          itemText.includes('bigquery') ||
-          itemText.includes('gcp') ||
-          itemText.includes('saas') ||
-          itemText.includes('datacenter')
-        ) {
-          firstSetMajor = 'Information Technology (IT) & Software';
-          if (itemText.includes('cloud') || itemText.includes('azure') || itemText.includes('gcp') || itemText.includes('storage') || itemText.includes('compute') || itemText.includes('credits')) {
-            secondSetMinors.push('Cloud Infrastructure & Storage');
-          }
-          if (itemText.includes('license') || itemText.includes('subscription') || itemText.includes('renewal') || itemText.includes('365') || itemText.includes('workspace') || itemText.includes('teams') || itemText.includes('windows server')) {
-            secondSetMinors.push('Enterprise Software & Licenses');
-          }
-          if (itemText.includes('bigquery') || itemText.includes('power bi') || itemText.includes('analytics') || itemText.includes('data')) {
-            secondSetMinors.push('Data & Analytics Platforms');
-          }
-          if (itemText.includes('datacenter') || itemText.includes('infrastructure') || itemText.includes('server')) {
-            secondSetMinors.push('IT Infrastructure');
-          }
-          if (secondSetMinors.length === 0) {
-            secondSetMinors.push('Enterprise Software & Licenses');
-          }
-        } else if (itemText.includes('pump') || itemText.includes('valve') || itemText.includes('hose') || itemText.includes('compressor')) {
-          firstSetMajor = 'Engineering Spares - Mechanical';
-          if (itemText.includes('pump')) secondSetMinors.push('Pumps & Accessories');
-          if (itemText.includes('valve') || itemText.includes('gate') || itemText.includes('globe')) secondSetMinors.push('Hoses, Valves & Fittings');
-          if (itemText.includes('hose')) secondSetMinors.push('Hoses, Valves & Fittings');
-          if (itemText.includes('compressor')) secondSetMinors.push('Compressors & Accessories');
-          if (itemText.includes('motor')) secondSetMinors.push('Machinery Parts');
-        } else if (itemText.includes('switchgear') || itemText.includes('panel') || itemText.includes('breaker') || itemText.includes('cable')) {
-          firstSetMajor = 'Engineering Spares - Electrical';
-          if (itemText.includes('panel') || itemText.includes('switchgear')) secondSetMinors.push('Panels');
-          if (itemText.includes('breaker') || itemText.includes('mccb')) secondSetMinors.push('Circuit Breakers');
-        } else if (itemText.includes('tmt') || itemText.includes('steel') || itemText.includes('civil') || itemText.includes('peb')) {
-          firstSetMajor = 'Civil Works';
-          if (itemText.includes('peb')) secondSetMinors.push('PEB Structure');
-          if (itemText.includes('tmt')) secondSetMinors.push('TMT BARS');
-          secondSetMinors.push('Roofing Sheets');
-        } else {
-          firstSetMajor = 'General Spares & Consumables';
-          secondSetMinors.push('Customised Parts');
-        }
-
-        // Deduplicate
-        secondSetMinors = Array.from(new Set(secondSetMinors));
-      }
 
       const parsedP = parseVendorMobile(v.phone);
       const cleanPhone = parsedP.isValid && parsedP.nationalNumber ? `+91 ${parsedP.nationalNumber}` : v.phone;
@@ -1301,15 +1401,15 @@ export default function InitialSetupModal() {
         gstNumber: v.gstNumber,
         vendorRatingScore: v.vendorRatingScore,
         hasPoHistory: hasMatchingPOs,
-        categoriesMappedByBuyer: hasMatchingPOs,
+        categoriesMappedByBuyer: false,
         itemsSupplied: items,
         pastPoSpend: hasMatchingPOs
           ? `${formatCurrency(totalAmount)} (${matchingPOs.length} POs)`
           : 'No PO History in Dump',
         poCount: matchingPOs.length,
-        firstSetMajorCategory: firstSetMajor,
-        secondSetMinorCategories: secondSetMinors,
-        secondSetSecondaryMajors: hasMatchingPOs ? ['Engineering Spares - Electrical', 'Civil Works'] : [],
+        firstSetMajorCategory: '',
+        secondSetMinorCategories: [],
+        secondSetSecondaryMajors: [],
       };
     });
   };
@@ -1395,7 +1495,6 @@ export default function InitialSetupModal() {
         'Unit',
         'Unit Price (INR)',
         'Total Spend (INR)',
-        'Category',
       ],
     ]);
     const workbook: XLSX.WorkBook = {
@@ -1413,7 +1512,13 @@ export default function InitialSetupModal() {
   };
   const handleDownloadPoDataCsv = handleDownloadPoDataExcel;
 
-  const handleSimulatePOJoin = () => {
+  /**
+   * Run the AI Category Cross-Match. The PO dump is optional: without one there is nothing to categorise, so
+   * suppliers open for review with no purchase history. With one, the server runs the join and the AI category
+   * extraction as a background job; the progress card polls it, and the completion effect opens the review.
+   */
+  const handleSimulatePOJoin = async () => {
+    if (isProcessingPOJoin || isAiRunning) return;
     if (storedVendors.length === 0) {
       const msg = 'Vendor Master is required. Please upload your Vendor Master spreadsheet before running AI Category Cross-Match.';
       setVendorUploadError(msg);
@@ -1428,48 +1533,43 @@ export default function InitialSetupModal() {
       setStep(2);
       return;
     }
-    if (!poDataUploaded || poLineItems.length === 0) {
-      const msg = 'Historical PO Dump is required. Please upload your PO purchase dump spreadsheet before running AI Category Cross-Match.';
-      setPoUploadError(msg);
-      showToast('PO Dump Required', msg, 'warning');
+
+    if (!hasPoDump) {
+      setPoUploadError(null);
+      setApiJoinedVendors(null);
+      setStep(4);
+      return;
+    }
+
+    if (!sessionId) {
+      setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.sessionNotReady);
       return;
     }
 
     setIsProcessingPOJoin(true);
-    let apiData: HistoricalPurchaseVendorRecord[] | null = null;
-
-    fetch('/api/buyer-accounts/ai-cross-match', {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify({
-        vendors: storedVendors,
-        poLineItems,
-      }),
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (json && json.success && Array.isArray(json.data)) {
-          apiData = json.data;
-          setApiJoinedVendors(json.data);
-        }
-      })
-      .catch((err) => {
-        logger.log('WARN', 'Backend AI cross-match API failed; category matching continues without it', { error: err }, 'VENDOR_INGESTION');
+    setPoUploadError(null);
+    try {
+      const res = await fetch(`/api/vendor-ingestion/${sessionId}/ai-categorize-job`, {
+        method: 'POST',
+        headers: authFetchHeaders(),
       });
-
-    setTimeout(() => {
+      const json = await res.json().catch(() => null);
+      const job: IngestionJobState | undefined = json?.data?.job;
+      if (!res.ok || !job) {
+        const msg: string = json?.error || UI_STRINGS.vendorPoIngestion.aiCategory.startFailed;
+        setPoUploadError(msg);
+        showToast('AI Category Cross-Match', msg, 'warning');
+        return;
+      }
+      setAiJob({ ...job, fileName: job.fileName || poFileName });
+      logger.log('INFO', 'AI category job started', { sessionId, jobId: job.id, status: job.status }, 'VENDOR_INGESTION');
+    } catch (err) {
+      logger.log('ERROR', 'Could not start the AI category job', { error: err }, 'VENDOR_INGESTION');
+      setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.startFailed);
+      showToast('AI Category Cross-Match', UI_STRINGS.vendorPoIngestion.aiCategory.startFailed, 'warning');
+    } finally {
       setIsProcessingPOJoin(false);
-      const dataToSet = apiData || computeJoinedRecords();
-      setApiJoinedVendors(dataToSet);
-      setStep(4);
-      const mappedCount = dataToSet.filter((v: any) => v.categoriesMappedByBuyer).length;
-      const unmappedCount = dataToSet.length - mappedCount;
-      showToast(
-        'Cross-Match Complete',
-        `Matched PO data against ${storedVendors.length} stored vendors. ${mappedCount} categorized, ${unmappedCount} flagged for self-mapping.`,
-        'success'
-      );
-    }, 600);
+    }
   };
 
   const handleConfirmFinalIngestion = async () => {
@@ -1477,15 +1577,6 @@ export default function InitialSetupModal() {
     setSubmissionError(null);
     setIsConfirmingIngestion(true);
     try {
-      if (!poDataUploaded || poLineItems.length === 0) {
-        const msg = 'PO purchase data is mandatory. Please upload your PO purchase dump spreadsheet before completing vendor ingestion.';
-        setSubmissionError(msg);
-        setPoUploadError(msg);
-        showToast('PO Dump Required', msg, 'warning');
-        setStep(3);
-        setIsConfirmingIngestion(false);
-        return;
-      }
       if (joinedVendors.length === 0) {
         const msg = 'No vendor records found to ingest. Please upload a valid Vendor Master file first.';
         setSubmissionError(msg);
@@ -1646,8 +1737,7 @@ export default function InitialSetupModal() {
                 <div
                   key={opt.id}
                   onClick={() => {
-                    setSelectedPeriod(opt.id);
-                    setHistoricalPurchaseDataPeriod(opt.id);
+                    void choosePeriod(opt.id);
                   }}
                   className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between space-y-3 ${
                     selectedPeriod === opt.id
@@ -2295,8 +2385,8 @@ export default function InitialSetupModal() {
             {/* Single-line Simplified PO Dump Info & Download Banner */}
             <div className="p-3.5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-blue-50/70 dark:from-purple-950/40 dark:via-indigo-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="badge badge-purple font-bold text-[10px] shrink-0">{UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBadge}</span>
-                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
+                <span className="badge badge-purple font-bold text-[10px] shrink-0">{UI_STRINGS.vendorPoIngestion.poDump.optionalBadge}</span>
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium">
                   {UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner}
                 </span>
               </div>
@@ -2339,9 +2429,34 @@ export default function InitialSetupModal() {
               </div>
             )}
 
+            {/* Failure of the AI category job, with the server's reason */}
+            {aiJob?.status === 'FAILED' && (
+              <div
+                data-testid="ai-job-error-banner"
+                className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5 shadow-xs"
+              >
+                <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" size={16} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-rose-900 dark:text-rose-100">{UI_STRINGS.vendorPoIngestion.aiCategory.failedTitle}</p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed">
+                    {aiJob.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Progress Card when PO upload is active or completed */}
             {poJob && (
               <IngestionProgressCard job={poJob} title="PO Dump" unit="PO records" />
+            )}
+
+            {/* Progress of the AI category job, read from the server while it runs */}
+            {aiJob && (
+              <IngestionProgressCard
+                job={aiJob}
+                title={UI_STRINGS.vendorPoIngestion.aiCategory.progressTitle}
+                unit={UI_STRINGS.vendorPoIngestion.aiCategory.progressUnit}
+              />
             )}
 
             {/* Drag & Drop PO Dump Area or Uploaded State Banner */}
@@ -2442,22 +2557,6 @@ export default function InitialSetupModal() {
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">
                     PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
                   </span>
-                  {poLineItems.length > 0 && (() => {
-                    const mappedCount = poLineItems.filter((p) => Boolean(p.category || p.minorCategory)).length;
-                    const unmappedCount = poLineItems.length - mappedCount;
-                    return (
-                      <span className="inline-flex items-center gap-1.5 text-[10px] font-medium">
-                        <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold">
-                          {mappedCount} {UI_STRINGS.vendorPoIngestion.poDump.categoryMapped}
-                        </span>
-                        {unmappedCount > 0 && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 font-bold">
-                            {unmappedCount} {UI_STRINGS.vendorPoIngestion.poDump.categoryUnmapped}
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })()}
                 </div>
                 <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
                   Total Spend: {formatCurrency(poLineItems.reduce((acc, p) => acc + p.totalSpend, 0))}
@@ -2477,7 +2576,6 @@ export default function InitialSetupModal() {
                       <th className="p-2.5">Unit</th>
                       <th className="p-2.5">Unit Price</th>
                       <th className="p-2.5">Total Spend</th>
-                      <th className="p-2.5">Category</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
@@ -2499,20 +2597,6 @@ export default function InitialSetupModal() {
                         <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {p.totalSpend > 0 ? formatCurrency(p.totalSpend) : '—'}
-                        </td>
-                        <td className="p-2.5 text-[10px] max-w-[160px]">
-                          {p.category || p.minorCategory ? (
-                            <span
-                              className="font-semibold text-slate-800 dark:text-gray-200 truncate block"
-                              title={p.category || p.minorCategory}
-                            >
-                              {p.category || p.minorCategory}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60">
-                              {UI_STRINGS.vendorPoIngestion.poDump.categoryUnmapped}
-                            </span>
-                          )}
                         </td>
                       </tr>
                     ))}
@@ -2566,9 +2650,15 @@ export default function InitialSetupModal() {
               <button
                 type="button"
                 onClick={handleSimulatePOJoin}
-                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
+                disabled={isProcessingPOJoin || isAiRunning}
+                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5 disabled:opacity-60"
               >
-                {isProcessingPOJoin ? 'Processing Join...' : 'Run AI Category Cross-Match'} <ArrowRight size={14} />
+                {isProcessingPOJoin || isAiRunning
+                  ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
+                  : hasPoDump
+                  ? UI_STRINGS.vendorPoIngestion.aiCategory.runAction
+                  : UI_STRINGS.vendorPoIngestion.aiCategory.continueWithoutPoAction}{' '}
+                <ArrowRight size={14} />
               </button>
             </div>
           </div>

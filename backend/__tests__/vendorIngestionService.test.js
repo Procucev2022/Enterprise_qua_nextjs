@@ -22,6 +22,7 @@ const {
   VENDOR_INGESTION_HORIZON: HORIZON, VENDOR_INGESTION_AI_STATUS: AI_STATUS,
   VENDOR_MAPPING_STATUS: MAPPING_STATUS, VENDOR_MAPPING_SOURCE: MAPPING_SOURCE,
   VENDOR_INGESTION_CONFIG: CONFIG, VENDOR_INGESTION_MESSAGES: MESSAGES,
+  VENDOR_CATEGORY_MASTER_SOURCE: CATEGORY_SOURCE, DEFAULT_CATEGORY_TAXONOMY,
 } = require('../src/config/constants');
 
 const USER = { sub: 'buyer-user', email: 'buyer@example.test', orgId: 'stale-token-org' };
@@ -279,10 +280,10 @@ describe('vendor history matching and AI progress', () => {
     await expect(service.runVendorPoJoin(USER, SESSION.id)).rejects.toMatchObject({ status: 409, message: MESSAGES.PO_DUMP_REQUIRED_FIRST });
   });
 
-  test('refuses classification without a buyer category master', async () => {
-    expect(await service.requireCategoryMaster(CONTEXT.organizationId)).toEqual(CATEGORY_MASTER);
+  test('uses the buyer category master when present, and the platform taxonomy when the buyer has none', async () => {
+    expect(await service.resolveCategoryMaster(CONTEXT.organizationId)).toEqual({ categoryMaster: CATEGORY_MASTER, source: CATEGORY_SOURCE.ORGANIZATION });
     queries.findOrganizationCategoryMaster.mockResolvedValue([]);
-    await expect(service.requireCategoryMaster(CONTEXT.organizationId)).rejects.toMatchObject({ status: 409, message: MESSAGES.CATEGORY_MASTER_EMPTY });
+    expect(await service.resolveCategoryMaster(CONTEXT.organizationId)).toEqual({ categoryMaster: DEFAULT_CATEGORY_TAXONOMY, source: CATEGORY_SOURCE.PLATFORM_DEFAULT });
   });
 
   test.each([SESSION_STATUS.DRAFT, SESSION_STATUS.VENDOR_MASTER_STORED])('requires the PO join before AI processing in %s', async (status) => {

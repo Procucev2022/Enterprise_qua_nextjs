@@ -166,6 +166,21 @@ async function categorizeBatch(req, res, next) {
   }
 }
 
+/**
+ * Start the AI categorization as a background job and return it at once.
+ *
+ * The browser polls GET /:sessionId/jobs/:jobId for progress. This replaces the
+ * batch loop for the wizard: the whole run, join included, happens server side.
+ */
+async function startCategorizationJob(req, res, next) {
+  try {
+    const job = await vendorIngestionService.startCategorizationJob(req.user, req.params.sessionId);
+    return res.status(202).json({ success: true, data: { job } });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error starting the AI categorization job');
+  }
+}
+
 async function reRunAi(req, res, next) {
   try {
     const result = await vendorIngestionService.reRunCategorization(
@@ -446,6 +461,7 @@ module.exports = {
   uploadPoDump,
   runJoin,
   categorizeBatch,
+  startCategorizationJob,
   reRunAi,
   listVendors,
   reviewVendorCategory,

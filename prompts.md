@@ -5845,3 +5845,9 @@ Ideal RFQ invitation flow:
 "invite 25 vendors for submitting quotations per each unique minor category. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at gmtrfq@procucev.com,quateam@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com"
 ```
 ---
+### Prompt 213
+**Timestamp**: 2026-11-14T12:02:33+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Buyer Initial Setup step 3 (PO Dump) was attached, showing the "Historical PO Dump is required" error.)
+```text
+PO dump data is optional, but if this data is provided then, required columns are vendor name , Item description , Item specifications.  Category would be extracted via system using AI in backend long running operation.
+```
+---

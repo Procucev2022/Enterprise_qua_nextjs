@@ -1808,3 +1808,23 @@ export const DEFAULT_APPROVAL_COLUMNS: Array<{
  * so the keyboard never has to scroll past this many options.
  */
 export const CATEGORY_SEARCH_RESULT_LIMIT = 10;
+
+/**
+ * The buyer's historical purchase periods, mapped to the server's time-horizon types. The server stores the
+ * horizon on the ingestion session and uses it to choose which PO rows count as purchasing evidence.
+ */
+export const VENDOR_INGESTION_HORIZON_BY_PERIOD = {
+  '1_year': 'LAST_1_YEAR',
+  '2_years': 'LAST_2_YEARS',
+  '3_years': 'LAST_3_YEARS',
+} as const;
+
+/** The reverse mapping, used when a saved ingestion session reports its horizon. */
+export const PERIOD_BY_VENDOR_INGESTION_HORIZON: Partial<Record<string, '1_year' | '2_years' | '3_years'>> = {
+  LAST_1_YEAR: '1_year',
+  LAST_2_YEARS: '2_years',
+  LAST_3_YEARS: '3_years',
+};
+
+/** Suppliers requested per page when the wizard loads AI category results. Matches the server's page cap. */
+export const VENDOR_MAPPING_PAGE_SIZE = 200;

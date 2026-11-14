@@ -1978,9 +1978,9 @@ sellerDirectory: {
 
     poDump: {
       heading: 'Step 3 — Upload File 2: Historical PO Purchase Dump',
-      hint: 'Required columns: Vendor Name, Line Item Description and Specifications. Vendor Code can be used instead of Vendor Name. PO Number, PO Date, Quantity, UOM, Spend and Category are optional, and so are Department, Material Code, Subcategory and Currency.',
-      requiredColumnsBadge: 'Required Columns',
-      requiredColumnsBanner: 'Vendor Name, Line Item Description & Specifications',
+      hint: 'Optional. If you upload a PO dump, these columns are required: Vendor Name, Line Item Description and Specifications. Vendor Code can be used instead of Vendor Name. Category is not a column: the system extracts each supplier\'s category from its PO history with AI.',
+      optionalBadge: 'Optional',
+      requiredColumnsBanner: 'If you upload a PO dump, these columns are required: Vendor Name, Line Item Description & Specifications. Category is extracted by AI.',
       fieldVendor: 'Vendor Name',
       fieldDescription: 'Line Item Description',
       fieldSpecs: 'Specifications',
@@ -2000,8 +2000,22 @@ sellerDirectory: {
         'None of the uploaded PO rows fall inside the selected period. Check the period, or the date column in your file.',
       runJoinAction: 'Run Vendor & PO Match',
       runningJoin: 'Matching PO history to your vendor master…',
-      categoryUnmapped: 'Unmapped',
-      categoryMapped: 'Mapped',
+    },
+
+    aiCategory: {
+      runAction: 'Run AI Category Cross-Match',
+      continueWithoutPoAction: 'Continue Without PO Dump',
+      runningAction: 'Extracting Categories…',
+      progressTitle: 'AI Category',
+      progressUnit: 'suppliers',
+      failedTitle: 'AI Category Cross-Match Failed',
+      genericFailure: 'AI category extraction did not finish. Run the AI Category Cross-Match again.',
+      startFailed: 'Could not start AI category extraction. Check your connection, then try again.',
+      resultsFailed: 'Supplier categories could not be loaded. Run the AI Category Cross-Match again to retry.',
+      runFirst: 'Run the AI Category Cross-Match before reviewing suppliers. Categories are extracted from your PO history.',
+      blockedWhileRunning: 'Wait for AI category extraction to finish before changing the PO dump or the period.',
+      sessionNotReady: 'The ingestion session is not ready yet. Reload the page and try again.',
+      periodNotSaved: 'The period could not be saved on the server. Reload the page and check the period before running the AI category match.',
     },
 
     join: {

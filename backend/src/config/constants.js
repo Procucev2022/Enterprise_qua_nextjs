@@ -2807,6 +2807,27 @@ const VENDOR_INGESTION_AI_STATUS = {
   FAILED: 'FAILED',
 };
 
+/** Background ingestion job types, as stored in ingestion_jobs.job_type. */
+const VENDOR_INGESTION_JOB_TYPE = {
+  VENDOR_MASTER: 'VENDOR_MASTER',
+  PO_DUMP: 'PO_DUMP',
+  AI_CATEGORY: 'AI_CATEGORY',
+};
+
+/** Background ingestion job states, as stored in ingestion_jobs.status. */
+const VENDOR_INGESTION_JOB_STATUS = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+};
+
+/** Which category list the AI and the reviewer use: the buyer's own master, or the platform default. */
+const VENDOR_CATEGORY_MASTER_SOURCE = {
+  ORGANIZATION: 'ORGANIZATION',
+  PLATFORM_DEFAULT: 'PLATFORM_DEFAULT',
+};
+
 /**
  * Statutory identifiers on a vendor record. They come from the supplier's own registration, so a buyer may read them
  * but may not write them. The supplier can still change them through its self-service profile.
@@ -2911,6 +2932,9 @@ const VENDOR_INGESTION_CONFIG = {
   // many times in total before the vendor is marked FAILED. Retrying is safe:
   // classification writes no category until a reply validates.
   AI_MAX_ATTEMPTS: 2,
+  // A background AI job whose progress has not moved for this long is treated as
+  // abandoned (its worker was stopped mid-run), so a new run may start.
+  AI_JOB_STALE_AFTER_MS: 10 * 60 * 1000,
   // PO lines summarised into one vendor's purchasing profile. Enough to
   // characterise what a supplier sells without sending an entire spend history,
   // which is what makes this one call per vendor rather than one per PO row.
@@ -2964,6 +2988,7 @@ const VENDOR_INGESTION_MESSAGES = {
   VENDOR_MASTER_LIMIT: 'A Vendor Master may hold at most {max} suppliers.',
   PO_LIMIT: 'A PO dump may hold at most {max} line items.',
   MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
+  AI_JOB_FAILED: 'AI categorization stopped unexpectedly before every supplier was classified. Run the categorization again to resume.',
   MAPPING_NO_PO_HISTORY:
     'This supplier has no pre-purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
   CATEGORY_MASTER_EMPTY:
@@ -3575,6 +3600,9 @@ module.exports = {
   VENDOR_MAPPING_SOURCE,
   VENDOR_AI_PROCESSING_STATUS,
   VENDOR_INGESTION_AI_STATUS,
+  VENDOR_INGESTION_JOB_TYPE,
+  VENDOR_INGESTION_JOB_STATUS,
+  VENDOR_CATEGORY_MASTER_SOURCE,
   VENDOR_MATCH_STRATEGY,
   BUYER_LOCKED_STATUTORY_FIELDS,
   VENDOR_DISPATCH_TEMPLATE,

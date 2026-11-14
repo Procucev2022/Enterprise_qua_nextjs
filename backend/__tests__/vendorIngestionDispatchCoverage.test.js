@@ -11,6 +11,8 @@ const {
   VENDOR_DISPATCH_STATUS: dispatchStatus,
   VENDOR_INGESTION_CONFIG: config,
   VENDOR_INGESTION_MESSAGES: messages,
+  VENDOR_CATEGORY_MASTER_SOURCE: categorySource,
+  DEFAULT_CATEGORY_TAXONOMY,
 } = require('../src/config/constants');
 
 jest.mock('../src/db/vendorIngestionQueries');
@@ -354,10 +356,18 @@ describe('organization-scoped read endpoints', () => {
     expect(queries.findEmailLogs).toHaveBeenLastCalledWith(sessionId, context.organizationId, { status: emailStatus.SENT, limit: 10 });
   });
 
-  test('explains empty category masters and returns configured categories', async () => {
-    expect(await service.getCategoryMaster(user)).toMatchObject({ isEmpty: false, total: 1, reason: null });
+  test('lists the organisation category master, or the platform taxonomy when the organisation has none', async () => {
+    expect(await service.getCategoryMaster(user)).toEqual({
+      categories: [{ majorCategory: 'Electrical', minorCategories: ['Copper', 'Switches'] }],
+      total: 1,
+      source: categorySource.ORGANIZATION,
+    });
     queries.findOrganizationCategoryMaster.mockResolvedValue([]);
-    expect(await service.getCategoryMaster(user)).toEqual({ categories: [], isEmpty: true, total: 0, reason: messages.CATEGORY_MASTER_EMPTY });
+    expect(await service.getCategoryMaster(user)).toEqual({
+      categories: DEFAULT_CATEGORY_TAXONOMY,
+      total: DEFAULT_CATEGORY_TAXONOMY.length,
+      source: categorySource.PLATFORM_DEFAULT,
+    });
   });
 
   test('loads audit entries with optional session scoping and classification logs with limits', async () => {

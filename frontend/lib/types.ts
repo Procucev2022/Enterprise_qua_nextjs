@@ -1777,8 +1777,8 @@ export interface VendorAiClassificationLogEntry {
 export interface VendorIngestionCategoryMaster {
   categories: MajorMinorCategory[];
   total: number;
-  isEmpty: boolean;
-  reason: string | null;
+  /** ORGANIZATION when the buyer's own master is used, PLATFORM_DEFAULT when the platform taxonomy is. */
+  source: 'ORGANIZATION' | 'PLATFORM_DEFAULT';
 }
 
 /** Everything the wizard needs to rehydrate. `session` is null on first visit. */

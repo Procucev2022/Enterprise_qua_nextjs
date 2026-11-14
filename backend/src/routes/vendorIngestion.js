@@ -36,6 +36,7 @@ router.get('/:sessionId/vendor-master/preview', vendorIngestionController.getVen
 router.post('/:sessionId/po-dump/upload', vendorIngestionController.uploadPoDump);
 router.post('/:sessionId/join', vendorIngestionController.runJoin);
 router.post('/:sessionId/ai-categorize', vendorIngestionController.categorizeBatch);
+router.post('/:sessionId/ai-categorize-job', vendorIngestionController.startCategorizationJob);
 
 router.get('/:sessionId/vendors', vendorIngestionController.listVendors);
 router.get('/:sessionId/segmentation', vendorIngestionController.getSegmentation);
