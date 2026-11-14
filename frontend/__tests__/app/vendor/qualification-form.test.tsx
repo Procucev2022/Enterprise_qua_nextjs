@@ -445,4 +445,14 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     expect(screen.getByText('📎 File Attached (Not OCR-Verified)')).toBeInTheDocument();
     expect(screen.getByText('Change File')).toBeInTheDocument();
   });
+
+  test('opens and closes the detailed report modal', () => {
+    renderWithProvider(<VendorQualificationForm onBack={jest.fn()} onSuccess={jest.fn()} />);
+    const viewReportBtn = screen.getByRole('button', { name: /View Detailed Report/i });
+    fireEvent.click(viewReportBtn);
+    expect(screen.getByText('Module Breakdown')).toBeInTheDocument();
+    const closeBtn = screen.getByRole('button', { name: /Close Report/i });
+    fireEvent.click(closeBtn);
+    expect(screen.queryByText('Module Breakdown')).not.toBeInTheDocument();
+  });
 });

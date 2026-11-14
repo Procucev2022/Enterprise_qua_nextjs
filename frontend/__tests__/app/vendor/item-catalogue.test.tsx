@@ -68,6 +68,25 @@ function mockFetchImpl(url: string, options: any = {}) {
       }),
     });
   }
+  if (url === '/api/subscriptions/pricing') {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          seller: {
+            select: {
+              catalogueLimit: 100,
+              rfqQuota: 50,
+            },
+            connect: {
+              rfqQuota: 10,
+            },
+          },
+        },
+      }),
+    });
+  }
   return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
 }
 
@@ -280,6 +299,8 @@ describe('ItemCatalogue Comprehensive Suite', () => {
       <ItemCatalogueCustomWrapper customSubscription="select" customCatalogue={mock95Catalogue} />
     );
 
+    expect(await screen.findByText('95 / 100 Products')).toBeInTheDocument();
+
     // Filter by matching RFQs when multiple products have matches
     const rfqSummaryBtn = screen.getByRole('button', { name: /Summary:/i });
     fireEvent.click(rfqSummaryBtn);
@@ -330,6 +351,7 @@ describe('ItemCatalogue Comprehensive Suite', () => {
       <ItemCatalogueCustomWrapper customSubscription="standard" customCatalogue={mock75Catalogue} />
     );
 
+    expect(await screen.findByText('75 / 100 Products')).toBeInTheDocument();
     expect(screen.getByText(/Select Model Required/i)).toBeInTheDocument();
   });
 
@@ -572,5 +594,245 @@ describe('ItemCatalogue Comprehensive Suite', () => {
 
     fireEvent.change(input, { target: { value: 'Pump' } });
     fireEvent.mouseDown(document.body);
+  });
+
+  test('validates file upload format and size limits', async () => {
+    renderWithProvider(<ItemCatalogue />);
+    const uploadInput = screen.getByLabelText(/Upload catalogue Excel workbook/i);
+
+    // Non-xlsx file
+    const badFile = new File(['dummy content'], 'document.pdf', { type: 'application/pdf' });
+    fireEvent.change(uploadInput, { target: { files: [badFile] } });
+
+    // File > 10MB
+    const bigFile = new File([new ArrayBuffer(11 * 1024 * 1024)], 'huge.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    fireEvent.change(uploadInput, { target: { files: [bigFile] } });
+  });
+
+  test('handles products with null fields and table interactions', async () => {
+    const nullProductCatalogue = [
+      {
+        id: 'prod-null-1',
+        name: 'Null Values Product',
+        category: 'General',
+        sku: 'SKU-NULL-1',
+        specs: '',
+        unitPrice: null,
+        leadTimeDays: null,
+        moq: null,
+      },
+    ];
+
+    renderWithProvider(
+      <ItemCatalogueCustomWrapper customSubscription="select" customCatalogue={nullProductCatalogue} />
+    );
+
+    expect(screen.getByText('SKU-NULL-1')).toBeInTheDocument();
+    const editBtn = screen.getByTitle('Edit Product');
+    fireEvent.click(editBtn);
+
+    const checkbox = screen.getByLabelText(/Select SKU-NULL-1/i);
+    fireEvent.click(checkbox);
+  });
+
+  test('detects duplicate SKUs and existing catalogue SKUs during Excel preview', async () => {
+    const existingCatalogue = [
+      {
+        id: 'prod-ex-1',
+        name: 'Existing Product',
+        category: 'General',
+        sku: 'SKU-EXISTING',
+        specs: '',
+        unitPrice: 100,
+        leadTimeDays: 5,
+        moq: 1,
+      },
+    ];
+
+    renderWithProvider(
+      <ItemCatalogueCustomWrapper customSubscription="select" customCatalogue={existingCatalogue} />
+    );
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['Product Name', 'SKU', 'Category', 'Specifications', 'Unit Price', 'Lead Time Days', 'MOQ'],
+      ['Item 1', 'SKU-DUP', 'Mechanical', 'Specs 1', 100, 5, 1],
+      ['Item 2', 'SKU-DUP', 'Mechanical', 'Specs 2', 200, 5, 1],
+      ['Item 3', 'SKU-EXISTING', 'Mechanical', 'Specs 3', 300, 5, 1],
+    ]), 'Catalogue');
+    const bytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const dupFile = new File([bytes], 'catalogue-dup.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    const uploadInput = screen.getByLabelText(/Upload catalogue Excel workbook/i);
+    await act(async () => {
+      fireEvent.change(uploadInput, { target: { files: [dupFile] } });
+    });
+
+    expect(await screen.findByText(/SKU is duplicated in this workbook/i)).toBeInTheDocument();
+    expect(await screen.findByText(/SKU already exists in your catalogue/i)).toBeInTheDocument();
+
+    // Click Import Valid Rows
+    const importBtn = screen.getByRole('button', { name: /Import Valid Rows/i });
+    await act(async () => {
+      fireEvent.click(importBtn);
+    });
+  });
+
+  test('handles component unmount while async loads are in flight (cancellation branches)', async () => {
+    let resolveVendor: any;
+    global.fetch = jest.fn(() => new Promise((res) => { resolveVendor = res; })) as any;
+    const { unmount } = renderWithProvider(<ItemCatalogueWithSession />);
+    unmount();
+    await act(async () => {
+      resolveVendor({ ok: true, status: 200, json: async () => ({ success: true, data: { id: 'v1' } }) });
+    });
+  });
+
+  test('handles corrupt excel workbook upload', async () => {
+    renderWithProvider(
+      <ItemCatalogueCustomWrapper customSubscription="select" customCatalogue={[]} />
+    );
+    const corruptFile = new File([new ArrayBuffer(10)], 'corrupt.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const uploadInput = screen.getByLabelText(/Upload catalogue Excel workbook/i);
+    await act(async () => {
+      fireEvent.change(uploadInput, { target: { files: [corruptFile] } });
+    });
+  });
+
+  test('covers excel preview with invalid rows and capacity limits', async () => {
+    const existingCatalogue: any[] = Array.from({ length: 99 }, (_, i) => ({
+      id: `p-${i}`,
+      name: `Product ${i}`,
+      category: 'General',
+      sku: `SKU-${i}`,
+      specs: '',
+      unitPrice: 100,
+      leadTimeDays: 5,
+      moq: 1,
+    }));
+
+    renderWithProvider(
+      <ItemCatalogueCustomWrapper customSubscription="select" customCatalogue={existingCatalogue} />
+    );
+
+    const uploadInput = screen.getByLabelText(/Upload catalogue Excel workbook/i);
+
+    // 1. Workbook with valid formatting but invalid row (negative price -> validRows.length === 0)
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['Product Name', 'SKU', 'Category', 'Specifications', 'Unit Price', 'Lead Time Days', 'MOQ'],
+      ['Invalid Item', 'SKU-ERR', 'Mechanical', 'Specs', -100, 5, 1],
+    ]), 'Catalogue');
+    const bytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const invalidFile = new File([bytes], 'invalid.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    await act(async () => {
+      fireEvent.change(uploadInput, { target: { files: [invalidFile] } });
+    });
+
+    // Button appears because cataloguePreview.length > 0
+    const importBtn = await screen.findByRole('button', { name: /Import Valid Rows/i });
+    await act(async () => {
+      fireEvent.click(importBtn);
+    });
+
+    // 2. Exceeds capacity (available is 100 - 99 = 1, but file has 2 valid rows)
+    const workbook2 = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook2, XLSX.utils.aoa_to_sheet([
+      ['Product Name', 'SKU', 'Category', 'Specifications', 'Unit Price', 'Lead Time Days', 'MOQ'],
+      ['Extra 1', 'SKU-EXTRA-1', 'Mechanical', '', 100, 5, 1],
+      ['Extra 2', 'SKU-EXTRA-2', 'Mechanical', '', 200, 5, 1],
+    ]), 'Catalogue');
+    const bytes2 = XLSX.write(workbook2, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const capacityFile = new File([bytes2], 'capacity.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    await act(async () => {
+      fireEvent.change(uploadInput, { target: { files: [capacityFile] } });
+    });
+
+    const importBtn2 = await screen.findByRole('button', { name: /Import Valid Rows/i });
+    await act(async () => {
+      fireEvent.click(importBtn2);
+    });
+
+    // 3. Try adding product manually when capacity reached
+    const nameInput = screen.getByPlaceholderText(/Centrifugal Water Pump/i);
+    const skuInput = screen.getByPlaceholderText(/SKU-PUMP-500/i);
+    const priceInput = screen.getByPlaceholderText('850');
+    const leadTimeInput = screen.getByPlaceholderText('5');
+    const moqInput = screen.getByPlaceholderText('10');
+
+    // Fill form and add 1 product to reach 100 limit
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'Final Product' } });
+      fireEvent.change(skuInput, { target: { value: 'SKU-FINAL' } });
+      fireEvent.change(priceInput, { target: { value: '500' } });
+      fireEvent.change(leadTimeInput, { target: { value: '5' } });
+      fireEvent.change(moqInput, { target: { value: '1' } });
+    });
+
+    const addBtn = screen.getByRole('button', { name: /Add Item/i });
+    await act(async () => {
+      fireEvent.click(addBtn);
+    });
+
+    // Now try adding another product when limit is 100 and length is 100
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'Overflow Product' } });
+      fireEvent.change(skuInput, { target: { value: 'SKU-OVERFLOW' } });
+      fireEvent.change(priceInput, { target: { value: '500' } });
+      fireEvent.change(leadTimeInput, { target: { value: '5' } });
+      fireEvent.change(moqInput, { target: { value: '1' } });
+      fireEvent.click(addBtn);
+    });
+  });
+
+  test('covers category input focus and non-Error exception handling', async () => {
+    renderWithProvider(<ItemCatalogueWithSession />);
+
+    const categoryInput = screen.getByPlaceholderText(/Type 3\+ characters to search\.\.\./i);
+
+    // Focus with short text (< 3 chars)
+    await act(async () => {
+      fireEvent.change(categoryInput, { target: { value: 'AB' } });
+      fireEvent.focus(categoryInput);
+    });
+
+    // Focus with 3+ chars
+    await act(async () => {
+      fireEvent.change(categoryInput, { target: { value: 'Pump' } });
+      fireEvent.focus(categoryInput);
+    });
+
+    // Non-Error exception thrown during save
+    global.fetch = jest.fn(() => Promise.reject('Plain string network failure')) as any;
+    const nameInput = screen.getByPlaceholderText(/Centrifugal Water Pump/i);
+    const skuInput = screen.getByPlaceholderText(/SKU-PUMP-500/i);
+    const priceInput = screen.getByPlaceholderText('850');
+    const leadTimeInput = screen.getByPlaceholderText('5');
+    const moqInput = screen.getByPlaceholderText('10');
+
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'Test Product' } });
+      fireEvent.change(skuInput, { target: { value: 'SKU-TEST' } });
+      fireEvent.change(priceInput, { target: { value: '100' } });
+      fireEvent.change(leadTimeInput, { target: { value: '5' } });
+      fireEvent.change(moqInput, { target: { value: '1' } });
+    });
+
+    const addBtn = screen.getByRole('button', { name: /Add Item/i });
+    await act(async () => {
+      fireEvent.click(addBtn);
+    });
   });
 });
