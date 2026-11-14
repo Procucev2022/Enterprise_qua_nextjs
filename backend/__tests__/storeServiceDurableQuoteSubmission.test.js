@@ -675,6 +675,24 @@ describe('durable quote submission and credit synchronization', () => {
     expect(submit).toHaveBeenCalledTimes(5);
   });
 
+  test('pauses between conflicting attempts, with a bounded pause, and not after the last attempt', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(rfq());
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(vendor());
+    jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({ conflict: true });
+    const timers = jest.spyOn(global, 'setTimeout');
+    await expect(storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    const pauses = timers.mock.calls.map(([, delayMs]) => delayMs);
+    // Five attempts make four pauses; the last attempt is followed by the conflict error, not a pause.
+    expect(pauses).toHaveLength(4);
+    for (const delayMs of pauses) {
+      expect(delayMs).toBeGreaterThan(0);
+      expect(delayMs).toBeLessThanOrEqual(require('../src/config/constants').RFQ_QUOTE_WRITE_BACKOFF.MAX_MS);
+    }
+  });
+
   test('keeps the in-memory compatibility path when no storage is configured', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     const credit = jest.spyOn(storeService, 'consumeVendorQuotationCredit').mockReturnValue(null);

@@ -111,6 +111,24 @@ app.listen(PORT);
 
 const httpHandler = httpServerHandler({ port: PORT });
 
+/**
+ * Runs cron jobs one after another. Starting them together put all of their D1 queries into the same
+ * ten-second window, and D1 rejected the burst as overloaded, which failed the jobs that most needed the
+ * database. Each job still runs when an earlier one fails. The first failure is rethrown at the end, so the
+ * invocation is still reported.
+ */
+async function runCronJobsInTurn(jobs) {
+  let failure = null;
+  for (const job of jobs) {
+    try {
+      await job();
+    } catch (error) {
+      if (failure === null) failure = { error };
+    }
+  }
+  if (failure !== null) throw failure.error;
+}
+
 // server.js's bootstrapServer() (Node/Render only) starts both of these via
 // setInterval — emailGatewayService.startPolling() (IMAP -> auto-RFQ
 // ingestion) and zohoReconciliationService.startPolling() (payment-link
@@ -140,7 +158,10 @@ async function scheduled(controller, workerEnv, ctx) {
   const { default: storeService } = await import('./services/storeService.js');
   const loggerModule = await import('./services/loggerService.js');
   const logger = loggerModule.logger || loggerModule.default?.logger;
-  if (!storeService.isHydratedFromDB) {
+  // Hydration reads the working set from the database, so it runs only for the jobs that work from the
+  // in-memory store. The reconciliation trigger works from the database directly and does not hydrate.
+  const hydrate = async () => {
+    if (storeService.isHydratedFromDB) return;
     await storeService.hydrateFromDB().catch((err) => {
       if (logger?.error) {
         logger.error('Scheduled Worker state hydration failed', err, 'WORKER_CRON');
@@ -148,20 +169,20 @@ async function scheduled(controller, workerEnv, ctx) {
         console.error('[CRON] hydration failed', err);
       }
     });
-  }
+  };
   if (isEmailGateway) {
-    const results = await Promise.allSettled([
-      emailGatewayService.pollBothInboxesOnce(),
-      rfqChaserScheduler.dispatchDueChaserJobs(),
-      rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
-      eventOutboxService.dispatchScheduledEventOutboxJobs(),
-      storeService.closeExpiredRFQsDurably(),
+    await hydrate();
+    await runCronJobsInTurn([
+      () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
+      () => rfqChaserScheduler.dispatchDueChaserJobs(),
+      () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+      () => storeService.closeExpiredRFQsDurably(),
+      () => emailGatewayService.pollBothInboxesOnce(),
     ]);
-    const rejected = results.find((r) => r.status === 'rejected');
-    if (rejected) throw rejected.reason;
     return;
   }
   if (cron === DAILY_RFQ_REPORT_CRON) {
+    await hydrate();
     const scheduledTime = controller?.scheduledTime == null
       ? new Date()
       : new Date(controller.scheduledTime);
@@ -169,27 +190,24 @@ async function scheduled(controller, workerEnv, ctx) {
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {
-    const results = await Promise.allSettled([
-      zohoReconciliationService.reconcileOnce(),
-      eventOutboxService.purgeExpiredEventOutboxRows(),
+    await runCronJobsInTurn([
+      () => zohoReconciliationService.reconcileOnce(),
+      () => eventOutboxService.purgeExpiredEventOutboxRows(),
     ]);
-    const rejected = results.find((result) => result.status === 'rejected');
-    if (rejected) throw rejected.reason;
     return;
   }
   // Unrecognised cron pattern: run all rather than silently doing nothing,
   // so a wrangler.jsonc edit that adds/renames a trigger doesn't go quiet.
-  const results = await Promise.allSettled([
-    emailGatewayService.pollBothInboxesOnce(),
-    zohoReconciliationService.reconcileOnce(),
-    rfqChaserScheduler.dispatchDueChaserJobs(),
-    rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
-    eventOutboxService.dispatchScheduledEventOutboxJobs(),
-    eventOutboxService.purgeExpiredEventOutboxRows(),
-    storeService.closeExpiredRFQsDurably(),
+  await hydrate();
+  await runCronJobsInTurn([
+    () => emailGatewayService.pollBothInboxesOnce(),
+    () => zohoReconciliationService.reconcileOnce(),
+    () => rfqChaserScheduler.dispatchDueChaserJobs(),
+    () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+    () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
+    () => eventOutboxService.purgeExpiredEventOutboxRows(),
+    () => storeService.closeExpiredRFQsDurably(),
   ]);
-  const rejected = results.find((r) => r.status === 'rejected');
-  if (rejected) throw rejected.reason;
 }
 
 // Must match the `crons` entries in wrangler.jsonc exactly — Cloudflare

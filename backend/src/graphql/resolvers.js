@@ -420,7 +420,9 @@ const rootResolvers = {
       { orgName: user.orgName || '' }
     );
     const requestingBuyerAccount = await storeService.getBuyerAccountByEmail(user.email);
-    return storeService.createRFQDurably({ ...input, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+    const created = await storeService.createRFQDurably({ ...input, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+    // Assigns and invites the vendors of a planned minor-category RFQ, as the REST create path does.
+    return storeService.completeRFQVendorPlan(created, { notifyShortfall: true });
   },
 
   updateRFQ: async ({ id, input }, context) => {

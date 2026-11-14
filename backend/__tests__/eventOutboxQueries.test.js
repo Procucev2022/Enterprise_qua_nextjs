@@ -204,7 +204,13 @@ describe('event-outbox database operations', () => {
     await expect(eventOutboxQueries.purgeEventOutboxInDB('cutoff-a', 'cutoff-b')).resolves.toBe(0);
     expect(querySpy.mock.calls[0][0]).toContain("status = 'dead'");
     expect(querySpy.mock.calls[0][0]).toContain("created_at < $2");
-    expect(querySpy.mock.calls[0][1]).toEqual(['cutoff-a', 'cutoff-b', 'onboarding']);
+    expect(querySpy.mock.calls[0][0]).toContain('LIMIT $4');
+    expect(querySpy.mock.calls[0][1]).toEqual([
+      'cutoff-a',
+      'cutoff-b',
+      'onboarding',
+      require('../src/config/constants').EVENT_OUTBOX_PURGE_BATCH_SIZE,
+    ]);
   });
 
   test.each([

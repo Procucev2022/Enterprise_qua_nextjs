@@ -527,6 +527,29 @@ describe('OpportunityFeed: rendering from the RFQ API', () => {
     });
   });
 
+  test('a 401 for the vendor profile is a warning, not an error, and the opportunity feed stays available', async () => {
+    logger.clearLogs();
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (url === `/api/vendors/${encodeURIComponent(SELF_VENDOR_RECORD.email)}`) {
+        return Promise.resolve({ ok: false, status: 401, json: async () => ({}) });
+      }
+      return baseImpl?.(url, init);
+    });
+
+    await renderFeed();
+
+    await waitFor(() => {
+      const [entry] = logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' });
+      expect(entry).toEqual(expect.objectContaining({
+        level: 'WARN',
+        metadata: expect.objectContaining({ operation: 'load_vendor_profile', status: 401 }),
+      }));
+    });
+    expect(logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' }).some((entry) => entry.level === 'ERROR')).toBe(false);
+    expect(screen.getByText(DIRECT_OWN.title as string)).toBeInTheDocument();
+  });
+
   test('logs vendor profile transport failures while keeping the opportunity feed available', async () => {
     logger.clearLogs();
     const baseImpl = (global.fetch as jest.Mock).getMockImplementation();

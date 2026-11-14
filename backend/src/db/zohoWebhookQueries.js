@@ -106,11 +106,16 @@ async function failWebhookEvent(accountId, eventId, ownerToken, errorCode) {
 async function purgeExpiredWebhookEvents(now = new Date()) {
   const retentionMs = ZOHO_WEBHOOK_RECEIPT_POLICY.RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const cutoff = new Date(now.getTime() - retentionMs).toISOString();
+  // One bounded batch per run. The primary key is (account_id, event_id), so the batch is selected by that pair.
   const result = await pool.query(
     `DELETE FROM zoho_webhook_events
-     WHERE (status = 'PROCESSED' AND processed_at < $1)
-        OR (status = 'FAILED' AND updated_at < $1)`,
-    [cutoff],
+     WHERE (account_id, event_id) IN (
+       SELECT account_id, event_id FROM zoho_webhook_events
+       WHERE (status = 'PROCESSED' AND processed_at < $1)
+          OR (status = 'FAILED' AND updated_at < $1)
+       LIMIT $2
+     )`,
+    [cutoff, ZOHO_WEBHOOK_RECEIPT_POLICY.PURGE_BATCH_SIZE],
     DB_OPTIONS
   );
   return Number(result.rowCount || 0);

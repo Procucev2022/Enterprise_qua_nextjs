@@ -21,6 +21,7 @@
 
 const { logger } = require('./loggerService');
 const { EMAIL_INGESTION_CONFIG, EMAIL_INGESTION_STATUS } = require('../config/constants');
+const { sanitizeTextForModel } = require('./documentTextSanitizer');
 
 /** True when the file name looks like a message container this module handles. */
 function isEmailFileName(fileName) {
@@ -351,10 +352,10 @@ function buildDocumentText(message) {
   message.attachments
     .filter((attachment) => attachment.role === 'text')
     .forEach((attachment) => {
-      const decoded = attachment.content
-        .toString('utf8')
-        .slice(0, EMAIL_INGESTION_CONFIG.MAX_TEXT_ATTACHMENT_CHARS)
-        .trim();
+      const decoded = sanitizeTextForModel(
+        attachment.content.toString('utf8'),
+        EMAIL_INGESTION_CONFIG.MAX_TEXT_ATTACHMENT_CHARS
+      ).text.trim();
       if (decoded) sections.push(`\nATTACHMENT: ${attachment.fileName}\n${decoded}`);
     });
 
