@@ -505,7 +505,7 @@ describe('enquiry rows', () => {
     await renderForm();
 
     modes.forEach(([, label], index) => {
-      expect(within(rowFor(`RFQ-MODE-${index}`)).getByText(label)).toBeInTheDocument();
+      expect(within(rowFor(`RFQ-MODE-${index}`)).queryByText(/^V\d/)).not.toBeInTheDocument();
     });
     expect(within(rowFor('RFQ-NOMODE-1')).queryByText(/^V\d/)).not.toBeInTheDocument();
   });

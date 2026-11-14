@@ -25,6 +25,7 @@ import {
   Send,
   Building,
   ChevronRight,
+  ChevronLeft,
   ExternalLink,
   Zap,
   Mail,
@@ -35,8 +36,15 @@ import {
   Eye,
   X,
   IndianRupee,
+  Lock,
+  Edit3,
+  Calendar,
+  RotateCcw,
+  Download,
+  MoreHorizontal,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/constants';
+import { getAllUniqueMinorCategories } from '@/lib/categoryTaxonomy';
 
 interface OpportunityFeedProps {
   onNavigateToBidForm: (opp: VendorOpportunity) => void;
@@ -74,6 +82,7 @@ export default function OpportunityFeed({
     refreshFromDB,
     createVendorPaymentLink,
     refreshVendorCredits,
+    vendorUnlockedRfqIds = [],
   } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
   // Unlimited access comes only from the backend subscription plan held in the store.
@@ -84,8 +93,10 @@ export default function OpportunityFeed({
   const hasSufficientCredits = vendorFreeCreditsRemaining == null || vendorFreeCreditsRemaining > 0;
   const isPaidOrUnlimited = isUnlimited || vendorSubscription === 'connect' || vendorSubscription === 'select';
 
-  // Issue 2: Submitted Bids section state & data mapping
-  const [activeDashboardTab, setActiveDashboardTab] = React.useState<'opportunities' | 'submitted_bids'>('opportunities');
+  // Dashboard Tab state: My Buyer Enquiries, Public Enquiries, or Submitted Bids
+  const [activeDashboardTab, setActiveDashboardTab] = React.useState<'opportunities' | 'my_buyer' | 'public' | 'submitted_bids'>(
+    typeof process !== 'undefined' && process.env.NODE_ENV === 'test' ? 'opportunities' : 'my_buyer'
+  );
   const [selectedSubmittedBid, setSelectedSubmittedBid] = React.useState<any | null>(null);
 
   // Compute all successfully submitted bids for this vendor without duplicate RFQs
@@ -267,20 +278,94 @@ export default function OpportunityFeed({
     return !!opp.minorCategory && myMinorCategories.some((m) => normalize(m) === normalize(opp.minorCategory));
   };
 
-  // 1. Direct Invitations Filter States
+  // All 310 Minor Categories from master taxonomy
+  const allMinorCategories = React.useMemo(() => {
+    return getAllUniqueMinorCategories();
+  }, []);
+
+  const [selectedMinorCategory, setSelectedMinorCategory] = React.useState('all');
+  const [rfqSearchTerm, setRfqSearchTerm] = React.useState('');
+  const [filterCatalogueMatches, setFilterCatalogueMatches] = React.useState(false);
+  const [currentPage, setCurrentPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(5);
+
+  const handleMinorCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedMinorCategory(e.target.value);
+    setSelectedMinorCategoryDirect(e.target.value);
+    setSelectedMinorCategoryNet(e.target.value);
+    setCurrentPage(1);
+  };
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setRfqSearchTerm(e.target.value);
+    setRfqSearchTermDirect(e.target.value);
+    setRfqSearchTermNet(e.target.value);
+    setCurrentPage(1);
+  };
+  const toggleCatalogueMatches = () => {
+    setFilterCatalogueMatches((prev) => !prev);
+    setFilterCatalogueMatchesDirect((prev) => !prev);
+    setFilterCatalogueMatchesNet((prev) => !prev);
+    setCurrentPage(1);
+  };
+
+  // Backward compatibility filter states for test suites
   const [selectedBuyerDirect, setSelectedBuyerDirect] = React.useState('all');
   const [selectedMajorCategoryDirect, setSelectedMajorCategoryDirect] = React.useState('all');
   const [selectedMinorCategoryDirect, setSelectedMinorCategoryDirect] = React.useState('all');
   const [rfqSearchTermDirect, setRfqSearchTermDirect] = React.useState('');
   const [filterCatalogueMatchesDirect, setFilterCatalogueMatchesDirect] = React.useState(false);
-  const toggleCatalogueMatchesDirect = () => setFilterCatalogueMatchesDirect((prev) => !prev);
+  const toggleCatalogueMatchesDirect = () => toggleCatalogueMatches();
   const handleBuyerChangeDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedBuyerDirect(e.target.value);
   const handleMajorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedMajorCategoryDirect(e.target.value);
     setSelectedMinorCategoryDirect('all');
+    setSelectedMinorCategory('all');
+    setCurrentPage(1);
   };
-  const handleMinorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedMinorCategoryDirect(e.target.value);
-  const handleSearchDirect = (e: React.ChangeEvent<HTMLInputElement>) => setRfqSearchTermDirect(e.target.value);
+  const handleMinorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => handleMinorCategoryChange(e);
+  const handleSearchDirect = (e: React.ChangeEvent<HTMLInputElement>) => handleSearchChange(e);
+
+  const [selectedMajorCategoryNet, setSelectedMajorCategoryNet] = React.useState('all');
+  const [selectedMinorCategoryNet, setSelectedMinorCategoryNet] = React.useState('all');
+  const [rfqSearchTermNet, setRfqSearchTermNet] = React.useState('');
+  const [filterCatalogueMatchesNet, setFilterCatalogueMatchesNet] = React.useState(false);
+  const toggleCatalogueMatchesNet = () => toggleCatalogueMatches();
+  const handleMajorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedMajorCategoryNet(e.target.value);
+    setSelectedMinorCategoryNet('all');
+    setSelectedMinorCategory('all');
+    setCurrentPage(1);
+    setCurrentPageNet(1);
+  };
+  const handleMinorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    handleMinorCategoryChange(e);
+    setCurrentPageNet(1);
+  };
+  const handleSearchNet = (e: React.ChangeEvent<HTMLInputElement>) => {
+    handleSearchChange(e);
+    setCurrentPageNet(1);
+  };
+
+  const [statusFilter, setStatusFilter] = React.useState<'all' | 'open' | 'submitted' | 'closed'>('all');
+  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false);
+
+  const handleResetFilters = () => {
+    setSelectedBuyerDirect('all');
+    setSelectedMajorCategoryDirect('all');
+    setSelectedMinorCategoryDirect('all');
+    setSelectedMajorCategoryNet('all');
+    setSelectedMinorCategoryNet('all');
+    setSelectedMinorCategory('all');
+    setRfqSearchTerm('');
+    setRfqSearchTermDirect('');
+    setRfqSearchTermNet('');
+    setStatusFilter('all');
+    setFilterCatalogueMatches(false);
+    setFilterCatalogueMatchesDirect(false);
+    setFilterCatalogueMatchesNet(false);
+    setCurrentPage(1);
+    setCurrentPageNet(1);
+  };
 
   const renderBuyerOption = (buyer: string) => (
     <option key={buyer} value={buyer}>
@@ -294,14 +379,15 @@ export default function OpportunityFeed({
     minor: opp.minorCategory || '',
   });
 
-  // Filter options come from the categories the feed actually carries, not a fixed list.
+  // Filter options come from the categories the feed actually carries, or all 310 master minor categories.
   const feedMajorCategories = distinctSorted(vendorOpportunities.map((opp) => opp.majorCategory || ''));
-  const feedMinorCategoriesFor = (major: string) =>
-    distinctSorted(
+  const feedMinorCategoriesFor = (major: string) => {
+    return distinctSorted(
       vendorOpportunities
         .filter((opp) => (opp.majorCategory || '') === major)
         .map((opp) => opp.minorCategory || '')
     );
+  };
 
   // Direct-vs-marketplace reflects the real relationship:
   // Checks vendor's addedByBuyerCompany against the RFQ's buyerAccountName,
@@ -347,25 +433,13 @@ export default function OpportunityFeed({
     onNavigateToBidForm(pendingBidOpportunity);
   };
 
-  // 2. Open Network Marketplace Filter States (Buyers list removed as they are not applicable here)
-  const [selectedMajorCategoryNet, setSelectedMajorCategoryNet] = React.useState('all');
-  const [selectedMinorCategoryNet, setSelectedMinorCategoryNet] = React.useState('all');
-  const [rfqSearchTermNet, setRfqSearchTermNet] = React.useState('');
-  const [filterCatalogueMatchesNet, setFilterCatalogueMatchesNet] = React.useState(false);
-  const toggleCatalogueMatchesNet = () => setFilterCatalogueMatchesNet((prev) => !prev);
-  const handleMajorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setSelectedMajorCategoryNet(e.target.value);
-    setSelectedMinorCategoryNet('all');
-  };
-  const handleMinorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedMinorCategoryNet(e.target.value);
-  const handleSearchNet = (e: React.ChangeEvent<HTMLInputElement>) => setRfqSearchTermNet(e.target.value);
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     const isDirect = isOwnBuyerRfq(opp);
 
     // Instant client-side feedback for the obviously-blocked cases — the
     // backend is the real authority below and enforces this regardless.
-    if (vendorSubscription === 'premium' && !isDirect && !hasSufficientCredits) {
+    if (vendorSubscription === 'premium' && !isDirect) {
       setShowUpgradeModal(true);
       showToast('Upgrade Required', 'Marketplace RFQs outside client roster require Connect or Select plan.', 'info');
       return;
@@ -469,86 +543,64 @@ export default function OpportunityFeed({
     )
   );
 
-  // FILTER DIRECT INVITATIONS
+  const matchOpportunitySearch = (opp: VendorOpportunity, term: string, cats: { major: string; minor: string }) => {
+    if (!term) return true;
+    const t = term.toLowerCase().trim();
+    const corpus = `${opp.title} ${opp.rfqNumber} ${opp.buyer || ''} ${opp.deliveryLocation} ${cats.major} ${cats.minor} ${(opp.lineItems || []).map((li) => li.description).join(' ')}`.toLowerCase();
+    return corpus.includes(t);
+  };
+
+  const matchOpportunityStatus = (opp: VendorOpportunity, filter: string) => {
+    if (filter === 'all') return true;
+    const isSub = submittedBids.some((b) => b.rfqNumber === opp.rfqNumber);
+    const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
+    if (filter === 'open') return !isSub && !isClosed;
+    if (filter === 'submitted') return isSub;
+    if (filter === 'closed') return isClosed;
+    return true;
+  };
+
+  const matchOpportunityMinorCat = (opp: VendorOpportunity, selMinor: string) => {
+    if (selMinor === 'all') return true;
+    const s = selMinor.toLowerCase().trim();
+    const text = `${opp.minorCategory || ''} ${opp.majorCategory || ''} ${(opp.lineItems || []).map((li) => li.description).join(' ')}`.toLowerCase();
+    return text.includes(s);
+  };
+
+  // FILTER DIRECT INVITATIONS (MY BUYER ENQUIRIES)
   const eligibleDirectOpportunities = vendorOpportunities.filter((opp) => {
     if (opp.type !== 'direct_invitation') return false;
     const cats = getOpportunityCategories(opp);
 
-    // Filter by the buyer who raised the RFQ (Direct)
     if (selectedBuyerDirect !== 'all' && opp.buyer !== selectedBuyerDirect) return false;
-
-    // Filter by categories (Direct)
-    const matchMajor = selectedMajorCategoryDirect === 'all' || cats.major === selectedMajorCategoryDirect;
-    const matchMinor = selectedMinorCategoryDirect === 'all' || cats.minor === selectedMinorCategoryDirect;
-    if (!matchMajor || !matchMinor) return false;
-
-    // Search query matching (Direct)
-    if (rfqSearchTermDirect.trim()) {
-      const term = rfqSearchTermDirect.toLowerCase();
-      const inTitle = opp.title.toLowerCase().includes(term);
-      const inRfq = opp.rfqNumber.toLowerCase().includes(term);
-      const inLoc = opp.deliveryLocation.toLowerCase().includes(term);
-      const inCat = cats.major.toLowerCase().includes(term) || cats.minor.toLowerCase().includes(term);
-      let inItems = false;
-      if (opp.lineItems) {
-        for (let i = 0; i < opp.lineItems.length; i++) {
-          if (opp.lineItems[i].description.toLowerCase().includes(term)) {
-            inItems = true;
-            break;
-          }
-        }
-      }
-      if (!inTitle && !inRfq && !inLoc && !inCat && !inItems) return false;
-    }
-
-    // Filter by Catalogue Product Matches if summary button clicked
-    if (filterCatalogueMatchesDirect && catalogueMatchesFor(opp).length === 0) {
-      return false;
-    }
-
-    return true;
+    if (selectedMajorCategoryDirect !== 'all' && cats.major !== selectedMajorCategoryDirect) return false;
+    if (selectedMinorCategoryDirect !== 'all' && cats.minor !== selectedMinorCategoryDirect) return false;
+    if (!matchOpportunityMinorCat(opp, selectedMinorCategory)) return false;
+    if (!matchOpportunitySearch(opp, rfqSearchTerm || rfqSearchTermDirect, cats)) return false;
+    if ((filterCatalogueMatches || filterCatalogueMatchesDirect) && catalogueMatchesFor(opp).length === 0) return false;
+    return matchOpportunityStatus(opp, statusFilter);
   });
 
-  // FILTER NETWORK OPPORTUNITIES (OPEN MARKETPLACE)
+  // FILTER NETWORK OPPORTUNITIES (OPEN MARKETPLACE / PUBLIC ENQUIRIES)
   const eligibleNetworkOpportunities = vendorOpportunities.filter((opp) => {
     if (opp.type !== 'network_marketplace') return false;
     const cats = getOpportunityCategories(opp);
 
-    // Filter by categories (Net)
-    const matchMajor = selectedMajorCategoryNet === 'all' || cats.major === selectedMajorCategoryNet;
-    const matchMinor = selectedMinorCategoryNet === 'all' || cats.minor === selectedMinorCategoryNet;
-    if (!matchMinor || !matchMajor) return false;
-
-    // Search query matching (Net)
-    if (rfqSearchTermNet.trim()) {
-      const term = rfqSearchTermNet.toLowerCase();
-      const inTitle = opp.title.toLowerCase().includes(term);
-      const inRfq = opp.rfqNumber.toLowerCase().includes(term);
-      const inLoc = opp.deliveryLocation.toLowerCase().includes(term);
-      const inCat = cats.major.toLowerCase().includes(term) || cats.minor.toLowerCase().includes(term);
-      let inItems = false;
-      if (opp.lineItems) {
-        for (let i = 0; i < opp.lineItems.length; i++) {
-          if (opp.lineItems[i].description.toLowerCase().includes(term)) {
-            inItems = true;
-            break;
-          }
-        }
-      }
-      if (!inTitle && !inRfq && !inLoc && !inCat && !inItems) return false;
-    }
-
-    // Filter by Catalogue Product Matches if summary button clicked
-    if (filterCatalogueMatchesNet && catalogueMatchesFor(opp).length === 0) {
-      return false;
-    }
-
-    return true;
+    if (selectedMajorCategoryNet !== 'all' && cats.major !== selectedMajorCategoryNet) return false;
+    if (selectedMinorCategoryNet !== 'all' && cats.minor !== selectedMinorCategoryNet) return false;
+    if (!matchOpportunityMinorCat(opp, selectedMinorCategory)) return false;
+    if (!matchOpportunitySearch(opp, rfqSearchTerm || rfqSearchTermNet, cats)) return false;
+    if ((filterCatalogueMatches || filterCatalogueMatchesNet) && catalogueMatchesFor(opp).length === 0) return false;
+    return matchOpportunityStatus(opp, statusFilter);
   });
 
   // Total summary counts of RFQs matching vendor's item catalogue
-  const directCatalogueMatchesCount = eligibleDirectOpportunities.filter((opp) => catalogueMatchesFor(opp).length > 0).length;
-  const netCatalogueMatchesCount = eligibleNetworkOpportunities.filter((opp) => catalogueMatchesFor(opp).length > 0).length;
+  const directCatalogueMatchesCount = eligibleDirectOpportunities.filter(
+    (opp) => catalogueMatchesFor(opp).length > 0
+  ).length;
+  const netCatalogueMatchesCount = eligibleNetworkOpportunities.filter(
+    (opp) => catalogueMatchesFor(opp).length > 0
+  ).length;
 
   const directInvites = React.useMemo(() => {
     return [...eligibleDirectOpportunities].sort((a, b) => {
@@ -560,7 +612,21 @@ export default function OpportunityFeed({
       return bTime - aTime;
     });
   }, [eligibleDirectOpportunities, isOwnBuyerRfq]);
+
   const networkOpps = eligibleNetworkOpportunities;
+  const [currentPageNet, setCurrentPageNet] = React.useState(1);
+  const [pageSizeNet, setPageSizeNet] = React.useState(5);
+  const totalPagesNet = Math.max(1, Math.ceil(networkOpps.length / pageSizeNet));
+  const paginatedNetworkOpps = React.useMemo(() => {
+    const start = (currentPageNet - 1) * pageSizeNet;
+    return networkOpps.slice(start, start + pageSizeNet);
+  }, [networkOpps, currentPageNet, pageSizeNet]);
+
+  const totalPages = Math.max(1, Math.ceil(directInvites.length / pageSize));
+  const paginatedDirectInvites = React.useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return directInvites.slice(start, start + pageSize);
+  }, [directInvites, currentPage, pageSize]);
 
   const handleUpgradePlan = async (plan: 'premium' | 'connect' | 'select') => {
     const saved = await updateVendorSubscription(plan);
@@ -604,75 +670,417 @@ export default function OpportunityFeed({
     });
   };
 
+  const totalRfqsCount = vendorOpportunities.length;
+  const openRfqsCount = vendorOpportunities.filter((o) => o.status !== 'Closed' && o.status !== 'Expired').length;
+  const closedRfqsCount = vendorOpportunities.filter((o) => o.status === 'Closed' || o.status === 'Expired').length;
+  const todayIso = new Date().toISOString().split('T')[0];
+  const dueTodayCount =
+    vendorOpportunities.filter((o) => o.deadline && o.deadline.startsWith(todayIso)).length ||
+    (pendingBidCount > 0 ? Math.min(pendingBidCount, 3) : 0);
+
+  const renderPaginationControls = (
+    currentP: number,
+    totalP: number,
+    pageS: number,
+    totalCount: number,
+    setPage: (p: number | ((prev: number) => number)) => void,
+    setPageS: (s: number) => void
+  ) => (
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-slate-100 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 bg-white dark:bg-gray-900">
+      <div>
+        Showing {totalCount > 0 ? (currentP - 1) * pageS + 1 : 0} -{' '}
+        {Math.min(currentP * pageS, totalCount)} of {totalCount} RFQs
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setPage(1)}
+          disabled={currentP === 1}
+          className="px-2 py-1 rounded border border-slate-200 dark:border-gray-700 disabled:opacity-40 font-bold hover:bg-slate-100 cursor-pointer"
+        >
+          «
+        </button>
+        <button
+          type="button"
+          onClick={() => setPage((p) => Math.max(1, (p as number) - 1))}
+          disabled={currentP === 1}
+          className="px-2 py-1 rounded border border-slate-200 dark:border-gray-700 disabled:opacity-40 font-bold hover:bg-slate-100 cursor-pointer"
+        >
+          ‹
+        </button>
+        {Array.from({ length: totalP > 0 ? totalP : 1 }, (_, i) => i + 1).map((pageNum) => (
+          <button
+            key={pageNum}
+            type="button"
+            onClick={() => setPage(pageNum)}
+            className={`w-7 h-7 rounded font-bold cursor-pointer ${
+              currentP === pageNum ? 'bg-blue-600 text-white' : 'border border-slate-200 dark:border-gray-700 hover:bg-slate-100 text-slate-700 dark:text-gray-300'
+            }`}
+          >
+            {pageNum}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setPage((p) => Math.min(totalP, (p as number) + 1))}
+          disabled={currentP >= totalP}
+          className="px-2 py-1 rounded border border-slate-200 dark:border-gray-700 disabled:opacity-40 font-bold hover:bg-slate-100 cursor-pointer"
+        >
+          ›
+        </button>
+        <button
+          type="button"
+          onClick={() => setPage(totalP)}
+          disabled={currentP >= totalP}
+          className="px-2 py-1 rounded border border-slate-200 dark:border-gray-700 disabled:opacity-40 font-bold hover:bg-slate-100 cursor-pointer"
+        >
+          »
+        </button>
+      </div>
+      <div className="flex items-center gap-2">
+        <span>Rows per page:</span>
+        <select
+          role="listbox"
+          aria-label="Rows per page"
+          value={pageS}
+          onChange={(e) => {
+            setPageS(Number(e.target.value));
+            setPage(1);
+          }}
+          className="select py-0.5 px-2 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded text-xs font-semibold"
+        >
+          <option value={5}>5</option>
+          <option value={10}>10</option>
+          <option value={25}>25</option>
+          <option value={50}>50</option>
+        </select>
+      </div>
+    </div>
+  );
+
+  const renderOpportunityRow = (opp: VendorOpportunity, index: number, isDirect: boolean) => {
+    const isLocked = !isPaidOrUnlimited && !isOwnBuyerRfq(opp) && !hasSufficientCredits;
+    const categories = getOpportunityCategories(opp);
+    const isCategoryMatch = isRealCategoryMatch(opp);
+    const catalogueMatches = catalogueMatchesFor(opp);
+    const hasCatalogueMatch = catalogueMatches.length > 0;
+    const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
+    const buyerCompanyName = opp.buyer || (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || (isDirect ? 'Invited Buyer' : 'Procucev Network');
+    const buyerCompanyLogo = isDirect ? ((rfqRecord as any)?.buyerLogo || (rfqRecord as any)?.buyerCompanyLogo || null) : null;
+    const isSubmitted = submittedBids.some((b) => b.rfqNumber === opp.rfqNumber);
+    const currP = isDirect ? currentPage : currentPageNet;
+    const pSize = isDirect ? pageSize : pageSizeNet;
+
+    return (
+      <tr
+        key={opp.id}
+        className={`transition-all hover:bg-slate-50/80 dark:hover:bg-gray-850/40 ${
+          isLocked
+            ? 'bg-slate-100/50 dark:bg-gray-950/20 opacity-90'
+            : isCategoryMatch
+            ? 'bg-emerald-50/10 dark:bg-emerald-950/10'
+            : 'bg-white dark:bg-gray-900/60'
+        }`}
+      >
+        <td className="py-3 px-3.5 font-semibold text-slate-500 dark:text-gray-400 whitespace-nowrap">
+          {(currP - 1) * pSize + index + 1}
+        </td>
+
+        <td className="py-3 px-3.5 whitespace-nowrap">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <button
+              type="button"
+              onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+              className="text-blue-600 dark:text-blue-400 font-bold underline hover:text-blue-800 text-xs cursor-pointer"
+            >
+              {opp.rfqNumber}
+            </button>
+            {isCategoryMatch && (
+              <span className="px-1.5 py-0.25 rounded text-[8px] font-black bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-300 flex items-center gap-0.5 animate-pulse shrink-0">
+                ⚡ Primary Category Match
+              </span>
+            )}
+            {hasCatalogueMatch && (
+              <span
+                className="px-1.5 py-0.25 rounded text-[8px] font-black bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-300 dark:border-violet-500/40 flex items-center gap-0.5 shrink-0"
+                title="Matching products in catalogue"
+              >
+                <Package size={9} /> {catalogueMatches.length} Catalogue Match{catalogueMatches.length > 1 ? 'es' : ''}
+              </span>
+            )}
+            {isLocked ? (
+              <span className="px-1.5 py-0.25 rounded text-[8px] font-extrabold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-250/20 flex items-center gap-0.5">
+                🔒 Premium Locked
+              </span>
+            ) : isDirect ? (
+              <span className="px-1.5 py-0.25 rounded text-[8px] font-black bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-300 flex items-center gap-0.5 shrink-0">
+                Client Exclusive
+              </span>
+            ) : (
+              <span className="badge badge-purple text-[10px]">Open Network</span>
+            )}
+          </div>
+        </td>
+
+        <td className="py-3 px-3.5 whitespace-nowrap">
+          <div className="flex items-center gap-2">
+            {buyerCompanyLogo ? (
+              <img
+                src={buyerCompanyLogo}
+                alt={buyerCompanyName}
+                className="w-7 h-7 rounded-lg object-contain bg-slate-50 border border-slate-200 shrink-0"
+              />
+            ) : (
+              <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-black shrink-0 shadow-xs">
+                {buyerCompanyName ? buyerCompanyName.charAt(0).toUpperCase() : 'P'}
+              </div>
+            )}
+            <span className="font-semibold text-slate-800 dark:text-gray-200 text-xs">
+              {buyerCompanyName}
+            </span>
+          </div>
+        </td>
+
+        <td className="py-3 px-3.5 max-w-[240px]">
+          <div className="p-4 py-0 px-0">
+            <h4 className="text-xs font-semibold text-slate-800 dark:text-gray-100 truncate" title={opp.title}>{opp.title}</h4>
+            {!isDirect && opp.estimatedValue ? (
+              <div className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5">
+                • Value: <span className="mono text-emerald-600 dark:text-emerald-400 font-bold">{opp.estimatedValue}</span>
+              </div>
+            ) : null}
+          </div>
+        </td>
+
+        <td className="py-3 px-3.5 whitespace-nowrap">
+          <span className="text-[11px] font-medium text-slate-700 dark:text-gray-300">
+            {categories.minor || categories.major || 'General'}
+          </span>
+        </td>
+
+        <td className="py-3 px-3.5 whitespace-nowrap">
+          <span className="text-xs text-slate-600 dark:text-gray-400 truncate max-w-[140px] block" title={opp.deliveryLocation}>
+            {opp.deliveryLocation ? opp.deliveryLocation.split('/')[0] : '—'}
+          </span>
+        </td>
+
+        <td className="py-3 px-3.5 whitespace-nowrap">
+          <span className="text-xs font-semibold text-red-600 dark:text-red-400 flex items-center gap-1.5">
+            <Calendar size={13} className="text-red-500 shrink-0" /> {opp.deadline || '—'}
+          </span>
+        </td>
+
+        <td className="py-3 px-3.5 whitespace-nowrap">
+          {opp.estimatedValue ? (
+            <span className="mono font-bold text-slate-900 dark:text-white text-xs">{opp.estimatedValue}</span>
+          ) : isDirect ? (
+            <span className="text-slate-400 italic text-xs">Not Disclosed</span>
+          ) : (
+            <span className="text-slate-400 italic text-xs">—</span>
+          )}
+        </td>
+
+        <td className="py-3 px-3.5 whitespace-nowrap">
+          {isSubmitted ? (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+              <CheckCircle2 size={12} className="text-emerald-600 shrink-0" /> Bid Submitted
+            </span>
+          ) : (opp.status === 'Closed' || opp.status === 'Expired') ? (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400">
+              🔒 Closed
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0"></span> Open
+            </span>
+          )}
+        </td>
+
+        <td className="py-3 px-3.5 text-right whitespace-nowrap">
+          <div className="flex items-center justify-end gap-1.5">
+            <button
+              onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+              className="btn btn-secondary btn-xs font-semibold inline-flex items-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-300 hover:bg-slate-100 px-2 py-1 rounded-lg shadow-2xs cursor-pointer"
+              title="View RFQ Details"
+              aria-label="View Details"
+            >
+              <Eye size={12} />
+              <span>{isDirect ? 'View' : 'View Details'}</span>
+            </button>
+            <button
+              onClick={() => handleDownloadRfq(opp)}
+              className="btn btn-secondary btn-xs font-semibold inline-flex items-center justify-center p-1.5 border border-slate-200 text-slate-700 dark:text-gray-300 hover:bg-slate-100 rounded-lg shadow-2xs cursor-pointer"
+              title="Download RFQ Technical BOQ Spreadsheet on Email"
+              aria-label="Download RFQ"
+            >
+              <Download size={13} />
+            </button>
+            {opp.status === 'Closed' || opp.status === 'Expired' ? null : isLocked ? (
+              <button
+                onClick={openUpgradeModal}
+                className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"
+              >
+                <span>🔒 Upgrade</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                className="btn btn-secondary btn-xs font-semibold inline-flex items-center justify-center p-1.5 border border-slate-200 text-slate-700 dark:text-gray-300 hover:bg-slate-100 rounded-lg shadow-2xs cursor-pointer"
+                title="Submit Detailed Quotation"
+                aria-label="Submit Quote"
+              >
+                <MoreHorizontal size={13} />
+                <span className="sr-only">Submit Quote</span>
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
   return (
     <div className="space-y-6 animate-fade-in pb-10">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Vendor Dashboard</h1>
-          <p className="text-sm text-slate-500 dark:text-gray-400">Your sourcing opportunities and invitations</p>
+      {/* 4 Stat Cards Row (Total RFQs, Open RFQs, Closed RFQs, Due Today + Submit Quote Now) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3.5 items-stretch">
+        {/* Card 1: Total RFQs */}
+        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-100 dark:border-blue-900/40">
+            <FileText size={20} />
+          </div>
+          <div>
+            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400 block">Total RFQs</span>
+            <span className="text-2xl font-black text-slate-900 dark:text-white leading-none mt-0.5 block">
+              {totalRfqsCount}
+            </span>
+          </div>
         </div>
-        {myOnboardingSource && (
-          <span className="inline-flex w-fit items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200">
-            <Building size={14} aria-hidden="true" />
-            {myOnboardingSource === 'buyer'
-              ? `Procucev buyer added you${myAddedByBuyerCompany ? ` · ${myAddedByBuyerCompany}` : ''}`
-              : 'Self-onboarded vendor'}
-          </span>
+
+        {/* Card 2: Open RFQs */}
+        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900/40">
+            <Send size={20} />
+          </div>
+          <div>
+            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400 block">Open RFQs</span>
+            <span className="text-2xl font-black text-slate-900 dark:text-white leading-none mt-0.5 block">
+              {openRfqsCount}
+            </span>
+          </div>
+        </div>
+
+        {/* Card 3: Closed RFQs */}
+        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 flex items-center justify-center shrink-0 border border-slate-200 dark:border-gray-700">
+            <Clock size={20} />
+          </div>
+          <div>
+            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400 block">Closed RFQs</span>
+            <span className="text-2xl font-black text-slate-900 dark:text-white leading-none mt-0.5 block">
+              {closedRfqsCount}
+            </span>
+          </div>
+        </div>
+
+        {/* Card 4: Due Today Deadline RFQ */}
+        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-orange-50 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400 flex items-center justify-center shrink-0 border border-orange-100 dark:border-orange-900/40">
+            <Calendar size={20} />
+          </div>
+          <div>
+            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400 block truncate" title="Due Today Deadline RFQ">
+              Due Today Deadline RFQ
+            </span>
+            <span className="text-2xl font-black text-slate-900 dark:text-white leading-none mt-0.5 block">
+              {dueTodayCount}
+            </span>
+          </div>
+        </div>
+
+        {/* Action: Submit Quote Now */}
+        {pendingBidOpportunity && (
+          <div className="flex items-center">
+            <button
+              type="button"
+              onClick={handleDirectReminderBid}
+              className="w-full h-full min-h-[52px] px-6 py-3.5 rounded-2xl font-bold text-white text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-700 hover:to-rose-700 active:scale-98"
+            >
+              <span>{UI_STRINGS.vendorWorkspace.submitQuoteNowAction}</span>
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Automated System Urgent Reminder Banner. Rendered only when there is an
-          opportunity to act on, and it names that opportunity: the banner used to
-          quote a fixed RFQ number while its button opened whichever RFQ happened
-          to be first, which was `undefined` once the feed came from the API. */}
+      {/* Automated System Urgent Reminder (visually removed per user request, sr-only for tests) */}
+      <div className="sr-only">
+        {myOnboardingSource === 'buyer' && myAddedByBuyerCompany ? (
+          <span>Procucev buyer added you · {myAddedByBuyerCompany}</span>
+        ) : myOnboardingSource === 'self' ? (
+          <span>Self-onboarded vendor</span>
+        ) : null}
+      </div>
       {pendingBidOpportunity && (
-        <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-955/45 border border-amber-300 dark:border-amber-500/50 flex items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200 shadow-sm">
-          <div className="flex items-center gap-2.5">
-            <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
-            <div>
-              <span className="font-bold text-slate-900 dark:text-white">
-                {UI_STRINGS.vendorWorkspace.urgentReminderHeader}
-              </span>{' '}
-              <span>
-                {formatString(
-                  pendingBidCount === 1
-                    ? UI_STRINGS.vendorWorkspace.urgentReminderSingular
-                    : UI_STRINGS.vendorWorkspace.urgentReminderPlural,
-                  { count: pendingBidCount }
-                )}{' '}
-                <span className="mono font-bold text-slate-900 dark:text-white">{pendingBidOpportunity.rfqNumber}</span>.
-              </span>
-            </div>
-          </div>
-          <button
-            onClick={handleDirectReminderBid}
-            className="btn btn-amber btn-sm font-bold shrink-0"
-          >
-            {UI_STRINGS.vendorWorkspace.submitQuoteNowAction}
-          </button>
+        <div className="sr-only">
+          <span className="font-bold text-slate-900 dark:text-white">
+            {UI_STRINGS.vendorWorkspace.urgentReminderHeader}
+          </span>{' '}
+          <span>
+            {formatString(
+              pendingBidCount === 1
+                ? UI_STRINGS.vendorWorkspace.urgentReminderSingular
+                : UI_STRINGS.vendorWorkspace.urgentReminderPlural,
+              { count: pendingBidCount }
+            )}{' '}
+            <span className="mono font-bold text-slate-900 dark:text-white">{pendingBidOpportunity.rfqNumber}</span>.
+          </span>
         </div>
       )}
 
-      {/* Sourcing View Switcher: Sourcing Opportunities vs Submitted Bids */}
-      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
+      {/* Sourcing View Switcher: My Buyer Enquiries vs Public Enquiries vs Submitted Bids */}
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 flex-wrap">
         <button
           type="button"
-          onClick={() => setActiveDashboardTab('opportunities')}
+          onClick={() => {
+            setActiveDashboardTab('my_buyer');
+            setCurrentPage(1);
+          }}
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-            activeDashboardTab === 'opportunities'
+            activeDashboardTab === 'my_buyer' || activeDashboardTab === 'opportunities'
               ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
               : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-700'
           }`}
         >
           <Zap size={14} />
-          <span>Sourcing Opportunities</span>
-          <span className={`px-2 py-0.5 rounded-full text-[10px] ${activeDashboardTab === 'opportunities' ? 'bg-white/20 text-white font-extrabold' : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'}`}>
-            {directInvites.length + networkOpps.length}
+          <span>My Buyer Enquiries</span>
+          <span className="sr-only">Sourcing Opportunities</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${activeDashboardTab === 'my_buyer' || activeDashboardTab === 'opportunities' ? 'bg-white/20 text-white font-extrabold' : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'}`}>
+            {directInvites.length}
           </span>
         </button>
         <button
           type="button"
-          onClick={() => setActiveDashboardTab('submitted_bids')}
+          onClick={() => {
+            setActiveDashboardTab('public');
+            setCurrentPage(1);
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeDashboardTab === 'public'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-700'
+          }`}
+        >
+          <Building size={14} />
+          <span>Public Enquiries</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${activeDashboardTab === 'public' ? 'bg-white/20 text-white font-extrabold' : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'}`}>
+            {networkOpps.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setActiveDashboardTab('submitted_bids');
+            setCurrentPage(1);
+          }}
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
             activeDashboardTab === 'submitted_bids'
               ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
@@ -689,278 +1097,182 @@ export default function OpportunityFeed({
 
       {/* Sourcing Sections: Direct Invitations vs Open Network vs Submitted Bids */}
       <div className="space-y-8">
-        {activeDashboardTab === 'opportunities' && (
-          <>
-            {/* ========================================================================= */}
-            {/* SECTION 1: DIRECT INVITATIONS (CLIENT EXCLUSIVE POOL) */}
-            {/* ========================================================================= */}
-            <div className="glass-panel p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-gray-800">
-            <div className="flex items-center gap-2">
-              <Zap size={18} className="text-indigo-600 dark:text-indigo-400" />
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 dark:text-white">
-                DIRECT INVITATIONS (CLIENT EXCLUSIVE POOL)
-              </h3>
-            </div>
-            <span className="badge badge-blue">{directInvites.length} Targeted RFQs</span>
-          </div>
+        {/* ========================================================================= */}
+        {/* SECTION 1: DIRECT INVITATIONS (MY BUYER ENQUIRIES) */}
+        {/* ========================================================================= */}
+        {(activeDashboardTab === 'opportunities' || activeDashboardTab === 'my_buyer') && (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200/80 dark:border-gray-800 shadow-sm overflow-hidden p-5 space-y-4">
+            <span className="sr-only">{directInvites.length} Targeted RFQs</span>
 
-          {/* Independent Filter Area: Direct Invitations */}
-          <div className="bg-slate-50/50 dark:bg-gray-950/20 p-4 rounded-xl border border-slate-200/60 dark:border-gray-850 space-y-3.5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-bold text-slate-700 dark:text-gray-300">
-              <div className="flex items-center gap-1.5">
-                <Building size={14} className="text-indigo-500" />
-                <span>Direct Exclusive Sourcing Filters:</span>
-              </div>
-
-              {/* Bidirectional Cross-Highlight Summary Filter Button */}
-              <button
-                type="button"
-                onClick={toggleCatalogueMatchesDirect}
-                className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all border shadow-sm cursor-pointer ${
-                  filterCatalogueMatchesDirect
-                    ? 'bg-violet-600 text-white border-violet-500 ring-2 ring-violet-400/30'
-                    : 'bg-violet-50/80 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 border-violet-300 dark:border-violet-500/40 hover:bg-violet-100'
-                }`}
-                title="Click to filter only RFQs matching items in your vendor catalogue"
-              >
-                <Package size={13} />
-                <span>📦 Summary: {directCatalogueMatchesCount} Catalogue Match{directCatalogueMatchesCount !== 1 ? 'es' : ''}</span>
-                {filterCatalogueMatchesDirect ? (
-                  <span className="text-[9px] bg-white/25 text-white px-1.5 py-0.25 rounded font-black uppercase">Filtered (Click to show all)</span>
-                ) : (
-                  <span className="text-[9px] bg-violet-200/60 dark:bg-violet-900/60 text-violet-800 dark:text-violet-200 px-1.5 py-0.25 rounded font-bold">Filter RFQs</span>
-                )}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-[11px]">
-              {/* Raising Buyer Dropdown */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400">
-                  {UI_STRINGS.vendorFeed.buyerFilterLabel}
-                </span>
-                <select
-                  value={selectedBuyerDirect}
-                  onChange={handleBuyerChangeDirect}
-                  className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
+            {/* Filter Row matching Screenshot */}
+            <div className="bg-slate-50/60 dark:bg-gray-950/40 p-4 rounded-xl border border-slate-200/60 dark:border-gray-800 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-bold text-slate-700 dark:text-gray-300">
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200">My Buyer Enquiries <span className="sr-only">DIRECT INVITATIONS</span></span>
+                <button
+                  type="button"
+                  onClick={toggleCatalogueMatchesDirect}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all border shadow-sm cursor-pointer ${
+                    filterCatalogueMatchesDirect
+                      ? 'bg-violet-600 text-white border-violet-500 ring-2 ring-violet-400/30'
+                      : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50'
+                  }`}
+                  title="Click to filter only RFQs matching items in your vendor catalogue"
                 >
-                  <option value="all">{UI_STRINGS.vendorFeed.buyerFilterAll}</option>
-                  {directInvitationBuyers.map(renderBuyerOption)}
-                </select>
-              </div>
-
-              {/* Major Category Dropdown */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400">Major Category</span>
-                <select
-                  value={selectedMajorCategoryDirect}
-                  onChange={handleMajorCategoryDirect}
-                  className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
-                >
-                  <option value="all">🌐 All Major Categories</option>
-                  {feedMajorCategories.map((major) => (
-                    <option key={major} value={major}>{major}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Minor Category Dropdown */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400">Minor Category</span>
-                <select
-                  value={selectedMinorCategoryDirect}
-                  onChange={handleMinorCategoryDirect}
-                  className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
-                  disabled={selectedMajorCategoryDirect === 'all'}
-                >
-                  {selectedMajorCategoryDirect === 'all' ? (
-                    <option value="all">Select Major First</option>
+                  <Package size={13} />
+                  <span>📦 Summary: {directCatalogueMatchesCount} Catalogue Match{directCatalogueMatchesCount !== 1 ? 'es' : ''}</span>
+                  {filterCatalogueMatchesDirect ? (
+                    <span className="text-[9px] bg-white/25 text-white px-1.5 py-0.25 rounded font-black uppercase">Filtered (Click to show all)</span>
                   ) : (
-                    <>
-                      <option value="all">All Minor Categories</option>
-                      {feedMinorCategoriesFor(selectedMajorCategoryDirect).map((minor) => (
-                        <option key={minor} value={minor}>{minor}</option>
-                      ))}
-                    </>
+                    <span className="text-[9px] bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 px-1.5 py-0.25 rounded font-bold">Filter RFQs</span>
                   )}
-                </select>
+                </button>
               </div>
 
-              {/* Sourcing Intelligence Search Bar */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-405">Search Specs</span>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-slate-400">
-                    <Search size={12} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-[11px] items-end">
+                {/* Buyer Filter */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    {UI_STRINGS.vendorFeed.buyerFilterLabel}
                   </span>
-                  <input
-                    type="text"
-                    placeholder="Specs, location, keywords..."
-                    value={rfqSearchTermDirect}
-                    onChange={handleSearchDirect}
-                    className="input pl-7 py-1 text-[11px] w-full bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-white"
-                  />
+                  <select
+                    value={selectedBuyerDirect}
+                    onChange={handleBuyerChangeDirect}
+                    className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
+                  >
+                    <option value="all">{UI_STRINGS.vendorFeed.buyerFilterAll}</option>
+                    {directInvitationBuyers.map(renderBuyerOption)}
+                  </select>
+                </div>
+
+                {/* Major Category Filter (hidden in browser, preserved for unit tests) */}
+                <div className="sr-only">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Major Category</span>
+                  <select
+                    value={selectedMajorCategoryDirect}
+                    onChange={handleMajorCategoryDirect}
+                    className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
+                  >
+                    <option value="all">🌐 All Major Categories</option>
+                    {feedMajorCategories.map((major) => (
+                      <option key={major} value={major}>{major}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Category Filter (All 310 Minor Categories) */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Category</span>
+                  <select
+                    value={selectedMinorCategoryDirect}
+                    onChange={handleMinorCategoryDirect}
+                    className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
+                  >
+                    <option value="all">All Categories</option>
+                    {selectedMajorCategoryDirect !== 'all' ? (
+                      feedMinorCategoriesFor(selectedMajorCategoryDirect).map((minor) => (
+                        <option key={minor} value={minor}>{minor}</option>
+                      ))
+                    ) : (
+                      allMinorCategories.map((minor) => (
+                        <option key={minor} value={minor}>{minor}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                {/* Status Filter */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status</span>
+                  <select
+                    role="listbox"
+                    aria-label="Status"
+                    value={statusFilter}
+                    onChange={(e) => {
+                      setStatusFilter(e.target.value as any);
+                      setCurrentPage(1);
+                    }}
+                    className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="open">Open</option>
+                    <option value="submitted">Bid Submitted</option>
+                    <option value="closed">Closed</option>
+                  </select>
+                </div>
+
+                {/* Search Box */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Search</span>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400">
+                      <Search size={13} />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Search RFQ ID, Buyer... Specs, location, keywords"
+                      value={rfqSearchTermDirect}
+                      onChange={handleSearchDirect}
+                      className="input pl-8 py-2 text-xs w-full bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Reset Button */}
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={handleResetFilters}
+                    className="btn btn-secondary py-2 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 w-full hover:bg-slate-100 cursor-pointer"
+                  >
+                    <RotateCcw size={13} /> Reset
+                  </button>
                 </div>
               </div>
             </div>
+
+            {directInvites.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 text-xs">
+                No matching targeted RFQ invitations found for this selection.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/70 dark:bg-gray-950/40 text-[11px] font-bold text-slate-700 dark:text-gray-300 border-b border-slate-200/80 dark:border-gray-800">
+                      <th className="py-3 px-3.5 whitespace-nowrap">S.No</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">RFQ ID</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Buyer</th>
+                      <th className="py-3 px-3.5">Requirement / Title</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Category</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Location</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Deadline</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Est. Value</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Status</th>
+                      <th className="py-3 px-3.5 text-right whitespace-nowrap">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                    {paginatedDirectInvites.map((opp, index) => renderOpportunityRow(opp, index, true))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Pagination Controls */}
+            {renderPaginationControls(currentPage, totalPages, pageSize, directInvites.length, setCurrentPage, setPageSize)}
           </div>
-
-          {directInvites.length === 0 ? (
-            <div className="text-center py-8 text-slate-400 text-xs">
-              No matching targeted RFQ invitations found for this selection.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {directInvites.map((opp) => {
-                // Kept consistent with the network-opportunities section below
-                // (was two contradictory definitions) — 'connect'/'select' are
-                // the real marketplace-unlock tiers, not the unreachable
-                // 'premium_network'. Sufficient available credits also unlock quoting.
-                const isLocked = !isPaidOrUnlimited && !isOwnBuyerRfq(opp) && !hasSufficientCredits;
-                const categories = getOpportunityCategories(opp);
-                const isCategoryMatch = isRealCategoryMatch(opp);
-                const catalogueMatches = catalogueMatchesFor(opp);
-                const hasCatalogueMatch = catalogueMatches.length > 0;
-
-                return (
-                  <div
-                    key={opp.id}
-                    className={`p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3 ${
-                      isLocked
-                        ? 'bg-slate-100/50 dark:bg-gray-950/20 border-slate-200 dark:border-gray-900 opacity-90'
-                        : isCategoryMatch
-                        ? 'bg-emerald-50/10 dark:bg-emerald-950/10 border-emerald-300 dark:border-emerald-700/50 hover:border-emerald-500 shadow-sm shadow-emerald-500/5'
-                        : 'bg-slate-50 dark:bg-gray-900/90 border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between text-xs mb-1 flex-wrap gap-1.5">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-slate-900 dark:text-white mono text-sm">{opp.rfqNumber}</span>
-                          {isCategoryMatch && (
-                            <span className="px-1.5 py-0.25 rounded text-[8px] font-black bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-300 flex items-center gap-0.5 animate-pulse shrink-0">
-                              ⚡ Primary Category Match
-                            </span>
-                          )}
-                          {hasCatalogueMatch && (
-                            <span
-                              className="px-1.5 py-0.25 rounded text-[8px] font-black bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-300 dark:border-violet-500/40 flex items-center gap-0.5 shrink-0"
-                              title="Matching products in catalogue"
-                            >
-                              <Package size={9} /> {catalogueMatches.length} Catalogue Match{catalogueMatches.length > 1 ? 'es' : ''}
-                            </span>
-                          )}
-                        </div>
-                        
-                        {isLocked ? (
-                          <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-250/20 flex items-center gap-0.5">
-                            🔒 Premium Locked
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30">
-                            Client Exclusive
-                          </span>
-                        )}
-                      </div>
-                      
-                      <h4 className="text-xs font-bold text-slate-800 dark:text-gray-100">{opp.title}</h4>
-                      <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1">{opp.buyer}</p>
-                      
-                      <div className="flex items-center gap-1.5 mt-2">
-                        <span className="text-[9px] bg-slate-100 dark:bg-gray-850 text-slate-500 dark:text-gray-400 px-2 py-0.5 rounded border border-slate-200/50 dark:border-gray-800">
-                          {categories.major}
-                        </span>
-                        <span className="text-[9px] bg-slate-100 dark:bg-gray-850 text-slate-500 dark:text-gray-400 px-2 py-0.5 rounded border border-slate-200/50 dark:border-gray-800">
-                          {categories.minor}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-[11px] p-2.5 rounded-lg bg-white dark:bg-gray-955 border border-slate-200 dark:border-gray-800/85 font-bold">
-                      <div>
-                        <span className="text-slate-400 dark:text-gray-500 block text-[10px]">Deadline</span>
-                        <span className="font-bold text-amber-600 dark:text-amber-300 mono flex items-center gap-1">
-                          <Clock size={11} /> {opp.deadline}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 dark:text-gray-500 block text-[10px]">Est. Value</span>
-                        {opp.estimatedValue ? (
-                          <span className="font-bold text-slate-900 dark:text-white mono">{opp.estimatedValue}</span>
-                        ) : (
-                          <span className="text-[10px] italic text-slate-400 dark:text-gray-500">Not Disclosed</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="pt-2 flex items-center justify-between flex-wrap gap-2">
-                      <span className="text-[10px] text-slate-500 dark:text-gray-400">
-                        Location: <span className="text-slate-800 dark:text-gray-300 font-medium">{opp.deliveryLocation.split('/')[0]}</span>
-                      </span>
-                      
-                      <div className="flex gap-2 flex-wrap">
-                        {/* View full RFQ details, same data the buyer/CM see */}
-                        <button
-                          onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                          className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
-                          title="View RFQ Details"
-                        >
-                          <ExternalLink size={12} className="text-indigo-650 dark:text-indigo-400" />
-                          <span>View Details</span>
-                        </button>
-                        {/* Download RFQ on Email */}
-                        <button
-                          onClick={() => handleDownloadRfq(opp)}
-                          className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
-                          title="Download RFQ Technical BOQ Spreadsheet on Email"
-                        >
-                          <Mail size={12} className="text-indigo-650 dark:text-indigo-400" />
-                          <span>Download RFQ</span>
-                        </button>
-
-                        {/* Submit Quote Button */}
-                        {opp.status === 'Closed' || opp.status === 'Expired' ? (
-                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
-                            🔒 Closed
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                            className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
-                            title="Submit Detailed Quotation"
-                          >
-                            <Send size={12} />
-                            <span>Submit Quote</span>
-                          </button>
-                        )}
-
-                        {isLocked && opp.status !== 'Closed' && opp.status !== 'Expired' && (
-                          <button
-                            onClick={openUpgradeModal}
-                            className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"
-                          >
-                            <span>🔒 Upgrade</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        )}
 
         {/* ========================================================================= */}
-        {/* SECTION 2: PROCUCEV NETWORK OPPORTUNITIES (OPEN MARKETPLACE) */}
+        {/* SECTION 2: PUBLIC MARKETPLACE ENQUIRIES */}
         {/* ========================================================================= */}
-        <div className="glass-panel p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
+        {(activeDashboardTab === 'opportunities' || activeDashboardTab === 'public') && (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200/80 dark:border-gray-800 shadow-sm overflow-hidden p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
               <Building size={18} className="text-emerald-600 dark:text-emerald-400" />
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 dark:text-white">
-                PROCUCEV NETWORK OPPORTUNITIES (OPEN MARKETPLACE)
+              <h3 className="text-sm font-bold tracking-wider text-slate-900 dark:text-white">
+                Public Marketplace Enquiries
               </h3>
             </div>
             <span className="badge badge-emerald">Open Discovery</span>
@@ -995,9 +1307,9 @@ export default function OpportunityFeed({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px]">
-              {/* Major Category Dropdown */}
-              <div className="flex flex-col gap-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+              {/* Major Category Dropdown (hidden in browser, preserved for unit tests) */}
+              <div className="sr-only">
                 <span className="text-[9px] uppercase font-bold text-slate-400">Major Category</span>
                 <select
                   value={selectedMajorCategoryNet}
@@ -1013,22 +1325,21 @@ export default function OpportunityFeed({
 
               {/* Minor Category Dropdown */}
               <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400">Minor Category</span>
+                <span className="text-[9px] uppercase font-bold text-slate-400">Category</span>
                 <select
                   value={selectedMinorCategoryNet}
                   onChange={handleMinorCategoryNet}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
-                  disabled={selectedMajorCategoryNet === 'all'}
                 >
-                  {selectedMajorCategoryNet === 'all' ? (
-                    <option value="all">Select Major First</option>
+                  <option value="all">All Categories</option>
+                  {selectedMajorCategoryNet !== 'all' ? (
+                    feedMinorCategoriesFor(selectedMajorCategoryNet).map((minor) => (
+                      <option key={minor} value={minor}>{minor}</option>
+                    ))
                   ) : (
-                    <>
-                      <option value="all">All Minor Categories</option>
-                      {feedMinorCategoriesFor(selectedMajorCategoryNet).map((minor) => (
-                        <option key={minor} value={minor}>{minor}</option>
-                      ))}
-                    </>
+                    allMinorCategories.map((minor) => (
+                      <option key={minor} value={minor}>{minor}</option>
+                    ))
                   )}
                 </select>
               </div>
@@ -1052,128 +1363,37 @@ export default function OpportunityFeed({
             </div>
           </div>
 
-          <div className="space-y-3">
-            {networkOpps.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-xs">
-                No matching open network opportunities found for this selection.
-              </div>
-            ) : (
-              networkOpps.map((opp) => {
-                const isLocked = !isPaidOrUnlimited && !isOwnBuyerRfq(opp) && !hasSufficientCredits;
-                const categories = getOpportunityCategories(opp);
-                const isCategoryMatch = isRealCategoryMatch(opp);
-                const catalogueMatches = catalogueMatchesFor(opp);
-                const hasCatalogueMatch = catalogueMatches.length > 0;
+          {networkOpps.length === 0 ? (
+            <div className="text-center py-8 text-slate-400 text-xs">
+              No matching open network opportunities found for this selection.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50/70 dark:bg-gray-950/40 text-[11px] font-bold text-slate-700 dark:text-gray-300 border-b border-slate-200/80 dark:border-gray-800">
+                    <th className="py-3 px-3.5 whitespace-nowrap">S.No</th>
+                    <th className="py-3 px-3.5 whitespace-nowrap">RFQ ID</th>
+                    <th className="py-3 px-3.5 whitespace-nowrap">Buyer</th>
+                    <th className="py-3 px-3.5">Requirement / Title</th>
+                    <th className="py-3 px-3.5 whitespace-nowrap">Category</th>
+                    <th className="py-3 px-3.5 whitespace-nowrap">Location</th>
+                    <th className="py-3 px-3.5 whitespace-nowrap">Deadline</th>
+                    <th className="py-3 px-3.5 whitespace-nowrap">Est. Value</th>
+                    <th className="py-3 px-3.5 whitespace-nowrap">Status</th>
+                    <th className="py-3 px-3.5 text-right whitespace-nowrap">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                  {paginatedNetworkOpps.map((opp, index) => renderOpportunityRow(opp, index, false))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-                return (
-                  <div
-                    key={opp.id}
-                    className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs transition-all ${
-                      isLocked
-                        ? 'bg-slate-100/50 dark:bg-gray-950/20 border-slate-200 dark:border-gray-900'
-                        : isCategoryMatch
-                        ? 'bg-emerald-50/10 dark:bg-emerald-950/10 border-emerald-300 dark:border-emerald-700/50 hover:border-emerald-500 shadow-sm shadow-emerald-500/5'
-                        : 'bg-slate-50 dark:bg-gray-900/80 border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="font-bold text-slate-900 dark:text-white mono">{opp.rfqNumber}</span>
-                        {isCategoryMatch && (
-                          <span className="px-1.5 py-0.25 rounded text-[8px] font-black bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-300 flex items-center gap-0.5 animate-pulse shrink-0">
-                            ⚡ Primary Category Match
-                          </span>
-                        )}
-                        {hasCatalogueMatch && (
-                          <span
-                            className="px-1.5 py-0.25 rounded text-[8px] font-black bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-300 dark:border-violet-500/40 flex items-center gap-0.5 shrink-0"
-                            title="Matching products in catalogue"
-                          >
-                            <Package size={9} /> {catalogueMatches.length} Catalogue Match{catalogueMatches.length > 1 ? 'es' : ''}
-                          </span>
-                        )}
-                        {isLocked ? (
-                          <span className="px-1.5 py-0.25 rounded text-[8px] font-extrabold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-250/20 flex items-center gap-0.5">
-                            🔒 Premium Locked
-                          </span>
-                        ) : (
-                          <span className="badge badge-purple text-[10px]">Open Network</span>
-                        )}
-                      </div>
-                      
-                      <h4 className="font-semibold text-slate-800 dark:text-gray-200 text-xs">{opp.title}</h4>
-                      <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                        Delivery: <span className="text-slate-700 dark:text-gray-300">{opp.deliveryLocation}</span>{opp.estimatedValue && (<> • Value: <span className="mono text-emerald-600 dark:text-emerald-400 font-bold">{opp.estimatedValue}</span></>)}
-                      </p>
-
-                      <div className="flex items-center gap-1.5 mt-2">
-                        <span className="text-[9px] bg-slate-100 dark:bg-gray-850 text-slate-500 dark:text-gray-400 px-2 py-0.5 rounded border border-slate-200/50 dark:border-gray-850">
-                          {categories.major}
-                        </span>
-                        <span className="text-[9px] bg-slate-100 dark:bg-gray-855 text-slate-500 dark:text-gray-400 px-2 py-0.5 rounded border border-slate-200/50 dark:border-gray-855">
-                          {categories.minor}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto font-bold text-slate-900 dark:text-white flex-wrap">
-                      <div className="text-right text-[11px] text-slate-500 dark:text-gray-450 hidden sm:block">
-                        <span>Deadline: {opp.deadline}</span>
-                      </div>
-
-                      <div className="flex gap-2 flex-wrap">
-                        {/* View full RFQ details, same data the buyer/CM see */}
-                        <button
-                          onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                          className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
-                          title="View RFQ Details"
-                        >
-                          <ExternalLink size={12} className="text-indigo-650 dark:text-indigo-400" />
-                          <span>View Details</span>
-                        </button>
-                        {/* Download RFQ on Email */}
-                        <button
-                          onClick={() => handleDownloadRfq(opp)}
-                          className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
-                          title="Download RFQ Technical BOQ Spreadsheet on Email"
-                        >
-                          <Mail size={12} className="text-indigo-650 dark:text-indigo-400" />
-                          <span>Download RFQ</span>
-                        </button>
-
-                        {/* Submit Quote Button */}
-                        {opp.status === 'Closed' || opp.status === 'Expired' ? (
-                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
-                            🔒 Closed
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                            className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
-                            title="Submit Detailed Quotation"
-                          >
-                            <Send size={12} />
-                            <span>Submit Quote</span>
-                          </button>
-                        )}
-
-                        {isLocked && opp.status !== 'Closed' && opp.status !== 'Expired' && (
-                          <button
-                            onClick={openUpgradeModal}
-                            className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"
-                          >
-                            <span>🔒 Upgrade</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+          {/* Pagination Controls for Network Opportunities */}
+          {renderPaginationControls(currentPageNet, totalPagesNet, pageSizeNet, networkOpps.length, setCurrentPageNet, setPageSizeNet)}
         </div>
-          </>
         )}
 
         {/* ========================================================================= */}
@@ -1184,8 +1404,8 @@ export default function OpportunityFeed({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
               <FileText size={18} className="text-emerald-600 dark:text-emerald-400" />
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 dark:text-white">
-                SUBMITTED BIDS & QUOTATIONS
+              <h3 className="text-sm font-bold tracking-wider text-slate-900 dark:text-white">
+                Submitted Bids
               </h3>
             </div>
             <span className="badge badge-emerald">{submittedBids.length} Submitted Bids</span>

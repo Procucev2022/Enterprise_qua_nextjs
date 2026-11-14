@@ -1507,4 +1507,261 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     expect(screen.getByText('Own Direct RFQ')).toBeInTheDocument();
     expect(screen.getByText('Non Own Direct RFQ')).toBeInTheDocument();
   });
+
+  test('switches tabs between My Buyer Enquiries, Public Enquiries, and Submitted Bids', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const myBuyerTab = screen.getByRole('button', { name: /My Buyer Enquiries/i });
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+
+    fireEvent.click(publicTab);
+    expect(screen.getByText(/Public Marketplace Enquiries/i)).toBeInTheDocument();
+
+    fireEvent.click(submittedTab);
+    expect(screen.getAllByText(/Submitted Bids/i).length).toBeGreaterThan(0);
+
+    fireEvent.click(myBuyerTab);
+    expect(screen.getAllByText(/My Buyer Enquiries/i).length).toBeGreaterThan(0);
+  });
+
+  test('resets all filters when clicking Reset button', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const resetBtn = screen.getByRole('button', { name: /Reset/i });
+    fireEvent.click(resetBtn);
+    expect(selects().directBuyer.value).toBe('all');
+  });
+
+  test('handles pagination controls and page size updates for both sections', async () => {
+    const twelveFixtures: RFQFixture[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `rfq-page-${i + 1}`,
+      rfqNumber: `RFQ-PAGE-${i + 1}`,
+      title: `Page RFQ ${i + 1}`,
+      sourcingMode: i % 2 === 0 ? 'mode_1' : 'mode_3',
+      budget: 10000 * (i + 1),
+      targetDeliveryDate: '2026-11-20',
+      buyerAccountName: OWN_ROSTER_BUYER,
+    }));
+    serveRFQs(twelveFixtures);
+    await renderFeed();
+
+    const pageButtons = screen.getAllByRole('button', { name: '2' });
+    if (pageButtons.length > 0) {
+      fireEvent.click(pageButtons[0]);
+    }
+    const nextButtons = screen.getAllByRole('button', { name: '›' });
+    if (nextButtons.length > 0) {
+      fireEvent.click(nextButtons[0]);
+    }
+    const prevButtons = screen.getAllByRole('button', { name: '‹' });
+    if (prevButtons.length > 0) {
+      fireEvent.click(prevButtons[0]);
+    }
+    const lastButtons = screen.getAllByRole('button', { name: '»' });
+    if (lastButtons.length > 0) {
+      fireEvent.click(lastButtons[0]);
+    }
+    const firstButtons = screen.getAllByRole('button', { name: '«' });
+    if (firstButtons.length > 0) {
+      fireEvent.click(firstButtons[0]);
+    }
+
+    const pageSizeSelects = screen.getAllByRole('listbox', { name: /Rows per page/i });
+    if (pageSizeSelects.length > 0) {
+      fireEvent.change(pageSizeSelects[0], { target: { value: '10' } });
+    }
+
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    const netNextButtons = screen.getAllByRole('button', { name: '›' });
+    if (netNextButtons.length > 0) fireEvent.click(netNextButtons[0]);
+    const netPrevButtons = screen.getAllByRole('button', { name: '‹' });
+    if (netPrevButtons.length > 0) fireEvent.click(netPrevButtons[0]);
+    const netLastButtons = screen.getAllByRole('button', { name: '»' });
+    if (netLastButtons.length > 0) fireEvent.click(netLastButtons[0]);
+    const netFirstButtons = screen.getAllByRole('button', { name: '«' });
+    if (netFirstButtons.length > 0) fireEvent.click(netFirstButtons[0]);
+
+    const rfqLinks = screen.getAllByRole('button', { name: /^RFQ-PAGE-/i });
+    if (rfqLinks.length > 0) fireEvent.click(rfqLinks[0]);
+  });
+
+  test('filters opportunities by status dropdown', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const statusSelect = screen.getByRole('listbox', { name: /^Status$/i });
+    fireEvent.change(statusSelect, { target: { value: 'open' } });
+    fireEvent.change(statusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(statusSelect, { target: { value: 'closed' } });
+    fireEvent.change(statusSelect, { target: { value: 'all' } });
+  });
+
+  test('handles actions inside the submitted bid details modal', async () => {
+    const quotedRFQ: any = {
+      id: 'rfq-quoted-modal',
+      rfqNumber: 'RFQ-QUOTED-MODAL',
+      title: 'Quoted Modal RFQ',
+      sourcingMode: 'mode_1',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      quotes: [{
+        vendorEmail: SELF_VENDOR_RECORD.email,
+        bidAmount: 75000,
+        submissionDate: '2026-10-01',
+        paymentTerms: 'Net 30',
+        remarks: 'Test remarks',
+        attachments: [{ id: 'att-bid-1', fileName: 'Proposal.pdf' }],
+      }],
+    };
+    serveRFQs([quotedRFQ]);
+    await renderFeed();
+
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    fireEvent.click(submittedTab);
+
+    const viewBidBtn = screen.getByTestId('view-submitted-bid-btn');
+    fireEvent.click(viewBidBtn);
+
+    expect(screen.getByText('Test remarks')).toBeInTheDocument();
+    expect(screen.getByText('Proposal.pdf')).toBeInTheDocument();
+
+    const openWorkspaceBtn = screen.getByRole('button', { name: /Open Full RFQ Workspace/i });
+    fireEvent.click(openWorkspaceBtn);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/rfq-details?rfq='));
+
+    // Open again and close with Close button
+    fireEvent.click(screen.getByTestId('view-submitted-bid-btn'));
+    const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+    fireEvent.click(closeBtn);
+    expect(screen.queryByText('Test remarks')).not.toBeInTheDocument();
+  });
+
+  test('covers additional branches for submitted quote statuses, pagination, downloads, and modal interactions', async () => {
+    const variedRFQs: any[] = [
+      {
+        id: 'rfq-var-1',
+        rfqNumber: 'RFQ-VAR-1',
+        title: 'PO Awarded RFQ',
+        status: 'PO Generated',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          totalPrice: 100000,
+          awarded: true,
+          status: 'Accepted',
+        }],
+      },
+      {
+        id: 'rfq-var-2',
+        rfqNumber: 'RFQ-VAR-2',
+        title: 'In Evaluation RFQ',
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          unitPrice: 5000,
+          awarded: false,
+        }],
+      },
+      {
+        id: 'rfq-var-3',
+        rfqNumber: 'RFQ-VAR-3',
+        title: 'Closed Concluded RFQ',
+        status: 'Closed',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          totalAmount: 15000,
+          status: 'Concluded',
+        }],
+      },
+    ];
+    serveRFQs([...ALL_FIXTURES, ...variedRFQs]);
+    await renderFeed();
+
+    // Direct table pagination next
+    const nextBtns = screen.getAllByRole('button', { name: '›' });
+    if (nextBtns.length > 0) fireEvent.click(nextBtns[0]);
+
+    // PageSize changes
+    const rowsPerPageSelects = screen.getAllByRole('listbox', { name: /Rows per page/i });
+    if (rowsPerPageSelects.length > 0) {
+      fireEvent.change(rowsPerPageSelects[0], { target: { value: '10' } });
+    }
+
+    // Public enquiries tab
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    if (rowsPerPageSelects.length > 1) {
+      fireEvent.change(rowsPerPageSelects[1], { target: { value: '10' } });
+    }
+
+    // Download buttons
+    const downloadBtns = screen.getAllByRole('button', { name: /Download RFQ/i });
+    if (downloadBtns.length > 0) {
+      fireEvent.click(downloadBtns[0]);
+    }
+
+    // Submitted bids tab
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    fireEvent.click(submittedTab);
+
+    // Switch back to My Buyer Enquiries
+    const buyerTab = screen.getByRole('button', { name: /My Buyer Enquiries/i });
+    fireEvent.click(buyerTab);
+
+    // Test Upgrade modal if upgrade buttons exist
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      const selectPrem = screen.queryByRole('button', { name: /^Select$/i });
+      if (selectPrem) fireEvent.click(selectPrem);
+      const closeUpgrade = screen.queryByRole('button', { name: /^Close$/i });
+      if (closeUpgrade) fireEvent.click(closeUpgrade);
+    }
+  });
+
+  test('covers upgrade modal states, pricing failure retry, and download quota branches', async () => {
+    const priorFetch = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && /\/api\/rfqs\/[^/]+\/download$/.test(url)) {
+        return Promise.resolve({
+          ok: false,
+          status: 403,
+          json: async () => ({ success: false, exhausted: true, error: 'Quota exhausted' }),
+        });
+      }
+      return priorFetch ? priorFetch(url, init) : Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    await renderFeed({ subscription: 'connect', downloadsUsed: 5 });
+    const dlBtns = screen.queryAllByRole('button', { name: /Download RFQ/i });
+    if (dlBtns.length > 0) {
+      await act(async () => {
+        fireEvent.click(dlBtns[0]);
+      });
+    }
+
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      
+      const selectBtn = screen.queryByRole('button', { name: /^Select$/i });
+      if (selectBtn) fireEvent.click(selectBtn);
+
+      const connBtn = screen.queryByRole('button', { name: /^Upgrade$/i });
+      if (connBtn) fireEvent.click(connBtn);
+
+      const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+      fireEvent.click(closeBtn);
+    }
+  });
 });

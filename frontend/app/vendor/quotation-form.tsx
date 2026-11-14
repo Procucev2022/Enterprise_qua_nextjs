@@ -37,6 +37,7 @@ import {
   HelpCircle,
   Search,
   Paperclip,
+  Edit3,
 } from 'lucide-react';
 
 /**
@@ -475,10 +476,44 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     e.target.value = '';
   };
 
-  // Callers only reach this for an RFQ the table shows as unlocked (or the auto-open effect,
-  // which checks isRfqLockedForVendor first). The server still enforces the quota on submit.
+  // Opens quotation form modal on explicit user action (Submit Quote / Resubmit Bid).
+  // Pre-populates previously submitted values when resubmitting a quotation.
   const openBidForm = (opp: VendorOpportunity) => {
     setBiddingOn(opp);
+    const existingQuote = submittedQuotes.find((q) => q.rfqNumber === opp.rfqNumber) as any;
+    if (existingQuote) {
+      setBidUnitPrice(existingQuote.unitPrice != null ? String(existingQuote.unitPrice) : (existingQuote.totalPrice != null ? String(existingQuote.totalPrice) : ''));
+      const itemPrices: Record<string, string> = {};
+      if (Array.isArray(existingQuote.lineItemQuotes)) {
+        existingQuote.lineItemQuotes.forEach((lq: any) => {
+          if (lq.lineItemId && lq.unitPrice != null) {
+            itemPrices[lq.lineItemId] = String(lq.unitPrice);
+          }
+        });
+      }
+      setBidLineItemPrices(itemPrices);
+      setBidLeadTimeDays(existingQuote.leadTimeDays != null ? String(existingQuote.leadTimeDays) : '');
+      setBidWarrantyYears(existingQuote.warrantyYears != null ? String(existingQuote.warrantyYears) : '');
+      setBidPaymentTerms(existingQuote.paymentTerms || '');
+      setBidRemarks(existingQuote.remarks || '');
+    } else {
+      setBidUnitPrice('');
+      setBidLineItemPrices({});
+      setBidLeadTimeDays('');
+      setBidWarrantyYears('');
+      setBidPaymentTerms('');
+      setBidRemarks('');
+    }
+    setBidDocuments([]);
+    setUploadedBidDocuments([]);
+    setSubmitModalError(null);
+    setSubmitModalSuccess(null);
+  };
+
+  // Closes quotation form modal and cleanly resets all form state.
+  const closeBidForm = () => {
+    if (isSubmittingQuote) return;
+    setBiddingOn(null);
     setBidUnitPrice('');
     setBidLineItemPrices({});
     setBidLeadTimeDays('');
@@ -537,25 +572,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     }
   };
 
-  // Landing here via "Submit Quote Now" (opportunity-feed's reminder banner)
-  // passes the specific RFQ as `opportunity` — previously that prop was
-  // received but never used, so the navigation just dropped the vendor on
-  // the same undifferentiated table regardless of which RFQ they clicked.
-  // Auto-open the bid form for it once, if it's actually biddable.
+  // RFQ list is shown by default. When an opportunity is deep-linked via prop, auto-open once if unlocked.
   const autoOpenedRef = useRef(false);
   useEffect(() => {
     if (!opportunity || autoOpenedRef.current) return;
-    // isOwnBuyerRfq needs myAddedByBuyerCompany, which only exists once the
-    // vendor-record fetch resolves — deciding "locked" before that would
-    // wrongly treat a real direct-buyer RFQ as marketplace-locked.
     if (!myVendorRecordLoaded) return;
-    // vendorOpportunities is hydrated by its own independent fetch
-    // (refreshRFQs, in store.tsx) that races the vendor-record fetch above —
-    // isOwnBuyerRfq looks the RFQ up in that list, so deciding before it has
-    // loaded would wrongly treat a real direct-buyer RFQ as locked forever
-    // (autoOpenedRef below only ever fires once). The deep-linked RFQ is
-    // always one that's actually in the feed, so waiting for the list to be
-    // non-empty is a reliable "has loaded" signal here.
     if (vendorOpportunities.length === 0) return;
     autoOpenedRef.current = true;
     const alreadyQuoted = submittedQuotes.some((q) => q.rfqNumber === opportunity.rfqNumber);
@@ -563,12 +584,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (!alreadyQuoted && !locked) {
       openBidForm(opportunity);
     }
-    // Intentionally not reacting to subsequent submittedQuotes/vendorSubscription
-    // changes (which would otherwise re-open the modal right after a successful
-    // submit) — autoOpenedRef ensures this only ever runs once, on the first
-    // render after both the vendor record and the RFQ list have loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myVendorRecordLoaded, vendorOpportunities.length]);
+  }, [myVendorRecordLoaded, vendorOpportunities.length, opportunity]);
 
   const handleSubmitQuote = async () => {
     if (!biddingOn) return;
@@ -1052,24 +1069,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 const isBuyerProtected48h = Boolean(isWithin48h) || Boolean(opp.buyerDetailsHidden) || Boolean((rfqRecord as { buyerDetailsHidden?: boolean } | undefined)?.buyerDetailsHidden);
                 const canViewBuyerDetails = !isBuyerProtected48h && (isUploadedByBuyer || (isQuoteSubmitted && !isWithin48h));
 
-                const buyerCompanyName = (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany;
-
-                const modeStr = String(opp.sourcingMode || (rfqRecord as any)?.sourcingMode || '').toLowerCase();
-                const versionBadge = (() => {
-                  if (modeStr.includes('0') || modeStr === 'v0' || modeStr === 'version_0' || modeStr === 'mode_0') {
-                    return { label: 'V0 · Starter', color: 'bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700' };
-                  }
-                  if (modeStr.includes('1') || modeStr === 'v1' || modeStr === 'version_1' || modeStr === 'mode_1') {
-                    return { label: 'V1 · Private', color: 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800' };
-                  }
-                  if (modeStr.includes('2') || modeStr === 'v2' || modeStr === 'version_2' || modeStr === 'mode_2') {
-                    return { label: 'V2 · Hybrid', color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' };
-                  }
-                  if (modeStr.includes('3') || modeStr === 'v3' || modeStr === 'version_3' || modeStr === 'mode_3') {
-                    return { label: 'V3 · Autonomous', color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800' };
-                  }
-                  return null;
-                })();
+                const buyerCompanyName = (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany || 'Inviting Buyer';
+                const buyerCompanyLogo = (rfqRecord as any)?.buyerLogo || (rfqRecord as any)?.buyerCompanyLogo || null;
+                const isConcluded = opp.status === 'Closed' || opp.status === 'Expired' || quote?.status === 'PO Generated' || (rfqRecord as any)?.poFinalised;
+                const isUnlocked = isRfqUnlocked(opp.rfqNumber) || isDirectBuyer;
 
                 return (
                   <tr
@@ -1078,8 +1081,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       isDirectBuyer ? 'bg-indigo-50/25 dark:bg-indigo-950/15' : ''
                     }`}
                   >
-                    {/* RFQ Number */}
-                    <td data-label="RFQ Number" className="py-3 font-mono font-bold text-slate-900 dark:text-white">
+                    {/* RFQ Number - Clean without version labels */}
+                    <td data-label="RFQ Number" className="py-2.5 font-mono font-bold text-slate-900 dark:text-white">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span>{opp.rfqNumber}</span>
                         {isDirectBuyer && (
@@ -1088,26 +1091,26 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           </span>
                         )}
                       </div>
-                      {versionBadge && (
-                        <div className="mt-1">
-                          <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${versionBadge.color}`}>
-                            {versionBadge.label}
-                          </span>
-                        </div>
-                      )}
                     </td>
                     
                     {/* Title */}
-                    <td data-label="RFQ Details" className="py-3">
-                      <div className="font-semibold text-slate-800 dark:text-gray-200">{opp.title}</div>
+                    <td data-label="RFQ Details" className="py-2.5">
+                      <div className="font-semibold text-slate-800 dark:text-gray-200">
+                        {(opp.title || '').replace(/\bV[0-3]\b\s*·?\s*/gi, '')}
+                      </div>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
                         {resolveOpportunityCategory(opp) && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
                             {resolveOpportunityCategory(opp)}
                           </span>
                         )}
-                        {(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (
-                          <span>· 📍 {opp.deliveryLocation || rfqRecord?.deliveryLocation}</span>
+                        {Boolean(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (
+                          <span
+                            className="cursor-help max-w-[140px] truncate inline-block"
+                            title={opp.deliveryLocation || rfqRecord?.deliveryLocation || ''}
+                          >
+                            📍 {(opp.deliveryLocation || rfqRecord?.deliveryLocation || '').split('/')[0]}
+                          </span>
                         )}
                       </div>
                       {itemDetails.length > 0 && (
@@ -1123,13 +1126,28 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       )}
                     </td>
                     
-                    {/* Buyer Company */}
-                    <td data-label="Buyer Company" className="py-3">
+                    {/* Buyer Company: Inviting Buyer logo & name for invited RFQs, Procucev logo & name for public RFQs */}
+                    <td data-label="Buyer Company" className="py-2.5">
                       {canViewBuyerDetails ? (
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-semibold text-slate-800 dark:text-gray-200">
-                            {buyerCompanyName}
-                          </span>
+                        <div className="flex items-center gap-2">
+                          {buyerCompanyLogo ? (
+                            <img
+                              src={buyerCompanyLogo}
+                              alt={buyerCompanyName}
+                              className="w-6 h-6 rounded object-contain bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700 shrink-0"
+                              onError={(e) => { (e.currentTarget as HTMLElement).style.display = 'none'; }}
+                            />
+                          ) : (
+                            <div className="w-6 h-6 rounded bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 flex items-center justify-center text-[10px] font-bold shrink-0">
+                              {buyerCompanyName ? buyerCompanyName.charAt(0).toUpperCase() : <Building size={12} />}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <span className="font-semibold text-slate-800 dark:text-gray-200 truncate block max-w-[130px]" title={buyerCompanyName}>
+                              {buyerCompanyName}
+                            </span>
+                            <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-medium">Invited Buyer</span>
+                          </div>
                         </div>
                       ) : isBuyerProtected48h ? (
                         <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
@@ -1142,58 +1160,64 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           </span>
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1.5 text-slate-400 dark:text-gray-500">
-                          <span className="italic text-[10px]">Procucev Network Sourced</span>
-                          <span
-                            className="p-1 rounded-md bg-slate-100 dark:bg-gray-800 text-slate-400 cursor-help inline-flex items-center"
-                            title="Buyer details will be revealed 48 hours after quotation submission."
-                          >
-                            <Lock size={11} />
-                          </span>
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded bg-blue-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0 shadow-sm">
+                            P
+                          </div>
+                          <div className="min-w-0">
+                            <span className="font-semibold text-slate-800 dark:text-gray-200 truncate block">
+                              Procucev
+                            </span>
+                            <span className="text-[9px] text-slate-400 dark:text-gray-500">Public Sourcing</span>
+                          </div>
                         </div>
                       )}
                     </td>
                     
                     {/* Deadline */}
-                    <td data-label="Deadline" className="py-3 text-center font-medium mono text-amber-700 dark:text-amber-300">{opp.deadline || '—'}</td>
+                    <td data-label="Deadline" className="py-2.5 text-center font-medium mono text-amber-700 dark:text-amber-300">{opp.deadline || '—'}</td>
                     
                     {/* Download RFQ */}
-                    <td data-label="RFQ Documents" className="py-3 text-center">
+                    <td data-label="RFQ Documents" className="py-2.5 text-center">
                       <div className="flex items-center justify-center gap-1.5">
                         <button
                           onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                          className="btn btn-secondary btn-xs min-h-9 py-1 px-2.5 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
+                          className="btn btn-secondary btn-xs min-h-8 py-1 px-2 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
                           title="View RFQ Details"
                         >
-                          <FileText size={12} className="text-blue-700 dark:text-blue-300" />
+                          <FileText size={11} className="text-blue-700 dark:text-blue-300" />
                           <span>View Details</span>
                         </button>
                         <button
                           onClick={() => {
                             if (isLocked) {
-                              showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
                               setShowUpgradeModal(true);
+                              showToast(
+                                UI_STRINGS.vendorSubscriptionModal.subscriptionRequiredToastTitle,
+                                UI_STRINGS.vendorSubscriptionModal.subscriptionRequiredToastDesc,
+                                'warning'
+                              );
                             } else {
                               handleDownloadRfq(opp);
                             }
                           }}
-                          className="btn btn-secondary btn-xs min-h-9 py-1 px-2.5 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
+                          className="btn btn-secondary btn-xs min-h-8 py-1 px-2 flex items-center justify-center gap-1 text-[10px] font-bold border border-slate-200"
                           title="Download RFQ Specification"
                         >
-                          <Download size={12} className="text-blue-700 dark:text-blue-300" />
+                          <Download size={11} className="text-blue-700 dark:text-blue-300" />
                           <span>Download RFQ</span>
                         </button>
                       </div>
                     </td>
 
                     {/* This vendor's submitted quote only */}
-                    <td data-label="Your Bid" className="py-3">
+                    <td data-label="Your Bid" className="py-2.5">
                       {quote ? (
                         <div>
                           <span className="font-bold text-slate-800 dark:text-gray-200">
                             {quote.totalPrice !== null ? `₹${quote.totalPrice.toLocaleString('en-IN')}` : '—'}
                           </span>
-                          <span className="mt-1 block text-[10px] text-slate-500 dark:text-gray-400">
+                          <span className="mt-0.5 block text-[10px] text-slate-500 dark:text-gray-400">
                             {quote.submissionMethod} · {quote.submittedDate}
                           </span>
                         </div>
@@ -1203,8 +1227,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                     </td>
 
                     {/* This vendor's own clarification history */}
-                    <td data-label="Clarifications" className="py-3">
-                      <div className="flex flex-col items-start gap-1.5">
+                    <td data-label="Clarifications" className="py-2.5">
+                      <div className="flex flex-col items-start gap-1">
                         {ownInquiries.length > 0 ? (
                           <span className="text-[10px] font-semibold text-slate-700 dark:text-gray-200">
                             {ownInquiries.length} sent · {latestInquiry?.status === 'answered' ? 'Buyer replied' : 'Awaiting reply'}
@@ -1213,14 +1237,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           <span className="text-[10px] text-slate-400">None sent</span>
                         )}
                         {latestInquiry?.reply && (
-                          <span className="max-w-[220px] truncate text-[10px] text-slate-500 dark:text-gray-400" title={latestInquiry.reply}>
+                          <span className="max-w-[200px] truncate text-[10px] text-slate-500 dark:text-gray-400" title={latestInquiry.reply}>
                             Latest reply: {latestInquiry.reply}
                           </span>
                         )}
                         {!isLocked && opp.status !== 'Closed' && opp.status !== 'Expired' && (
                           <button
                             onClick={() => openInquiryModal(opp)}
-                            className="btn btn-secondary btn-xs min-h-8 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-semibold text-slate-600 dark:text-gray-300"
+                            className="btn btn-secondary btn-xs min-h-7 py-0.5 px-2 inline-flex items-center gap-1 text-[10px] font-semibold text-slate-600 dark:text-gray-300"
                             title="Ask a question or raise a clarification with the buyer"
                           >
                             <MessageSquare size={10} />
@@ -1230,20 +1254,37 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       </div>
                     </td>
                     
-                    {/* Sourcing Status */}
-                    <td data-label="Sourcing Status" className="py-3 text-right">
-                      {quote ? (
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wide border inline-block ${
-                          quote.status === 'PO Generated' 
-                            ? 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200' 
-                            : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-250'
-                        }`}>
-                          {quote.status}
-                        </span>
-                      ) : (opp.status === 'Closed' || opp.status === 'Expired') ? (
+                    {/* Sourcing Status / Bid Action States */}
+                    <td data-label="Sourcing Status" className="py-2.5 text-right">
+                      {(opp.status === 'Closed' || opp.status === 'Expired') ? (
                         <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 border border-slate-200 dark:border-gray-700">
                           🔒 RFQ Closed
                         </span>
+                      ) : isQuoteSubmitted ? (
+                        <div className="flex items-center justify-end gap-1.5">
+                          {quote?.status === 'PO Generated' || (rfqRecord as any)?.poFinalised ? (
+                            <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wide bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200">
+                              PO Generated
+                            </span>
+                          ) : isConcluded ? (
+                            <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-250">
+                              Bid Submitted
+                            </span>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-250">
+                                Quote Submitted
+                              </span>
+                              <button
+                                onClick={() => openBidForm(opp)}
+                                className="btn btn-secondary btn-xs py-1 px-2 inline-flex items-center gap-1 text-[10px] font-bold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                                title="Edit and resubmit your quotation"
+                              >
+                                <Edit3 size={10} /> Resubmit Bid
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       ) : isLocked ? (
                         <div className="flex items-center justify-end gap-1.5">
                           <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
@@ -1265,6 +1306,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                               openBidForm(opp);
                             }}
                             className="btn btn-emerald btn-xs min-h-9 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-bold"
+                            title={isRfqUnlocked(opp.rfqNumber) || isDirectBuyer ? "Available to Bid: Click to submit your quotation" : "Download and Bid"}
                           >
                             <Send size={10} /> Submit Quote
                           </button>
@@ -1449,7 +1491,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 </div>
               </div>
               <button
-                onClick={() => !isSubmittingQuote && setBiddingOn(null)}
+                onClick={closeBidForm}
                 title="Close"
                 className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800"
               >
@@ -1714,7 +1756,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 </div>
 
                 <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-gray-800">
-                  <button onClick={() => setBiddingOn(null)} disabled={isSubmittingQuote} className="btn btn-ghost btn-sm">
+                  <button onClick={closeBidForm} disabled={isSubmittingQuote} className="btn btn-ghost btn-sm">
                     Cancel
                   </button>
                   <button
