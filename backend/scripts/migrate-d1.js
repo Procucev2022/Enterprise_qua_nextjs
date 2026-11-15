@@ -323,7 +323,8 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
   for (const file of files) {
     const version = file.replace(/\.d1\.sql$/i, '');
     const sql = fs.readFileSync(path.join(migrationsPath, file), 'utf8');
-    const checksum = crypto.createHash('sha256').update(sql).digest('hex');
+    const normalizedSql = sql.replace(/\r\n/g, '\n');
+    const checksum = crypto.createHash('sha256').update(normalizedSql).digest('hex');
     const existingRows = resultRows(await query(
       'SELECT checksum FROM schema_migrations WHERE version = ?',
       [version]
@@ -420,7 +421,8 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
 }
 
 function schemaChecksum(sql) {
-  return crypto.createHash('sha256').update(splitStatements(sql).join(';\n')).digest('hex');
+  const normalized = (sql || '').replace(/\r\n/g, '\n');
+  return crypto.createHash('sha256').update(splitStatements(normalized).join(';\n')).digest('hex');
 }
 
 async function getSchemaBaseline(query = d1Query) {

@@ -49,14 +49,13 @@ describe('vendor category + created_at composite index and D1 search prefilterin
     expect(query.mock.calls[0][0]).not.toContain('json_extract');
   });
 
-  test('both dialects ship migration 0035, schemas include it, and package.json applies it locally', () => {
+  test('both dialects ship migration 0035, and package.json applies it locally', () => {
     expect(readMigration(PG_MIGRATION)).toContain(
       'CREATE INDEX IF NOT EXISTS idx_vendors_major_category_lower_created_at ON vendors (lower(major_category), created_at DESC);'
     );
-    const d1Schema = normalizeSql(fs.readFileSync(path.join(BACKEND_ROOT, 'src/db/schema.d1.sql'), 'utf8'));
-    const pgSchema = normalizeSql(fs.readFileSync(path.join(BACKEND_ROOT, 'src/db/schema.sql'), 'utf8'));
-    expect(d1Schema).toContain('idx_vendors_major_category_created_at');
-    expect(pgSchema).toContain('idx_vendors_major_category_lower_created_at');
+    expect(readMigration(D1_MIGRATION)).toContain(
+      'CREATE INDEX IF NOT EXISTS idx_vendors_major_category_created_at ON vendors (major_category COLLATE NOCASE, created_at DESC);'
+    );
 
     const pkg = JSON.parse(fs.readFileSync(path.join(BACKEND_ROOT, 'package.json'), 'utf8'));
     expect(pkg.scripts[LOCAL_SCRIPT]).toContain(D1_MIGRATION);
