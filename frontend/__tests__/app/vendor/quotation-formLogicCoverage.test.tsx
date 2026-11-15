@@ -669,16 +669,15 @@ describe('enquiry filtering', () => {
     expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
   });
 
-  test('category chips add and remove categories one at a time', async () => {
+  test('category dropdown filters categories and updates filtered count', async () => {
     await renderCategoryScenario();
     fireEvent.change(categorySelect(), { target: { value: 'Electrical' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Hydraulics/ }));
-    expectRows(['RFQ-CAT-2', 'RFQ-CAT-3'], ['RFQ-CAT-1', 'RFQ-CAT-4', 'RFQ-CAT-5', 'RFQ-CAT-6']);
-    expect(screen.getByText('(Filtered by 2 categories)')).toBeInTheDocument();
+    expectRows(['RFQ-CAT-2'], ['RFQ-CAT-1', 'RFQ-CAT-3', 'RFQ-CAT-4', 'RFQ-CAT-5', 'RFQ-CAT-6']);
+    expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Hydraulics/ }));
-    expectRows(['RFQ-CAT-2'], ['RFQ-CAT-3']);
+    fireEvent.change(categorySelect(), { target: { value: 'Hydraulics' } });
+    expectRows(['RFQ-CAT-3'], ['RFQ-CAT-1', 'RFQ-CAT-2', 'RFQ-CAT-4', 'RFQ-CAT-5', 'RFQ-CAT-6']);
     expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
   });
 
@@ -696,11 +695,11 @@ describe('enquiry filtering', () => {
     expect(categorySelect()).toHaveValue('all');
   });
 
-  test('choosing All Categories from the chip or the dropdown lists every enquiry again', async () => {
+  test('choosing All Categories from the dropdown lists every enquiry again', async () => {
     await renderCategoryScenario();
 
     fireEvent.change(categorySelect(), { target: { value: 'Electrical' } });
-    fireEvent.click(screen.getByRole('button', { name: /^All Categories \(6\)$/ }));
+    fireEvent.change(categorySelect(), { target: { value: 'all' } });
     expectRows(everyCategoryRfq, []);
     expect(categorySelect()).toHaveValue('all');
 

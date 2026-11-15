@@ -2,21 +2,30 @@ const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT, hasUnlimitedQuoteAccess } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, hasUnlimitedQuoteAccess, clearDummyPanFields } = require('../config/constants');
 
 function parseVendorRaw(raw) {
+  let vendor;
   if (typeof raw === 'string') {
     try {
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      vendor = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
     } catch (error) {
       const parseError = new Error('Persisted vendor profile contains invalid JSON.');
       parseError.code = 'INVALID_VENDOR_RECORD';
       parseError.cause = error;
       throw parseError;
     }
+  } else {
+    vendor = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   }
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  if (vendor && typeof vendor === 'object' && !Array.isArray(vendor)) {
+    delete vendor.tempPassword;
+    if (typeof clearDummyPanFields === 'function') {
+      clearDummyPanFields(vendor);
+    }
+  }
+  return vendor;
 }
 
 function quoteCreditState(vendor, isBuyerMapped, isResubmission = false) {

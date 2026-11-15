@@ -2,21 +2,30 @@ const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT, VENDOR_PLAN_RFQ_QUOTA, hasUnlimitedDownloadAccess } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, VENDOR_PLAN_RFQ_QUOTA, hasUnlimitedDownloadAccess, clearDummyPanFields } = require('../config/constants');
 
 function parseVendorRaw(value) {
+  let vendor;
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      vendor = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
     } catch (error) {
       const parseError = new Error('Persisted vendor profile contains invalid JSON.');
       parseError.code = 'INVALID_VENDOR_RECORD';
       parseError.cause = error;
       throw parseError;
     }
+  } else {
+    vendor = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  if (vendor && typeof vendor === 'object' && !Array.isArray(vendor)) {
+    delete vendor.tempPassword;
+    if (typeof clearDummyPanFields === 'function') {
+      clearDummyPanFields(vendor);
+    }
+  }
+  return vendor;
 }
 
 function vendorCreditState(vendor) {

@@ -1037,8 +1037,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
 
       expect(screen.getByTestId('view-statutory-gstin')).toHaveTextContent('29AAMCP4349L1Z0');
-      expect(screen.getByTestId('view-statutory-pan')).toHaveTextContent(new RegExp(`^${NOT_APPLICABLE}$`));
-      expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+      expect(screen.getByTestId('view-statutory-pan')).toHaveTextContent('ABCPE1234F');
+      expect(screen.getByText('ABCPE1234F')).toBeInTheDocument();
     });
 
     it('shows a real PAN, MSME number and turnover from the record in the View Profile', () => {

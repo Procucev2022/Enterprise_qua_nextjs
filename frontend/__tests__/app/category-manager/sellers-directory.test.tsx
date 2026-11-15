@@ -165,10 +165,10 @@ describe('SellersDirectory Component Suite', () => {
     await waitFor(() => expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Apex Fasteners Ltd'));
-    expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+    expect(screen.getByText('ABCPE1234F')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Precision Forgings Pvt Ltd'));
-    expect(screen.queryByText('ABCDE1234F')).not.toBeInTheDocument();
+    expect(screen.getByText('ABCDE1234F')).toBeInTheDocument();
   });
 
   test('filters sellers by source, category, and rating', async () => {

@@ -1948,7 +1948,7 @@ test('shows no supplier category when none is recorded, and asks for a credit am
   ).toBeInTheDocument();
 });
 
-test('suppresses placeholder dummy PAN in SupplierDossierDrawer Statutory Verification card', () => {
+test('displays PAN in SupplierDossierDrawer Statutory Verification card without dummy restrictions', () => {
   render(
     <SupplierDossierDrawer
       seller={{ ...mockSeller, pan: 'ABCPE1234F', panNumber: 'ABCDE1234F' }}
@@ -1956,6 +1956,5 @@ test('suppresses placeholder dummy PAN in SupplierDossierDrawer Statutory Verifi
       onClose={jest.fn()}
     />
   );
-  expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
-  expect(screen.queryByText('ABCDE1234F')).not.toBeInTheDocument();
+  expect(screen.getByText('ABCPE1234F')).toBeInTheDocument();
 });

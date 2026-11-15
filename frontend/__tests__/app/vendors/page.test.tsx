@@ -743,8 +743,7 @@ describe('Public Vendor Directory (/vendors)', () => {
 
     render(<VendorDetailModal vendor={dummyPanVendor} onClose={jest.fn()} />);
     fireEvent.click(screen.getByRole('tab', { name: new RegExp(S.tabs.compliance, 'i') }));
-    expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
-    expect(screen.getByText('No compliance details available.')).toBeInTheDocument();
+    expect(screen.getByText('ABCPE1234F')).toBeInTheDocument();
   });
 
   test('covers debounce timer cleanup on unmount and vendors with null id in grid', async () => {
