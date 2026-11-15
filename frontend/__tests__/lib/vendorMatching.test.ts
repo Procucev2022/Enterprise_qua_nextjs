@@ -1,11 +1,14 @@
 import {
   normalizeCategory,
   extractRfqCategorySignals,
+  extractRfqCategoryFilters,
+  hasExplicitAllCategoriesChoice,
   matchVendorAgainstSignals,
   getCategoryMatchedProcucevVendors,
   selectVendorsForCategories,
   scoreVendorLocation,
   rankProcucevVendorsForV3,
+  selectTopProcucevVendorsForMode3,
   minorNamesMatch,
 } from '@/lib/vendorMatching';
 import type { VendorEntry } from '@/lib/types';
@@ -644,5 +647,171 @@ describe('vendorMatching minor-only matching', () => {
     );
     expect(ranked.map((r) => r.vendor.id)).toEqual(['v-min']);
     expect(ranked[0].hasMinorMatch).toBe(true);
+  });
+});
+
+describe('Mode 3 top-10 vendor selection', () => {
+  const makeNetVendor = (overrides: Partial<VendorEntry> & { id: string }): VendorEntry =>
+    ({
+      name: `Vendor ${overrides.id}`,
+      contactPerson: 'Network Contact',
+      phone: '+91-9000000000',
+      email: `${overrides.id}@net.example`,
+      source: 'procucev_network',
+      rating: 4.5,
+      ...overrides,
+    }) as VendorEntry;
+
+  const makePrivateVendor = (overrides: Partial<VendorEntry> & { id: string }): VendorEntry =>
+    ({
+      name: `Private ${overrides.id}`,
+      contactPerson: 'Private Contact',
+      phone: '+91-9000000001',
+      email: `${overrides.id}@priv.example`,
+      source: 'buyer_uploaded',
+      buyerId: 'buyer-1',
+      rating: 5.0,
+      ...overrides,
+    }) as VendorEntry;
+
+  it('ignores All Categories sentinel in extractRfqCategorySignals while flagging explicit All Categories choice', () => {
+    const allOnlyForm = {
+      majorCategory: 'All Categories',
+      minorCategory: 'All Categories',
+      lineItems: [{ majorCategory: 'All Categories', minorCategory: '' }],
+    };
+    expect(extractRfqCategorySignals(allOnlyForm)).toEqual({ signals: [], rawSignals: [], minorOnly: false });
+    expect(hasExplicitAllCategoriesChoice(allOnlyForm)).toBe(true);
+
+    const blankForm = { majorCategory: '', minorCategory: '', lineItems: [{ majorCategory: '', minorCategory: '' }] };
+    expect(hasExplicitAllCategoriesChoice(blankForm)).toBe(false);
+
+    const narrowedWithAll = {
+      majorCategory: 'All Categories',
+      minorCategory: 'Laptop',
+      lineItems: [{ majorCategory: 'IT', minorCategory: 'Laptop' }],
+    };
+    expect(hasExplicitAllCategoriesChoice(narrowedWithAll)).toBe(false);
+    expect(extractRfqCategorySignals(narrowedWithAll)).toEqual({
+      signals: ['laptop'],
+      rawSignals: ['Laptop', 'IT'],
+      minorOnly: true,
+    });
+  });
+
+  it('rankProcucevVendorsForV3 recognizes minor matches in vendorSelectedCategories, clientMappedCategories, and plural stems', () => {
+    const vendors = [
+      makeNetVendor({ id: 'v-sel', vendorSelectedCategories: ['Boxes'], majorCategory: 'Packaging' }),
+      makeNetVendor({ id: 'v-map', clientMappedCategories: ['Box'], majorCategory: 'Packaging' }),
+    ];
+    const ranked = rankProcucevVendorsForV3(
+      vendors,
+      ['boxes'],
+      { location: null, pincode: null },
+      10,
+      ['Boxes'],
+      true
+    );
+    expect(ranked.map((r) => r.vendor.id)).toEqual(expect.arrayContaining(['v-sel', 'v-map']));
+    expect(ranked.every((r) => r.hasMinorMatch && (r.matchedMinorCategory === 'Boxes' || r.matchedMinorCategory === 'Box'))).toBe(true);
+  });
+
+  it('selectTopProcucevVendorsForMode3 returns top 10 combining minor matches first plus parent-major top-up', () => {
+    const minorMatches = [
+      makeNetVendor({ id: 'v-m1', majorCategory: 'IT', minorCategories: ['Laptop'], city: 'Bengaluru', pincode: '560001', rating: 4.9 }),
+      makeNetVendor({ id: 'v-m2', majorCategory: 'IT', vendorSelectedCategories: ['Laptop'], city: 'Delhi', rating: 4.2 }),
+    ];
+    const majorOnly = Array.from({ length: 12 }, (_, idx) =>
+      makeNetVendor({
+        id: `v-maj-${idx}`,
+        majorCategory: 'IT',
+        minorCategories: ['Routers'],
+        city: idx < 2 ? 'Bengaluru' : 'Pune',
+        rating: 4.8 - idx * 0.05,
+      })
+    );
+    const privateVendor = makePrivateVendor({ id: 'v-priv', majorCategory: 'IT', minorCategories: ['Laptop'] });
+
+    const top10 = selectTopProcucevVendorsForMode3([...minorMatches, ...majorOnly, privateVendor], {
+      majorCategory: 'IT',
+      minorCategory: 'Laptop',
+      deliveryLocation: 'Bengaluru',
+      deliveryPincode: '560058',
+      lineItems: [{ majorCategory: 'IT', minorCategory: 'Laptop' }],
+    });
+
+    expect(top10).toHaveLength(10);
+    expect(top10.some((r) => r.vendor.id === 'v-priv')).toBe(false);
+    expect(top10.slice(0, 2).map((r) => r.vendor.id)).toEqual(['v-m1', 'v-m2']);
+    expect(top10.slice(0, 2).every((r) => r.hasMinorMatch)).toBe(true);
+    expect(top10.slice(2).every((r) => !r.hasMinorMatch)).toBe(true);
+  });
+
+  it('selectTopProcucevVendorsForMode3 stops after Tier 1 when enough minor matches fill top 10', () => {
+    const twelveMinors = Array.from({ length: 12 }, (_, idx) =>
+      makeNetVendor({
+        id: `v-full-${idx}`,
+        majorCategory: 'Mechanical',
+        minorCategories: ['Centrifugal Pumps'],
+        rating: 4.0 + idx * 0.05,
+      })
+    );
+    const top10 = selectTopProcucevVendorsForMode3(twelveMinors, {
+      majorCategory: 'Mechanical',
+      lineItems: [{ majorCategory: 'Mechanical', minorCategory: 'Centrifugal Pumps' }],
+    });
+    expect(top10).toHaveLength(10);
+    expect(top10.every((r) => r.hasMinorMatch)).toBe(true);
+  });
+
+  it('selectTopProcucevVendorsForMode3 ranks top 10 by location & rating on explicit All Categories, while staying empty for blank RFQs', () => {
+    const pool = [
+      makeNetVendor({ id: 'v-no-major', rating: undefined, city: 'Jaipur', pincode: '302001' }),
+      ...Array.from({ length: 11 }, (_, idx) =>
+        makeNetVendor({
+          id: `v-all-${idx}`,
+          majorCategory: idx % 2 === 0 ? 'IT' : 'Civil Works',
+          city: idx === 5 ? 'Bengaluru' : 'Jaipur',
+          pincode: idx === 5 ? '560058' : '302001',
+          rating: 3.5 + (idx % 3) * 0.5,
+        })
+      ),
+    ];
+
+    expect(selectTopProcucevVendorsForMode3(null as unknown as VendorEntry[], { majorCategory: 'IT' })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3([makePrivateVendor({ id: 'only-priv', majorCategory: 'IT' })], { majorCategory: 'IT' })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3(pool, { majorCategory: '', lineItems: [] })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3([], { majorCategory: 'All Categories' })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3(pool, { majorCategory: 'All Categories' }, 0)).toEqual([]);
+
+    const allTop = selectTopProcucevVendorsForMode3(pool, {
+      majorCategory: 'All Categories',
+      deliveryLocation: 'Bengaluru',
+      deliveryPincode: '560058',
+      lineItems: [{ majorCategory: 'All Categories' }],
+    });
+    expect(allTop).toHaveLength(10);
+    expect(allTop[0].vendor.id).toBe('v-all-5');
+
+    const majorOnlyTop = selectTopProcucevVendorsForMode3(pool, {
+      majorCategory: 'IT',
+      lineItems: [{ majorCategory: 'IT', minorCategory: '' }],
+    });
+    expect(majorOnlyTop.every((r) => r.vendor.majorCategory === 'IT')).toBe(true);
+
+    const unknownMinorNoMajor = selectTopProcucevVendorsForMode3(pool, {
+      lineItems: [{ minorCategory: 'Exotic Widget XYZ' }],
+    });
+    expect(unknownMinorNoMajor).toEqual([]);
+  });
+
+  it('extractRfqCategoryFilters infers canonical parent major from taxonomy and deduplicates labels', () => {
+    const filters = extractRfqCategoryFilters({
+      majorCategory: 'All Categories',
+      minorCategory: 'Centrifugal Pumps',
+      lineItems: [{ majorCategory: 'Mechanical', minorCategory: 'Centrifugal Pumps' }],
+    });
+    expect(filters.minors).toEqual(['Centrifugal Pumps']);
+    expect(filters.majors.map((m) => m.toLowerCase())).toContain('mechanical');
   });
 });

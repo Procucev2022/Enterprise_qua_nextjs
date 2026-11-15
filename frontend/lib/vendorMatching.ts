@@ -5,9 +5,9 @@
 // for Mode 1 (Private Roster), Mode 2 (Hybrid Sourcing), and Mode 3 (AI Discovery).
 // ==============================================================================
 
-import type { VendorEntry } from './types';
+import type { RfqCategoryFormInput, VendorEntry } from './types';
 import { isProcucevVendor } from '../app/buyer/vendor-summary';
-import { VENDOR_ASSIGNMENT_LIMITS } from './constants';
+import { ALL_CATEGORIES_OPTION, VENDOR_ASSIGNMENT_LIMITS } from './constants';
 import { findMajorForMinor } from './categoryTaxonomy';
 import { UI_STRINGS } from './uiStrings';
 
@@ -79,31 +79,43 @@ export interface RfqCategorySignals {
  * Extract the unique normalized category signals from an RFQ form or payload.
  * An RFQ that names minor categories is matched by those minors only.
  */
-export function extractRfqCategorySignals(form: {
-  majorCategory?: string | null;
-  minorCategory?: string | null;
-  category?: string | null;
-  lineItems?: Array<{ majorCategory?: string | null; minorCategory?: string | null; category?: string | null }>;
-  extractedEntities?: Array<{ majorCategory?: string | null; minorCategory?: string | null; category?: string | null }>;
-}): RfqCategorySignals {
+function isAllCategoriesLabel(value?: string | null): boolean {
+  return String(value ?? '').trim().toLowerCase() === ALL_CATEGORIES_OPTION.toLowerCase();
+}
+
+function addDistinctCategoryLabel(target: Set<string>, value?: string | null): void {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed || isAllCategoriesLabel(trimmed)) return;
+  target.add(trimmed);
+}
+
+function collectVendorMinorLabels(vendor: VendorEntry): string[] {
+  return [
+    ...categoryLabels(vendor.minorCategories),
+    ...categoryLabels(vendor.vendorSelectedCategories),
+    ...categoryLabels(vendor.clientMappedCategories),
+  ].filter((label) => Boolean(normalizeCategory(label)));
+}
+
+export function extractRfqCategorySignals(form: RfqCategoryFormInput): RfqCategorySignals {
   const rawSet = new Set<string>();
   const minorSet = new Set<string>();
 
-  if (form.majorCategory?.trim()) rawSet.add(form.majorCategory.trim());
-  if (form.minorCategory?.trim()) {
-    rawSet.add(form.minorCategory.trim());
-    minorSet.add(form.minorCategory.trim());
+  addDistinctCategoryLabel(rawSet, form.majorCategory);
+  if (form.minorCategory?.trim() && !isAllCategoriesLabel(form.minorCategory)) {
+    addDistinctCategoryLabel(rawSet, form.minorCategory);
+    addDistinctCategoryLabel(minorSet, form.minorCategory);
   }
-  if (form.category?.trim()) rawSet.add(form.category.trim());
+  addDistinctCategoryLabel(rawSet, form.category);
 
   const items = form.lineItems || form.extractedEntities || [];
   for (const item of items) {
-    if (item.majorCategory?.trim()) rawSet.add(item.majorCategory.trim());
-    if (item.minorCategory?.trim()) {
-      rawSet.add(item.minorCategory.trim());
-      minorSet.add(item.minorCategory.trim());
+    addDistinctCategoryLabel(rawSet, item.majorCategory);
+    if (item.minorCategory?.trim() && !isAllCategoriesLabel(item.minorCategory)) {
+      addDistinctCategoryLabel(rawSet, item.minorCategory);
+      addDistinctCategoryLabel(minorSet, item.minorCategory);
     }
-    if (item.category?.trim()) rawSet.add(item.category.trim());
+    addDistinctCategoryLabel(rawSet, item.category);
   }
 
   const rawSignals = Array.from(rawSet);
@@ -114,6 +126,48 @@ export function extractRfqCategorySignals(form: {
   const signals = Array.from(new Set(rawSignals.map(normalizeCategory).filter(Boolean)));
 
   return { signals, rawSignals, minorOnly: false };
+}
+
+/**
+ * Returns true only when the buyer explicitly chose "All Categories" with no narrower category.
+ */
+export function hasExplicitAllCategoriesChoice(form: RfqCategoryFormInput): boolean {
+  if (extractRfqCategorySignals(form).rawSignals.length > 0) return false;
+  const items = form.lineItems || form.extractedEntities || [];
+  return (
+    isAllCategoriesLabel(form.majorCategory) ||
+    isAllCategoriesLabel(form.category) ||
+    items.some((item) => isAllCategoriesLabel(item.majorCategory) || isAllCategoriesLabel(item.category))
+  );
+}
+
+/**
+ * Extracts distinct non-empty minor and major categories (including parent majors inferred
+ * from minor categories) across the RFQ header and all line items.
+ */
+export function extractRfqCategoryFilters(form: RfqCategoryFormInput): { majors: string[]; minors: string[] } {
+  const items = form.lineItems || form.extractedEntities || [];
+  const majorsSet = new Set<string>();
+  const minorsSet = new Set<string>();
+
+  addDistinctCategoryLabel(majorsSet, form.majorCategory);
+  addDistinctCategoryLabel(majorsSet, form.category);
+  addDistinctCategoryLabel(minorsSet, form.minorCategory);
+
+  for (const item of items) {
+    addDistinctCategoryLabel(majorsSet, item.majorCategory);
+    addDistinctCategoryLabel(majorsSet, item.category);
+    addDistinctCategoryLabel(minorsSet, item.minorCategory);
+  }
+
+  for (const minor of Array.from(minorsSet)) {
+    addDistinctCategoryLabel(majorsSet, findMajorForMinor(minor));
+  }
+
+  return {
+    majors: Array.from(majorsSet),
+    minors: Array.from(minorsSet),
+  };
 }
 
 function matchesCategoryToken(target: string, signal: string): boolean {
@@ -339,7 +393,8 @@ export function rankProcucevVendorsForV3(
     const categoryScore = match.matchScore;
     if (categoryScore <= 0) continue;
 
-    const vendorMinors = categoryLabels(vendor.minorCategories).map(normalizeCategory).filter(Boolean);
+    const rawVendorMinors = collectVendorMinorLabels(vendor);
+    const vendorMinors = rawVendorMinors.map(normalizeCategory);
 
     const hasMinorMatch = normMinors.length > 0 && normMinors.some((nm) =>
       vendorMinors.some((vm) => minorNamesMatch(vm, nm))
@@ -349,9 +404,10 @@ export function rankProcucevVendorsForV3(
     const minorBonus = hasMinorMatch ? 15 : 0;
     const overallScore = Math.min(100, Math.round(categoryScore * 0.7 + loc.score * 0.3) + minorBonus);
 
-    const matchedMinorCategory = vendor.minorCategories?.find((m) => normMinors.includes(normalizeCategory(m)))
-      || vendor.minorCategories?.[0]
-      || null;
+    const matchedMinorCategory = rawVendorMinors.find((m) => {
+      const normM = normalizeCategory(m);
+      return normMinors.some((nm) => minorNamesMatch(normM, nm));
+    }) || rawVendorMinors[0] || null;
 
     ranked.push({
       vendor,
@@ -375,6 +431,75 @@ export function rankProcucevVendorsForV3(
   });
 
   return ranked.slice(0, Math.max(0, limit));
+}
+
+/**
+ * Selects the top Procucev Network vendors for Mode 3 ingestion:
+ * - Returns `[]` when no categories are set unless the buyer explicitly selected "All Categories".
+ * - Ranks Tier 1 exact/stem minor matches first, then tops up remaining slots up to `limit` (10)
+ *   from Tier 2 parent-major vendors so multi-vendor shortlists stay populated.
+ */
+export function selectTopProcucevVendorsForMode3(
+  vendors: VendorEntry[],
+  form: RfqCategoryFormInput,
+  limit = VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_VENDORS_LIMIT
+): RankedProcucevVendor[] {
+  if (!Array.isArray(vendors) || limit <= 0) return [];
+  const procucevPool = vendors.filter(isProcucevVendor);
+  if (procucevPool.length === 0) return [];
+
+  const destination = { location: form.deliveryLocation, pincode: form.deliveryPincode };
+  const { signals, minorOnly } = extractRfqCategorySignals(form);
+  const { majors, minors } = extractRfqCategoryFilters(form);
+
+  if (signals.length === 0) {
+    if (!hasExplicitAllCategoriesChoice(form)) return [];
+    return procucevPool
+      .map((vendor): RankedProcucevVendor => {
+        const loc = scoreVendorLocation(vendor, destination);
+        const ratingScore = Math.min(100, Math.max(0, Math.round((Number(vendor.rating) || 0) * 20)));
+        const overallScore = Math.min(100, Math.round(loc.score * 0.6 + ratingScore * 0.4));
+        const vendorMinors = collectVendorMinorLabels(vendor);
+        return {
+          vendor,
+          overallScore,
+          categoryScore: 100,
+          locationScore: loc.score,
+          matchedCategories: [vendor.majorCategory?.trim() || ALL_CATEGORIES_OPTION],
+          locationReason: loc.reason,
+          hasMinorMatch: false,
+          matchedMinorCategory: vendorMinors[0] || null,
+        };
+      })
+      .sort((a, b) => {
+        if (b.overallScore !== a.overallScore) return b.overallScore - a.overallScore;
+        if (b.locationScore !== a.locationScore) return b.locationScore - a.locationScore;
+        return (b.vendor.rating || 0) - (a.vendor.rating || 0);
+      })
+      .slice(0, limit);
+  }
+
+  if (!minorOnly) {
+    return rankProcucevVendorsForV3(procucevPool, signals, destination, limit, minors, false);
+  }
+
+  const tier1 = rankProcucevVendorsForV3(procucevPool, signals, destination, limit, minors, true);
+  if (tier1.length >= limit) return tier1.slice(0, limit);
+
+  const fallbackMajorSignals = Array.from(new Set(majors.map(normalizeCategory).filter(Boolean)));
+  if (fallbackMajorSignals.length === 0) return tier1;
+
+  const pickedKeys = new Set(tier1.map((item) => item.vendor.id || item.vendor.email));
+  const remainingPool = procucevPool.filter((v) => !pickedKeys.has(v.id || v.email));
+  const tier2 = rankProcucevVendorsForV3(
+    remainingPool,
+    fallbackMajorSignals,
+    destination,
+    limit - tier1.length,
+    [],
+    false
+  );
+  return [...tier1, ...tier2];
 }
 
 /**

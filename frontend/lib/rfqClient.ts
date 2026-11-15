@@ -4,6 +4,7 @@ import { resolveAttachmentMimeType } from './constants';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
+  FetchAllVendorsOptions,
   RFQAttachment,
   RFQAttachmentResult,
   RFQCreatePayload,
@@ -683,14 +684,32 @@ export async function fetchVendorCandidates(rfqId: string, limit?: number): Prom
  * vendor id already invites successfully.
  */
 export async function fetchAllVendors(
-  options: { page?: number; pageSize?: number; search?: string; category?: string; state?: string; city?: string } = {}
+  options: FetchAllVendorsOptions = {}
 ): Promise<RFQVendorPageResult> {
   const token = authClient.getToken();
-  const { page = 1, pageSize = 50, search = '', category = '', state = '', city = '' } = options;
+  const {
+    page = 1,
+    pageSize = 50,
+    search = '',
+    category = '',
+    majors = [],
+    minors = [],
+    publicOnly = false,
+    state = '',
+    city = '',
+  } = options;
+
+  const cleanFilterValues = (values: string[]): string[] =>
+    Array.from(new Set(values.map((v) => String(v || '').trim()).filter(Boolean)));
+  const cleanMajors = cleanFilterValues(majors);
+  const cleanMinors = cleanFilterValues(minors);
 
   const params = new URLSearchParams({ buyerId: 'all', page: String(page), pageSize: String(pageSize) });
+  if (publicOnly) params.set('publicOnly', 'true');
   if (search.trim()) params.set('search', search.trim());
   if (category.trim()) params.set('category', category.trim());
+  if (cleanMajors.length > 0) params.set('majors', cleanMajors.join(','));
+  if (cleanMinors.length > 0) params.set('minors', cleanMinors.join(','));
   if (state.trim()) params.set('state', state.trim());
   if (city.trim()) params.set('city', city.trim());
 

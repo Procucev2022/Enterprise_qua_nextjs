@@ -1120,6 +1120,180 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       }
     });
 
+    test('getVendors: rejects invalid publicOnly query values with 400 validation errors', async () => {
+      const next = jest.fn();
+      const res = mockRes();
+
+      await vendorController.getVendors(
+        { user: { role: 'buyer', email: 'b@b.com' }, query: { publicOnly: 'maybe' } },
+        res,
+        next
+      );
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          errors: expect.objectContaining({ publicOnly: expect.any(String) }),
+        })
+      );
+    });
+
+    test('getVendors: publicOnly indexed lookup for minor categories supplements sparse hits and tops up from parent major without leaking buyer-private vendors', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const getBuyerSpy = jest.spyOn(storeService, 'getBuyerAccountByEmail');
+      const minorSpy = jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([
+        { id: 'v-priv', name: 'Private Supplier', isClientUploaded: true, buyerId: 'buyer-1', minorCategories: ['Laptop'] },
+        { id: 'v-pub-minor', name: 'Public Minor Supplier', majorCategory: 'IT', minorCategories: ['Laptop'] },
+      ]);
+      const fallbackMinorSpy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+        { id: 'v-pub-minor', name: 'Public Minor Supplier', majorCategory: 'IT', minorCategories: ['Laptop'] },
+        { id: 'v-pub-legacy', name: 'Legacy Minor Supplier', categories: ['Laptop'] },
+      ]);
+      const majorSpy = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([
+        { id: 'v-pub-major-1', name: 'Public IT Supplier', majorCategory: 'IT' },
+      ]);
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          {
+            user: { role: 'buyer', email: 'buyer@enterprise.com' },
+            query: { page: '1', pageSize: '10', publicOnly: 'true', majors: 'IT,All Categories', minors: 'Laptop' },
+          },
+          res,
+          next
+        );
+
+        expect(getBuyerSpy).not.toHaveBeenCalled();
+        expect(minorSpy).toHaveBeenCalled();
+        expect(fallbackMinorSpy).toHaveBeenCalledWith(['laptop'], 20);
+        expect(majorSpy).toHaveBeenCalled();
+        const body = res.json.mock.calls[0][0];
+        expect(body.success).toBe(true);
+        expect(body.data.map((v) => v.id)).toEqual(['v-pub-minor', 'v-pub-legacy', 'v-pub-major-1']);
+      } finally {
+        pool.pool = originalPool;
+        getBuyerSpy.mockRestore();
+        minorSpy.mockRestore();
+        fallbackMinorSpy.mockRestore();
+        majorSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: publicOnly multi-minor and multi-major indexed DB lookups prevent starving secondary divisions', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const minorSpy = jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockImplementation(async (terms) => {
+        if (terms.includes('laptop') && terms.includes('monitors')) {
+          return [{ id: 'v-laptop', name: 'Laptop Co', majorCategory: 'IT', minorCategories: ['Laptop'] }];
+        }
+        return [{ id: 'v-monitor', name: 'Monitor Co', majorCategory: 'IT', minorCategories: ['Monitors'] }];
+      });
+      const fallbackSpy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([]);
+      const majorSpy = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockImplementation(async (majors) => {
+        if (majors.length === 1 && String(majors[0]).toLowerCase() === 'it') return [{ id: 'v-it-1', name: 'IT One', majorCategory: 'IT' }];
+        if (majors.length === 1 && String(majors[0]).toLowerCase() === 'civil') return [{ id: 'v-civ-1', name: 'Civil One', majorCategory: 'Civil' }];
+        return [{ id: 'v-comb-1', name: 'Combined One', majorCategory: 'Civil' }];
+      });
+
+      try {
+        const resMinors = mockRes();
+        await vendorController.getVendors(
+          { query: { page: '1', pageSize: '10', publicOnly: '1', minors: ['Laptop', 'Monitors'], majors: 'IT' } },
+          resMinors,
+          next
+        );
+        expect(resMinors.json.mock.calls[0][0].data.map((v) => v.id)).toEqual(
+          expect.arrayContaining(['v-laptop', 'v-monitor', 'v-it-1'])
+        );
+
+        const resMajors = mockRes();
+        await vendorController.getVendors(
+          { query: { page: '1', pageSize: '10', publicOnly: 'true', majors: 'IT,Civil' } },
+          resMajors,
+          next
+        );
+        expect(resMajors.json.mock.calls[0][0].data.map((v) => v.id)).toEqual(['v-it-1', 'v-civ-1', 'v-comb-1']);
+      } finally {
+        pool.pool = originalPool;
+        minorSpy.mockRestore();
+        fallbackSpy.mockRestore();
+        majorSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: publicOnly All Categories falls through to paginated public DB lookup with cleared category filter', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+        rows: [{ id: 'v-all-1', name: 'Global Network Vendor' }],
+        total: 1,
+      });
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          { user: { role: 'buyer', email: 'buyer@co.com' }, query: { page: '1', pageSize: '10', publicOnly: 'true', category: 'All Categories' } },
+          res,
+          next
+        );
+        expect(pageSpy).toHaveBeenCalledWith({
+          limit: 10,
+          offset: 0,
+          search: '',
+          email: '',
+          category: '',
+          publicOnly: true,
+          scopedBuyerId: '',
+        });
+      } finally {
+        pool.pool = originalPool;
+        pageSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: in-memory fallback honors publicOnly, minor-first matching, vendorSelectedCategories, and parent-major top-up', async () => {
+      const next = jest.fn();
+      const originalPool = pool.pool;
+      pool.pool = null;
+      const dataset = [
+        { id: 'v-priv', name: 'Buyer Private', buyerId: 'b-1', isClientUploaded: true, majorCategory: 'IT', minorCategories: ['Laptop'] },
+        { id: 'v-major', name: 'IT Generalist', clientMappedCategories: ['IT', 'Cloud'] },
+        { id: 'v-minor', name: 'Selected Laptop', vendorSelectedCategories: ['Laptop'] },
+      ];
+      const getVendorsSpy = jest.spyOn(storeService, 'getVendors').mockResolvedValue(dataset);
+
+      try {
+        const resPublic = mockRes();
+        await vendorController.getVendors(
+          { query: { publicOnly: 'true', minors: 'Laptop', majors: 'IT' } },
+          resPublic,
+          next
+        );
+        expect(getVendorsSpy).toHaveBeenCalledWith(null, null);
+        expect(resPublic.json.mock.calls[0][0].data.map((v) => v.id)).toEqual(['v-minor', 'v-major']);
+
+        const resStrictMinor = mockRes();
+        await vendorController.getVendors(
+          { query: { minor: 'Laptop' } },
+          resStrictMinor,
+          next
+        );
+        expect(resStrictMinor.json.mock.calls[0][0].data.map((v) => v.id)).toEqual(['v-priv', 'v-minor']);
+      } finally {
+        pool.pool = originalPool;
+        getVendorsSpy.mockRestore();
+      }
+    });
+
     test('createVendor role handling and validation', async () => {
       const res = mockRes();
       const next = jest.fn();

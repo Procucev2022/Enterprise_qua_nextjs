@@ -30,6 +30,8 @@ const {
   EVENT_OUTBOX_TYPES,
   VENDOR_EVALUATION_REQUEST,
   BUYER_LOCKED_STATUTORY_FIELDS,
+  VENDOR_ASSIGNMENT_LIMITS,
+  VENDOR_DIRECTORY_QUERY_CONFIG,
   formatMessage,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
@@ -222,8 +224,8 @@ function pickVendorBuyerCreateFields(body) {
 // Guards against a typo'd limit=100000 still shipping the whole vendor table
 // (the exact bug a real request hit: 87k vendors in one response crashed the
 // browser rendering an unpaginated "All Vendors" list).
-const MAX_VENDOR_PAGE_SIZE = 200;
-const DEFAULT_VENDOR_PAGE_SIZE = 50;
+const MAX_VENDOR_PAGE_SIZE = VENDOR_DIRECTORY_QUERY_CONFIG.MAX_PAGE_SIZE;
+const DEFAULT_VENDOR_PAGE_SIZE = VENDOR_DIRECTORY_QUERY_CONFIG.DEFAULT_PAGE_SIZE;
 
 function withoutTemporaryPassword(vendor) {
   if (!vendor || typeof vendor !== 'object') return vendor;
@@ -323,26 +325,234 @@ function sanitizePublicVendor(vendor) {
   };
 }
 
+/**
+ * Parses comma-separated or repeated category query parameters, dropping blank entries
+ * and the "All Categories" placeholder while preserving caller order.
+ */
+function parseCategoryFilterList(rawValue) {
+  const joined = Array.isArray(rawValue) ? rawValue.map(String).join(',') : rawValue;
+  if (typeof joined !== 'string' || !joined.trim()) return [];
+  const allLabel = VENDOR_DIRECTORY_QUERY_CONFIG.ALL_CATEGORIES_LABEL.toLowerCase();
+  const seen = new Set();
+  const parsed = [];
+  for (const part of joined.split(',')) {
+    const trimmed = part.trim();
+    const norm = trimmed.toLowerCase();
+    if (!trimmed || norm === allLabel || seen.has(norm)) continue;
+    seen.add(norm);
+    parsed.push(trimmed);
+    if (parsed.length >= VENDOR_DIRECTORY_QUERY_CONFIG.MAX_CATEGORY_FILTERS) break;
+  }
+  return parsed;
+}
+
+/**
+ * Deduplicates category strings case-insensitively while preserving the first casing seen.
+ */
+function dedupeCategoryStrings(values) {
+  const seen = new Set();
+  const out = [];
+  for (const val of values) {
+    const trimmed = String(val || '').trim();
+    const key = trimmed.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Normalizes and schema-validates GET /api/vendors query parameters.
+ */
+function validateVendorDirectoryQuery(rawQuery) {
+  const q = rawQuery && typeof rawQuery === 'object' ? rawQuery : {};
+  const normalized = {};
+  for (const key of ['buyerId', 'search', 'email', 'category', 'minor', 'state', 'city']) {
+    if (q[key] !== undefined) normalized[key] = q[key];
+  }
+  for (const listKey of ['majors', 'minors']) {
+    if (q[listKey] !== undefined) {
+      normalized[listKey] = Array.isArray(q[listKey]) ? q[listKey].map(String).join(',') : q[listKey];
+    }
+  }
+  if (q.publicOnly !== undefined && String(q.publicOnly).trim() !== '') {
+    normalized.publicOnly = String(q.publicOnly).trim().toLowerCase();
+  }
+  return validatePayload(VALIDATION_SCHEMAS.vendorDirectoryQuery, normalized);
+}
+
+function mergeUniquePublicVendors(targetMap, candidates, cap) {
+  if (!Array.isArray(candidates)) return;
+  for (const vendor of candidates) {
+    if (targetMap.size >= cap) break;
+    if (!vendor || !storeService.isProcucevVendor(vendor)) continue;
+    const key = vendor.id || vendor.vendorCode || String(vendor.email || '').toLowerCase();
+    if (!key || targetMap.has(key)) continue;
+    targetMap.set(key, vendor);
+  }
+}
+
+async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
+  if (!Array.isArray(majors) || majors.length === 0 || poolMap.size >= poolLimit) return;
+  if (majors.length === 1) {
+    const rows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit);
+    mergeUniquePublicVendors(poolMap, rows, poolLimit);
+    return;
+  }
+  // Query each division separately and round-robin merge so populous divisions do not crowd
+  // out secondary line-item divisions under a single SQL LIMIT.
+  const perMajorLimit = Math.max(20, Math.ceil(poolLimit / majors.length));
+  const buckets = await Promise.all(
+    majors.map((major) => domainQueries.getPublicVendorsByMajorCategoryFromDB([major], perMajorLimit))
+  );
+  const maxLen = buckets.reduce((max, arr) => Math.max(max, Array.isArray(arr) ? arr.length : 0), 0);
+  for (let idx = 0; idx < maxLen && poolMap.size < poolLimit; idx += 1) {
+    for (const bucket of buckets) {
+      if (poolMap.size >= poolLimit) break;
+      if (Array.isArray(bucket) && idx < bucket.length) {
+        mergeUniquePublicVendors(poolMap, [bucket[idx]], poolLimit);
+      }
+    }
+  }
+  if (poolMap.size < poolLimit) {
+    const combined = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit);
+    mergeUniquePublicVendors(poolMap, combined, poolLimit);
+  }
+}
+
+/**
+ * Fetches indexed public Procucev network candidates matching RFQ minor/major categories.
+ * Minor matches lead the pool; parent-major vendors top up the pool when minor matches are sparse.
+ */
+async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize }) {
+  const poolLimit = Math.min(
+    VENDOR_DIRECTORY_QUERY_CONFIG.MAX_POOL_LIMIT,
+    Math.max(pageSize, VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_LIMIT * VENDOR_DIRECTORY_QUERY_CONFIG.MIN_MINOR_POOL_FACTOR)
+  );
+  const minorTarget = VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_LIMIT;
+  const poolMap = new Map();
+
+  if (minors.length > 0) {
+    const inferredMajors = storeService._majorCategoriesForMinors(minors, { allMajors: true });
+    const lookupMajors = dedupeCategoryStrings([...majors, ...inferredMajors]);
+    const searchTerms = storeService.minorSearchTerms(minors);
+    const batchMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(searchTerms, lookupMajors, poolLimit);
+    mergeUniquePublicVendors(poolMap, batchMinorRows, poolLimit);
+
+    if (minors.length > 1 && poolMap.size < poolLimit) {
+      const perMinorLimit = Math.max(25, Math.ceil(poolLimit / minors.length));
+      for (const minor of minors) {
+        if (poolMap.size >= poolLimit) break;
+        const alreadyHasMinor = Array.from(poolMap.values()).some((v) => storeService.vendorCoversMinorCategory(v, minor));
+        if (alreadyHasMinor) continue;
+        const singleMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(
+          storeService.minorSearchTerms([minor]),
+          storeService._majorCategoriesForMinors([minor], { allMajors: true }),
+          perMinorLimit
+        );
+        mergeUniquePublicVendors(poolMap, singleMinorRows, poolLimit);
+      }
+    }
+
+    const minorMatchedCount = Array.from(poolMap.values()).filter((v) =>
+      minors.some((minor) => storeService.vendorCoversMinorCategory(v, minor))
+    ).length;
+
+    if (minorMatchedCount < minorTarget && poolMap.size < poolLimit) {
+      const legacyMinorRows = await domainQueries.getPublicVendorsMatchingCategories(searchTerms, minorTarget * 2);
+      mergeUniquePublicVendors(poolMap, legacyMinorRows, poolLimit);
+    }
+
+    if (poolMap.size < pageSize && lookupMajors.length > 0) {
+      await fetchMajorPoolsFromDB(lookupMajors, poolMap, poolLimit);
+    }
+  } else {
+    await fetchMajorPoolsFromDB(majors, poolMap, poolLimit);
+  }
+
+  return Array.from(poolMap.values()).slice(0, pageSize);
+}
+
+function matchesMajorInMemory(vendor, rawMajor) {
+  const normTarget = String(rawMajor || '').toLowerCase().trim();
+  if (!normTarget) return false;
+  if (String(vendor.majorCategory || vendor.category || '').toLowerCase().trim() === normTarget) {
+    return true;
+  }
+  for (const list of [vendor.categories, vendor.vendorSelectedCategories, vendor.clientMappedCategories]) {
+    if (parseCategoryFilterList(list).some((label) => label.toLowerCase() === normTarget)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function applyCategoryFiltersInMemory(vendors, { minors, majors, publicOnly }) {
+  if (minors.length === 0 && majors.length === 0) return vendors;
+  if (minors.length > 0) {
+    const minorHits = vendors.filter((v) => minors.some((minor) => storeService.vendorCoversMinorCategory(v, minor)));
+    if (!publicOnly && majors.length === 0) return minorHits;
+    const minorSet = new Set(minorHits);
+    const lookupMajors = dedupeCategoryStrings([
+      ...storeService._majorCategoriesForMinors(minors, { allMajors: true }),
+      ...majors,
+    ]);
+    const majorTopUp = vendors.filter(
+      (v) => !minorSet.has(v) && lookupMajors.some((major) => matchesMajorInMemory(v, major))
+    );
+    return [...minorHits, ...majorTopUp];
+  }
+  return vendors.filter((v) => majors.some((major) => matchesMajorInMemory(v, major)));
+}
+
 async function getVendors(req, res, next) {
   try {
+    const rawQuery = (req && req.query) || {};
+    const queryValidation = validateVendorDirectoryQuery(rawQuery);
+    if (!queryValidation.isValid) {
+      logger.warn('Rejected invalid vendor directory query', { fields: Object.keys(queryValidation.errors) }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid vendor directory query parameters.',
+        errors: queryValidation.errors,
+      });
+    }
+    const cleanQuery = queryValidation.sanitizedData;
+    const publicOnly = ['true', '1'].includes(String(cleanQuery.publicOnly || '').trim().toLowerCase());
+    const minors = dedupeCategoryStrings([
+      ...parseCategoryFilterList(cleanQuery.minors),
+      ...parseCategoryFilterList(cleanQuery.minor),
+    ]);
+    const majors = dedupeCategoryStrings([
+      ...parseCategoryFilterList(cleanQuery.majors),
+      ...parseCategoryFilterList(cleanQuery.category),
+    ]);
+
     const user = req.user;
     let buyerId = null;
-    if (user && user.role === 'buyer') {
-      const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
-      buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    } else if (req.query && req.query.buyerId) {
-      buyerId = req.query.buyerId;
+    if (!publicOnly) {
+      if (user && user.role === 'buyer') {
+        const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
+        buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+      } else if (cleanQuery.buyerId) {
+        buyerId = cleanQuery.buyerId;
+      }
     }
     // buyerId may be an email fallback when identity linkage has not completed;
     // log scope presence without copying a contact identifier into diagnostics.
     logger.info('Fetching vendors with scoping', {
       hasBuyerScope: Boolean(buyerId && buyerId !== 'all'),
+      publicOnly,
+      minorsCount: minors.length,
+      majorsCount: majors.length,
       role: user && user.role,
     }, 'VENDOR_CONTROLLER');
 
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
-    const { page, search, email, category, state, city } = req.query || {};
+    const { page } = rawQuery;
+    const { search, email, category, state, city } = cleanQuery;
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -362,18 +572,35 @@ async function getVendors(req, res, next) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);
       const pageSize = Math.min(
         MAX_VENDOR_PAGE_SIZE,
-        Math.max(1, parseInt(req.query.pageSize, 10) || DEFAULT_VENDOR_PAGE_SIZE)
+        Math.max(1, parseInt(rawQuery.pageSize, 10) || DEFAULT_VENDOR_PAGE_SIZE)
       );
       try {
+        if (publicOnly && (minors.length > 0 || majors.length > 0) && !search && !email && !state && !city && pageNumber === 1) {
+          const candidates = await fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize });
+          logger.info('Fetched indexed public vendor category candidates', {
+            minorsCount: minors.length,
+            majorsCount: majors.length,
+            returned: candidates.length,
+            pageSize,
+          }, 'VENDOR_CONTROLLER');
+          return res.json({
+            success: true,
+            source: 'persisted',
+            data: candidates.map(withoutTemporaryPassword),
+            pagination: { page: 1, pageSize, total: candidates.length, totalPages: 1 },
+          });
+        }
+        const effectiveCategory = majors.length === 1 ? majors[0] : '';
         const { rows, total } = await domainQueries.getVendorsPageFromDB({
           limit: pageSize,
           offset: (pageNumber - 1) * pageSize,
           search: search ? String(search).trim() : '',
           email: email ? String(email).trim() : '',
-          category: category ? String(category) : '',
+          category: effectiveCategory,
           ...(state ? { state: String(state).trim() } : {}),
           ...(city ? { city: String(city).trim() } : {}),
-          scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
+          ...(publicOnly ? { publicOnly: true } : {}),
+          scopedBuyerId: !publicOnly && buyerId && buyerId !== 'all' ? buyerId : '',
         });
         return res.json({
           success: true,
@@ -403,11 +630,14 @@ async function getVendors(req, res, next) {
       }
     }
 
-    const hasFilters = Boolean(search || email || category || state || city);
-    const limitQuery = (!hasFilters && req.query && req.query.limit)
-      ? Math.min(Number(req.query.limit), 500)
+    const hasFilters = Boolean(search || email || category || state || city || minors.length > 0 || majors.length > 0 || publicOnly);
+    const limitQuery = (!hasFilters && rawQuery.limit)
+      ? Math.min(Number(rawQuery.limit), 500)
       : null;
-    let vendors = await storeService.getVendors(buyerId, limitQuery);
+    let vendors = await storeService.getVendors(publicOnly ? null : buyerId, limitQuery);
+    if (publicOnly) {
+      vendors = vendors.filter((v) => storeService.isProcucevVendor(v));
+    }
     if (search) {
       const tokens = parseSearchTokens(search);
       if (tokens.length > 0) {
@@ -444,12 +674,7 @@ async function getVendors(req, res, next) {
       const eq = String(email).toLowerCase().trim();
       vendors = vendors.filter((v) => String(v.email || '').toLowerCase().includes(eq));
     }
-    if (category) {
-      const cat = String(category).toLowerCase().trim();
-      vendors = vendors.filter((v) =>
-        String(v.majorCategory || v.category || '').toLowerCase().trim() === cat
-      );
-    }
+    vendors = applyCategoryFiltersInMemory(vendors, { minors, majors, publicOnly });
     if (state) {
       const sq = String(state).toLowerCase().trim();
       vendors = vendors.filter((v) =>

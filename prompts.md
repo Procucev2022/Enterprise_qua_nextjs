@@ -5884,3 +5884,11 @@ View Button not working.
 [Attached image: image/jpeg (media_1794708781624_1e957f6a.jpg)]
 ```
 ---
+### Prompt 218
+**Timestamp**: 2026-11-15T08:24:48+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded.)
+```text
+Mode 3 should show the top 10 vendors. Please check if it's correctly working
+
+[Attached image: image/jpeg (media_1794708892498_73d007e6.jpg)]
+```
+---

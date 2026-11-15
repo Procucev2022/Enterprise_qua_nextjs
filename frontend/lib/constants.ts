@@ -1210,6 +1210,9 @@ export const SUPPORT_CHAT_ENDPOINT = '/api/support-chat';
 /** How long the support chat widget shows the copied confirmation (ms). */
 export const SUPPORT_CHAT_COPY_CONFIRMATION_MS = 2 * 1000;
 
+/** Category selector sentinel value indicating all categories are eligible. */
+export const ALL_CATEGORIES_OPTION = 'All Categories';
+
 /** RFQ vendor assignment limits per category (configurable via env) */
 export const VENDOR_ASSIGNMENT_LIMITS = {
   get MAX_CLIENT_PER_CATEGORY(): number {
@@ -1227,6 +1230,10 @@ export const VENDOR_ASSIGNMENT_LIMITS = {
     const num = Number(envVal);
     return Number.isFinite(num) && num > 0 ? num : 25;
   },
+  /** Maximum Procucev Network vendors surfaced in Mode 3 top shortlist. */
+  MODE3_TOP_VENDORS_LIMIT: 10,
+  /** Indexed candidate pool size pulled from the backend before client-side Mode 3 ranking. */
+  MODE3_CANDIDATE_POOL_SIZE: 100,
 };
 
 export {

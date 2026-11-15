@@ -1294,6 +1294,27 @@ describe('rfqClient RFQ persistence', () => {
       expect(lastPath()).toBe('/api/vendors?buyerId=all&page=2&pageSize=25&search=bolt');
     });
 
+    test('includes publicOnly, deduplicated majors, and minors in the query string when provided', async () => {
+      global.fetch = reply(200, { success: true, data: [], pagination: { ...pagination, total: 0 } });
+
+      await fetchAllVendors({
+        page: 1,
+        pageSize: 100,
+        publicOnly: true,
+        majors: [' IT ', 'IT', 'Civil Works', ''],
+        minors: [' Laptop ', 'Laptop', '  '],
+      });
+
+      const url = new URL(lastPath(), 'http://localhost');
+      expect(url.pathname).toBe('/api/vendors');
+      expect(url.searchParams.get('buyerId')).toBe('all');
+      expect(url.searchParams.get('page')).toBe('1');
+      expect(url.searchParams.get('pageSize')).toBe('100');
+      expect(url.searchParams.get('publicOnly')).toBe('true');
+      expect(url.searchParams.get('majors')).toBe('IT,Civil Works');
+      expect(url.searchParams.get('minors')).toBe('Laptop');
+    });
+
     test('attaches the session token when one is held', async () => {
       signIn();
       global.fetch = reply(200, { success: true, data: [], pagination });

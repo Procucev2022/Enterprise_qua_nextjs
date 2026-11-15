@@ -36,9 +36,10 @@ import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, res
 import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
+  extractRfqCategoryFilters,
   extractRfqCategorySignals,
   matchVendorAgainstSignals,
-  rankProcucevVendorsForV3,
+  selectTopProcucevVendorsForMode3,
   selectVendorsForCategories,
   type RankedProcucevVendor,
 } from '@/lib/vendorMatching';
@@ -643,34 +644,26 @@ export default function IngestionWizard({
       setProcucevV3Ranked([]);
       return;
     }
-    const { signals, minorOnly } = extractRfqCategorySignals(form);
-    const lineItemMinors = Array.from(
-      new Set(
-        (form.lineItems || [])
-          .map((it) => it.minorCategory?.trim())
-          
-          .filter(Boolean) as string[]
-      )
-    );
+    const { majors, minors } = extractRfqCategoryFilters(form);
     const seq = ++procucevV3FetchSeqRef.current;
     setProcucevV3Loading(true);
-    // Pull a generous page so the client-side 360° ranking has a real pool to
-    // order; the server narrows by category, the client picks the top 10.
+    // Pull an indexed public candidate pool covering every RFQ division and minor category;
+    // the server widens sparse minors with parent majors and the client selects the top 10.
     void fetchAllVendors({
       page: 1,
-      pageSize: 100,
+      pageSize: VENDOR_ASSIGNMENT_LIMITS.MODE3_CANDIDATE_POOL_SIZE,
       search: '',
       category: isAllCategories ? '' : selectedMajorCategory,
+      publicOnly: true,
+      ...(majors.length > 0 ? { majors } : {}),
+      ...(minors.length > 0 ? { minors } : {}),
     }).then((result) => {
       if (seq !== procucevV3FetchSeqRef.current) return;
       if (result.success) {
-        const ranked = rankProcucevVendorsForV3(
+        const ranked = selectTopProcucevVendorsForMode3(
           result.candidates,
-          signals,
-          { location: form.deliveryLocation, pincode: form.deliveryPincode },
-          10,
-          lineItemMinors,
-          minorOnly
+          form,
+          VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_VENDORS_LIMIT
         );
         setProcucevV3Ranked(ranked);
         // Drop any prior selection that is no longer in the new top-10.
@@ -681,7 +674,7 @@ export default function IngestionWizard({
       setProcucevV3Loading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-rank only on the inputs that change the ranking
-  }, [form.sourcingMode, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode, JSON.stringify(form.lineItems.map((it) => [it.majorCategory, it.minorCategory]))]);
+  }, [form.sourcingMode, form.majorCategory, form.minorCategory, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode, JSON.stringify(form.lineItems.map((it) => [it.majorCategory, it.minorCategory]))]);
 
   const toggleProcucevV3 = (id: string) => {
     setSelectedProcucevV3Ids((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -3005,7 +2998,7 @@ export default function IngestionWizard({
                                   const vendorMinors = Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0
                                     ? r.vendor.minorCategories.join(', ')
                                     : null;
-                                  const displayCat = r.matchedMinorCategory || vendorMinors || lineItemMinors[0] || r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial';
+                                  const displayCat = r.matchedMinorCategory || vendorMinors || (r.hasMinorMatch ? lineItemMinors[0] : null) || r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial';
                                   return (
                                     <span
                                       data-testid="procucev-v3-vendor-category"

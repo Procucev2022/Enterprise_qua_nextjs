@@ -365,6 +365,34 @@ export interface VendorPageMeta {
   totalPages: number;
 }
 
+/** Category fields extracted from an RFQ line item or header for supplier matching. */
+export interface RfqCategoryLineItemInput {
+  majorCategory?: string | null;
+  minorCategory?: string | null;
+  category?: string | null;
+}
+
+/** RFQ header and line item category inputs consumed by Mode 3 supplier matching helpers. */
+export interface RfqCategoryFormInput extends RfqCategoryLineItemInput {
+  lineItems?: RfqCategoryLineItemInput[];
+  extractedEntities?: RfqCategoryLineItemInput[];
+  deliveryLocation?: string | null;
+  deliveryPincode?: string | null;
+}
+
+/** Query options for fetching paginated vendor directory candidates via `/api/vendors`. */
+export interface FetchAllVendorsOptions {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  category?: string;
+  majors?: string[];
+  minors?: string[];
+  publicOnly?: boolean;
+  state?: string;
+  city?: string;
+}
+
 /** Outcome of fetching one page of the full (unfiltered-by-category) vendor directory. */
 export type RFQVendorPageResult =
   | { success: true; candidates: RFQVendorCandidate[]; pagination: VendorPageMeta }

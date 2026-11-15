@@ -1420,7 +1420,21 @@ const VENDOR_ASSIGNMENT_LIMITS = {
   get TARGET_PER_MINOR_CATEGORY() {
     return getEnvNumber('TARGET_VENDORS_PER_MINOR_CATEGORY', 25);
   },
+  get MODE3_TOP_LIMIT() {
+    return getEnvNumber('MODE3_TOP_VENDORS_LIMIT', 10);
+  },
 };
+
+const VENDOR_DIRECTORY_QUERY_CONFIG = Object.freeze({
+  DEFAULT_PAGE_SIZE: 50,
+  MAX_PAGE_SIZE: 200,
+  MAX_CATEGORY_FILTERS: 25,
+  MAX_FILTER_STRING_LENGTH: 1000,
+  MAX_SEARCH_LENGTH: 200,
+  MIN_MINOR_POOL_FACTOR: 5,
+  MAX_POOL_LIMIT: PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT,
+  ALL_CATEGORIES_LABEL: 'All Categories',
+});
 
 // Each minor category of an RFQ is filled to the per-minor target from its own vendors, then from the
 // vendors under its parent major. These limits shape the database lookups behind that fill.
@@ -3790,6 +3804,7 @@ module.exports = {
   VENDOR_PRESENCE_MAX_IDENTIFIERS,
   VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH,
   VENDOR_ASSIGNMENT_LIMITS,
+  VENDOR_DIRECTORY_QUERY_CONFIG,
   RFQ_MINOR_INVITE_LOOKUP,
   RFQ_MINOR_SHORTFALL_ALERT,
   MAX_INVITE_VENDORS_PER_REQUEST,

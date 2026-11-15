@@ -11203,6 +11203,10 @@ let clientCandidates = [];
     };
   }
 
+  minorSearchTerms(minors) {
+    return minorSearchTerms(Array.isArray(minors) ? minors : []);
+  }
+
 }
 
 // Global Singleton Instance for Node.js process

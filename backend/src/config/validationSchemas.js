@@ -1136,6 +1136,24 @@ const VALIDATION_SCHEMAS = {
     minRating: { type: 'number', required: false, min: 0, max: 5 },
     verifiedOnly: { type: 'boolean', required: false },
   },
+  // Authenticated vendor directory — search, pagination, and indexed public category filters
+  vendorDirectoryQuery: {
+    buyerId: { type: 'string', required: false, maxLength: 128 },
+    search: { type: 'string', required: false, maxLength: 200 },
+    email: { type: 'string', required: false, maxLength: 200 },
+    category: { type: 'string', required: false, maxLength: 200 },
+    majors: { type: 'string', required: false, maxLength: 1000 },
+    minors: { type: 'string', required: false, maxLength: 1000 },
+    minor: { type: 'string', required: false, maxLength: 200 },
+    state: { type: 'string', required: false, maxLength: 100 },
+    city: { type: 'string', required: false, maxLength: 100 },
+    publicOnly: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'publicOnly must be true, false, 1, or 0.',
+    },
+  },
 
   transactionalEmailPreview: {
     templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },

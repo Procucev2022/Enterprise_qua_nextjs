@@ -1251,7 +1251,98 @@ describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
     fillLineItem(0, { major: 'Civil Works' });
     await flushAsync();
 
-    expect(mockFetchAllVendors).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, search: '', category: 'Civil Works' });
+    expect(mockFetchAllVendors).toHaveBeenLastCalledWith({
+      page: 1,
+      pageSize: 100,
+      search: '',
+      category: 'Civil Works',
+      publicOnly: true,
+      majors: ['Civil Works'],
+    });
+  });
+
+  it('displays up to 10 Procucev vendors by combining sparse minor matches with parent-major top-up without mislabeling cards', async () => {
+    directoryPool = [
+      candidate({
+        id: 'priv-1',
+        name: 'Private Supplier',
+        source: 'buyer_uploaded',
+        buyerId: 'buyer-1',
+        isClientUploaded: true,
+        majorCategory: MECHANICAL,
+        minorCategories: [MECHANICAL_MINOR],
+      }),
+      candidate({
+        id: 'min-1',
+        name: 'Minor Alpha',
+        source: 'procucev_network',
+        majorCategory: MECHANICAL,
+        minorCategories: [MECHANICAL_MINOR],
+        rating: 4.9,
+      }),
+      candidate({
+        id: 'min-2',
+        name: 'Minor Beta',
+        source: 'procucev_network',
+        majorCategory: MECHANICAL,
+        minorCategories: [MECHANICAL_MINOR],
+        rating: 4.7,
+      }),
+      ...Array.from({ length: 10 }, (_, idx) =>
+        candidate({
+          id: `maj-${idx}`,
+          name: `Major Topup ${idx}`,
+          source: 'procucev_network',
+          majorCategory: MECHANICAL,
+          rating: 4.5 - idx * 0.05,
+        })
+      ),
+    ];
+    setupStore();
+    renderWizard();
+    await flushAsync();
+
+    fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_3'));
+    fillLineItem(0, { major: MECHANICAL, minor: MECHANICAL_MINOR });
+    await flushAsync();
+
+    expect(mockFetchAllVendors).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        page: 1,
+        pageSize: 100,
+        publicOnly: true,
+        majors: [MECHANICAL],
+        minors: [MECHANICAL_MINOR],
+      })
+    );
+
+    const cards = screen.getAllByTestId('procucev-v3-vendor');
+    expect(cards).toHaveLength(10);
+    const categoryBadges = screen.getAllByTestId('procucev-v3-vendor-category').map((el) => el.textContent);
+    expect(categoryBadges.slice(0, 2)).toEqual([MECHANICAL_MINOR, MECHANICAL_MINOR]);
+    expect(categoryBadges.slice(2).every((label) => label === MECHANICAL)).toBe(true);
+  });
+
+  it('displays up to 10 Procucev vendors ranked by location and rating when All Categories is selected in Mode 3', async () => {
+    directoryPool = Array.from({ length: 12 }, (_, idx) =>
+      candidate({
+        id: `all-${idx}`,
+        name: `Global Vendor ${idx}`,
+        source: 'procucev_network',
+        majorCategory: idx % 2 === 0 ? 'Civil Works' : MECHANICAL,
+        city: idx === 3 ? 'Bengaluru' : 'Pune',
+        rating: 4.0 + (idx % 3) * 0.3,
+      })
+    );
+    setupStore();
+    renderWizard();
+    await flushAsync();
+
+    fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_3'));
+    fillLineItem(0, { major: ALL_CATEGORIES });
+    await flushAsync();
+
+    expect(screen.getAllByTestId('procucev-v3-vendor')).toHaveLength(10);
   });
 });
 
