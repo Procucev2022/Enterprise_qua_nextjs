@@ -54,6 +54,7 @@ import {
   getVendorCreditBalance,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { usablePan } from '@/lib/validationSchemas';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import SupplierDossierDrawer from './components/SupplierDossierDrawer';
@@ -312,7 +313,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         freeQuotationCredits: getVendorCreditBalance(v as any),
         rfqDownloadsUsed: toNumberOrNull((v as any).rfqDownloadsUsed),
         gstNumber: (v as any).gstNumber || '',
-        panNumber: (v as any).panNumber || '',
+        panNumber: usablePan((v as any).panNumber || (v as any).pan) || '',
         isNetwork: true,
         createdAt: (v as any).createdAt || (v as any).created_at || '',
       });
@@ -351,7 +352,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           freeQuotationCredits: getVendorCreditBalance(bv as any),
           rfqDownloadsUsed: toNumberOrNull((bv as any).rfqDownloadsUsed),
           gstNumber: (bv as any).gstNumber || '',
-          panNumber: (bv as any).panNumber || '',
+          panNumber: usablePan((bv as any).panNumber || (bv as any).pan) || '',
           isNetwork: false,
           createdAt: (bv as any).createdAt || (bv as any).created_at || '',
         });

@@ -15,8 +15,14 @@ const { logger } = require('../services/loggerService');
 const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
 const {
   EMAIL_REGEX,
+  PAN_REGEX,
+  PAN_MESSAGE,
+  DUMMY_PAN_MESSAGE,
   VALIDATION_SCHEMAS,
   validatePayload,
+  isDummyPan,
+  usablePan,
+  clearDummyPanFields,
 } = require('../config/validationSchemas');
 const {
   ZOHO_CONFIG,
@@ -230,7 +236,40 @@ const DEFAULT_VENDOR_PAGE_SIZE = VENDOR_DIRECTORY_QUERY_CONFIG.DEFAULT_PAGE_SIZE
 function withoutTemporaryPassword(vendor) {
   if (!vendor || typeof vendor !== 'object') return vendor;
   const { tempPassword: _temporaryPassword, ...safeVendor } = vendor;
-  return safeVendor;
+  if (safeVendor.raw && typeof safeVendor.raw === 'object') {
+    safeVendor.raw = clearDummyPanFields({ ...safeVendor.raw });
+  }
+  return clearDummyPanFields(safeVendor);
+}
+
+/**
+ * Validates and normalizes `pan` / `panNumber` on self-service or admin vendor
+ * write payloads. Rejects known sample/placeholder PANs and malformed non-empty
+ * PANs with HTTP 400, while stripping blank PAN strings so placeholder defaults
+ * are never stored on a vendor profile.
+ */
+function validateAndNormalizeVendorPanUpdate(payload, res) {
+  if (!payload || typeof payload !== 'object') return true;
+  const panFields = ['pan', 'panNumber'];
+  for (const field of panFields) {
+    if (!Object.prototype.hasOwnProperty.call(payload, field)) continue;
+    const rawValue = payload[field];
+    const clean = typeof rawValue === 'string' ? rawValue.trim().toUpperCase() : '';
+    if (!clean) {
+      delete payload[field];
+      continue;
+    }
+    if (isDummyPan(clean)) {
+      res.status(400).json({ success: false, error: DUMMY_PAN_MESSAGE });
+      return false;
+    }
+    if (!PAN_REGEX.test(clean)) {
+      res.status(400).json({ success: false, error: PAN_MESSAGE });
+      return false;
+    }
+    payload[field] = clean;
+  }
+  return true;
 }
 
 /**
@@ -292,6 +331,7 @@ function sanitizePublicVendor(vendor) {
   const city = v.city || null;
   const state = v.state || null;
   const location = [city, state].filter(Boolean).join(', ') || v.location || city || state || 'India';
+  const publicPan = usablePan(v.pan || v.panNumber);
   return {
     id: v.id || null,
     name: v.name || 'Unnamed Supplier',
@@ -310,9 +350,9 @@ function sanitizePublicVendor(vendor) {
     pincode: v.pincode || null,
     country: v.country || 'India',
     factoryAddress: v.factoryAddress || null,
-    // Compliance — PAN is partially masked for privacy
+    // Compliance — PAN is partially masked for privacy; dummy/placeholder PANs are never shown
     gstin: v.gstin || v.gst || null,
-    pan: v.pan ? `${v.pan.slice(0, 3)}****${v.pan.slice(-2)}` : null,
+    pan: publicPan ? `${publicPan.slice(0, 3)}****${publicPan.slice(-2)}` : null,
     msme: v.msme || null,
     orgType: v.orgType || null,
     annualTurnover: v.annualTurnover || null,
@@ -774,7 +814,7 @@ async function getVendorById(req, res, next) {
 
 async function createVendor(req, res, next) {
   try {
-    let body = req.body;
+    let body = { ...(req.body || {}) };
     let buyerId = null;
     let addedByBuyerCompany = null;
     // A vendor can only ever register themselves; the identity-DB session
@@ -792,10 +832,12 @@ async function createVendor(req, res, next) {
       body.source = 'self_registration';
     } else if (req.user.role === 'admin') {
       buyerId = (req.query && req.query.buyerId) || null;
+      clearDummyPanFields(body);
     } else if (req.user.role === 'category_manager') {
       buyerId = null;
       addedByBuyerCompany = null;
       body.source = 'procucev_network';
+      clearDummyPanFields(body);
     } else if (req.user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
       if (!buyerAccount) {
@@ -806,13 +848,16 @@ async function createVendor(req, res, next) {
       }
       buyerId = buyerAccount.id;
       addedByBuyerCompany = buyerAccount.organizationName;
-      body = pickVendorBuyerCreateFields(body);
+      body = clearDummyPanFields(pickVendorBuyerCreateFields(body));
     } else {
       return res.status(403).json({ success: false, error: 'You do not have permission to create a vendor profile.' });
     }
     if (!body.name || !body.majorCategory) {
       logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
+    }
+    if (req.user.role === 'vendor' && !validateAndNormalizeVendorPanUpdate(body, res)) {
+      return;
     }
     if ((req.user.role === 'buyer' || req.user.role === 'category_manager') && !body.email) {
       return res.status(400).json({ success: false, error: 'Vendor email is required.' });
@@ -887,7 +932,7 @@ async function updateVendor(req, res, next) {
     if (!(await assertVendorOwnership(req, res, existing))) return;
     // A vendor editing their own record only gets the self-service field set. A buyer's edit drops the locked
     // statutory identifiers. An admin keeps full field access.
-    let updates = req.body;
+    let updates = { ...(req.body || {}) };
     if (req.user.role === 'vendor') {
       updates = pickVendorSelfEditFields(req.body);
     } else if (req.user.role === 'buyer') {
@@ -897,6 +942,7 @@ async function updateVendor(req, res, next) {
         logger.info(`Ignored buyer changes to locked statutory fields on vendor ${id}`, { id, droppedFields: dropped }, 'VENDOR_CONTROLLER');
       }
     }
+    if (!validateAndNormalizeVendorPanUpdate(updates, res)) return;
     logger.info(`Updating vendor ${id}`, { id, updatedFields: Object.keys(updates || {}) }, 'VENDOR_CONTROLLER');
     const updated = await storeService.updateVendorDurably(existing.id, updates);
     res.json({ success: true, data: withoutTemporaryPassword(updated) });
@@ -1477,9 +1523,10 @@ async function bulkImportVendors(req, res, next) {
     const rowsToImport = [];
     rows.forEach((row, idx) => {
       const rowNumber = row.rowNumber ?? idx + 1;
-      const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportRow, row);
+      const sanitizedRow = clearDummyPanFields({ ...row });
+      const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportRow, sanitizedRow);
       rowsToImport.push({
-        ...row,
+        ...sanitizedRow,
         ...(buyerAttribution || {}),
         rowNumber,
         hasIssues: !isValid,

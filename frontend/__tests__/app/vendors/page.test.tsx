@@ -722,6 +722,31 @@ describe('Public Vendor Directory (/vendors)', () => {
     expect(screen.getAllByText('3.5').length).toBeGreaterThan(0);
   });
 
+  test('omits placeholder dummy PAN from VendorDetailModal compliance tab', () => {
+    const dummyPanVendor: PublicVendor = {
+      id: 'v-dummy-pan',
+      name: 'Veera Solutions Pvt LTD',
+      majorCategory: 'Engineering',
+      minorCategories: [],
+      products: [],
+      location: 'Bengaluru, Karnataka',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      country: 'India',
+      pan: 'ABCPE1234F',
+      gstin: null,
+      rating: null,
+      status: null,
+      isVerified: false,
+      createdAt: null,
+    };
+
+    render(<VendorDetailModal vendor={dummyPanVendor} onClose={jest.fn()} />);
+    fireEvent.click(screen.getByRole('tab', { name: new RegExp(S.tabs.compliance, 'i') }));
+    expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+    expect(screen.getByText('No compliance details available.')).toBeInTheDocument();
+  });
+
   test('covers debounce timer cleanup on unmount and vendors with null id in grid', async () => {
     const vendorNoId: PublicVendor = {
       id: null,

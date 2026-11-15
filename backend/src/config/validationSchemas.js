@@ -169,6 +169,33 @@ const DISPATCH_TEMPLATES = ['CATEGORY_MAPPED', 'SELF_MAP_REQUIRED', 'GENERAL_ONB
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
 const PAN_MESSAGE = 'PAN must be 10 characters in the format AAAAA9999A, for example AAACL1234F.';
 
+// Sample/placeholder PANs that do not represent a real business tax registration.
+// Mirrors DUMMY_PANS, isDummyPan, and usablePan in frontend/lib/validationSchemas.ts.
+const DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+const REPEATED_LETTER_PAN_REGEX = /^([A-Z])\1{4}[0-9]{4}\1$/;
+const DUMMY_PAN_MESSAGE = 'Enter your registered business PAN; sample or placeholder PANs are not allowed.';
+
+function isDummyPan(pan) {
+  if (!pan || typeof pan !== 'string') return false;
+  const clean = pan.trim().toUpperCase();
+  if (!clean) return false;
+  return DUMMY_PANS.has(clean) || REPEATED_LETTER_PAN_REGEX.test(clean);
+}
+
+function usablePan(pan) {
+  if (typeof pan !== 'string') return null;
+  const clean = pan.trim().toUpperCase();
+  if (!PAN_REGEX.test(clean) || isDummyPan(clean)) return null;
+  return clean;
+}
+
+function clearDummyPanFields(record) {
+  if (!record || typeof record !== 'object') return record;
+  if (isDummyPan(record.pan)) delete record.pan;
+  if (isDummyPan(record.panNumber)) delete record.panNumber;
+  return record;
+}
+
 // MCA Corporate Identity Number: listing status, 5-digit industry code, 2-letter
 // state, 4-digit year, 3-letter ownership code, 6-digit registration number.
 const CIN_REGEX = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
@@ -1695,6 +1722,11 @@ module.exports = {
   CLIENT_LOG_LIMITS,
   PAN_REGEX,
   PAN_MESSAGE,
+  DUMMY_PANS,
+  DUMMY_PAN_MESSAGE,
+  isDummyPan,
+  usablePan,
+  clearDummyPanFields,
   CIN_REGEX,
   CIN_MESSAGE,
   WEBSITE_REGEX,

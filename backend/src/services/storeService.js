@@ -38,6 +38,7 @@ const {
   RFQ_MINOR_INVITE_LOOKUP,
   RFQ_MINOR_SHORTFALL_ALERT,
   EXTENSION_HOURS_PER_DAY,
+  clearDummyPanFields,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -1714,7 +1715,7 @@ class StoreService {
     const normalizedEmail = safeVendorData.email === undefined || safeVendorData.email === null
       ? safeVendorData.email
       : String(safeVendorData.email).trim().toLowerCase();
-    return {
+    return clearDummyPanFields({
       ...safeVendorData,
       ...(safeVendorData.email !== undefined ? { email: normalizedEmail } : {}),
       id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1742,7 +1743,7 @@ class StoreService {
       quotedRfqIds: Array.isArray(vendorData.quotedRfqIds) ? vendorData.quotedRfqIds : [],
       createdAt: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
       created_at: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
-    };
+    });
   }
 
   addVendor(vendorData, actorEmail = null, buyerId = null, { deferPersistence = false } = {}) {
@@ -2340,7 +2341,7 @@ class StoreService {
     // A client payload must never be able to reassign the record's primary
     // key (would corrupt this.vendors' id-uniqueness and orphan the old id).
     const { id: _ignoredId, tempPassword: _ignoredTemporaryPassword, ...safeUpdates } = updates;
-    const updated = { ...this.vendors[idx], ...safeUpdates };
+    const updated = clearDummyPanFields({ ...this.vendors[idx], ...safeUpdates });
     this.vendors[idx] = updated;
     if (persist) this._persistVendor(updated);
 
@@ -2368,7 +2369,7 @@ class StoreService {
         if (!snapshot) return null;
 
         for (let attempt = 0; attempt < PERSISTED_RECORD_WRITE_RETRIES; attempt += 1) {
-          updated = { ...snapshot.vendor, ...resolveUpdates(snapshot.vendor) };
+          updated = clearDummyPanFields({ ...snapshot.vendor, ...resolveUpdates(snapshot.vendor) });
           savedVendor = await domainQueries.updateVendorIfUnchangedInDB(snapshot, updated);
           if (savedVendor) break;
           snapshot = await domainQueries.getVendorSnapshotByIdFromDB(snapshot.id);
@@ -2378,7 +2379,7 @@ class StoreService {
       } else {
         const previous = idx >= 0 ? this.vendors[idx] : null;
         if (!previous) return null;
-        updated = { ...previous, ...resolveUpdates(previous) };
+        updated = clearDummyPanFields({ ...previous, ...resolveUpdates(previous) });
         savedVendor = updated;
       }
       idx = this.vendors.findIndex((vendor) => vendor.id === savedVendor.id);

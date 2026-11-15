@@ -63,6 +63,7 @@ import {
   SELLER_QUOTE_CREDITS_ALLOWED,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { usablePan } from '@/lib/validationSchemas';
 import {
   fetchSupplierCreditHistory,
   updateSupplierCategories,
@@ -1017,7 +1018,7 @@ export default function SupplierDossierDrawer({
                   <div>
                     <span className="text-slate-400">PAN:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {seller.pan || seller.panNumber || EMPTY_VALUE}
+                      {usablePan(seller.pan) || usablePan(seller.panNumber) || EMPTY_VALUE}
                     </span>
                   </div>
                   <div>

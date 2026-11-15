@@ -34,6 +34,7 @@ const {
   D1_NOTIFICATION_INSERT_BATCH_SIZE,
   DATABASE_QUERY_CACHE,
   PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
+  clearDummyPanFields,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
@@ -62,6 +63,7 @@ function normalizeVendorRecord(vendor) {
   if (!vendor || typeof vendor !== 'object' || Array.isArray(vendor)) return null;
   const normalized = { ...vendor };
   delete normalized.tempPassword;
+  clearDummyPanFields(normalized);
   if (Object.prototype.hasOwnProperty.call(vendor, 'email')) {
     normalized.email = normalizeVendorEmail(vendor.email);
   }
@@ -72,6 +74,7 @@ function parseVendorRaw(value) {
   const vendor = parseRaw(value);
   if (vendor && typeof vendor === 'object' && !Array.isArray(vendor)) {
     delete vendor.tempPassword;
+    clearDummyPanFields(vendor);
   }
   return vendor;
 }

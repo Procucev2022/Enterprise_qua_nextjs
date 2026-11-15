@@ -34,8 +34,8 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
         raw: {
           id: 'v-pub-1',
           name: 'Kirloskar Pneumatic Co',
-          pan: 'ABCDE1234F',
-          gstin: '27ABCDE1234F1Z5',
+          pan: 'AAACT1234G',
+          gstin: '27AAACT1234G1Z5',
           email: 'sales@kirloskar.example.com',
           phone: '+91 20 2710 1234',
           rating: 4.7,
@@ -71,7 +71,7 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
               name: 'Kirloskar Pneumatic Co',
               email: 'sXXXX@kirloskar.example.com',
               phone: '+91 2XXXXXXX34',
-              pan: 'ABC****4F', // Masked PAN
+              pan: 'AAA****4G', // Masked PAN
               isProcucevNetwork: true,
             }),
           ]),
@@ -88,6 +88,42 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
         expect.stringContaining('private')
       );
       expect(next).not.toHaveBeenCalled();
+    });
+
+    test('omits placeholder dummy PANs instead of masking and surfacing them publicly', async () => {
+      jest.spyOn(domainQueries, 'getPublicVendorsPageFromDB').mockResolvedValue({
+        rows: [
+          {
+            id: 'v-pub-dummy',
+            name: 'Veera Solutions Pvt LTD',
+            raw: {
+              id: 'v-pub-dummy',
+              name: 'Veera Solutions Pvt LTD',
+              pan: 'ABCPE1234F',
+              gstin: '29AAMCP4349L1Z0',
+            },
+          },
+        ],
+        total: 1,
+      });
+
+      const req = { query: { page: '1', pageSize: '10' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.getPublicVendors(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: [
+            expect.objectContaining({
+              id: 'v-pub-dummy',
+              pan: null,
+            }),
+          ],
+        })
+      );
     });
 
     test('handles default query values when query parameters are omitted', async () => {

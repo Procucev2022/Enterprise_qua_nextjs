@@ -32,7 +32,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
-import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan } from '@/lib/validationSchemas';
 
 export default function VendorProfilePage() {
   const {
@@ -235,7 +235,7 @@ export default function VendorProfilePage() {
         setCompanyName(v.name || '');
         setBrandName(v.brandName || '');
         if (v.orgType) setOrgType(v.orgType);
-        setPanNumber(v.pan || '');
+        setPanNumber(usablePan(v.pan || v.panNumber) || '');
         setGstNumber(v.gst || v.gstin || '');
         setMsmeNumber(v.msme || '');
         setWebsite(v.website || '');
@@ -277,7 +277,7 @@ export default function VendorProfilePage() {
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
 
   // PAN Validation Helper
-  const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
+  const isPanValid = (pan: string) => Boolean(usablePan(pan));
   // GST Validation Helper
   const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
 
@@ -560,11 +560,15 @@ export default function VendorProfilePage() {
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!companyName.trim() || !panNumber.trim() || !gstNumber.trim()) {
-      showToast('Validation Error', 'Company Name, PAN, and GSTIN are required.', 'warning');
+      showToast(UI_STRINGS.vendorProfile.validationErrorTitle, UI_STRINGS.vendorProfile.panRequiredToastMessage, 'warning');
+      return;
+    }
+    if (isDummyPan(panNumber)) {
+      showToast(UI_STRINGS.vendorProfile.validationErrorTitle, UI_STRINGS.vendorProfile.panDummyRejectedMessage, 'warning');
       return;
     }
     if (!isPanValid(panNumber)) {
-      showToast('Validation Error', 'PAN number format is invalid (expected e.g. AAACA9876K).', 'warning');
+      showToast(UI_STRINGS.vendorProfile.validationErrorTitle, UI_STRINGS.vendorProfile.panInvalidToastMessage, 'warning');
       return;
     }
     if (!isGstValid(gstNumber)) {
@@ -597,7 +601,7 @@ export default function VendorProfilePage() {
         brandName,
         // Omitted (not sent as an empty string) when the vendor has not chosen one.
         orgType: orgType || undefined,
-        pan: panNumber,
+        pan: usablePan(panNumber) || panNumber.trim().toUpperCase(),
         gst: gstNumber,
         msme: msmeNumber,
         website,
@@ -774,11 +778,21 @@ export default function VendorProfilePage() {
                 <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
                   PAN Number *
                 </label>
-                {isPanValid(panNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid format</span>
-                ) : (
-                  <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
-                )}
+                {panNumber.trim() ? (
+                  isPanValid(panNumber) ? (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                      {UI_STRINGS.vendorProfile.panValidFormat}
+                    </span>
+                  ) : isDummyPan(panNumber) ? (
+                    <span className="text-[10px] font-bold text-rose-500">
+                      {UI_STRINGS.vendorProfile.panPlaceholderBadge}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-rose-500">
+                      {UI_STRINGS.vendorProfile.panInvalidBadge}
+                    </span>
+                  )
+                ) : null}
               </div>
               <input
                 type="text"
@@ -786,11 +800,17 @@ export default function VendorProfilePage() {
                 onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
                 maxLength={10}
                 required
+                placeholder={UI_STRINGS.vendorProfile.panPlaceholderHint}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
               />
-              {panNumber.trim() && !isPanValid(panNumber) && (
+              {panNumber.trim() && isDummyPan(panNumber) && (
                 <p className="text-[10px] text-rose-500 font-medium mt-1">
-                  Invalid PAN format (expected 5 letters, 4 numbers, 1 letter, e.g. AAACA9876K)
+                  {UI_STRINGS.vendorProfile.panDummyRejectedMessage}
+                </p>
+              )}
+              {panNumber.trim() && !isDummyPan(panNumber) && !isPanValid(panNumber) && (
+                <p className="text-[10px] text-rose-500 font-medium mt-1">
+                  {UI_STRINGS.vendorProfile.panInvalidFormatMessage}
                 </p>
               )}
             </div>

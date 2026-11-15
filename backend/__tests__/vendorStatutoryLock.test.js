@@ -2,10 +2,12 @@ const storeService = require('../src/services/storeService');
 const vendorController = require('../src/controllers/vendorController');
 const { logger } = require('../src/services/loggerService');
 
+const { PAN_MESSAGE, DUMMY_PAN_MESSAGE } = require('../src/config/validationSchemas');
+
 const STATUTORY_CHANGES = {
   gst: '29AAMCP4349L1Z0',
   gstin: '29AAMCP4349L1Z0',
-  pan: 'ABCPE1234F',
+  pan: 'AAMCP4349L',
   msme: 'UDYAM-KA-01-0000001',
   annualTurnover: '10 - 50 Cr',
 };
@@ -135,5 +137,97 @@ describe('vendor update: statutory identifiers are locked to the buyer', () => {
     );
 
     expect(update).toHaveBeenCalledWith('v-hist-1', STATUTORY_CHANGES);
+  });
+
+  test('rejects dummy placeholder PANs when a vendor or admin updates a profile', async () => {
+    givenVendor({ id: 'vendor-self-1', name: 'Supplier Co', email: 'supplier@example.test', source: 'self_registration' });
+    const res = mockRes();
+
+    await vendorController.updateVendor(
+      {
+        params: { id: 'vendor-self-1' },
+        body: { pan: 'abcpe1234f', gst: STATUTORY_CHANGES.gst },
+        user: { role: 'vendor', email: 'supplier@example.test' },
+      },
+      res,
+      next
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: DUMMY_PAN_MESSAGE });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test('rejects invalid non-empty PAN formats and ignores blank PAN strings on update', async () => {
+    givenVendor({ id: 'vendor-self-1', name: 'Supplier Co', email: 'supplier@example.test', source: 'self_registration' });
+    const invalidRes = mockRes();
+
+    await vendorController.updateVendor(
+      {
+        params: { id: 'vendor-self-1' },
+        body: { pan: 'BADPAN' },
+        user: { role: 'vendor', email: 'supplier@example.test' },
+      },
+      invalidRes,
+      next
+    );
+
+    expect(invalidRes.status).toHaveBeenCalledWith(400);
+    expect(invalidRes.json).toHaveBeenCalledWith({ success: false, error: PAN_MESSAGE });
+    expect(update).not.toHaveBeenCalled();
+
+    const blankRes = mockRes();
+    await vendorController.updateVendor(
+      {
+        params: { id: 'vendor-self-1' },
+        body: { name: 'Supplier Co Updated', pan: '   ' },
+        user: { role: 'vendor', email: 'supplier@example.test' },
+      },
+      blankRes,
+      next
+    );
+
+    expect(update).toHaveBeenCalledWith('vendor-self-1', { name: 'Supplier Co Updated' });
+  });
+
+  test('strips dummy PANs when reading a vendor profile and blocks dummy PANs on vendor self-create', async () => {
+    jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue({
+      id: 'v-veera-1',
+      name: 'Veera Solutions Pvt LTD',
+      email: 'veerababu@example.test',
+      gst: '29AAMCP4349L1Z0',
+      pan: 'ABCPE1234F',
+      raw: { id: 'v-veera-1', pan: 'ABCPE1234F', panNumber: 'ABCDE1234F' },
+    });
+
+    const getRes = mockRes();
+    await vendorController.getVendorById(
+      { params: { id: 'v-veera-1' }, user: { role: 'vendor', email: 'veerababu@example.test' } },
+      getRes,
+      next
+    );
+
+    expect(getRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        data: expect.not.objectContaining({ pan: 'ABCPE1234F' }),
+      })
+    );
+    const returned = getRes.json.mock.calls[0][0].data;
+    expect(returned.pan).toBeUndefined();
+    expect(returned.raw.pan).toBeUndefined();
+    expect(returned.raw.panNumber).toBeUndefined();
+
+    const createRes = mockRes();
+    await vendorController.createVendor(
+      {
+        body: { name: 'Veera Solutions Pvt LTD', majorCategory: 'Engineering', pan: 'ABCPE1234F' },
+        user: { role: 'vendor', email: 'veerababu@example.test' },
+      },
+      createRes,
+      next
+    );
+    expect(createRes.status).toHaveBeenCalledWith(400);
+    expect(createRes.json).toHaveBeenCalledWith({ success: false, error: DUMMY_PAN_MESSAGE });
   });
 });

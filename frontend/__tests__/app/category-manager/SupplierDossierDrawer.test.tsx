@@ -1947,3 +1947,15 @@ test('shows no supplier category when none is recorded, and asks for a credit am
     await screen.findByText(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError)
   ).toBeInTheDocument();
 });
+
+test('suppresses placeholder dummy PAN in SupplierDossierDrawer Statutory Verification card', () => {
+  render(
+    <SupplierDossierDrawer
+      seller={{ ...mockSeller, pan: 'ABCPE1234F', panNumber: 'ABCDE1234F' }}
+      initialTab="profile"
+      onClose={jest.fn()}
+    />
+  );
+  expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+  expect(screen.queryByText('ABCDE1234F')).not.toBeInTheDocument();
+});

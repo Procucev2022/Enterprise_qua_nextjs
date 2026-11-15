@@ -1654,6 +1654,15 @@ sellerDirectory: {
     customCategoryGroup: 'Other',
     removeCategoryTitle: 'Remove Category',
     noCategoriesSelected: 'No categories selected. Pick up to 10 below or add your own above.',
+    validationErrorTitle: 'Validation Error',
+    panValidFormat: '✓ Valid format',
+    panInvalidBadge: 'Invalid Format',
+    panPlaceholderBadge: 'Placeholder PAN',
+    panInvalidFormatMessage: 'Invalid PAN format (expected 5 letters, 4 numbers, 1 letter, e.g. AAACA9876K)',
+    panDummyRejectedMessage: 'Enter your registered business PAN; sample or placeholder PANs are not allowed.',
+    panRequiredToastMessage: 'Company Name, PAN, and GSTIN are required.',
+    panInvalidToastMessage: 'PAN number format is invalid (expected e.g. AAACA9876K).',
+    panPlaceholderHint: 'e.g. AAMCP4349L',
   },
 
   buyerProfile: {

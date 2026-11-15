@@ -149,6 +149,28 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.queryByText('Apex Fasteners Ltd')).not.toBeInTheDocument();
   });
 
+  test('strips placeholder dummy PAN values from both remote and buyer sellers', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: [{ ...mockRemoteVendors[0], panNumber: 'ABCPE1234F', pan: undefined }],
+    });
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [{ ...mockBuyerVendors[0], panNumber: undefined, pan: 'ABCDE1234F' }],
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<SellersDirectory />);
+    await waitFor(() => expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Apex Fasteners Ltd'));
+    expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Precision Forgings Pvt Ltd'));
+    expect(screen.queryByText('ABCDE1234F')).not.toBeInTheDocument();
+  });
+
   test('filters sellers by source, category, and rating', async () => {
     render(<SellersDirectory />);
 

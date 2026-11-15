@@ -654,4 +654,42 @@ describe('Ticket and batch chaser schema contract', () => {
       expect(validatePayload(schema, { channels: 'sms' }).errors.channels).toBe('channels must be an array.');
     });
   });
+
+  describe('dummy PAN helpers', () => {
+    const {
+      DUMMY_PANS,
+      isDummyPan,
+      usablePan,
+      clearDummyPanFields,
+    } = require('../src/config/validationSchemas');
+
+    test('detects placeholder and repeated-letter dummy PANs', () => {
+      expect(DUMMY_PANS.has('ABCPE1234F')).toBe(true);
+      expect(isDummyPan('abcpe1234f')).toBe(true);
+      expect(isDummyPan('ABCDE1234F')).toBe(true);
+      expect(isDummyPan('AAACL1234F')).toBe(true);
+      expect(isDummyPan('AAAAA0000A')).toBe(true);
+      expect(isDummyPan('')).toBe(false);
+      expect(isDummyPan(null)).toBe(false);
+      expect(isDummyPan('AAMCP4349L')).toBe(false);
+    });
+
+    test('usablePan normalizes genuine PANs and returns null for dummy or invalid values', () => {
+      expect(usablePan(' aamcp4349l ')).toBe('AAMCP4349L');
+      expect(usablePan('ABCPE1234F')).toBeNull();
+      expect(usablePan('INVALID')).toBeNull();
+      expect(usablePan(undefined)).toBeNull();
+    });
+
+    test('clearDummyPanFields strips only dummy PAN fields in place', () => {
+      expect(clearDummyPanFields(null)).toBeNull();
+      expect(clearDummyPanFields({ pan: 'ABCPE1234F', panNumber: 'AAACL1234F', gst: '29AAMCP4349L1Z0' })).toEqual({
+        gst: '29AAMCP4349L1Z0',
+      });
+      expect(clearDummyPanFields({ pan: 'AAMCP4349L', panNumber: 'BGLPK1234M' })).toEqual({
+        pan: 'AAMCP4349L',
+        panNumber: 'BGLPK1234M',
+      });
+    });
+  });
 });
