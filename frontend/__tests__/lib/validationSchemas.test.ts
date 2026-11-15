@@ -809,38 +809,40 @@ describe('validationSchemas edge branches', () => {
 });
 
 describe('PO dump required columns', () => {
-  it('reports no missing header when a sheet has the vendor, description and specifications columns', () => {
-    expect(findMissingPoDumpHeaders(['PO Number', 'Vendor Name', 'Line Item Description', 'Specifications', 'Quantity'])).toEqual([]);
+  it('reports no missing header when a sheet has only the two mandatory columns (Vendor/Supplier Name and Item Description/Short Text/Material Description)', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Vendor Name', 'Line Item Description', 'Quantity'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['PO Number', 'PO Date', 'Vendor Name / Code', 'Item Name & Description', 'Quantity', 'Unit'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['Vendor/Supplier Name', 'Short Text'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['Supplier Name', 'Material Description', 'Specifications'])).toEqual([]);
   });
 
   it('accepts the other spellings of each required column', () => {
-    expect(findMissingPoDumpHeaders(['Vendor Code', 'Item Description', 'Technical Specs'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['Vendor Code', 'Item Description'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['Supplier', 'Item Description/Short Text/Material Description'])).toEqual([]);
   });
 
-  it('names each required column that no header satisfies', () => {
-    expect(findMissingPoDumpHeaders(['PO Number', 'Quantity'])).toEqual([
+  it('names only the two required columns when missing, ignoring empty headers', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Quantity', 'Specifications', ''])).toEqual([
       UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
       UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
-      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
     ]);
   });
 
-  it('names only the specifications column when that is the one missing', () => {
-    expect(findMissingPoDumpHeaders(['Vendor Name', 'Item Description'])).toEqual([
-      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
+  it('names only the item description column when vendor is present but description is missing', () => {
+    expect(findMissingPoDumpHeaders(['Vendor Name', 'Specifications'])).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
     ]);
   });
 
-  it('reports no missing field for a complete row and names each blank required field', () => {
-    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: 'Valve', specs: 'DN50' })).toEqual([]);
-    expect(findMissingPoDumpFields({ vendorIdentifier: '  ', itemName: 'Valve', specs: undefined })).toEqual([
+  it('reports no missing field when only vendor and item description are populated and names blank mandatory fields', () => {
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: 'Valve' })).toEqual([]);
+    expect(findMissingPoDumpFields({ vendorIdentifier: '  ', itemName: 'Valve' })).toEqual([
       UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
-      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecs,
     ]);
   });
 
   it('treats the description as missing when only the description is blank', () => {
-    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: '', specs: 'DN50' })).toEqual([
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: '' })).toEqual([
       UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
     ]);
   });

@@ -5892,3 +5892,23 @@ Mode 3 should show the top 10 vendors. Please check if it's correctly working
 [Attached image: image/jpeg (media_1794708892498_73d007e6.jpg)]
 ```
 ---
+
+### Prompt 219
+**Timestamp**: 2026-11-15T09:09:36+05:30
+```text
+Mandatory fields are only two "Vendor/Supplier Name", "Item Description/Short Text/Material Description"
+
+Also PO dump data is not optional in Buyer vendor upload.
+
+Do not commit the change, please do the change only.
+
+[Attached image: image/jpeg (media_1794713143881_dc226bca.jpg)]
+```
+---
+
+### Prompt 220
+**Timestamp**: 2026-11-15T09:34:01+05:30
+```text
+please commit & push as well
+```
+---

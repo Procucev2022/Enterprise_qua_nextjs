@@ -267,6 +267,31 @@ describe('largeFileIngestionService unit tests', () => {
       expect(blank.poDate).toBeNull();
     });
 
+    it('maps PO headers including Short Text, Material Description, Vendor Name / Code, and ignores blank trailing headers', () => {
+      const headers = ['PO Number', 'PO Date', 'Vendor Name / Code', 'Item Name & Description', 'Quantity', 'Unit', ''];
+      const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
+      expect(headerMap.vendorIdentifier).toBe(2);
+      expect(headerMap.itemName).toBe(3);
+
+      const mapped = largeFileIngestionService.mapRowValues(
+        ['PO-001', '2025-06-01', 'Acme Supply', 'Hydraulic Cylinder', '4', 'Nos', ''],
+        headerMap,
+        'PO_DUMP',
+        0
+      );
+      expect(mapped.vendorName).toBe('Acme Supply');
+      expect(mapped.itemDescription).toBe('Hydraulic Cylinder');
+      expect(mapped.specification).toBeNull();
+
+      const sapMap = largeFileIngestionService.extractHeaderIndices(['', 'Vendor/Supplier Name', 'Short Text'], 'PO_DUMP');
+      expect(sapMap.vendorIdentifier).toBe(1);
+      expect(sapMap.itemName).toBe(2);
+
+      const matMap = largeFileIngestionService.extractHeaderIndices(['Supplier Name', 'Material Description'], 'PO_DUMP');
+      expect(matMap.vendorIdentifier).toBe(0);
+      expect(matMap.itemName).toBe(1);
+    });
+
     it('normalizes Excel date serial decimals and various date formats in PO dump rows', () => {
       const headers = ['PO Number', 'PO Date', 'Vendor Name', 'Line Item Description', 'Quantity', 'Spend'];
       const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
@@ -340,31 +365,65 @@ describe('largeFileIngestionService unit tests', () => {
       expect(res.failed).toBe(1);
     });
 
-    it('rejects a po dump row missing its line item description or its specification, even when vendor identity is present', async () => {
+    it('rejects a po dump row missing its item description even when vendor identity is present, and accepts rows without specification', async () => {
+      jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }, { id: 2 }, { id: 3 }]);
       const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
         { vendorName: 'Apex', department: 'Piping', specification: 'DN50' }, // no item description
-        { vendorName: 'Apex', itemDescription: 'Valves' }, // no specification
+        { vendorName: 'Apex', itemDescription: 'Valves' }, // no specification (optional)
+        { supplierName: 'Delta Supply', shortText: 'Ball Valve' }, // alias: Short Text
+        { vendorCode: 'V-44', materialDescription: 'Copper Wire' }, // alias: Material Description
       ], null);
-      expect(res.imported).toBe(0);
-      expect(res.failed).toBe(2);
+      expect(res.imported).toBe(3);
+      expect(res.failed).toBe(1);
       expect(res.errors[0].reason).toBe(VALIDATION_SCHEMAS.poLineItemRow.itemDescription.message);
-      expect(res.errors[1].reason).toBe(VALIDATION_SCHEMAS.poLineItemRow.specification.message);
     });
 
-    it('accepts a po dump row that gives only vendor name, line item description and specification, and keeps the rest null', async () => {
+    it('accepts a po dump row that gives only vendor name and item description, and keeps specification and the rest null', async () => {
       const bulkSpy = jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }]);
       const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
-        { vendorName: 'Apex', itemDescription: 'Valves', specification: 'DN50, flanged' },
+        { vendorName: 'Apex', itemDescription: 'Valves' },
       ], { horizonStart: '2025-01-01', horizonEnd: '2025-12-31' });
       expect(res).toMatchObject({ imported: 1, failed: 0, skipped: 0 });
       expect(bulkSpy.mock.calls[0][2][0]).toMatchObject({
         poDate: null,
+        specification: null,
         quantity: null,
         spend: null,
         department: null,
         // A line without a date is kept inside the period, so it is still used.
         inHorizon: true,
       });
+    });
+
+    it('keeps PO session status unchanged when finalizeSessionAfterUpload counts zero stored PO rows', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({
+        id: 'sess-zero-po',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED,
+        currentStep: VENDOR_INGESTION_STEP.PO_DUMP,
+      });
+      jest.spyOn(queries, 'countPoLineItems').mockResolvedValue({ total: 0, inHorizon: 0, outsideHorizon: 0 });
+      const updateSessionSpy = jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-zero-po',
+        sessionId: 'sess-zero-po',
+        organizationId: 'org-1',
+        rows: [{ vendorName: 'Apex', itemDescription: '' }],
+        fileName: 'bad-po.xlsx',
+        jobType: 'PO_DUMP',
+      });
+
+      expect(updateSessionSpy).toHaveBeenCalledWith(
+        'sess-zero-po',
+        'org-1',
+        expect.objectContaining({
+          poRowCount: 0,
+          status: VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED,
+          currentStep: VENDOR_INGESTION_STEP.PO_DUMP,
+        })
+      );
     });
 
     it('handles bulkInsertPoLineItems failure', async () => {

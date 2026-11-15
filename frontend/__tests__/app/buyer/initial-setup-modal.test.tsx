@@ -2135,7 +2135,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.queryByTestId('po-upload-error-banner')).not.toBeInTheDocument();
   });
 
-  it('opens Step 4 without a PO dump, and handles files with zero recognizable rows', async () => {
+  it('blocks Step 4 without a PO dump, and handles files with zero recognizable rows', async () => {
     const { container } = render(<InitialSetupModal />);
 
     // Step 2: Upload valid vendor master
@@ -2149,11 +2149,16 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    // The PO dump is optional: without one, Step 4 opens directly and no AI run is required
+    // PO dump is mandatory: Step 4 stays locked on Step 3 until a PO dump is uploaded
     fireEvent.click(screen.getByText('3. PO Dump'));
     fireEvent.click(screen.getByText('4. Dispatch Emails'));
-    expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument();
-    expect(screen.queryByText(UI_STRINGS.vendorPoIngestion.aiCategory.runFirst)).not.toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.poDump.requiredTitle,
+      UI_STRINGS.vendorPoIngestion.poDump.requiredError,
+      'warning'
+    );
 
     // Upload Vendor Master with headers but empty/unrecognizable rows (lines 708-716)
     fireEvent.click(screen.getByText('2. Vendor Master'));
@@ -2282,9 +2287,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(vInput, { target: { files: [vFile] } });
     }
 
-    // Step 3 with no PO dump yet: the button continues to Step 4 without an AI run
+    // Step 3 with no PO dump yet: Step 3 shows required badge + Run AI button (never Continue Without PO Dump) and blocks proceeding without PO dump
     fireEvent.click(screen.getByText('3. PO Dump'));
-    expect(screen.getByRole('button', { name: /Continue Without PO Dump/i })).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredBadge)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Continue Without PO Dump/i })).not.toBeInTheDocument();
+    const runAiBtn = screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorPoIngestion.aiCategory.runAction, 'i') });
+    expect(runAiBtn).toBeInTheDocument();
+    fireEvent.click(runAiBtn);
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
 
     // Upload PO dump
     const poFile = createValidPoDumpFile();
@@ -2940,16 +2950,38 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.drop(poDropzone, { dataTransfer: { files: [] } });
     }
 
-    // Upload PO Dump with diverse items to exercise AI category classification (lines 1215-1228)
+    // 1. A row missing a mandatory field (Item Description/Short Text/Material Description) rejects the whole file
+    const badRowWb = XLSX.utils.book_new();
+    const badRowWs = XLSX.utils.json_to_sheet([
+      {
+        'PO Number': 'PO-BAD-1',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Name': '',
+        Specifications: 'DN50',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(badRowWb, badRowWs, 'PO');
+    const badRowBuf = XLSX.write(badRowWb, { type: 'array', bookType: 'xlsx' });
+    const badRowFile: any = new File([badRowBuf], 'bad_row_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    badRowFile.__buffer = badRowBuf;
+
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [badRowFile] } });
+    }
+    expect(screen.getByText(new RegExp(`Row 2: ${UI_STRINGS.vendorPoIngestion.poDump.fieldDescription}`))).toBeInTheDocument();
+
+    // 2. Upload PO Dump without Specifications on row 1 (empty date / 0 unitPrice render as '—') -> accepted
     const diversePoWb = XLSX.utils.book_new();
     const diversePoWs = XLSX.utils.json_to_sheet([
       {
         'PO Number': 'PO-DIV-1',
-        'PO Date': '', // empty date -> line 2446 '—'
+        'PO Date': '', // empty date -> '—'
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Globe gate valve with hydraulic hose', // lines 1216, 1217
+        'Item Name': 'Globe gate valve with hydraulic hose',
         Quantity: 2,
-        'Unit Price': 0, // 0 unitPrice -> line 2452 '—'
+        'Unit Price': 0, // 0 unitPrice -> '—'
         'Total Spend': 10000,
         Department: 'Hydraulics',
       },
@@ -2957,7 +2989,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-DIV-2',
         'PO Date': '2025-06-01',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Rotary air compressor and induction electric motor', // lines 1218, 1219
+        'Item Name': 'Rotary air compressor and induction electric motor',
         Specifications: 'Induction motor, 15 HP',
         Quantity: 1,
         'Unit Price': 45000,
@@ -2968,7 +3000,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-DIV-3',
         'PO Date': '2025-06-02',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Substation switchgear control panel with power cable and mccb breaker', // lines 1222, 1223
+        'Item Name': 'Substation switchgear control panel with power cable and mccb breaker',
         Specifications: 'Panel, 415 V, 50 Hz',
         Quantity: 3,
         'Unit Price': 15000,
@@ -2979,7 +3011,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-DIV-4',
         'PO Date': '2025-06-03',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Civil industrial steel works with peb structure and tmt bars', // lines 1226, 1227
+        'Item Name': 'Civil industrial steel works with peb structure and tmt bars',
         Specifications: 'Fe 500 TMT bars',
         Quantity: 10,
         'Unit Price': 5000,
@@ -2997,16 +3029,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     if (poInput) {
       fireEvent.change(poInput, { target: { files: [diversePoFile] } });
     }
+    expect(screen.queryByTestId('po-upload-error-banner')).not.toBeInTheDocument();
+    expect(screen.getByTestId('po-dump-uploaded-card')).toBeInTheDocument();
 
-    // A row without a specification rejects the file. The message names the row and the missing field, and no row is inserted.
-    expect(screen.getByText(/Row 2: Specifications/)).toBeInTheDocument();
-
-    // A valid dump replaces the rejected one, so the reset control below is rendered.
-    if (poInput) {
-      fireEvent.change(poInput, { target: { files: [createValidPoDumpFile()] } });
-    }
-
-    // Test Reset PO data button (lines 1150-1160, 2363)
+    // Test Reset PO data button
     const resetPoBtn = screen.getByTitle('Reset PO data');
     fireEvent.click(resetPoBtn);
     expect(mockShowToast).toHaveBeenCalledWith('Reset Complete', expect.stringContaining('cleared'), 'info');
@@ -3273,11 +3299,13 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(/2 Supplier Records Missing Required Fields/i)).toBeInTheDocument();
   });
 
-  it('treats the PO dump as optional: Step 4 opens and setup completes without one', async () => {
+  it('requires a PO dump before Step 4 and accepts a 2-column PO sheet with Vendor/Supplier Name and Short Text (without Specifications)', async () => {
     jest.useFakeTimers();
     mockProcessHistoricalPurchaseData.mockResolvedValue(1);
+    installIngestionServer();
 
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
     // Proceed to Step 2
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
@@ -3289,15 +3317,47 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(vInput, { target: { files: [vFile] } });
     }
 
-    // The PO dump is optional: Step 4 opens from the vendor master alone, and no PO Dump gate applies
+    // PO dump is NOT optional: jumping directly to Step 4 is blocked with clear required guidance
     fireEvent.click(screen.getByText('4. Dispatch Emails'));
-    expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument();
-    expect(mockShowToast).not.toHaveBeenCalledWith('PO Dump Required', expect.anything(), expect.anything());
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.poDump.requiredTitle,
+      UI_STRINGS.vendorPoIngestion.poDump.requiredError,
+      'warning'
+    );
 
-    // Confirm final ingestion with valid PO data
+    // Upload PO dump with ONLY the 2 mandatory columns: Vendor/Supplier Name & Short Text (NO Specifications)
+    const poWb = XLSX.utils.book_new();
+    const poWs = XLSX.utils.json_to_sheet([
+      { 'Vendor/Supplier Name': 'Apex Supplies Ltd.', 'Short Text': 'Centrifugal Water Pump 500 GPM' },
+    ]);
+    XLSX.utils.book_append_sheet(poWb, poWs, 'POs');
+    const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'xlsx' });
+    const poFile: any = new File([poBuf], 'two_col_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = poBuf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    expect(mockShowToast).not.toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle,
+      expect.anything(),
+      'warning'
+    );
+
+    // Run AI Category Cross-Match -> opens Step 4
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorPoIngestion.aiCategory.runAction, 'i') }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    // Confirm final ingestion
     const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
     await act(async () => {
       fireEvent.click(completeBtn);
+      await Promise.resolve();
       await Promise.resolve();
     });
 
@@ -3311,7 +3371,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useRealTimers();
   });
 
-  it('drops the AI result when the PO dump is reset, so Step 4 falls back to the vendor master alone', async () => {
+  it('drops the AI result when the PO dump is reset, and blocks Step 4 until a fresh PO dump is uploaded', async () => {
     jest.useFakeTimers();
     mockProcessHistoricalPurchaseData.mockResolvedValue(1);
     installIngestionServer();
@@ -3336,16 +3396,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
     await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
-    // Reset the PO dump on Step 3. The reset also drops the AI result built from it
+    // Reset the PO dump on Step 3. The reset drops both PO dump and AI result; Step 4 is blocked again
     fireEvent.click(screen.getByText('3. PO Dump'));
     fireEvent.click(screen.getByText('Reset Template'));
-    expect(screen.getByRole('button', { name: /Continue Without PO Dump/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Continue Without PO Dump/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorPoIngestion.aiCategory.runAction, 'i') })).toBeInTheDocument();
 
-    // With no PO dump left, Step 4 opens from the vendor master alone: the one supplier needs self-mapping
     fireEvent.click(screen.getByText('4. Dispatch Emails'));
-    expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument();
-    expect(screen.getByText('0 Suppliers')).toBeInTheDocument();
-    expect(screen.getByText('1 Suppliers')).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
 
     jest.useRealTimers();
   });
@@ -3408,6 +3467,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
     await act(async () => {
       fireEvent.click(completeBtn);
+      await Promise.resolve();
       await Promise.resolve();
     });
 
@@ -3722,7 +3782,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(phoneInputs[0]).toHaveValue('+91 9899988877');
   });
 
-  it('accepts a PO dump that gives only vendor name, line item description and specifications, and shows a dash for the columns it omits', async () => {
+  it('accepts a PO dump that gives only vendor/supplier name and item description/short text/material description without specifications, and shows a dash for omitted columns', async () => {
     const { container } = render(<InitialSetupModal />);
 
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
@@ -3736,11 +3796,11 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
     fireEvent.click(screen.getByText('3. PO Dump'));
 
-    // Only the three required columns are present: no PO number, date, quantity, spend, unit price or category.
+    // Only the two mandatory columns are present (no Specifications, PO number, date, quantity, spend, unit price or category).
     const poWb = XLSX.utils.book_new();
     const poWs = XLSX.utils.json_to_sheet([
-      { 'Vendor Name': 'Minimal Supply Co', 'Line Item Description': 'Gate valve', Specifications: 'DN50, flanged' },
-      { 'Vendor Name': 'Minimal Supply Co', 'Line Item Description': 'Hydraulic hose', Specifications: 'Class 150' },
+      { 'Vendor Name / Code': 'Minimal Supply Co', 'Item Name & Description': 'Gate valve' },
+      { 'Vendor Name / Code': 'Minimal Supply Co', 'Item Name & Description': 'Hydraulic hose' },
     ]);
     XLSX.utils.book_append_sheet(poWb, poWs, 'PO');
     const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'xlsx' });
@@ -3788,7 +3848,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText('3. PO Dump'));
     expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
 
-    // The required columns banner lists the three mandatory columns
+    // The required columns banner lists the two mandatory columns
     expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner)).toBeInTheDocument();
 
     // The template lists the PO columns without a Category column: categories come from the AI job

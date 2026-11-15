@@ -606,6 +606,9 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
 
   const normalizedRows = (Array.isArray(rows) ? rows : []).map((row) => ({
     ...row,
+    vendorName: row.vendorName || row.supplierName || row.vendorIdentifier,
+    vendorCode: row.vendorCode || row.supplierCode,
+    itemDescription: row.itemDescription || row.shortText || row.materialDescription || row.itemName,
     poDate: normalizePoDate(row.poDate || row.date) || row.poDate,
   }));
 

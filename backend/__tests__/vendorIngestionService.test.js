@@ -256,11 +256,15 @@ describe('vendor and purchase order uploads', () => {
     await expect(service.confirmPoDump(USER, SESSION.id, { rows: [PO_ROW] })).rejects.toMatchObject({ status: 413 });
   });
 
-  test('keeps a PO line that gives only the required fields inside the period when it has no date', async () => {
+  test('keeps a PO line that gives only the two mandatory fields inside the period without requiring specifications', async () => {
     const result = await service.confirmPoDump(USER, SESSION.id, {
-      rows: [{ itemDescription: 'Industrial pump', specification: 'Centrifugal, 5 HP', vendorName: 'Pump Supplier' }],
+      rows: [
+        { itemDescription: 'Industrial pump', vendorName: 'Pump Supplier' },
+        { shortText: 'Ball valve DN50', supplierName: 'Valve Corp' },
+        { materialDescription: 'Copper cable 4mm', vendorCode: 'V-999' },
+      ],
     });
-    expect(result).toMatchObject({ validRows: 1, invalidRows: 0 });
+    expect(result).toMatchObject({ validRows: 3, invalidRows: 0 });
     expect(queries.bulkInsertPoLineItems.mock.calls[0][2][0]).toMatchObject({ inHorizon: true });
   });
 });

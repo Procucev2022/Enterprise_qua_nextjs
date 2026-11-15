@@ -782,13 +782,13 @@ export const REQUEST_VENDOR_EVALUATION_SCHEMA = {
 // ==============================================================================
 // HISTORICAL PO DUMP (Step 3 of the vendor ingestion wizard)
 // ==============================================================================
-// Three columns are required: the vendor, the line item description and the
-// specification. Every other PO column is optional, and a complete dump is still
-// accepted. The server applies the same rule in backend/src/config/validationSchemas.js
-// (poLineItemRow).
+// Only two columns are mandatory: Vendor/Supplier Name (or Vendor Code) and
+// Item Description/Short Text/Material Description. Specifications and all other
+// PO columns are optional. The server applies the same rule in
+// backend/src/config/validationSchemas.js (poLineItemRow).
 
 /** The parsed PO row fields a line must carry before it is accepted. */
-export const PO_DUMP_REQUIRED_FIELDS = ['vendorIdentifier', 'itemName', 'specs'] as const;
+export const PO_DUMP_REQUIRED_FIELDS = ['vendorIdentifier', 'itemName'] as const;
 
 export type PoDumpRequiredField = (typeof PO_DUMP_REQUIRED_FIELDS)[number];
 
@@ -797,12 +797,15 @@ export type PoDumpRequiredField = (typeof PO_DUMP_REQUIRED_FIELDS)[number];
  * punctuation removed, and a header matches when it equals an alias or contains one.
  */
 export const PO_DUMP_REQUIRED_HEADER_ALIASES: Record<PoDumpRequiredField, readonly string[]> = {
-  vendorIdentifier: ['vendorname', 'vendoridentifier', 'vendor', 'suppliername', 'supplier', 'companyname', 'vendorcode', 'vendorid'],
-  itemName: [
-    'lineitemdescription', 'lineitem', 'itemdescription', 'description', 'itemname', 'productdescription',
-    'productname', 'materialdescription', 'material', 'servicedescription', 'service', 'item',
+  vendorIdentifier: [
+    'vendorname', 'vendorsuppliername', 'vendoridentifier', 'suppliername', 'companyname',
+    'vendorcode', 'suppliercode', 'vendorid', 'supplierid', 'vendor', 'supplier',
   ],
-  specs: ['specs', 'specification', 'technicalspecs', 'specifications', 'details', 'itemspecs', 'grade'],
+  itemName: [
+    'itemdescription', 'shorttext', 'materialdescription', 'lineitemdescription', 'itemnameanddescription',
+    'itemname', 'productdescription', 'productname', 'servicedescription', 'lineitem', 'description',
+    'material', 'service', 'item',
+  ],
 };
 
 function cleanPoDumpHeader(value: string): string {
@@ -811,14 +814,12 @@ function cleanPoDumpHeader(value: string): string {
 
 function poDumpFieldLabel(field: PoDumpRequiredField): string {
   const labels = UI_STRINGS.vendorPoIngestion.poDump;
-  if (field === 'vendorIdentifier') return labels.fieldVendor;
-  if (field === 'itemName') return labels.fieldDescription;
-  return labels.fieldSpecs;
+  return field === 'vendorIdentifier' ? labels.fieldVendor : labels.fieldDescription;
 }
 
 /** Labels of the required columns that no header in the sheet satisfies. */
 export function findMissingPoDumpHeaders(headerKeys: readonly string[]): string[] {
-  const cleaned = headerKeys.map(cleanPoDumpHeader);
+  const cleaned = headerKeys.map(cleanPoDumpHeader).filter((header) => header.length > 0);
   return PO_DUMP_REQUIRED_FIELDS.filter(
     (field) =>
       !cleaned.some((header) =>

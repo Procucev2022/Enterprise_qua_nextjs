@@ -346,7 +346,7 @@ export default function InitialSetupModal() {
   // category per supplier, so the wizard polls its progress the same way it polls the upload jobs.
   const [aiJob, setAiJob] = useState<IngestionJobState | null>(null);
   const isAiRunning = aiJob?.status === 'PENDING' || aiJob?.status === 'PROCESSING';
-  // The PO dump is optional. A dump counts when the browser holds its lines or the server holds stored rows.
+  // Historical PO dump is mandatory in Buyer vendor upload before proceeding to Step 4.
   const hasPoDump = poDataUploaded || poLineItems.length > 0;
 
   // Validate vendor mobile number: accepts with or without +91, exactly 10 numeric digits after country code
@@ -456,9 +456,17 @@ export default function InitialSetupModal() {
       return true;
     }
 
-    // The PO dump is optional. Once one is stored, its suppliers' categories come from the AI job, so review
-    // waits for that job. Without a PO dump there is nothing to extract and review can open straight away.
-    if (targetStep === 4 && hasPoDump && apiJoinedVendors === null) {
+    // PO dump data is mandatory in Buyer vendor upload before proceeding to Step 4.
+    if (targetStep === 4 && !hasPoDump) {
+      const msg = UI_STRINGS.vendorPoIngestion.poDump.requiredError;
+      setPoUploadError(msg);
+      showToast(UI_STRINGS.vendorPoIngestion.poDump.requiredTitle, msg, 'warning');
+      setStep(3);
+      return false;
+    }
+
+    // Once the PO dump is stored, its suppliers' categories come from the AI job, so review waits for that job.
+    if (targetStep === 4 && apiJoinedVendors === null) {
       setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.runFirst);
       setStep(3);
       return false;
@@ -1088,7 +1096,8 @@ export default function InitialSetupModal() {
           }
 
           const headerKeys = Object.keys(rawJson[0]);
-          // The three required columns must each be present. Other PO columns are optional.
+          // Only two columns are mandatory: Vendor/Supplier Name and Item Description/Short Text/Material Description.
+          // Specifications and other PO columns are optional.
           const missingHeaders = findMissingPoDumpHeaders(headerKeys);
 
           if (missingHeaders.length > 0) {
@@ -1139,8 +1148,36 @@ export default function InitialSetupModal() {
             const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']);
             const rawPoDate = getRawVal(['podate', 'po date', 'date', 'order date', 'creation date']);
             const poDate = normalizePoDate(rawPoDate) || '';
-            const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']);
-            const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']);
+            const vendorIdentifier = getVal([
+              'vendor name',
+              'supplier name',
+              'vendor/supplier name',
+              'vendor name / code',
+              'vendor identifier',
+              'company name',
+              'vendor code',
+              'supplier code',
+              'vendor id',
+              'supplier id',
+              'vendor',
+              'supplier',
+            ]);
+            const itemName = getVal([
+              'item description',
+              'short text',
+              'material description',
+              'line item description',
+              'item name & description',
+              'item name',
+              'product description',
+              'product name',
+              'service description',
+              'line item',
+              'description',
+              'material',
+              'service',
+              'item',
+            ]);
             const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
             
             const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
@@ -1171,7 +1208,7 @@ export default function InitialSetupModal() {
             // required field it lacks. Nothing is substituted for a missing value. Category is not read from the
             // file: the AI job extracts it per supplier from the stored PO history.
             const isBlankRow = !vendorIdentifier && !itemName && !department;
-            const missingFields = findMissingPoDumpFields({ vendorIdentifier, itemName, specs });
+            const missingFields = findMissingPoDumpFields({ vendorIdentifier, itemName });
             if (!isBlankRow && missingFields.length > 0) {
               invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
             }
@@ -1513,9 +1550,9 @@ export default function InitialSetupModal() {
   const handleDownloadPoDataCsv = handleDownloadPoDataExcel;
 
   /**
-   * Run the AI Category Cross-Match. The PO dump is optional: without one there is nothing to categorise, so
-   * suppliers open for review with no purchase history. With one, the server runs the join and the AI category
-   * extraction as a background job; the progress card polls it, and the completion effect opens the review.
+   * Run the AI Category Cross-Match. The PO dump is mandatory in Buyer vendor upload: the server
+   * runs the join and AI category extraction as a background job; the progress card polls it, and
+   * the completion effect opens the Step 4 review.
    */
   const handleSimulatePOJoin = async () => {
     if (isProcessingPOJoin || isAiRunning) return;
@@ -1535,9 +1572,9 @@ export default function InitialSetupModal() {
     }
 
     if (!hasPoDump) {
-      setPoUploadError(null);
-      setApiJoinedVendors(null);
-      setStep(4);
+      const msg = UI_STRINGS.vendorPoIngestion.poDump.requiredError;
+      setPoUploadError(msg);
+      showToast(UI_STRINGS.vendorPoIngestion.poDump.requiredTitle, msg, 'warning');
       return;
     }
 
@@ -2385,7 +2422,7 @@ export default function InitialSetupModal() {
             {/* Single-line Simplified PO Dump Info & Download Banner */}
             <div className="p-3.5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-blue-50/70 dark:from-purple-950/40 dark:via-indigo-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="badge badge-purple font-bold text-[10px] shrink-0">{UI_STRINGS.vendorPoIngestion.poDump.optionalBadge}</span>
+                <span className="badge badge-purple font-bold text-[10px] shrink-0">{UI_STRINGS.vendorPoIngestion.poDump.requiredBadge}</span>
                 <span className="text-xs text-slate-700 dark:text-gray-300 font-medium">
                   {UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner}
                 </span>
@@ -2460,7 +2497,7 @@ export default function InitialSetupModal() {
             )}
 
             {/* Drag & Drop PO Dump Area or Uploaded State Banner */}
-            {poLineItems.length > 0 || poJob?.status === 'COMPLETED' ? (
+            {poLineItems.length > 0 || (poJob?.status === 'COMPLETED' && (poJob.importedRecords ?? 0) > 0) ? (
               <div
                 data-testid="po-dump-uploaded-card"
                 className="p-5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border-2 border-emerald-500/40 dark:border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in"
@@ -2655,9 +2692,7 @@ export default function InitialSetupModal() {
               >
                 {isProcessingPOJoin || isAiRunning
                   ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
-                  : hasPoDump
-                  ? UI_STRINGS.vendorPoIngestion.aiCategory.runAction
-                  : UI_STRINGS.vendorPoIngestion.aiCategory.continueWithoutPoAction}{' '}
+                  : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
                 <ArrowRight size={14} />
               </button>
             </div>

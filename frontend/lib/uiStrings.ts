@@ -2004,12 +2004,14 @@ sellerDirectory: {
 
     poDump: {
       heading: 'Step 3 — Upload File 2: Historical PO Purchase Dump',
-      hint: 'Optional. If you upload a PO dump, these columns are required: Vendor Name, Line Item Description and Specifications. Vendor Code can be used instead of Vendor Name. Category is not a column: the system extracts each supplier\'s category from its PO history with AI.',
-      optionalBadge: 'Optional',
-      requiredColumnsBanner: 'If you upload a PO dump, these columns are required: Vendor Name, Line Item Description & Specifications. Category is extracted by AI.',
-      fieldVendor: 'Vendor Name',
-      fieldDescription: 'Line Item Description',
-      fieldSpecs: 'Specifications',
+      hint: 'Required. Upload your PO dump with these 2 mandatory columns: Vendor/Supplier Name and Item Description/Short Text/Material Description. Specifications & other columns are optional. Category is not a column: the system extracts each supplier\'s category from its PO history with AI.',
+      requiredBadge: 'Required',
+      requiredColumnsBanner: 'Mandatory 2 columns only: Vendor/Supplier Name & Item Description/Short Text/Material Description. Specifications & other columns are optional; Category is extracted by AI.',
+      fieldVendor: 'Vendor/Supplier Name',
+      fieldDescription: 'Item Description/Short Text/Material Description',
+      requiredTitle: 'PO Dump Required',
+      requiredError:
+        'Historical PO Purchase Dump is mandatory. Please upload your PO dump file (containing Vendor/Supplier Name and Item Description/Short Text/Material Description) before continuing.',
       missingColumnsTemplate: 'Missing required columns: {columns}. (Found: [{found}]). Download the PO Dump template and use its headers.',
       invalidHeadersTitle: 'Invalid PO Sheet Headers',
       noHeadersFound: 'None',
@@ -2030,7 +2032,6 @@ sellerDirectory: {
 
     aiCategory: {
       runAction: 'Run AI Category Cross-Match',
-      continueWithoutPoAction: 'Continue Without PO Dump',
       runningAction: 'Extracting Categories…',
       progressTitle: 'AI Category',
       progressUnit: 'suppliers',

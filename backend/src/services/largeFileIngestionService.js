@@ -194,7 +194,9 @@ function extractHeaderIndices(headers, type) {
   function findIndex(aliases) {
     for (const alias of aliases) {
       const aliasClean = alias.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const idx = cleaned.findIndex((c) => c === aliasClean || c.includes(aliasClean) || aliasClean.includes(c));
+      const idx = cleaned.findIndex(
+        (c) => c === aliasClean || (c.length > 0 && (c.includes(aliasClean) || (c.length >= 3 && aliasClean.includes(c))))
+      );
       if (idx !== -1) return idx;
     }
     return -1;
@@ -213,8 +215,36 @@ function extractHeaderIndices(headers, type) {
     // PO_DUMP
     map.poNumber = findIndex(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']);
     map.poDate = findIndex(['podate', 'po date', 'date', 'order date', 'creation date']);
-    map.vendorIdentifier = findIndex(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']);
-    map.itemName = findIndex(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']);
+    map.vendorIdentifier = findIndex([
+      'vendor name',
+      'supplier name',
+      'vendor/supplier name',
+      'vendor name / code',
+      'vendor identifier',
+      'company name',
+      'vendor code',
+      'supplier code',
+      'vendor id',
+      'supplier id',
+      'vendor',
+      'supplier',
+    ]);
+    map.itemName = findIndex([
+      'item description',
+      'short text',
+      'material description',
+      'line item description',
+      'item name & description',
+      'item name',
+      'product description',
+      'product name',
+      'service description',
+      'line item',
+      'description',
+      'material',
+      'service',
+      'item',
+    ]);
     map.specs = findIndex(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
     map.quantity = findIndex(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
     map.unit = findIndex(['unit', 'uom', 'unit of measure', 'units']);
@@ -358,10 +388,9 @@ function mapRowValues(values, headerMap, type, rowIdx) {
       rating,
     };
   } else {
-    // PO_DUMP — same principle: a PO row with only Vendor Name/Code, Item
-    // Details and Category present should still process successfully (see
-    // processPoDumpBatch's required-field check below), with every other
-    // field left blank rather than invented.
+    // PO_DUMP — only Vendor/Supplier Name (or Code) and Item Description/Short
+    // Text/Material Description are mandatory; Specifications and all other
+    // columns stay blank/null rather than invented when omitted.
     const poNumber = normalizePoNumber(get('poNumber')) || null;
     const poDate = normalizePoDate(get('poDate'));
     const vendorName = get('vendorIdentifier') || null;
@@ -484,14 +513,25 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   const valid = [];
   const invalid = [];
 
-  // Required: a vendor (name or code), a line item description and a specification.
-  // Every other PO column is optional. A row that does not give one of them keeps that
-  // value null, and a row that gives more of them is stored with all of them.
+  // Required (only two): Vendor/Supplier Name (or Vendor Code) and
+  // Item Description/Short Text/Material Description. Specifications and all
+  // other PO columns are optional.
   for (const row of batch) {
-    const vendorName = row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.companyName || '';
-    const vendorCode = row.vendorCode || row.vendor_code || row.supplierCode || '';
-    const itemDescription = row.itemDescription || row.itemName || row.description || '';
-    const specification = row.specification || row.specs || '';
+    const vendorName = String(
+      row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.supplier || row.companyName || ''
+    ).trim();
+    const vendorCode = String(row.vendorCode || row.vendor_code || row.supplierCode || row.vendorId || '').trim();
+    const itemDescription = String(
+      row.itemDescription ||
+        row.itemName ||
+        row.shortText ||
+        row.short_text ||
+        row.materialDescription ||
+        row.material_description ||
+        row.description ||
+        ''
+    ).trim();
+    const specification = String(row.specification || row.specs || '').trim() || null;
     const department = row.department || row.category || '';
 
     if (!vendorName && !vendorCode) {
@@ -530,7 +570,7 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
       poDate: poDate || null,
       vendorName: vendorName || `Vendor ${vendorCode}`,
       itemDescription,
-      specification: specification || null,
+      specification,
       department: department || null,
       quantity,
       spend,
@@ -569,6 +609,39 @@ async function recordVendorMasterUpload({ jobId, sessionId, organizationId, tota
       LOG_CATEGORY
     );
   }
+}
+
+/**
+ * Persist finalized session counts and advance the session step only when rows were actually stored.
+ */
+async function finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType }) {
+  if (jobType === 'VENDOR_MASTER') {
+    const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
+    await queries.updateSession(sessionId, organizationId, {
+      vendorMasterFileName: fileName,
+      vendorMasterRowCount: totalStored,
+      status:
+        session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
+          ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
+          : session.status,
+      currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
+    });
+    await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
+    return;
+  }
+
+  const counts = await queries.countPoLineItems(sessionId, organizationId);
+  await queries.updateSession(sessionId, organizationId, {
+    poFileName: fileName,
+    poRowCount: counts.total,
+    poInHorizonCount: counts.inHorizon,
+    poOutsideHorizonCount: counts.outsideHorizon,
+    status: counts.total > 0 ? VENDOR_INGESTION_SESSION_STATUS.PO_STORED : session.status,
+    currentStep:
+      counts.total > 0
+        ? Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN)
+        : session.currentStep,
+  });
 }
 
 /**
@@ -708,29 +781,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
       }
 
       // Finalize session counts and state
-      if (jobType === 'VENDOR_MASTER') {
-        const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
-        await queries.updateSession(sessionId, organizationId, {
-          vendorMasterFileName: fileName,
-          vendorMasterRowCount: totalStored,
-          status:
-            session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
-              ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
-              : session.status,
-          currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
-        });
-        await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
-      } else {
-        const counts = await queries.countPoLineItems(sessionId, organizationId);
-        await queries.updateSession(sessionId, organizationId, {
-          poFileName: fileName,
-          poRowCount: counts.total,
-          poInHorizonCount: counts.inHorizon,
-          poOutsideHorizonCount: counts.outsideHorizon,
-          status: VENDOR_INGESTION_SESSION_STATUS.PO_STORED,
-          currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
-        });
-      }
+      await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
 
       // Mark job completed
       await queries.updateIngestionJobProgress(jobId, organizationId, {
@@ -819,29 +870,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
       });
     }
 
-    if (jobType === 'VENDOR_MASTER') {
-      const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
-      await queries.updateSession(sessionId, organizationId, {
-        vendorMasterFileName: fileName,
-        vendorMasterRowCount: totalStored,
-        status:
-          session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
-            ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
-            : session.status,
-        currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
-      });
-      await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
-    } else {
-      const counts = await queries.countPoLineItems(sessionId, organizationId);
-      await queries.updateSession(sessionId, organizationId, {
-        poFileName: fileName,
-        poRowCount: counts.total,
-        poInHorizonCount: counts.inHorizon,
-        poOutsideHorizonCount: counts.outsideHorizon,
-        status: VENDOR_INGESTION_SESSION_STATUS.PO_STORED,
-        currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
-      });
-    }
+    await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
 
     await queries.updateIngestionJobProgress(jobId, organizationId, {
       totalRecords: Math.max(rows.length, processedRecords),

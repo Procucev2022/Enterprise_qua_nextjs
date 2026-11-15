@@ -1014,10 +1014,9 @@ const VALIDATION_SCHEMAS = {
     rating: { type: 'number', required: false, min: 0, max: 100 },
   },
 
-  // One historical PO line item. Three fields are required: the vendor (a name or a
-  // code, checked by the service), the line item description and the specification.
-  // Every other PO column is optional, so a dump with only those three is accepted,
-  // and a complete dump is accepted too.
+  // One historical PO line item. Two fields are required: the vendor (Vendor/Supplier Name
+  // or Vendor Code, checked by the service) and the Item Description/Short Text/Material Description.
+  // Specifications and all other PO columns are optional.
   poLineItemRow: {
     poNumber: { type: 'string', required: false, minLength: 1, maxLength: 120 },
     poDate: { type: 'string', required: false, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
@@ -1026,7 +1025,7 @@ const VALIDATION_SCHEMAS = {
       required: true,
       minLength: 2,
       maxLength: 4000,
-      message: 'Line Item Description is required — it is the evidence the categoriser reads.',
+      message: 'Item Description / Short Text / Material Description is required — it is the evidence the categoriser reads.',
     },
     quantity: { type: 'number', required: false, min: 0 },
     uom: { type: 'string', required: false, minLength: 1, maxLength: 64 },
@@ -1039,10 +1038,8 @@ const VALIDATION_SCHEMAS = {
     vendorGstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
     specification: {
       type: 'string',
-      required: true,
-      minLength: 1,
+      required: false,
       maxLength: 4000,
-      message: 'Specifications is required.',
     },
     materialCode: { type: 'string', required: false, maxLength: 120 },
     existingCategory: { type: 'string', required: false, maxLength: 255 },
