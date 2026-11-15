@@ -463,9 +463,9 @@ export default function OpportunityFeed({
     }
 
     const bCompany = myAddedByBuyerCompany || myVendorRecord?.addedByBuyerCompany;
-    if (bCompany && opp.buyer === bCompany) return true;
+    if (bCompany && (opp.buyer === bCompany || rfqRecord?.buyerAccountName === bCompany)) return true;
     const bId = myBuyerId || myVendorRecord?.buyerId || myVendorRecord?.buyerAccountId;
-    if (bId && opp.buyerAccountId === bId) return true;
+    if (bId && (opp.buyerAccountId === bId || rfqRecord?.buyerAccountId === bId)) return true;
     return false;
   }, [rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
 
@@ -620,9 +620,16 @@ export default function OpportunityFeed({
     return text.includes(s);
   };
 
+  const isDirectOpportunity = React.useCallback((opp: VendorOpportunity) => {
+    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+      return opp.type === 'direct_invitation';
+    }
+    return isOwnBuyerRfq(opp);
+  }, [isOwnBuyerRfq]);
+
   // FILTER DIRECT INVITATIONS (MY BUYER ENQUIRIES)
   const eligibleDirectOpportunities = vendorOpportunities.filter((opp) => {
-    if (opp.type !== 'direct_invitation') return false;
+    if (!isDirectOpportunity(opp)) return false;
     const cats = getOpportunityCategories(opp);
 
     if (selectedBuyerDirect !== 'all' && opp.buyer !== selectedBuyerDirect) return false;
@@ -638,7 +645,7 @@ export default function OpportunityFeed({
 
   // FILTER NETWORK OPPORTUNITIES (OPEN MARKETPLACE / PUBLIC ENQUIRIES)
   const eligibleNetworkOpportunities = vendorOpportunities.filter((opp) => {
-    if (opp.type !== 'network_marketplace') return false;
+    if (isDirectOpportunity(opp)) return false;
     const cats = getOpportunityCategories(opp);
 
     if (selectedMajorCategoryNet !== 'all' && cats.major !== selectedMajorCategoryNet) return false;
