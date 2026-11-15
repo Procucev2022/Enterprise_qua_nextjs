@@ -3,14 +3,14 @@ import VendorConsole, { classifyVendorSource, isBuyerOrSelfOnboardedVendor, isPr
 import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
-import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem, RFQVendorCandidate } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
 jest.mock('@/lib/rfqClient', () => ({ fetchAllVendors: jest.fn() }));
 jest.mock('@/lib/buyerProfileClient', () => ({ fetchCategoryTaxonomy: jest.fn() }));
-jest.mock('@/lib/categoryTaxonomy', () => ({ getMajorCategories: jest.fn() }));
+jest.mock('@/lib/categoryTaxonomy', () => ({ getMajorCategories: jest.fn(), getMinorCategories: jest.fn(() => []) }));
 
 const candidate: RFQVendorCandidate = {
   id: 'network-vendor', name: 'Acme', contactPerson: 'Network Contact', email: 'acme@example.com',
@@ -35,6 +35,7 @@ beforeEach(() => {
   jest.resetAllMocks();
   (useApp as jest.Mock).mockReturnValue({ rfqs: [] });
   (getMajorCategories as jest.Mock).mockReturnValue(['Cables', '', '   ']);
+  (getMinorCategories as jest.Mock).mockReturnValue([]);
   (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: [] });
   (fetchAllVendors as jest.Mock).mockResolvedValue(page([candidate]));
 });
@@ -137,6 +138,92 @@ test('keeps latest category results when a slower initial request arrives later'
   expect(fetchAllVendors).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'Cables' }));
 });
 
+test('minor category filter is scoped to the selected major and sent as minors in the payload', async () => {
+  (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({
+    success: true,
+    data: [
+      { majorCategory: 'IT', minorCategories: ['Laptops', 'Servers'] },
+      { majorCategory: 'Cables', minorCategories: ['Power Cables'] },
+    ],
+  });
+  render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
+  const minorSelect = await screen.findByRole('combobox', { name: 'Minor category' });
+  expect(minorSelect).toBeDisabled();
+
+  const majorSelect = screen.getAllByRole('combobox')[2];
+  await screen.findByRole('option', { name: 'IT' });
+  fireEvent.change(majorSelect, { target: { value: 'IT' } });
+  expect(minorSelect).toBeEnabled();
+  expect(within(minorSelect).getByRole('option', { name: 'Laptops' })).toBeInTheDocument();
+  expect(within(minorSelect).queryByRole('option', { name: 'Power Cables' })).not.toBeInTheDocument();
+
+  fireEvent.change(minorSelect, { target: { value: 'Laptops' } });
+  await waitFor(() =>
+    expect(fetchAllVendors).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'IT', minors: ['Laptops'] }))
+  );
+
+  // Changing the major clears the minor in the same request.
+  fireEvent.change(majorSelect, { target: { value: 'Cables' } });
+  expect(minorSelect).toHaveValue('');
+  await waitFor(() =>
+    expect(fetchAllVendors).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'Cables', minors: [] }))
+  );
+});
+
+describe('pincode filter and filter combinations', () => {
+  const taxonomy = {
+    success: true,
+    data: [{ majorCategory: 'IT', minorCategories: ['Laptop', 'Printers'] }],
+  };
+  const lastCall = () => (fetchAllVendors as jest.Mock).mock.calls.at(-1)?.[0];
+
+  test('sends a pincode only once it has 3–6 digits, strips non-digits, and shows a hint while partial', async () => {
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
+    const pin = await screen.findByRole('textbox', { name: 'Pincode' });
+
+    fireEvent.change(pin, { target: { value: '5a6' } });
+    expect(pin).toHaveValue('56');
+    expect(screen.getByText(/Enter at least 3 digits/)).toBeInTheDocument();
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
+    expect(lastCall()).toEqual(expect.objectContaining({ pincode: '' }));
+
+    fireEvent.change(pin, { target: { value: '5600011' } });
+    expect(pin).toHaveValue('560001');
+    expect(screen.queryByText(/Enter at least 3 digits/)).not.toBeInTheDocument();
+    await waitFor(() => expect(lastCall()).toEqual(expect.objectContaining({ pincode: '560001' })));
+
+    fireEvent.change(pin, { target: { value: '' } });
+    await waitFor(() => expect(lastCall()).toEqual(expect.objectContaining({ pincode: '' })));
+  });
+
+  test.each([
+    { name: 'category only', category: 'IT', minor: '', pin: '', search: '' },
+    { name: 'category + minor', category: 'IT', minor: 'Laptop', pin: '', search: '' },
+    { name: 'category + pincode', category: 'IT', minor: '', pin: '560', search: '' },
+    { name: 'category + minor + pincode', category: 'IT', minor: 'Laptop', pin: '560001', search: '' },
+    { name: 'pincode only', category: '', minor: '', pin: '110', search: '' },
+    { name: 'search + pincode', category: '', minor: '', pin: '400', search: 'acme' },
+    { name: 'all filters', category: 'IT', minor: 'Printers', pin: '500', search: 'acme' },
+  ])('$name: page 1 and Load more send the same combination', async ({ category, minor, pin, search }) => {
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue(taxonomy);
+    (fetchAllVendors as jest.Mock).mockResolvedValue(page([candidate], 1, 2));
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
+    await screen.findByRole('option', { name: 'IT' });
+
+    if (category) fireEvent.change(screen.getAllByRole('combobox')[2], { target: { value: category } });
+    if (minor) fireEvent.change(screen.getByRole('combobox', { name: 'Minor category' }), { target: { value: minor } });
+    if (pin) fireEvent.change(screen.getByRole('textbox', { name: 'Pincode' }), { target: { value: pin } });
+    if (search) fireEvent.change(screen.getByPlaceholderText(/Search Vendor name/), { target: { value: search } });
+
+    const expected = { category, minors: minor ? [minor] : [], pincode: pin, search };
+    await waitFor(() => expect(lastCall()).toEqual(expect.objectContaining({ page: 1, ...expected })), { timeout: 3000 });
+
+    (fetchAllVendors as jest.Mock).mockResolvedValueOnce(page([{ ...candidate, id: 'second' }], 2, 2));
+    fireEvent.click(await screen.findByTestId('load-more-vendor-cards'));
+    await waitFor(() => expect(lastCall()).toEqual(expect.objectContaining({ page: 2, ...expected })));
+  });
+});
+
 test('ignores stale pagination responses and treats an exact category search as a category filter', async () => {
   let resolveMore = (value: ReturnType<typeof page>) => { void value; };
   (fetchAllVendors as jest.Mock)
@@ -146,7 +233,7 @@ test('ignores stale pagination responses and treats an exact category search as 
     .mockResolvedValueOnce(page([{ ...candidate, id: 'second', name: 'Second supplier' }], 2, 2));
   render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
   fireEvent.click(await screen.findByTestId('load-more-vendor-cards'));
-  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Cables' } });
+  fireEvent.change(screen.getByPlaceholderText(/Search Vendor name/), { target: { value: 'Cables' } });
   await waitFor(() => expect(screen.getByTestId('vendor-card-filtered')).toBeInTheDocument(), { timeout: 3000 });
   await act(async () => resolveMore(page([{ ...candidate, id: 'stale', name: 'Stale supplier' }], 2, 2)));
   expect(screen.queryByTestId('vendor-card-stale')).not.toBeInTheDocument();

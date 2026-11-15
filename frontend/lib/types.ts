@@ -392,6 +392,8 @@ export interface FetchAllVendorsOptions {
   publicOnly?: boolean;
   state?: string;
   city?: string;
+  /** Pincode prefix, 3–6 digits ("560" = region, "560001" = exact). Other values are not sent. */
+  pincode?: string;
 }
 
 /** Outcome of fetching one page of the full (unfiltered-by-category) vendor directory. */

@@ -1295,6 +1295,25 @@ describe('rfqClient RFQ persistence', () => {
       expect(lastPath()).toBe('/api/vendors?buyerId=all&page=2&pageSize=25&search=bolt');
     });
 
+    test.each([
+      ['560001', '560001'],
+      ['560', '560'],
+      ['560 001', '560001'],
+      ['56', null],
+      ['5600012', null],
+      ['56A001', null],
+      ['', null],
+    ])('pincode %p is sent as %p', async (input, expected) => {
+      global.fetch = reply(200, { success: true, data: [], pagination: { ...pagination, total: 0 } });
+
+      await fetchAllVendors({ page: 1, pageSize: 20, category: 'IT', minors: ['Laptop'], pincode: input });
+
+      const url = new URL(lastPath(), 'http://localhost');
+      expect(url.searchParams.get('pincode')).toBe(expected);
+      expect(url.searchParams.get('category')).toBe('IT');
+      expect(url.searchParams.get('minors')).toBe('Laptop');
+    });
+
     test('includes publicOnly, deduplicated majors, and minors in the query string when provided', async () => {
       global.fetch = reply(200, { success: true, data: [], pagination: { ...pagination, total: 0 } });
 

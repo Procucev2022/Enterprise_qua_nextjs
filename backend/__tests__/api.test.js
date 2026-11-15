@@ -259,6 +259,22 @@ describe('API Route Endpoints', () => {
       expect(Array.isArray(res.body.data)).toBe(true);
     });
 
+    test.each(['56', '5600012', '56A001', '560-001'])('GET /api/vendors rejects malformed pincode %p with 400', async (pin) => {
+      const res = await request(app)
+        .get('/api/vendors')
+        .query({ buyerId: 'all', category: 'IT', pincode: pin })
+        .set(authHeader('buyer'));
+      expect(res.statusCode).toBe(400);
+      expect(res.body.errors).toHaveProperty('pincode');
+    });
+
+    test('GET /api/vendors accepts a spaced or empty pincode', async () => {
+      const spaced = await request(app).get('/api/vendors').query({ pincode: '560 001' }).set(authHeader('buyer'));
+      expect(spaced.statusCode).toBe(200);
+      const empty = await request(app).get('/api/vendors').query({ pincode: '' }).set(authHeader('buyer'));
+      expect(empty.statusCode).toBe(200);
+    });
+
     test('GET /api/vendors rejects anonymous and vendor-list enumeration', async () => {
       const anonymous = await request(app).get('/api/vendors');
       expect(anonymous.statusCode).toBe(401);

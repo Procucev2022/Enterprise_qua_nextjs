@@ -129,8 +129,14 @@ async function getVendorsFromDB(limit = null) {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', state = '', city = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
+  // Pincode prefix (3–6 digits). Anything else is ignored rather than turned into a LIKE pattern.
+  const cleanPincode = /^\d{3,6}$/.test(String(pincode || '').replace(/\s+/g, '')) ? String(pincode).replace(/\s+/g, '') : '';
   if (!pool.hasStorage()) return { rows: [], total: 0 };
+  // Lower-case minor names plus singular/plural stems (storeService.minorSearchTerms).
+  const cleanMinorTerms = Array.from(
+    new Set((Array.isArray(minorTerms) ? minorTerms : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   const cacheKey = queryCache.generateKey('vendors_page', [
     limit,
     offset,
@@ -142,6 +148,9 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     publicOnly,
     scopedBuyerId,
     skipCount,
+    // Appended only when set so existing (minor-less) cache keys are unchanged.
+    ...(cleanMinorTerms.length > 0 ? [`minors:${cleanMinorTerms.join('|')}`] : []),
+    ...(cleanPincode ? [`pincode:${cleanPincode}`] : []),
   ]);
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
@@ -281,7 +290,61 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     params.push(category.trim());
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
+    // D1 filters on the indexed major_category column only. The former raw-JSON fallback
+    // (`OR raw LIKE '%it%' AND json_extract(...)`) forced a full scan of all 600k+ vendor rows on
+    // every category request (~5s for IT); that alone spent D1's 10-second resource window, so the
+    // very next request (e.g. adding a pincode or minor) failed with 429 "D1 DB is overloaded".
+    // Verified on the prod clone (2026-11-15) that the fallback matched nothing extra:
+    //  - 0 vendors with an empty major_category column but a major in raw,
+    //  - 0 vendors whose column disagrees with raw.majorCategory,
+    //  - 0 vendors carrying a master major name as a minor under a different major.
+    // upsertVendor always writes the column from raw.majorCategory, so this stays true.
     d1Conditions.push(`(major_category = $${p} COLLATE NOCASE)`);
+  }
+  let pgOrderPrefix = '';
+  let d1OrderPrefix = '';
+  if (cleanMinorTerms.length > 0) {
+    // A vendor matches a minor when either:
+    //  1. one of its category lists holds an element equal to a minor term (exact, quoted on both
+    //     sides, so "CCTV" does not also pull "CCTV Repair & Maintenance"; singular/plural stems are
+    //     already separate terms), or
+    //  2. its name contains the term. Several master minors (e.g. IT > Laptop, Networking
+    //     Equipment) have no tagged vendors at all — the bulk catalogue filed those suppliers under a
+    //     broader minor such as Hardware — yet hundreds carry the product in their name
+    //     ("... Laptop Service Center"). Terms under MIN_NAME_MATCH_TERM_LENGTH chars skip the name
+    //     match to avoid substring noise.
+    // On D1 the cheap `raw LIKE` pre-check runs first so json_extract only parses candidate rows;
+    // callers always pair minors with a major, which keeps the scan on the indexed major rows.
+    const MIN_NAME_MATCH_TERM_LENGTH = 4;
+    const pgClauses = [];
+    const d1Clauses = [];
+    const pgTagClauses = [];
+    const d1TagClauses = [];
+    for (const term of cleanMinorTerms) {
+      params.push(`%"${term}"%`);
+      const p = params.length;
+      const pgTag = `(lower((raw->'minorCategories')::text) LIKE $${p}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${p})`;
+      const d1Tag = `(raw LIKE $${p} AND (lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}))`;
+      pgClauses.push(pgTag);
+      d1Clauses.push(d1Tag);
+      pgTagClauses.push(pgTag);
+      d1TagClauses.push(d1Tag);
+      if (term.length >= MIN_NAME_MATCH_TERM_LENGTH) {
+        params.push(`%${term}%`);
+        const pName = params.length;
+        pgClauses.push(`lower(raw->>'name') LIKE $${pName}`);
+        d1Clauses.push(`(raw LIKE $${pName} AND lower(json_extract(raw,'$.name')) LIKE $${pName})`);
+      }
+    }
+    conditions.push(`(${pgClauses.join(' OR ')})`);
+    d1Conditions.push(`(${d1Clauses.join(' OR ')})`);
+    // Vendors actually tagged with the minor rank ahead of name-only matches.
+    pgOrderPrefix = `CASE WHEN ${pgTagClauses.join(' OR ')} THEN 0 ELSE 1 END, `;
+    d1OrderPrefix = `CASE WHEN ${d1TagClauses.join(' OR ')} THEN 0 ELSE 1 END, `;
   }
   if (state) {
     params.push(`%${state.trim()}%`);
@@ -306,6 +369,15 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       conditions.push(`(raw->>'city' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
       d1Conditions.push(`(raw LIKE $${p} AND (lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p})))`);
     }
+  }
+  if (cleanPincode) {
+    // Prefix match on raw.pincode ("560" = region, "560001" = exact). On D1 the raw LIKE on the
+    // serialized `"pincode":"560…` key is a cheap pre-check before json_extract; with a category
+    // selected the scan stays on the indexed major_category rows.
+    params.push(cleanPincode);
+    const p = params.length;
+    conditions.push(`(raw->>'pincode' LIKE ($${p} || '%'))`);
+    d1Conditions.push(`(raw LIKE ('%"pincode":"' || $${p} || '%') AND json_extract(raw,'$.pincode') LIKE ($${p} || '%'))`);
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
@@ -350,8 +422,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const d1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
 
   let total = 0;
+  // Set when the count query fails: the page is still returned, but the response must not be
+  // cached (that would pin a wrong total for the cache TTL) and the total is only an estimate.
+  let countFailed = false;
   if (!skipCount) {
-    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1) || (scopedBuyerId && !search && !category && !email && !state && !city);
+    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1) || (scopedBuyerId && !search && !category && cleanMinorTerms.length === 0 && !cleanPincode && !email && !state && !city);
     if (
       isUnfiltered &&
       cachedUnfilteredVendorsTotal !== null &&
@@ -388,11 +463,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           isUnfiltered,
           hasCachedCount: cachedUnfilteredVendorsTotal !== null,
         }, 'DATABASE_QUERY');
-        if (cachedUnfilteredVendorsTotal !== null) {
-          total = cachedUnfilteredVendorsTotal;
-        } else {
-          total = 0;
-        }
+        countFailed = true;
+        // The cached figure is the whole-table total, so it only stands in for an unfiltered
+        // count; a filtered page falls back to the floor computed from the rows returned below.
+        total = isUnfiltered && cachedUnfilteredVendorsTotal !== null ? cachedUnfilteredVendorsTotal : 0;
       }
     }
   }
@@ -403,11 +477,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   let dataResult;
   try {
     dataResult = await pool.query(
-      `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY ${pgOrderPrefix}created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
       dataParams,
       {
         d1: true,
-        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY ${d1OrderPrefix}created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
         useCache: true,
         tag: 'vendors',
         ttlMs: 120000,
@@ -428,7 +502,14 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     }),
     total,
   };
-  if (cacheKey) {
+  if (countFailed) {
+    // Never report fewer vendors than are already on screen: offset + this page, plus one more
+    // page's worth when this page came back full so "Load more" stays available.
+    const shown = Number(effectiveOffset) + response.rows.length;
+    const floor = response.rows.length >= Number(effectiveLimit) ? shown + 1 : shown;
+    response.total = Math.max(response.total, floor);
+  }
+  if (cacheKey && !countFailed) {
     queryCache.set(cacheKey, [], response, { tag: 'vendors', ttlMs: 120000 });
   }
   return response;

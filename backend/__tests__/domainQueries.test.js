@@ -197,6 +197,90 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(countParams).toEqual(['%fastener%']);
       });
 
+      test('ANDs a minor-category filter with the major category across the vendor category lists', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 20, offset: 0, category: 'IT', minorTerms: ['Laptops', 'laptop', ''] });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        // Exact tag pattern + name pattern per term.
+        expect(countParams).toEqual(['IT', '%"laptops"%', '%laptops%', '%"laptop"%', '%laptop%']);
+        expect(countSql).toContain("lower((raw->'minorCategories')::text) LIKE $2");
+        expect(countSql).toContain("lower(raw->>'name') LIKE $3");
+        expect(countSql).toContain("lower((raw->'vendorSelectedCategories')::text) LIKE $4");
+        expect(countSql).toContain("lower(raw->>'name') LIKE $5");
+        expect(countSql).toMatch(/major_category = \$1[\s\S]*\) AND \(/);
+        // Tagged vendors are ordered ahead of name-only matches.
+        const [dataSql] = query.mock.calls[1];
+        expect(dataSql).toMatch(/ORDER BY CASE WHEN [\s\S]* THEN 0 ELSE 1 END, created_at DESC LIMIT \$6 OFFSET \$7/);
+      });
+
+      test('adds a pincode prefix filter on its own and combined with category, minor and search', async () => {
+        const run = async (args) => {
+          const query = jest.fn().mockResolvedValueOnce({ rows: [{ total: 0 }] }).mockResolvedValueOnce({ rows: [] });
+          pool.pool = { query };
+          await domainQueries.getVendorsPageFromDB({ limit: 20, offset: 0, ...args });
+          return query.mock.calls[0];
+        };
+
+        const [onlySql, onlyParams] = await run({ pincode: '560' });
+        expect(onlyParams).toEqual(['560']);
+        expect(onlySql).toContain("(raw->>'pincode' LIKE ($1 || '%'))");
+
+        const [allSql, allParams] = await run({ search: 'acme', category: 'IT', minorTerms: ['laptop'], pincode: '560 001' });
+        expect(allParams).toEqual(['%acme%', 'IT', '%"laptop"%', '%laptop%', '560001']);
+        expect(allSql).toContain("raw->>'pincode' LIKE ($5 || '%')");
+        // Every filter is ANDed together.
+        expect(allSql.match(/\) AND \(/g).length).toBeGreaterThanOrEqual(3);
+      });
+
+      test.each(['56', '5600012', '56A', "560' OR 1=1"])('ignores an invalid pincode %p instead of building a pattern', async (pin) => {
+        const query = jest.fn().mockResolvedValueOnce({ rows: [{ total: 0 }] }).mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+        await domainQueries.getVendorsPageFromDB({ limit: 20, offset: 0, category: 'IT', pincode: pin });
+        const [sql, params] = query.mock.calls[0];
+        expect(params).toEqual(['IT']);
+        expect(sql).not.toContain('pincode');
+      });
+
+      test('a failed filtered count never reports fewer vendors than shown and is not cached', async () => {
+        const fullPage = Array.from({ length: 20 }, (_, i) => ({ raw: { id: `v-${i}` } }));
+        const query = jest.fn()
+          .mockRejectedValueOnce(new Error('D1 HTTP query failed (429): D1 DB is overloaded.'))
+          .mockResolvedValueOnce({ rows: fullPage })
+          // Second identical call must re-run the count (no cached wrong total); the page rows
+          // themselves were correct and may come from the pool's row cache.
+          .mockResolvedValueOnce({ rows: [{ total: 108 }] });
+        pool.pool = { query };
+
+        const first = await domainQueries.getVendorsPageFromDB({ limit: 20, offset: 20, category: 'IT', pincode: '560002' });
+        expect(first.rows).toHaveLength(20);
+        expect(first.total).toBe(41); // offset 20 + 20 shown + 1 so "Load more" stays available
+
+        const second = await domainQueries.getVendorsPageFromDB({ limit: 20, offset: 20, category: 'IT', pincode: '560002' });
+        expect(second.total).toBe(108);
+        expect(second.rows).toHaveLength(20);
+        expect(query.mock.calls[2][0]).toContain('COUNT(*)');
+      });
+
+      test('skips the name match for short minor terms to avoid substring noise', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 20, offset: 0, category: 'IT', minorTerms: ['pos'] });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countParams).toEqual(['IT', '%"pos"%']);
+        expect(countSql).not.toContain("raw->>'name') LIKE");
+      });
+
       test('caches exact vendor counts across pages and vendor writes invalidate the count', async () => {
         const query = jest.fn()
           .mockResolvedValueOnce({ rows: [{ total: 7 }] })
@@ -205,11 +289,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
           .mockResolvedValueOnce({ rows: [{ total: 8 }] })
           .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-3' } }] });
         pool.pool = { query };
+        // Cache metrics are process-wide and not reset by clear(), so measure the delta.
+        const hitsBefore = pool.queryCache.getMetrics().hits;
 
         await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 0, search: 'steel' });
         await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 1, search: 'steel' });
         expect(query).toHaveBeenCalledTimes(3);
-        expect(pool.queryCache.getMetrics().hits).toBe(1);
+        expect(pool.queryCache.getMetrics().hits - hitsBefore).toBe(1);
 
         pool.queryCache.invalidate('vendors');
         const refreshed = await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 2, search: 'steel' });
