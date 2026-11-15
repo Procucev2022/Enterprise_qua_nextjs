@@ -1,5 +1,7 @@
 const bootstrapController = require('../src/controllers/bootstrapController');
 const storeService = require('../src/services/storeService');
+const vendorIngestionQueries = require('../src/db/vendorIngestionQueries');
+const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 
 function mockRes() {
   const res = {
@@ -339,5 +341,78 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     expect(res.statusCode).toBe(200);
     const returnedOwn = res.data.data.vendors.find((v) => v.id === 'v-vendor-own');
     expect(returnedOwn.email).toBe('supplier@own.com');
+  });
+
+  test('merges buyer vendor_master_records fallback when uploaded suppliers are not yet in vendors table', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({
+      id: 'ba-org-1',
+      corporateEmail: 'veera@procucev.com',
+      organizationName: 'Veera solutions pvt ltd',
+    });
+    jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+      found: true,
+      profile: { organizationId: 'org-master-1' },
+    });
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValue({ id: 'sess-master-1' });
+    jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecords').mockResolvedValue([
+      { id: 'rec-existing-email', vendorCode: 'V-EX1', companyName: 'Existing Email Co', email: 'existing@co.test' },
+      { id: 'rec-existing-code', vendorCode: 'VC-DUP', companyName: 'Existing Code Co', email: 'newemail@co.test' },
+      { id: 'rec-empty', vendorCode: '', companyName: '', email: '' },
+      { id: 'rec-new-1', vendorCode: 'VC-10', companyName: 'Testing CSV Co', email: 'csv@co.test', contactPerson: 'Veera', phone: '9999999999', address: 'Hyderabad', gstin: '36ABCDE1234F1Z5', rating: 4.6 },
+      { id: 'rec-new-2', vendorCode: '', companyName: '', email: 'emailonly@co.test', rating: null },
+    ]);
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      vendors: [
+        { id: 'v-ex-1', email: 'existing@co.test', vendorCode: 'VC-EX', buyerId: 'ba-org-1', name: 'Existing Email Co' },
+        { id: 'v-ex-2', email: 'other@co.test', vendorCode: 'VC-DUP', buyerId: 'ba-org-1', name: 'Existing Code Co' },
+      ],
+      vendorsTotal: 2,
+      evaluations: [{ id: 'ev-1', email: 'csv@co.test' }, { id: 'ev-foreign', email: 'stranger@x.test' }],
+    });
+
+    const req = { user: { role: 'buyer', sub: 'u-veera-1', email: 'veera@procucev.com' } };
+    const res = mockRes();
+    await bootstrapController.getBootstrap(req, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.data.vendorsTotal).toBe(4);
+    const csvVendor = res.data.data.vendors.find((v) => v.id === 'v-master-rec-new-1');
+    const emailOnlyVendor = res.data.data.vendors.find((v) => v.id === 'v-master-rec-new-2');
+    expect(csvVendor).toMatchObject({
+      name: 'Testing CSV Co',
+      rating: 4.6,
+      source: 'vendor_master_ingestion',
+      addedByBuyerCompany: 'Veera solutions pvt ltd',
+    });
+    expect(emailOnlyVendor).toMatchObject({ name: 'emailonly@co.test', rating: null });
+    expect(res.data.data.evaluations.map((e) => e.id)).toEqual(['ev-1']);
+  });
+
+  test('handles missing orgId, missing session, empty records, and query errors gracefully in master fallback', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({
+      id: 'ba-no-org',
+      corporateEmail: 'noorg@test.com',
+    });
+    const profileSpy = jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: false });
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ vendors: [], evaluations: [] });
+
+    // Case 1: no orgId resolved
+    const resNoOrg = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', sub: 'u-no-org', email: 'noorg@test.com' } }, resNoOrg, jest.fn());
+    expect(resNoOrg.data.data.vendors).toEqual([]);
+
+    // Case 2: orgId from user.orgId, findLatestSession returns null
+    const sessSpy = jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValue(null);
+    const resNoSess = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-2', email: 'noorg@test.com' } }, resNoSess, jest.fn());
+    expect(resNoSess.data.data.vendors).toEqual([]);
+
+    // Case 3: findLatestSession throws error (caught and warns)
+    profileSpy.mockRestore();
+    sessSpy.mockRejectedValueOnce(new Error('D1 table missing'));
+    const resErr = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-3', email: 'noorg@test.com' } }, resErr, jest.fn());
+    expect(resErr.statusCode).toBe(200);
+    expect(resErr.data.data.vendors).toEqual([]);
   });
 });

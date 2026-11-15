@@ -3,6 +3,88 @@ const { logger } = require('../services/loggerService');
 const { sanitizePublicVendor } = require('./vendorController');
 const { isRetryableD1Error } = require('../db/d1Bridge');
 const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
+const vendorIngestionQueries = require('../db/vendorIngestionQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
+
+/**
+ * Load vendor_master_records from the buyer's latest ingestion session when those uploaded
+ * suppliers have not yet been promoted into the main `vendors` table (e.g. buyer completed
+ * Step 2 vendor upload before running PO categorization / Step 4).
+ */
+async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buyerId, existingVendors }) {
+  try {
+    let orgId = resolvedBuyerAccount?.organizationId || user.orgId || user.organizationId || null;
+    if (!orgId && (user.sub || user.id)) {
+      const profileLookup = await buyerProfileQueries.findProfileByUserId(user.sub || user.id);
+      if (profileLookup?.found && profileLookup.profile?.organizationId) {
+        orgId = profileLookup.profile.organizationId;
+      }
+    }
+    if (!orgId) return [];
+
+    const session = await vendorIngestionQueries.findLatestSession(orgId);
+    if (!session || !session.id) return [];
+
+    const masterRecords = await vendorIngestionQueries.findVendorMasterRecords(session.id, orgId, 500);
+    if (!Array.isArray(masterRecords) || masterRecords.length === 0) return [];
+
+    const seenEmails = new Set(
+      existingVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
+    );
+    const seenCodes = new Set(
+      existingVendors.map((v) => String(v.vendorCode || '').trim().toLowerCase()).filter(Boolean)
+    );
+
+    const fallbackVendors = [];
+    for (const rec of masterRecords) {
+      const normalizedEmail = String(rec.email || '').trim().toLowerCase();
+      const normalizedCode = String(rec.vendorCode || '').trim().toLowerCase();
+      if (!rec.companyName && !normalizedEmail) continue;
+      if ((normalizedEmail && seenEmails.has(normalizedEmail)) || (normalizedCode && seenCodes.has(normalizedCode))) {
+        continue;
+      }
+      if (normalizedEmail) seenEmails.add(normalizedEmail);
+      if (normalizedCode) seenCodes.add(normalizedCode);
+
+      const parsedRating = Number(rec.rating);
+      fallbackVendors.push({
+        id: `v-master-${rec.id}`,
+        vendorCode: rec.vendorCode || null,
+        name: rec.companyName || normalizedEmail,
+        email: rec.email || null,
+        contactPerson: rec.contactPerson || null,
+        phone: rec.phone || null,
+        location: rec.address || null,
+        gstin: rec.gstin || null,
+        majorCategory: 'Vendor Master',
+        minorCategories: [],
+        clientMappedCategories: [],
+        vendorSelectedCategories: [],
+        rating:
+          rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(parsedRating)
+            ? parsedRating
+            : null,
+        score: null,
+        evaluated: false,
+        hasRecord: true,
+        isExistingInDatabase: true,
+        status: 'PENDING EVALUATION',
+        source: 'vendor_master_ingestion',
+        buyerId: buyerId || orgId,
+        buyerAccountId: buyerId || orgId,
+        buyerEmail: user.email || null,
+        addedByBuyerCompany: resolvedBuyerAccount?.organizationName || user.orgName || null,
+      });
+    }
+    return fallbackVendors;
+  } catch (error) {
+    logger.warn('Failed to load vendor_master_records fallback during bootstrap', {
+      error,
+      userId: user?.sub || user?.id || null,
+    }, 'BOOTSTRAP_CONTROLLER');
+    return [];
+  }
+}
 
 async function getBootstrap(req, res, next) {
   try {
@@ -61,6 +143,18 @@ async function getBootstrap(req, res, next) {
     const isManagementUser = Boolean(user && (user.role === 'admin' || user.role === 'category_manager'));
     const isBuyer = Boolean(user && user.role === 'buyer');
     const sessionEmail = user && String(user.email || '').toLowerCase();
+    const existingVendors = Array.isArray(data.vendors) ? data.vendors : [];
+    const fallbackMasterVendors = isBuyer
+      ? await loadBuyerMasterFallbackVendors({
+          user,
+          resolvedBuyerAccount,
+          buyerId,
+          existingVendors,
+        })
+      : [];
+    const rawVendors = fallbackMasterVendors.length > 0
+      ? [...existingVendors, ...fallbackMasterVendors]
+      : existingVendors;
     const evaluations = Array.isArray(data.evaluations) ? data.evaluations : [];
     const vendorEvaluations = user && user.role === 'vendor' && sessionEmail
       ? evaluations.filter((evaluation) => String(evaluation.email || '').toLowerCase() === sessionEmail)
@@ -68,7 +162,7 @@ async function getBootstrap(req, res, next) {
     const buyerIdentityValues = [buyerId, ...candidateBuyerIds]
       .filter(Boolean)
       .map((value) => String(value).toLowerCase());
-    const buyerOwnedVendors = (data.vendors || []).filter((vendor) => {
+    const buyerOwnedVendors = rawVendors.filter((vendor) => {
       const vendorOwnerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
         .filter(Boolean)
         .map((value) => String(value).toLowerCase());
@@ -96,7 +190,7 @@ async function getBootstrap(req, res, next) {
         })
       : [];
 
-    const vendors = (data.vendors || []).map((vendor) => {
+    const vendors = rawVendors.map((vendor) => {
       const isOwnVendor = sessionEmail && String(vendor.email || '').toLowerCase() === sessionEmail;
       const vendorOwnerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
         .filter(Boolean)
@@ -110,6 +204,9 @@ async function getBootstrap(req, res, next) {
       buyerAccounts: isManagementUser ? data.buyerAccounts : (isBuyer && resolvedBuyerAccount ? [resolvedBuyerAccount] : []),
       activeBuyerAccount: isManagementUser ? data.activeBuyerAccount : (isBuyer ? resolvedBuyerAccount : null),
       vendors,
+      ...(fallbackMasterVendors.length > 0
+        ? { vendorsTotal: (data.vendorsTotal || existingVendors.length) + fallbackMasterVendors.length }
+        : {}),
       evaluations: isManagementUser ? evaluations : (isBuyer ? buyerEvaluations : vendorEvaluations),
       auditLogs: isManagementUser ? data.auditLogs : [],
       systemConfig: isManagementUser ? data.systemConfig : null,

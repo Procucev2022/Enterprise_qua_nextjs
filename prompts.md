@@ -6001,3 +6001,17 @@ In the vendors detailed displayed, we should see the vendor pincode as well. so 
 Please resolve the error mentioned or occcured in these logs
 ```
 ---
+
+### Prompt 230
+**Timestamp**: 2026-11-15T18:42:06+05:30
+```text
+have uploaded vendors in past, but can't see the vendors, Can you please check once the issue
+```
+---
+
+### Prompt 231
+**Timestamp**: 2026-11-15T21:12:50+05:30
+```text
+keep commiting &  pushing the change as well
+```
+---

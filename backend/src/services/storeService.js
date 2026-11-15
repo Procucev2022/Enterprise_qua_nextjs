@@ -10027,10 +10027,15 @@ class StoreService {
         updatedVendor.buyerId = buyerId || updatedVendor.buyerId || null;
         updatedVendor.buyerAccountId = buyerId || updatedVendor.buyerAccountId || null;
         updatedVendor.buyerEmail = buyerEmail || updatedVendor.buyerEmail || null;
+        updatedVendor.addedByBuyerCompany =
+          (attributedAccount && attributedAccount.organizationName) || updatedVendor.addedByBuyerCompany || null;
         if (name) updatedVendor.name = name;
         if (rec.contactPerson) updatedVendor.contactPerson = (rec.contactPerson || '').trim();
         if (rec.phone) updatedVendor.phone = (rec.phone || '').trim();
         if (rec.location || rec.address) updatedVendor.location = (rec.location || rec.address || '').trim();
+        if (rec.vendorCode) updatedVendor.vendorCode = String(rec.vendorCode).trim();
+        const rawGstin = rec.gstin || rec.gstNumber;
+        if (rawGstin) updatedVendor.gstin = String(rawGstin).trim().toUpperCase();
         if (majorCategory) updatedVendor.majorCategory = majorCategory;
         if (minorCategories.length > 0) {
           updatedVendor.minorCategories = minorCategories;
@@ -10065,11 +10070,15 @@ class StoreService {
         continue;
       }
 
+      const rawNewGstin = rec.gstin || rec.gstNumber;
       const newVendor = {
         id: `v-hist-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         buyerId: buyerId || null,
         buyerAccountId: buyerId || null,
         buyerEmail: buyerEmail || null,
+        addedByBuyerCompany: (attributedAccount && attributedAccount.organizationName) || null,
+        vendorCode: rec.vendorCode ? String(rec.vendorCode).trim() : null,
+        gstin: rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null,
         name,
         email,
         contactPerson: (rec.contactPerson || '').trim() || null,
@@ -10114,14 +10123,18 @@ class StoreService {
               const updated = {
                 ...existingInDB,
                 buyerId: buyerId || existingInDB.buyerId,
-                buyerAccountId: buyerAccountId || existingInDB.buyerAccountId,
+                buyerAccountId: buyerId || existingInDB.buyerAccountId,
                 buyerEmail: buyerEmail || existingInDB.buyerEmail,
-                addedByBuyerCompany: buyerAccount?.organizationName || existingInDB.addedByBuyerCompany,
+                addedByBuyerCompany:
+                  (attributedAccount && attributedAccount.organizationName) || existingInDB.addedByBuyerCompany,
+                vendorCode: vendor.vendorCode || existingInDB.vendorCode,
+                gstin: vendor.gstin || existingInDB.gstin,
                 minorCategories: vendor.minorCategories?.length ? vendor.minorCategories : existingInDB.minorCategories,
                 majorCategory: vendor.majorCategory || existingInDB.majorCategory,
               };
               // eslint-disable-next-line no-await-in-loop
               await domainQueries.upsertVendorInDB(updated);
+              this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
               const memIdx = this.vendors.findIndex((v) => v.id === existingInDB.id);
               if (memIdx !== -1) this.vendors[memIdx] = { ...this.vendors[memIdx], ...updated };
               else this.vendors.push(updated);

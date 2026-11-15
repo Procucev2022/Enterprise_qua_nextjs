@@ -291,7 +291,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [selectedHistoryBatch, setSelectedHistoryBatch] = useState<any | null>(null);
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
 
-  const loadUploadHistory = () => {
+  const loadUploadHistory = useCallback(() => {
     try {
       const raw = localStorage.getItem('procucev_vendor_upload_history');
       if (raw) {
@@ -303,7 +303,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     } catch {
       setUploadHistoryList([]);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadUploadHistory();
+  }, [loadUploadHistory]);
 
   const handleDownloadBatchCsv = (batch: any) => {
     if (!batch) return;
@@ -837,7 +841,74 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       };
     });
 
-  const mergedVendors = mergeWithEvaluations(buyerVendors);
+  const reconciledBuyerVendors = useMemo<VendorEntry[]>(() => {
+    if (uploadHistoryList.length === 0) return buyerVendors;
+
+    const seenEmails = new Set(
+      buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
+    );
+    const seenNames = new Set(
+      buyerVendors.map((v) => String(v.name || '').trim().toLowerCase()).filter(Boolean)
+    );
+
+    const extras: VendorEntry[] = [];
+    uploadHistoryList.forEach((batch, batchIdx) => {
+      const records = Array.isArray(batch?.records) ? batch.records : [];
+      records.forEach((rec: Record<string, unknown>, recIdx: number) => {
+        const recStatus = String(rec.status || '').toUpperCase();
+        if (recStatus === 'FAILED' || recStatus === 'DUPLICATE' || recStatus === 'SKIPPED') {
+          return;
+        }
+        const rawName = String(rec.name || rec.vendorName || rec.companyName || '').trim();
+        const rawEmail = String(rec.email || '').trim();
+        if (!rawName && !rawEmail) return;
+
+        const emailKey = rawEmail.toLowerCase();
+        const nameKey = rawName.toLowerCase();
+        if ((emailKey && seenEmails.has(emailKey)) || (!emailKey && nameKey && seenNames.has(nameKey))) {
+          return;
+        }
+        if (emailKey) seenEmails.add(emailKey);
+        if (nameKey) seenNames.add(nameKey);
+
+        const city = String(rec.city || '').trim();
+        const state = String(rec.state || '').trim();
+        const rawCategory = String(rec.category || rec.majorCategory || '').trim();
+        const numericRating = Number(rec.rating);
+        const rating =
+          rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(numericRating)
+            ? numericRating
+            : 0;
+
+        extras.push({
+          id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
+          name: rawName || rawEmail,
+          contactPerson: String(rec.contactPerson || ''),
+          phone: String(rec.phone || ''),
+          email: rawEmail,
+          majorCategory: rawCategory,
+          minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
+          location: [city, state].filter(Boolean).join(', '),
+          rating,
+          source: 'buyer_uploaded',
+          status: 'REGISTERED / NOT EVALUATED',
+          evaluated: false,
+          hasRecord: false,
+          addedByBuyerCompany: activeBuyerAccount?.organizationName,
+          buyerId: activeBuyerAccount?.id,
+          buyerAccountId: activeBuyerAccount?.id,
+          ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
+          ...(city ? { city } : {}),
+          ...(state ? { state } : {}),
+          ...(rec.pincode ? { pincode: String(rec.pincode) } : {}),
+        });
+      });
+    });
+
+    return extras.length > 0 ? [...buyerVendors, ...extras] : buyerVendors;
+  }, [buyerVendors, uploadHistoryList, activeBuyerAccount]);
+
+  const mergedVendors = mergeWithEvaluations(reconciledBuyerVendors);
   const buyerUploadedVendorsList = mergedVendors.filter(isBuyerUploaded);
 
   // Filter categories dynamically
@@ -3004,7 +3075,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* ========================================================================= */}
       {showUploadHistoryModal && (
         <div className="modal-overlay !z-[1100] animate-fade-in">
-          <div className="modal-content max-w-5xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-3xl shadow-2xl border-2 border-indigo-500/30 dark:border-indigo-500/40 animate-scale-up max-h-[92vh] flex flex-col space-y-4">
+          <div
+            data-testid="upload-history-modal"
+            className="modal-content max-w-5xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-3xl shadow-2xl border-2 border-indigo-500/30 dark:border-indigo-500/40 animate-scale-up max-h-[92vh] flex flex-col space-y-4"
+          >
             {/* Header */}
             <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-gray-800 shrink-0">
               <div className="flex items-center gap-3">

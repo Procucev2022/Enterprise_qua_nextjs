@@ -1303,6 +1303,16 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     ? mapping.buyerMinorCategories
     : mapping.aiSuggestion.minorCategories;
 
+  const buyerAccount = context?.email
+    ? (await storeService.ensureBuyerAccountForUser?.({
+        sub: context.userId,
+        email: context.email,
+        orgName: context.organizationName,
+      })) || (await storeService.getBuyerAccountByEmail?.(context.email))
+    : null;
+  const attributedBuyerId = buyerAccount?.id || context?.organizationId || context?.userId || null;
+  const attributedBuyerEmail = buyerAccount?.corporateEmail || context?.email || null;
+
   const payload = {
     name: mapping.companyName,
     email: mapping.email,
@@ -1315,6 +1325,9 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     clientMappedCategories: categories,
     vendorCode: mapping.vendorCode || null,
     addedByBuyerCompany: context.organizationName || null,
+    buyerId: existing?.buyerId || attributedBuyerId,
+    buyerAccountId: existing?.buyerAccountId || attributedBuyerId,
+    buyerEmail: existing?.buyerEmail || attributedBuyerEmail,
   };
 
   const vendor = existing

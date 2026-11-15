@@ -615,6 +615,32 @@ export default function InitialSetupModal() {
         if (sess.vendorMasterFileName && sess.vendorMasterRowCount > 0) {
           setVendorFileName(sess.vendorMasterFileName);
           setVendorMasterUploaded(true);
+          try {
+            const vmRes = await fetch(`/api/vendor-ingestion/${sess.id}/vendor-master?limit=500`, {
+              headers: authFetchHeaders(),
+            });
+            if (vmRes?.ok) {
+              const vmJson = await vmRes.json();
+              const rawRecords = vmJson?.data?.records;
+              if (Array.isArray(rawRecords) && rawRecords.length > 0) {
+                setStoredVendors(
+                  rawRecords.map((rec: Record<string, unknown>, idx: number) => ({
+                    id: String(rec.id || `vm-resumed-${idx}`),
+                    vendorCode: String(rec.vendorCode || idx + 1),
+                    companyName: String(rec.companyName || ''),
+                    contactPerson: String(rec.contactPerson || ''),
+                    email: String(rec.email || ''),
+                    phone: String(rec.phone || ''),
+                    address: String(rec.address || ''),
+                    gstNumber: String(rec.gstin || ''),
+                    vendorRatingScore: typeof rec.rating === 'number' ? rec.rating : undefined,
+                  }))
+                );
+              }
+            }
+          } catch (vmErr) {
+            logger.log('WARN', 'Could not hydrate saved vendor master records', { error: vmErr }, 'VENDOR_INGESTION');
+          }
         }
         if (sess.poFileName && sess.poRowCount > 0) {
           setPoFileName(sess.poFileName);

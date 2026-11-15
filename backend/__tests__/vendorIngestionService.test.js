@@ -4,6 +4,7 @@ jest.mock('../src/services/loggerService', () => ({ logger: { info: jest.fn(), w
 jest.mock('../src/services/storeService', () => ({
   reset: jest.fn(), addAuditLog: jest.fn(), notifyBuyer: jest.fn(), getVendorById: jest.fn(),
   getVendorByIdWithDBFallback: jest.fn(), updateVendorDurably: jest.fn(), empanelIngestedVendor: jest.fn(),
+  ensureBuyerAccountForUser: jest.fn(), getBuyerAccountByEmail: jest.fn(),
 }));
 jest.mock('../src/services/mailerService', () => ({}));
 jest.mock('../src/services/vendorCategorizationService', () => ({
@@ -399,8 +400,26 @@ describe('buyer category review and vendor empanelment', () => {
     store.empanelIngestedVendor.mockReturnValue(null);
     const mapping = { ...MAPPING, vendorCode: '', aiSuggestion: { ...MAPPING.aiSuggestion, majorCategory: '' } };
     expect(await service.empanelApprovedVendor({ ...CONTEXT, organizationName: '' }, SESSION.id, mapping)).toBeNull();
-    expect(store.empanelIngestedVendor).toHaveBeenCalledWith(expect.objectContaining({ majorCategory: null, gstin: null, phone: null, contactPerson: null, location: null, vendorCode: null, addedByBuyerCompany: null }), CONTEXT.email);
+    expect(store.empanelIngestedVendor).toHaveBeenCalledWith(expect.objectContaining({
+      majorCategory: null, gstin: null, phone: null, contactPerson: null, location: null, vendorCode: null,
+      addedByBuyerCompany: null, buyerId: CONTEXT.organizationId, buyerAccountId: CONTEXT.organizationId, buyerEmail: CONTEXT.email,
+    }), CONTEXT.email);
     expect(queries.attachVendorId).not.toHaveBeenCalled();
+  });
+
+  test('attributes empanelled vendor to resolved buyer account and preserves existing vendor ownership on update', async () => {
+    queries.findVendorMasterRecord.mockResolvedValue(VENDOR_ROW);
+    store.ensureBuyerAccountForUser.mockResolvedValueOnce({ id: 'ba-99', corporateEmail: 'corp@buyer.test' });
+    store.getVendorByIdWithDBFallback.mockResolvedValueOnce({ id: 'v-existing-99', buyerId: 'ba-prev', buyerEmail: 'prev@buyer.test' });
+    store.updateVendorDurably.mockResolvedValueOnce({ id: 'v-existing-99', buyerId: 'ba-prev' });
+
+    const res = await service.empanelApprovedVendor(CONTEXT, SESSION.id, MAPPING);
+    expect(res).toMatchObject({ id: 'v-existing-99' });
+    expect(store.updateVendorDurably).toHaveBeenCalledWith('v-existing-99', expect.objectContaining({
+      buyerId: 'ba-prev',
+      buyerAccountId: 'ba-99',
+      buyerEmail: 'prev@buyer.test',
+    }));
   });
 });
 

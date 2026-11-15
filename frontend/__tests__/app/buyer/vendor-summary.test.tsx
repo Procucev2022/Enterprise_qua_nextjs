@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
@@ -238,6 +238,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    localStorage.removeItem('procucev_vendor_upload_history');
     logger.isRemoteSyncEnabled = false;
     logger.clearLogs();
     (useApp as jest.Mock).mockReturnValue({
@@ -2601,19 +2602,20 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const viewRecordBtns = screen.getAllByRole('button', { name: /View Records/i });
       fireEvent.click(viewRecordBtns[0]);
 
-      expect(screen.getByText('Vendor Template Upload Batch Details')).toBeInTheDocument();
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
-      expect(screen.getByText('Zenith Electricals')).toBeInTheDocument();
+      const historyModal = screen.getByTestId('upload-history-modal');
+      expect(within(historyModal).getByText('Vendor Template Upload Batch Details')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Zenith Electricals')).toBeInTheDocument();
 
       // Filter records
-      const searchRecordInput = screen.getByPlaceholderText(/Search this batch\.\.\./i);
+      const searchRecordInput = within(historyModal).getByPlaceholderText(/Search this batch\.\.\./i);
       fireEvent.change(searchRecordInput, { target: { value: 'Precision' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
-      expect(screen.queryByText('Zenith Electricals')).not.toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).queryByText('Zenith Electricals')).not.toBeInTheDocument();
 
       // Search non-matching
       fireEvent.change(searchRecordInput, { target: { value: 'NonExistent' } });
-      expect(screen.getByText(/No suppliers match "NonExistent"/i)).toBeInTheDocument();
+      expect(within(historyModal).getByText(/No suppliers match "NonExistent"/i)).toBeInTheDocument();
 
       // Clear search via clear button
       const clearSearchBtn = searchRecordInput.parentElement?.querySelector('button');
@@ -2622,7 +2624,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       } else {
         fireEvent.change(searchRecordInput, { target: { value: '' } });
       }
-      expect(screen.getByText('Zenith Electricals')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Zenith Electricals')).toBeInTheDocument();
 
       // Export Upload CSV button in batch details
       fireEvent.click(screen.getByRole('button', { name: /Export Upload CSV/i }));
@@ -2768,58 +2770,59 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const viewRecordBtns = screen.getAllByRole('button', { name: /View Records/i });
       fireEvent.click(viewRecordBtns[0]);
 
-      expect(screen.getByText('Vendor Template Upload Batch Details')).toBeInTheDocument();
+      const historyModal = screen.getByTestId('upload-history-modal');
+      expect(within(historyModal).getByText('Vendor Template Upload Batch Details')).toBeInTheDocument();
 
       // Verify sparse record renders table fallbacks (lines 2778-2822)
       // Missing vendorCode, contactPerson, email, phone, gstin and category show a dash, not a stand-in label.
-      const allDashes = screen.getAllByText('—');
+      const allDashes = within(historyModal).getAllByText('—');
       expect(allDashes.length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText('General')).not.toBeInTheDocument();
+      expect(within(historyModal).queryByText('General')).not.toBeInTheDocument();
 
       // Verify contactDesignation renders for the second record (line 2794-2797)
-      expect(screen.getByText('Manager')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Manager')).toBeInTheDocument();
 
       // Search by brandName: 'PrecisionBrand'
-      const searchInput = screen.getByPlaceholderText(/Search this batch/i);
+      const searchInput = within(historyModal).getByPlaceholderText(/Search this batch/i);
       fireEvent.change(searchInput, { target: { value: 'PrecisionBrand' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
-      expect(screen.queryByText('Zenith Electricals')).not.toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).queryByText('Zenith Electricals')).not.toBeInTheDocument();
 
       // Search by vendorCode: 'VND-001'
       fireEvent.change(searchInput, { target: { value: 'VND-001' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Search by contactPerson: 'Karan'
       fireEvent.change(searchInput, { target: { value: 'Karan' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Search by email: 'karan@'
       fireEvent.change(searchInput, { target: { value: 'karan@' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Search by phone: '98111'
       fireEvent.change(searchInput, { target: { value: '98111' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Search by city: 'Vadodara'
       fireEvent.change(searchInput, { target: { value: 'Vadodara' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Search by state: 'Gujarat'
       fireEvent.change(searchInput, { target: { value: 'Gujarat' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Search by gstin: '24AAAAA'
       fireEvent.change(searchInput, { target: { value: '24AAAAA' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Search by category: 'Mechanical'
       fireEvent.change(searchInput, { target: { value: 'Mechanical' } });
-      expect(screen.getByText('Precision Bearings Co')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Precision Bearings Co')).toBeInTheDocument();
 
       // Clear search to show all
       fireEvent.change(searchInput, { target: { value: '' } });
-      expect(screen.getByText('Sparse Vendor')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Sparse Vendor')).toBeInTheDocument();
     });
   });
 

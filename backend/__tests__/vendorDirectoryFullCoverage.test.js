@@ -384,6 +384,11 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
       expect(res.status).toHaveBeenCalledWith(400);
 
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({
+        id: 'ba-hist-1',
+        corporateEmail: 'b@b.com',
+        organizationName: 'Buyer Hist Org',
+      });
       await buyerAccountController.ingestHistoricalData(
         {
           user: { role: 'buyer', email: 'b@b.com' },
@@ -396,6 +401,17 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'ba-hist-2',
+        corporateEmail: 'b@b.com',
+      });
+      await buyerAccountController.ingestHistoricalData(
+        { user: { role: 'buyer', email: 'b@b.com' }, body: { period: 'FY2025-Q1', vendorRecords: [] } },
+        res,
+        next
+      );
 
       jest.spyOn(storeService, 'processHistoricalPurchaseData').mockImplementation(() => {
         throw new Error('err');
