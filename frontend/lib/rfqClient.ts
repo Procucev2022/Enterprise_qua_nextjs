@@ -1,5 +1,6 @@
 import { authClient } from './authClient';
 import { logger } from './logger';
+import { resolveAttachmentMimeType } from './constants';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
@@ -368,7 +369,11 @@ export async function uploadRFQAttachment(file: File): Promise<RFQAttachmentResu
       },
       // The browser leaves `type` empty for some uploads; the server allow-list
       // rejects an unrecognised value, which is the outcome we want.
-      body: JSON.stringify({ fileName: file.name, mimeType: file.type, content }),
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: resolveAttachmentMimeType(file.name, file.type),
+        content,
+      }),
     });
   } catch {
     return { success: false, error: UI_STRINGS.auth.networkUnreachable };

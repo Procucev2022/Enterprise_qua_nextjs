@@ -40,6 +40,7 @@ const {
   EMAIL_GATEWAY_CONFIG,
   AUTH_MESSAGES,
   RFQ_CREATION_ERRORS,
+  resolveAttachmentContentType,
 } = require('../config/constants');
 const { validateRFQLineItemsForCreate } = require('../config/validationSchemas');
 
@@ -1676,11 +1677,26 @@ async function downloadRFQAttachment(req, res, next) {
       return res.status(404).json({ success: false, error: 'That document is no longer available.' });
     }
 
-    res.setHeader('Content-Type', stored.meta.mimeType);
+    const fileName = stored.meta && stored.meta.fileName ? stored.meta.fileName : 'attachment';
+    const contentType = resolveAttachmentContentType(stored.meta && stored.meta.mimeType, fileName);
+
+    logger.info(
+      'Serving RFQ attachment',
+      {
+        attachmentId,
+        fileName,
+        contentType,
+        bytes: stored.content.length,
+      },
+      'RFQ_CONTROLLER'
+    );
+
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Length', stored.content.length);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     // The stored name is already reduced to a leaf and quoted, so it cannot inject
     // extra header directives.
-    res.setHeader('Content-Disposition', `inline; filename="${stored.meta.fileName.replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/["\r\n]/g, '')}"`);
     res.send(stored.content);
   } catch (err) {
     logger.error('Error reading RFQ attachment', err, 'RFQ_CONTROLLER');

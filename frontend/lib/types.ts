@@ -503,6 +503,30 @@ export interface RFQAttachment {
   uploadedAt: string;
 }
 
+export type AttachmentPreviewKind = 'email' | 'pdf' | 'image' | 'text' | 'download';
+
+export interface ParsedEmlPreview {
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  date?: string;
+  body: string;
+  embeddedAttachments: string[];
+  raw: string;
+}
+
+export interface AttachmentPreviewState {
+  file: RFQAttachment;
+  status: 'loading' | 'ready' | 'error';
+  previewKind: AttachmentPreviewKind;
+  resolvedMime: string;
+  objectUrl: string | null;
+  textContent: string | null;
+  emailPreview: ParsedEmlPreview | null;
+  errorMessage: string | null;
+}
+
 /**
  * The narrative summary stored against an RFQ.
  *

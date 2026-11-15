@@ -1,8 +1,10 @@
 'use client';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
+import { normalizeAttachmentBlob, parseEmlContent, readBlobAsText } from '@/lib/attachmentPreview';
 import {
   SOURCING_MODES,
   PRESENCE_POLL_INTERVAL_MS,
@@ -25,12 +27,15 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
 import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
+import AttachmentPreviewModal from '@/app/components/AttachmentPreviewModal';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
 import { getMinorCategories, hasMajorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import type {
+  AttachmentPreviewState,
   ExtractedEntity,
+  ParsedEmlPreview,
   QuoteComparison,
   RFQAttachment,
   RFQInquiry,
@@ -1095,29 +1100,135 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     }
   };
 
+  const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | null>(null);
+  const previewRequestIdRef = useRef(0);
+  const activeObjectUrlRef = useRef<string | null>(null);
+
+  const revokeActivePreviewUrl = useCallback(() => {
+    if (activeObjectUrlRef.current) {
+      if (typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(activeObjectUrlRef.current);
+      }
+      activeObjectUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      revokeActivePreviewUrl();
+    };
+  }, [revokeActivePreviewUrl]);
+
+  const handleCloseAttachmentPreview = useCallback(() => {
+    previewRequestIdRef.current += 1;
+    revokeActivePreviewUrl();
+    setAttachmentPreview(null);
+  }, [revokeActivePreviewUrl]);
+
   // GET /api/rfqs/attachments/:id requires authentication, and this app's
   // session token lives only in localStorage (never a cookie) — a plain
-  // `<a href>` navigation carries no Authorization header, so it always 401s
-  // regardless of whether the user is logged in. Fetching it manually with
-  // the header and opening the resulting blob preserves the original inline
-  // PDF/image preview behavior while actually authenticating the request.
+  // `<a href>` navigation carries no Authorization header, so it always 401s.
+  // Calling window.open asynchronously after fetch() is also blocked by browser
+  // popup blockers and fails on .eml / Office files. Instead, open a declarative
+  // React preview modal synchronously and bind a blob URL once loaded so both
+  // inline previews (.eml/.pdf/images/text) and synchronous Download / New Tab
+  // links work reliably across every browser.
   const handleViewAttachment = async (file: RFQAttachment) => {
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+    revokeActivePreviewUrl();
+
+    const declaredMime = file.mimeType || (file as RFQAttachment & { type?: string }).type || '';
+    setAttachmentPreview({
+      file,
+      status: 'loading',
+      previewKind: 'download',
+      resolvedMime: declaredMime,
+      objectUrl: null,
+      textContent: null,
+      emailPreview: null,
+      errorMessage: null,
+    });
+
     try {
       const token = authClient.getToken();
       const res = await fetch(rfqAttachmentUrl(file.id), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) {
-        throw new Error('Could not load the attachment.');
+        const errorBody = typeof res.json === 'function' ? await res.json().catch(() => null) : null;
+        const serverError =
+          errorBody && typeof errorBody === 'object' && typeof (errorBody as { error?: unknown }).error === 'string'
+            ? (errorBody as { error: string }).error
+            : '';
+        throw new Error(serverError || DETAILS.attachmentLoadFailed);
       }
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      window.open(objectUrl, '_blank', 'noopener,noreferrer');
-      // The opened tab has its own reference to the blob; safe to release
-      // this one once the browser has had a chance to load it.
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-    } catch (err: any) {
-      showToast('Could Not Open Attachment', err?.message || 'Could not load the attachment.', 'warning');
+
+      const rawBlob = await res.blob();
+      const responseContentType = typeof res.headers?.get === 'function' ? res.headers.get('content-type') : null;
+      const normalized = normalizeAttachmentBlob(rawBlob, file.fileName, responseContentType, declaredMime);
+
+      let emailPreview: ParsedEmlPreview | null = null;
+      let textContent: string | null = null;
+      if (normalized.previewKind === 'email') {
+        const rawText = await readBlobAsText(normalized.blob);
+        emailPreview = parseEmlContent(rawText);
+      } else if (normalized.previewKind === 'text') {
+        textContent = await readBlobAsText(normalized.blob);
+      }
+
+      if (previewRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(normalized.blob);
+      activeObjectUrlRef.current = objectUrl;
+      logger.info(
+        'Opened supporting document preview',
+        {
+          attachmentId: file.id,
+          fileName: file.fileName,
+          previewKind: normalized.previewKind,
+          resolvedMime: normalized.resolvedMime,
+        },
+        'RFQ_DETAILS'
+      );
+
+      setAttachmentPreview({
+        file,
+        status: 'ready',
+        previewKind: normalized.previewKind,
+        resolvedMime: normalized.resolvedMime,
+        objectUrl,
+        textContent,
+        emailPreview,
+        errorMessage: null,
+      });
+    } catch (err: unknown) {
+      if (previewRequestIdRef.current !== requestId) {
+        return;
+      }
+      const message = err instanceof Error && err.message ? err.message : DETAILS.attachmentLoadFailed;
+      logger.warn(
+        'Failed to open supporting document preview',
+        {
+          attachmentId: file.id,
+          fileName: file.fileName,
+          error: message,
+        },
+        'RFQ_DETAILS'
+      );
+      setAttachmentPreview({
+        file,
+        status: 'error',
+        previewKind: 'download',
+        resolvedMime: declaredMime,
+        objectUrl: null,
+        textContent: null,
+        emailPreview: null,
+        errorMessage: message,
+      });
+      showToast(DETAILS.attachmentOpenFailedTitle, message, 'warning');
     }
   };
 
@@ -1787,10 +1898,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   <button
                     type="button"
                     onClick={() => handleViewAttachment(file)}
+                    disabled={attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id}
                     aria-label={formatString(DETAILS.attachmentViewAria, { fileName: file.fileName })}
-                    className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto"
+                    className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto disabled:opacity-60"
                   >
-                    <ExternalLink size={11} /> {DETAILS.attachmentViewAction}
+                    <ExternalLink size={11} />{' '}
+                    {attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id
+                      ? DETAILS.attachmentViewingAction
+                      : DETAILS.attachmentViewAction}
                   </button>
                 </li>
               ))}
@@ -3422,6 +3537,15 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             </div>
           </div>
         </div>
+      )}
+
+      {attachmentPreview && (
+        <AttachmentPreviewModal
+          key={attachmentPreview.file.id}
+          preview={attachmentPreview}
+          onClose={handleCloseAttachmentPreview}
+          onRetry={handleViewAttachment}
+        />
       )}
     </div>
   );

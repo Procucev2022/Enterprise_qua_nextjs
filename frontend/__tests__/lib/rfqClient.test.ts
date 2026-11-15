@@ -528,6 +528,25 @@ describe('rfqClient.uploadRFQAttachment', () => {
     expect(sent.content.length).toBeGreaterThan(0);
   });
 
+  test('infers message/rfc822 for .eml files when browser omits file.type', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        success: true,
+        data: { ...stored, fileName: 'smaple rfq email.eml', mimeType: 'message/rfc822' },
+      }),
+    });
+
+    const emlFile = new File(['From: a@b.com\n\nBody'], 'smaple rfq email.eml', { type: '' });
+    const res = await uploadRFQAttachment(emlFile);
+
+    expect(res.success).toBe(true);
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    const sent = JSON.parse(init.body);
+    expect(sent.mimeType).toBe('message/rfc822');
+  });
+
   test('attaches the session token when one is held', async () => {
     authClient.setSession(
       { id: 'u1', email: 'b@x.com', name: 'B', role: 'buyer', orgId: 'o1', orgName: 'O' },

@@ -3565,6 +3565,48 @@ const TICKET_CREATE_FIELD_ALIASES = Object.freeze({
   assigned_to_name: 'assignedToName',
 });
 
+const RFQ_ATTACHMENT_EXTENSION_MIME_MAP = Object.freeze({
+  '.pdf': 'application/pdf',
+  '.eml': 'message/rfc822',
+  '.msg': 'application/vnd.ms-outlook',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.json': 'application/json',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+});
+
+/**
+ * Resolve a safe Content-Type header for a stored RFQ attachment, falling back
+ * to extension-based MIME detection when stored metadata is missing or generic.
+ */
+function resolveAttachmentContentType(declaredMimeType, fileName) {
+  const normalized =
+    typeof declaredMimeType === 'string'
+      ? declaredMimeType.split(';')[0].trim().toLowerCase()
+      : '';
+  if (normalized && normalized !== 'application/octet-stream' && normalized !== 'binary/octet-stream') {
+    return normalized;
+  }
+  const safeName = typeof fileName === 'string' ? fileName.trim().toLowerCase() : '';
+  const dotIdx = safeName.lastIndexOf('.');
+  if (dotIdx > -1) {
+    const ext = safeName.slice(dotIdx);
+    if (RFQ_ATTACHMENT_EXTENSION_MIME_MAP[ext]) {
+      return RFQ_ATTACHMENT_EXTENSION_MIME_MAP[ext];
+    }
+  }
+  return normalized || 'application/octet-stream';
+}
+
 module.exports = {
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   SMS_MESSAGES,
@@ -3676,6 +3718,8 @@ module.exports = {
   RFQ_CATEGORY_CLASSIFICATION,
   RFQ_INGESTION_CONFIG,
   RFQ_ATTACHMENT_CONFIG,
+  RFQ_ATTACHMENT_EXTENSION_MIME_MAP,
+  resolveAttachmentContentType,
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,
   EXTRACTION_REASON_MESSAGES,

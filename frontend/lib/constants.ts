@@ -1828,3 +1828,56 @@ export const PERIOD_BY_VENDOR_INGESTION_HORIZON: Partial<Record<string, '1_year'
 
 /** Suppliers requested per page when the wizard loads AI category results. Matches the server's page cap. */
 export const VENDOR_MAPPING_PAGE_SIZE = 200;
+
+/**
+ * Canonical MIME types by lowercase file extension for RFQ supporting documents.
+ * Used as a fallback when browsers or object storage omit or generalize Content-Type.
+ */
+export const ATTACHMENT_EXTENSION_MIME_MAP: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.eml': 'message/rfc822',
+  '.msg': 'application/vnd.ms-outlook',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.json': 'application/json',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+/** Generic Content-Type values that should yield to extension-based inference. */
+export const ATTACHMENT_GENERIC_MIME_TYPES: ReadonlySet<string> = new Set([
+  '',
+  'application/octet-stream',
+  'binary/octet-stream',
+]);
+
+/**
+ * Resolve a concrete MIME type for an attachment from declared/response headers
+ * and fall back to its filename extension when empty or generic.
+ */
+export function resolveAttachmentMimeType(fileName?: string | null, declaredMimeType?: string | null): string {
+  const normalized =
+    typeof declaredMimeType === 'string'
+      ? declaredMimeType.split(';')[0].trim().toLowerCase()
+      : '';
+  if (normalized && !ATTACHMENT_GENERIC_MIME_TYPES.has(normalized)) {
+    return normalized;
+  }
+  const safeName = typeof fileName === 'string' ? fileName.trim().toLowerCase() : '';
+  const dotIdx = safeName.lastIndexOf('.');
+  if (dotIdx > -1) {
+    const inferred = ATTACHMENT_EXTENSION_MIME_MAP[safeName.slice(dotIdx)];
+    if (inferred) {
+      return inferred;
+    }
+  }
+  return normalized || 'application/octet-stream';
+}

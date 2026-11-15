@@ -5874,3 +5874,13 @@ For example if there are 40 line items in an RFQ & among them there are 15 uniqu
 please check once & fix if there is issue.
 ```
 ---
+### Prompt 217
+**Timestamp**: 2026-11-15T07:43:41+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded.)
+```text
+Keep pushing the code directly into "test-v3" branch. 
+
+View Button not working.
+
+[Attached image: image/jpeg (media_1794708781624_1e957f6a.jpg)]
+```
+---

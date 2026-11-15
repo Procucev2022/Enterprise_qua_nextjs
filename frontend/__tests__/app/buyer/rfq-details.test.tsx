@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/rea
 import RFQDetails, { daysUntil, lineItemsToCsv, resolveVendorCategories } from '@/app/buyer/rfq-details';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   SOURCING_MODES,
@@ -845,8 +846,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
     // only in localStorage — a plain <a href> can never carry it, so it would
     // always 401 regardless of login state. The button below fetches with the
     // Authorization header manually and opens the result as a blob URL instead.
-    it('fetches the attachment with the Authorization header and opens it as a blob URL', async () => {
-      const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+    it('fetches the attachment with the Authorization header and opens a declarative preview modal', async () => {
       const mockBlob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
       global.fetch = jest.fn().mockResolvedValue({ ok: true, blob: async () => mockBlob });
 
@@ -863,7 +863,197 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
           { headers: { Authorization: 'Bearer test-token' } }
         );
       });
-      await waitFor(() => expect(openSpy).toHaveBeenCalledWith('blob:mock-url', '_blank', 'noopener,noreferrer'));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(
+        within(dialog).getByTitle(formatString(DETAILS.attachmentPreviewIframeTitle, { fileName: 'annexure.pdf' }))
+      ).toHaveAttribute('src', 'blob:mock-url');
+      expect(within(dialog).getByRole('link', { name: DETAILS.attachmentDownloadAction })).toHaveAttribute(
+        'download',
+        'annexure.pdf'
+      );
+      expect(within(dialog).getByRole('link', { name: DETAILS.attachmentOpenNewTab })).toHaveAttribute(
+        'href',
+        'blob:mock-url'
+      );
+
+      fireEvent.click(within(dialog).getByRole('button', { name: DETAILS.attachmentCloseAction }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+    });
+
+    it('renders formatted .eml email previews even when headers or blob MIME types are generic', async () => {
+      const emlPayload = [
+        'From: buyer@enterprise.in',
+        'Subject: Laptop Procurement Request',
+        '',
+        'Please supply 20 units to Bangalore.',
+      ].join('\r\n');
+      const mockBlob = new Blob([emlPayload], { type: 'application/octet-stream' });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'application/octet-stream' },
+        blob: async () => mockBlob,
+      });
+
+      renderDetails(
+        buildRFQ({
+          attachments: [
+            attachment({
+              id: 'eml-att-1',
+              fileName: 'smaple rfq email.eml',
+              mimeType: 'message/rfc822',
+            }),
+          ],
+        })
+      );
+
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: formatString(DETAILS.attachmentViewAria, { fileName: 'smaple rfq email.eml' }),
+        })
+      );
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByText('Laptop Procurement Request')).toBeInTheDocument());
+      expect(within(dialog).getByText('Please supply 20 units to Bangalore.')).toBeInTheDocument();
+      expect(within(dialog).getByRole('link', { name: DETAILS.attachmentDownloadAction })).toHaveAttribute(
+        'download',
+        'smaple rfq email.eml'
+      );
+    });
+
+    it('renders text attachment previews and supports retry on server errors', async () => {
+      const prevSync = logger.isRemoteSyncEnabled;
+      logger.isRemoteSyncEnabled = false;
+      logger.clearLogs();
+      try {
+        const failJson = jest.fn().mockResolvedValue({ error: 'That document is no longer available.' });
+        const textBlob = new Blob(['ColumnA,ColumnB\n1,2'], { type: 'text/csv' });
+        global.fetch = jest
+          .fn()
+          .mockResolvedValueOnce({ ok: false, json: failJson })
+          .mockResolvedValueOnce({ ok: true, blob: async () => textBlob });
+
+        renderDetails(
+          buildRFQ({
+            attachments: [
+              attachment({ id: 'csv-1', fileName: 'items.csv', mimeType: 'text/csv' }),
+            ],
+          })
+        );
+
+        fireEvent.click(
+          screen.getByRole('button', {
+            name: formatString(DETAILS.attachmentViewAria, { fileName: 'items.csv' }),
+          })
+        );
+
+        await waitFor(() =>
+          expect(mockShowToast).toHaveBeenCalledWith(
+            DETAILS.attachmentOpenFailedTitle,
+            'That document is no longer available.',
+            'warning'
+          )
+        );
+
+        const retryBtn = await screen.findByRole('button', { name: DETAILS.attachmentRetryAction });
+        fireEvent.click(retryBtn);
+
+        await waitFor(() => expect(screen.getByText(/ColumnA,ColumnB/)).toBeInTheDocument());
+      } finally {
+        logger.isRemoteSyncEnabled = prevSync;
+      }
+    });
+
+    it('ignores stale attachment responses and falls back cleanly on non-Error failures', async () => {
+      const prevSync = logger.isRemoteSyncEnabled;
+      logger.isRemoteSyncEnabled = false;
+      try {
+        let resolveFirst: ((val: unknown) => void) | undefined;
+        let rejectSecond: ((reason?: unknown) => void) | undefined;
+        const firstPromise = new Promise((resolve) => {
+          resolveFirst = resolve;
+        });
+        const secondPromise = new Promise((_resolve, reject) => {
+          rejectSecond = reject;
+        });
+
+        global.fetch = jest
+          .fn()
+          .mockReturnValueOnce(firstPromise)
+          .mockReturnValueOnce(secondPromise);
+
+        renderDetails(
+          buildRFQ({
+            attachments: [
+              attachment({ id: 'att-first', fileName: 'first.txt', mimeType: 'text/plain' }),
+              attachment({ id: 'att-second', fileName: 'second.txt', mimeType: 'text/plain' }),
+            ],
+          })
+        );
+
+        fireEvent.click(
+          screen.getByRole('button', {
+            name: formatString(DETAILS.attachmentViewAria, { fileName: 'first.txt' }),
+          })
+        );
+        fireEvent.click(
+          screen.getByRole('button', {
+            name: formatString(DETAILS.attachmentViewAria, { fileName: 'second.txt' }),
+          })
+        );
+
+        // Stale first response settles after user started opening second attachment
+        resolveFirst?.({ ok: true, blob: async () => new Blob(['stale content'], { type: 'text/plain' }) });
+        // Second request rejects with non-Error value
+        rejectSecond?.('network-drop');
+
+        await waitFor(() =>
+          expect(mockShowToast).toHaveBeenCalledWith(
+            DETAILS.attachmentOpenFailedTitle,
+            DETAILS.attachmentLoadFailed,
+            'warning'
+          )
+        );
+        expect(screen.queryByText('stale content')).not.toBeInTheDocument();
+
+        // Also ensure stale rejection when modal already closed is ignored cleanly
+        fireEvent.click(screen.getByRole('button', { name: DETAILS.attachmentCloseAction }));
+      } finally {
+        logger.isRemoteSyncEnabled = prevSync;
+      }
+    });
+
+    it('guards against late rejection after preview modal is closed', async () => {
+      const prevSync = logger.isRemoteSyncEnabled;
+      logger.isRemoteSyncEnabled = false;
+      try {
+        let rejectPending: ((reason?: unknown) => void) | undefined;
+        const pendingPromise = new Promise((_resolve, reject) => {
+          rejectPending = reject;
+        });
+        global.fetch = jest.fn().mockReturnValueOnce(pendingPromise);
+
+        renderDetails(buildRFQ({ attachments: [attachment({ id: 'att-slow', fileName: 'slow.pdf' })] }));
+
+        fireEvent.click(
+          screen.getByRole('button', {
+            name: formatString(DETAILS.attachmentViewAria, { fileName: 'annexure.pdf' }).replace('annexure.pdf', 'slow.pdf'),
+          })
+        );
+
+        const dialog = await screen.findByRole('dialog');
+        fireEvent.click(within(dialog).getByRole('button', { name: DETAILS.attachmentCloseAction }));
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+        rejectPending?.(new Error('Cancelled late'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(mockShowToast).not.toHaveBeenCalled();
+      } finally {
+        logger.isRemoteSyncEnabled = prevSync;
+      }
     });
 
     it('shows a toast instead of throwing when the attachment fetch fails', async () => {
@@ -877,8 +1067,8 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       fireEvent.click(viewBtn);
 
       await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(
-        'Could Not Open Attachment',
-        'Could not load the attachment.',
+        DETAILS.attachmentOpenFailedTitle,
+        DETAILS.attachmentLoadFailed,
         'warning'
       ));
     });
@@ -3366,8 +3556,6 @@ function makeInquiry(overrides: any = {}): any {
     it('exercises handleViewAttachment authentication and error paths', async () => {
       // Mock global fetch
       const origFetch = global.fetch;
-      const mockOpen = jest.fn();
-      window.open = mockOpen;
 
       // 1. Success path
       global.fetch = jest.fn().mockResolvedValue({
@@ -3386,8 +3574,9 @@ function makeInquiry(overrides: any = {}): any {
       const viewAttBtn = screen.getByRole('button', { name: /Open Technical_Specification\.pdf/i });
       fireEvent.click(viewAttBtn);
 
+      const dialog = await screen.findByRole('dialog');
       await waitFor(() => {
-        expect(mockOpen).toHaveBeenCalled();
+        expect(within(dialog).getByRole('link', { name: DETAILS.attachmentDownloadAction })).toBeInTheDocument();
       });
 
       // 2. Fetch returns ok: false
@@ -3398,8 +3587,8 @@ function makeInquiry(overrides: any = {}): any {
 
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Could Not Open Attachment',
-          'Could not load the attachment.',
+          DETAILS.attachmentOpenFailedTitle,
+          DETAILS.attachmentLoadFailed,
           'warning'
         );
       });
@@ -3410,7 +3599,7 @@ function makeInquiry(overrides: any = {}): any {
 
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Could Not Open Attachment',
+          DETAILS.attachmentOpenFailedTitle,
           'Connection aborted',
           'warning'
         );
