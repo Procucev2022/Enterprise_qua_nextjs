@@ -714,6 +714,7 @@ export interface RFQAssignedVendor {
   contactPerson?: string | null;
   phone?: string | null;
   city?: string | null;
+  pincode?: string | null;
   /**
    * Classifies the vendor for the RFQ details confidentiality gate. A
    * 'Procucev Network' entry is double-blind — the details view shows its

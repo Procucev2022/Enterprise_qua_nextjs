@@ -64,6 +64,7 @@ const mockVendorsPool: RFQVendorCandidate[] = [
     city: 'Pune',
     state: 'Maharashtra',
     location: 'Pune, Maharashtra',
+    pincode: '411001',
     rating: 4.8,
     source: 'procucev_network',
     alreadyInvited: false,
@@ -875,5 +876,18 @@ describe('InviteVendorsModal — Comprehensive Multi-Filter & 20-Vendor Limit Su
         })
       );
     });
+  });
+
+  it('Displays vendor pincode badges on candidate rows when present', async () => {
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Pune Fasteners Pvt Ltd')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('invite-candidate-pincode-v-pune-1')).toHaveTextContent(
+      formatString(S.pincodeBadge, { pincode: '411001' })
+    );
+    expect(screen.queryByTestId('invite-candidate-pincode-v-pune-2')).not.toBeInTheDocument();
   });
 });

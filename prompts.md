@@ -5984,3 +5984,11 @@ Add filter major or minor category as well.
 ```
 [Attached image: image/jpeg (media_1794747107987_31b2c3c8.jpg)]
 ---
+
+### Prompt 228
+**Timestamp**: 2026-11-15T18:24:22+05:30
+```text
+In the vendors detailed displayed, we should see the vendor pincode as well. so that we can recognise, which vendor belongs to which pincode
+```
+[Attached image: image/jpeg (media_1794747223533_c65e201d.jpg)]
+---

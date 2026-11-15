@@ -1150,6 +1150,14 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                                   </span>
                                 </span>
                               )}
+                              {c.pincode && (
+                                <span
+                                  data-testid={`invite-candidate-pincode-${c.id}`}
+                                  className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60 font-semibold"
+                                >
+                                  {formatString(S.pincodeBadge, { pincode: c.pincode })}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
