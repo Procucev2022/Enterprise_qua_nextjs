@@ -233,4 +233,27 @@ describe('CategorySearchInput', () => {
     expect(input).toHaveAttribute('aria-controls', screen.getByRole('listbox').id);
     expect(input).toHaveAttribute('aria-expanded', 'true');
   });
+
+  it('shows minChars hint when query is shorter than minChars and displays suggestions after reaching minChars', () => {
+    const onChange = jest.fn();
+    const { input } = renderField({ minChars: 3, onChange, options: ['Centrifugal Pumps', 'Submersible Pumps', 'Gate Valves'] });
+
+    fireEvent.click(input);
+    expect(screen.getByText(/Type at least 3 characters to search/i)).toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'pu' } });
+    expect(screen.getByText(/Type at least 3 characters to search/i)).toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'pum' } });
+    expect(screen.queryByText(/Type at least 3 characters to search/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    expect(screen.getByText('Centrifugal Pumps')).toBeInTheDocument();
+    expect(screen.getByText('Submersible Pumps')).toBeInTheDocument();
+    expect(screen.queryByText('Gate Valves')).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByText('Centrifugal Pumps'));
+    expect(onChange).toHaveBeenCalledWith('Centrifugal Pumps');
+  });
 });

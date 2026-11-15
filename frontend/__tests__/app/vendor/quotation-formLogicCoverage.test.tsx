@@ -559,6 +559,8 @@ describe('direct buyer relationship', () => {
       expect(await within(rowFor(own)).findByRole('button', { name: /^Submit Quote$/ })).toBeInTheDocument();
       expect(within(rowFor(own)).queryByText(/Premium Locked/)).not.toBeInTheDocument();
     }
+    // Switch to Public Enquiries to verify external buyer RFQ is locked
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
     expect(within(rowFor('RFQ-EXTERNAL')).getByText(/Premium Locked/)).toBeInTheDocument();
     expect(within(rowFor('RFQ-EXTERNAL')).queryByRole('button', { name: /^Submit Quote$/ })).not.toBeInTheDocument();
   });
