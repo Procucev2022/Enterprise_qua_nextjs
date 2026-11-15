@@ -1171,6 +1171,13 @@ const VALIDATION_SCHEMAS = {
     minor: { type: 'string', required: false, maxLength: 200 },
     state: { type: 'string', required: false, maxLength: 100 },
     city: { type: 'string', required: false, maxLength: 100 },
+    // Indian pincode prefix: 3 digits narrows to a region, 6 digits is an exact pincode.
+    pincode: {
+      type: 'string',
+      required: false,
+      pattern: /^\d{3,6}$/,
+      message: 'pincode must be 3 to 6 digits.',
+    },
     publicOnly: {
       type: 'string',
       required: false,

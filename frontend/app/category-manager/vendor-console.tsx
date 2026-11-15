@@ -2,10 +2,10 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
-import { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
+import { MajorMinorCategory, RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
-import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
@@ -205,6 +205,9 @@ export const isBuyerOrSelfOnboardedVendor = (v: Parameters<typeof classifyVendor
 // the pages loaded so far, as in InviteVendorsModal.tsx.
 const VENDOR_CARDS_PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 350;
+// Indian pincodes are 6 digits; 3+ digits already narrows to a postal region (e.g. 560 = Bengaluru).
+const PINCODE_MIN_DIGITS = 3;
+const PINCODE_MAX_DIGITS = 6;
 
 export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluation }: VendorConsoleProps) {
   const { rfqs, categoryTaxonomy } = useApp();
@@ -217,6 +220,11 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [categoryOptions, setCategoryOptions] = useState<string[]>(() => getMajorCategories());
+  const [minorFilter, setMinorFilter] = useState('');
+  const [taxonomyGroups, setTaxonomyGroups] = useState<MajorMinorCategory[]>([]);
+  // Pincode prefix filter: digits only, applied once it has 3–6 digits.
+  const [pincodeInput, setPincodeInput] = useState('');
+  const [debouncedPincode, setDebouncedPincode] = useState('');
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [expandedQuoteNumber, setExpandedQuoteNumber] = useState<string | null>(null);
   // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
@@ -237,9 +245,15 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   }, [searchTerm]);
 
   useEffect(() => {
+    const t = setTimeout(() => setDebouncedPincode(pincodeInput), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [pincodeInput]);
+
+  useEffect(() => {
     void fetchCategoryTaxonomy()
       .then((result) => {
         if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          setTaxonomyGroups(result.data);
           const fetched = result.data.map((c) => c.majorCategory).filter(Boolean);
           if (fetched.length > 0) {
             setCategoryOptions(fetched);
@@ -268,6 +282,48 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [categoryOptions, categoryTaxonomy, fetchedVendors]);
 
+  // Minor categories under the selected major: API taxonomy first, then the app
+  // context taxonomy, then the bundled registry.
+  const minorCategoryOptions = useMemo(() => {
+    if (!categoryFilter) return [];
+    const key = categoryFilter.toLowerCase().trim();
+    const set = new Set<string>();
+    const addFrom = (groups: MajorMinorCategory[] | undefined | null) => {
+      if (!Array.isArray(groups)) return;
+      groups.forEach((g) => {
+        if (g?.majorCategory?.toLowerCase().trim() !== key) return;
+        (g.minorCategories || []).forEach((m) => {
+          if (m && m.trim()) set.add(m.trim());
+        });
+      });
+    };
+    addFrom(taxonomyGroups);
+    addFrom(categoryTaxonomy);
+    if (set.size === 0) getMinorCategories(categoryFilter).forEach((m) => m && set.add(m.trim()));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [categoryFilter, taxonomyGroups, categoryTaxonomy]);
+
+  const pincodeDigits = pincodeInput.replace(/\D/g, '');
+  const pincodeIsPartial = pincodeDigits.length > 0 && pincodeDigits.length < PINCODE_MIN_DIGITS;
+
+  /**
+   * The one place the request filters are derived, so page 1 and "Load more" always send the
+   * same combination of search / category / minor / pincode.
+   */
+  const buildVendorFilters = () => {
+    const trimmedSearch = debouncedSearch.trim();
+    const matchedCat = effectiveCategoryOptions.find(
+      (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
+    );
+    const effectiveCategory = categoryFilter || matchedCat || '';
+    const effectiveSearch = matchedCat ? '' : trimmedSearch;
+    // A minor is only meaningful under the major picked in the dropdown.
+    const minors = categoryFilter && minorFilter ? [minorFilter] : [];
+    const pincodeValue = debouncedPincode.replace(/\D/g, '');
+    const pincode = pincodeValue.length >= PINCODE_MIN_DIGITS ? pincodeValue : '';
+    return { search: effectiveSearch, category: effectiveCategory, minors, pincode };
+  };
+
   const lastFetchedKeyRef = useRef<string | null>(null);
   // Guards against a slower, earlier request (e.g. the initial unfiltered
   // load) resolving AFTER a newer, filtered one and overwriting it with
@@ -275,14 +331,8 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   // applied.
   const fetchSeqRef = useRef(0);
   useEffect(() => {
-    const trimmedSearch = debouncedSearch.trim();
-    const matchedCat = effectiveCategoryOptions.find(
-      (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
-    );
-    const effectiveCategory = categoryFilter || matchedCat || '';
-    const effectiveSearch = matchedCat ? '' : trimmedSearch;
-
-    const key = `${effectiveSearch}|${effectiveCategory}`;
+    const filters = buildVendorFilters();
+    const key = `${filters.search}|${filters.category}|${filters.minors.join(',')}|${filters.pincode}`;
     if (lastFetchedKeyRef.current === key) return;
     lastFetchedKeyRef.current = key;
     const seq = ++fetchSeqRef.current;
@@ -291,8 +341,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     void fetchAllVendors({
       page: 1,
       pageSize: VENDOR_CARDS_PAGE_SIZE,
-      search: effectiveSearch,
-      category: effectiveCategory,
+      ...filters,
     }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
@@ -304,26 +353,19 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       setVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, categoryFilter, effectiveCategoryOptions]);
+  }, [debouncedSearch, categoryFilter, minorFilter, debouncedPincode, effectiveCategoryOptions]);
 
   const loadMoreVendors = () => {
     if (!vendorsPagination || vendorsLoadingMore) return;
     const nextPage = vendorsPagination.page + 1;
     if (nextPage > vendorsPagination.totalPages) return;
-    const trimmedSearch = debouncedSearch.trim();
-    const matchedCat = categoryOptions.find(
-      (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
-    );
-    const effectiveCategory = categoryFilter || matchedCat || '';
-    const effectiveSearch = matchedCat ? '' : trimmedSearch;
 
     const seq = ++fetchSeqRef.current;
     setVendorsLoadingMore(true);
     void fetchAllVendors({
       page: nextPage,
       pageSize: VENDOR_CARDS_PAGE_SIZE,
-      search: effectiveSearch,
-      category: effectiveCategory,
+      ...buildVendorFilters(),
     }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
@@ -960,7 +1002,11 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             {/* Category filter */}
             <select
               value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
+              onChange={(e) => {
+                // A minor only makes sense under its own major — clear it in the same update.
+                setCategoryFilter(e.target.value);
+                setMinorFilter('');
+              }}
               className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium"
             >
               <option value="">All categories</option>
@@ -970,6 +1016,50 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 </option>
               ))}
             </select>
+
+            {/* Minor category filter (scoped to the selected major) */}
+            <select
+              aria-label="Minor category"
+              value={minorFilter}
+              onChange={(e) => setMinorFilter(e.target.value)}
+              disabled={!categoryFilter || minorCategoryOptions.length === 0}
+              title={!categoryFilter ? 'Select a category first' : undefined}
+              className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <option value="">
+                {!categoryFilter
+                  ? 'Select category first'
+                  : minorCategoryOptions.length === 0
+                    ? 'No minor categories'
+                    : 'All minor categories'}
+              </option>
+              {minorCategoryOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+
+            {/* Pincode prefix filter: 3 digits = region, 6 digits = exact pincode */}
+            <div className="w-full sm:w-36">
+              <input
+                type="text"
+                inputMode="numeric"
+                aria-label="Pincode"
+                placeholder="Pincode"
+                maxLength={PINCODE_MAX_DIGITS}
+                value={pincodeInput}
+                onChange={(e) => setPincodeInput(e.target.value.replace(/\D/g, '').slice(0, PINCODE_MAX_DIGITS))}
+                aria-invalid={pincodeIsPartial}
+                aria-describedby={pincodeIsPartial ? 'vendor-pincode-hint' : undefined}
+                className="input py-1.5 px-3 text-xs w-full"
+              />
+              {pincodeIsPartial && (
+                <p id="vendor-pincode-hint" className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
+                  Enter at least {PINCODE_MIN_DIGITS} digits
+                </p>
+              )}
+            </div>
           </div>
         </div>
 
@@ -986,7 +1076,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             <Users size={32} className="mx-auto text-slate-400" />
             <h4 className="font-bold text-sm text-slate-800 dark:text-gray-200">No Vendors Found</h4>
             <p className="text-xs text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
-              No vendors match the current search or category filter criteria. Try clearing filters or use bulk upload.
+              No vendors match the current search, category, minor category or pincode filters. Try clearing filters or use bulk upload.
             </p>
           </div>
         )}

@@ -697,6 +697,7 @@ export async function fetchAllVendors(
     publicOnly = false,
     state = '',
     city = '',
+    pincode = '',
   } = options;
 
   const cleanFilterValues = (values: string[]): string[] =>
@@ -712,6 +713,8 @@ export async function fetchAllVendors(
   if (cleanMinors.length > 0) params.set('minors', cleanMinors.join(','));
   if (state.trim()) params.set('state', state.trim());
   if (city.trim()) params.set('city', city.trim());
+  const cleanPincode = String(pincode || '').replace(/\s+/g, '');
+  if (/^\d{3,6}$/.test(cleanPincode)) params.set('pincode', cleanPincode);
 
   let res: Response;
   try {

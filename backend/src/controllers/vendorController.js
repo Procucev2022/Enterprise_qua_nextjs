@@ -411,6 +411,10 @@ function validateVendorDirectoryQuery(rawQuery) {
   for (const key of ['buyerId', 'search', 'email', 'category', 'minor', 'state', 'city']) {
     if (q[key] !== undefined) normalized[key] = q[key];
   }
+  // Pincode: digits only (spaces stripped, e.g. "560 001"); an empty value means no filter.
+  if (q.pincode !== undefined && String(q.pincode).trim() !== '') {
+    normalized.pincode = String(q.pincode).replace(/\s+/g, '');
+  }
   for (const listKey of ['majors', 'minors']) {
     if (q[listKey] !== undefined) {
       normalized[listKey] = Array.isArray(q[listKey]) ? q[listKey].map(String).join(',') : q[listKey];
@@ -592,7 +596,7 @@ async function getVendors(req, res, next) {
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
     const { page } = rawQuery;
-    const { search, email, category, state, city } = cleanQuery;
+    const { search, email, category, state, city, pincode } = cleanQuery;
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -615,7 +619,7 @@ async function getVendors(req, res, next) {
         Math.max(1, parseInt(rawQuery.pageSize, 10) || DEFAULT_VENDOR_PAGE_SIZE)
       );
       try {
-        if (publicOnly && (minors.length > 0 || majors.length > 0) && !search && !email && !state && !city && pageNumber === 1) {
+        if (publicOnly && (minors.length > 0 || majors.length > 0) && !search && !email && !state && !city && !pincode && pageNumber === 1) {
           const candidates = await fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize });
           logger.info('Fetched indexed public vendor category candidates', {
             minorsCount: minors.length,
@@ -637,8 +641,10 @@ async function getVendors(req, res, next) {
           search: search ? String(search).trim() : '',
           email: email ? String(email).trim() : '',
           category: effectiveCategory,
+          ...(minors.length > 0 ? { minorTerms: storeService.minorSearchTerms(minors) } : {}),
           ...(state ? { state: String(state).trim() } : {}),
           ...(city ? { city: String(city).trim() } : {}),
+          ...(pincode ? { pincode } : {}),
           ...(publicOnly ? { publicOnly: true } : {}),
           scopedBuyerId: !publicOnly && buyerId && buyerId !== 'all' ? buyerId : '',
         });
@@ -658,6 +664,7 @@ async function getVendors(req, res, next) {
           hasCategoryFilter: Boolean(category),
           hasStateFilter: Boolean(state),
           hasCityFilter: Boolean(city),
+          hasPincodeFilter: Boolean(pincode),
           page: pageNumber,
           pageSize,
         }, 'VENDOR_CONTROLLER');
@@ -670,7 +677,7 @@ async function getVendors(req, res, next) {
       }
     }
 
-    const hasFilters = Boolean(search || email || category || state || city || minors.length > 0 || majors.length > 0 || publicOnly);
+    const hasFilters = Boolean(search || email || category || state || city || pincode || minors.length > 0 || majors.length > 0 || publicOnly);
     const limitQuery = (!hasFilters && rawQuery.limit)
       ? Math.min(Number(rawQuery.limit), 500)
       : null;
@@ -735,6 +742,9 @@ async function getVendors(req, res, next) {
         }
         return vCity === cq || vLoc.includes(cq);
       });
+    }
+    if (pincode) {
+      vendors = vendors.filter((v) => String(v.pincode || '').replace(/\s+/g, '').startsWith(pincode));
     }
     if (page !== undefined) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);
