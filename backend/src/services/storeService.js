@@ -5573,11 +5573,19 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     for (let attempt = 0; attempt < RFQ_QUOTE_WRITE_RETRIES; attempt += 1) {
       let rfq;
       let vendor;
+      let rfqSnapshot = null;
+      let vendorSnapshot = null;
       try {
         [rfq, vendor] = await Promise.all([
           domainQueries.getRFQByIdFromDB(rfqId),
           domainQueries.getVendorByIdFromDB(quote.vendorId, { fresh: true }),
         ]);
+        if (rfq && domainQueries.getRFQSnapshotByIdFromDB) {
+          rfqSnapshot = await domainQueries.getRFQSnapshotByIdFromDB(rfqId).catch(() => null);
+        }
+        if (vendor && domainQueries.getVendorSnapshotByIdFromDB) {
+          vendorSnapshot = await domainQueries.getVendorSnapshotByIdFromDB(quote.vendorId, { fresh: true }).catch(() => null);
+        }
       } catch (error) {
         logger.error('Failed to load authoritative records before atomic vendor quote submission', {
           error,
@@ -5697,7 +5705,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
             autoClosureComparisonFireAt: autoClosureComparisonIntent.fireAt,
           } : {}),
           expectedVendor: vendor,
+          expectedVendorRaw: vendorSnapshot?.raw,
           expectedRFQ: rfq,
+          expectedRFQRaw: rfqSnapshot?.raw,
           updatedRFQ,
         });
       } catch (error) {

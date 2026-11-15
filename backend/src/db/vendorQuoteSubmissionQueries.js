@@ -29,8 +29,11 @@ function parseRaw(raw) {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
 }
 
-function serializeExpectedRaw(record) {
-  return typeof record === 'string' ? record : JSON.stringify(record || {});
+function serializeExpectedRaw(record, explicitRaw) {
+  if (typeof explicitRaw === 'string' && explicitRaw.length > 0) return explicitRaw;
+  if (typeof record === 'string') return record;
+  if (record && typeof record.raw === 'string') return record.raw;
+  return JSON.stringify(record || {});
 }
 
 function isAlreadyQuoted(vendor, rfqId, existingLedger) {
@@ -186,10 +189,10 @@ function makeD1VendorQuoteSubmissionStatements(options) {
           budget = $7,
           raw = $8,
           updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND raw = $9
+        WHERE id = $1 AND (raw = $9 OR json(raw) = json($9) OR (json_extract(raw, '$.quotes') = json_extract($9, '$.quotes') AND COALESCE(status, '') = COALESCE($5, '')))
           AND EXISTS (
             SELECT 1 FROM vendors v
-            WHERE v.id = $2 AND v.raw = $10
+            WHERE v.id = $2 AND (v.raw = $10 OR json(v.raw) = json($10) OR json_extract(v.raw, '$.freeQuotationCredits') = json_extract($10, '$.freeQuotationCredits'))
               AND (
                 $12 = 1 OR $13 = 1 OR ${subscribed} OR ${existingQuote} OR
                 EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $11) OR ${balance} > 0
@@ -205,8 +208,8 @@ function makeD1VendorQuoteSubmissionStatements(options) {
           options.updatedRFQ.sourcingMode || null,
           Number.isFinite(Number(options.updatedRFQ.budget)) ? Number(options.updatedRFQ.budget) : null,
           JSON.stringify(options.updatedRFQ),
-          serializeExpectedRaw(options.expectedRFQ),
-          serializeExpectedRaw(options.expectedVendor),
+          serializeExpectedRaw(options.expectedRFQ, options.expectedRFQRaw),
+          serializeExpectedRaw(options.expectedVendor, options.expectedVendorRaw),
           options.idempotencyKey,
           options.isBuyerMapped ? 1 : 0,
           options.isResubmission || alreadyQuoted ? 1 : 0,
@@ -220,11 +223,11 @@ function makeD1VendorQuoteSubmissionStatements(options) {
           '$.quotedRfqIds', ${quotedIdsJson},
           '$.unlockedRfqIds', ${unlockedIdsJson}
         ), updated_at = CURRENT_TIMESTAMP
-          WHERE id = $1 AND raw = $2 AND changes() > 0
+          WHERE id = $1 AND (raw = $2 OR json(raw) = json($2) OR json_extract(raw, '$.freeQuotationCredits') = json_extract($2, '$.freeQuotationCredits')) AND changes() > 0
           RETURNING raw`,
         params: [
           options.vendorId,
-          serializeExpectedRaw(options.expectedVendor),
+          serializeExpectedRaw(options.expectedVendor, options.expectedVendorRaw),
           options.rfqId,
           options.rfqNumber || null,
           options.idempotencyKey,

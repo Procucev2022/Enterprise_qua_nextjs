@@ -667,4 +667,18 @@ describe('atomic vendor quote submission queries', () => {
     expect(result.transaction).toBe(ledger);
     expect(batch).toHaveBeenCalledTimes(1);
   });
+
+  test('preserves and prefers explicit snapshot raw strings for D1 compare-and-swap statements', () => {
+    const rawRfq = '{"id":"rfq-custom","customKey":"val"}';
+    const rawVendor = '{"id":"vendor-custom","customKey":"val"}';
+    const built = queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      expectedRFQRaw: rawRfq,
+      expectedVendorRaw: rawVendor,
+    }));
+    expect(built.statements[3].params[8]).toBe(rawRfq);
+    expect(built.statements[3].params[9]).toBe(rawVendor);
+    expect(built.statements[4].params[1]).toBe(rawVendor);
+    expect(built.statements[3].text).toContain('json(raw) = json($9)');
+    expect(built.statements[4].text).toContain('json(raw) = json($2)');
+  });
 });
