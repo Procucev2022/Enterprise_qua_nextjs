@@ -34,8 +34,8 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
         raw: {
           id: 'v-pub-1',
           name: 'Kirloskar Pneumatic Co',
-          pan: 'ABCDE1234F',
-          gstin: '27ABCDE1234F1Z5',
+          pan: 'AAACT1234G',
+          gstin: '27AAACT1234G1Z5',
           email: 'sales@kirloskar.example.com',
           phone: '+91 20 2710 1234',
           rating: 4.7,
@@ -71,7 +71,7 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
               name: 'Kirloskar Pneumatic Co',
               email: 'sXXXX@kirloskar.example.com',
               phone: '+91 2XXXXXXX34',
-              pan: 'ABC****4F', // Masked PAN
+              pan: 'AAA****4G', // Masked PAN
               isProcucevNetwork: true,
             }),
           ]),
@@ -88,6 +88,42 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
         expect.stringContaining('private')
       );
       expect(next).not.toHaveBeenCalled();
+    });
+
+    test('omits placeholder dummy PANs instead of masking and surfacing them publicly', async () => {
+      jest.spyOn(domainQueries, 'getPublicVendorsPageFromDB').mockResolvedValue({
+        rows: [
+          {
+            id: 'v-pub-dummy',
+            name: 'Veera Solutions Pvt LTD',
+            raw: {
+              id: 'v-pub-dummy',
+              name: 'Veera Solutions Pvt LTD',
+              pan: 'ABCPE1234F',
+              gstin: '29AAMCP4349L1Z0',
+            },
+          },
+        ],
+        total: 1,
+      });
+
+      const req = { query: { page: '1', pageSize: '10' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.getPublicVendors(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: [
+            expect.objectContaining({
+              id: 'v-pub-dummy',
+              pan: null,
+            }),
+          ],
+        })
+      );
     });
 
     test('handles default query values when query parameters are omitted', async () => {
@@ -528,8 +564,22 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
   });
 
   describe('vendorController.authenticateVendorDirectory', () => {
-    test('authenticates successfully with default passkey', async () => {
-      const req = { body: { passcode: 'Procucev@Vendors2026' } };
+    const ACCESS_KEY_ENV = 'VENDOR_DIRECTORY_ACCESS_KEY';
+    const CONFIGURED_KEY = 'test-directory-key-7410';
+    let previousAccessKey;
+
+    beforeEach(() => {
+      previousAccessKey = process.env[ACCESS_KEY_ENV];
+      process.env[ACCESS_KEY_ENV] = CONFIGURED_KEY;
+    });
+
+    afterEach(() => {
+      if (previousAccessKey === undefined) delete process.env[ACCESS_KEY_ENV];
+      else process.env[ACCESS_KEY_ENV] = previousAccessKey;
+    });
+
+    test('authenticates successfully with the configured access key', async () => {
+      const req = { body: { passcode: CONFIGURED_KEY } };
       const res = mockRes();
       const next = jest.fn();
 
@@ -546,8 +596,8 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
       expect(next).not.toHaveBeenCalled();
     });
 
-    test('authenticates successfully with alias passkey VENDOR2026', async () => {
-      const req = { body: { accessKey: 'VENDOR2026' } };
+    test('accepts the configured key when it is sent as accessKey', async () => {
+      const req = { body: { accessKey: CONFIGURED_KEY } };
       const res = mockRes();
       const next = jest.fn();
 
@@ -561,11 +611,43 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
       );
     });
 
-    test('authenticates successfully with credentials username and password', async () => {
+    test('issues a 256-bit random token that differs on every sign-in', async () => {
+      const first = mockRes();
+      const second = mockRes();
+
+      await vendorController.authenticateVendorDirectory({ body: { passcode: CONFIGURED_KEY } }, first, jest.fn());
+      await vendorController.authenticateVendorDirectory({ body: { passcode: CONFIGURED_KEY } }, second, jest.fn());
+
+      const firstToken = first.json.mock.calls[0][0].token;
+      const secondToken = second.json.mock.calls[0][0].token;
+      // 32 random bytes encoded as base64url is 43 characters.
+      expect(firstToken).toMatch(/^vdir_[A-Za-z0-9_-]{43}$/);
+      expect(secondToken).toMatch(/^vdir_[A-Za-z0-9_-]{43}$/);
+      expect(firstToken).not.toBe(secondToken);
+    });
+
+    test('fails closed with 503 when no access key is configured', async () => {
+      delete process.env[ACCESS_KEY_ENV];
+      const { AUTH_MESSAGES } = require('../src/config/constants');
+      const req = { body: { passcode: 'anything-at-all' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.authenticateVendorDirectory(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_ACCESS_KEY_NOT_CONFIGURED,
+      });
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    test('does not accept a username and password pair in place of the access key', async () => {
       const req = {
         body: {
           username: 'directory@procucev.com',
-          password: 'Procucev@Vendors2026',
+          password: CONFIGURED_KEY,
         },
       };
       const res = mockRes();
@@ -573,12 +655,8 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
 
       await vendorController.authenticateVendorDirectory(req, res, next);
 
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          token: expect.stringMatching(/^vdir_/),
-        })
-      );
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
     });
 
     test('returns 401 with descriptive error when passkey is invalid', async () => {

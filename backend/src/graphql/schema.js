@@ -31,7 +31,8 @@ const schema = buildSchema(`
     id: String!
     name: String!
     contactPerson: String
-    email: String!
+    # Null when no contact email is on record. Nothing is substituted.
+    email: String
     phone: String
     majorCategory: String!
     minorCategories: [String]
@@ -144,20 +145,12 @@ const schema = buildSchema(`
     metric: String
   }
 
+  """
+  Read-only configuration that the backend itself uses. No setting is stored or editable.
+  """
   type SystemConfig {
-    maintenanceMode: Boolean
-    strictSecurityMode: Boolean
-    allowDirectNegotiations: Boolean
-    require2FAForPO: Boolean
-    autoApproveVendorUnderBudget: Boolean
-    aiAutonomousChasing: Boolean
-    auditLogRetentionDays: Int
-    maxSimultaneousMode2Events: Int
-    activeMode: String
-    chaserIntervalSeconds: Int
     aiModel: String
     aiTemperature: Float
-    identityDbSyncInterval: Int
   }
 
   """
@@ -228,8 +221,11 @@ const schema = buildSchema(`
   }
 
   type RemediationResult {
-    remediationId: String!
+    # Null for a refused action. Nothing ran and no remediation record was written.
+    remediationId: String
     actionType: String!
+    success: Boolean!
+    status: String!
     message: String!
     timestamp: String!
     durationMs: Int

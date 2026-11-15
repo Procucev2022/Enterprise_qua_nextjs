@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import SubscriptionCenter from '@/app/buyer/subscription-center';
 import { useApp } from '@/lib/store';
 import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -10,6 +11,10 @@ jest.mock('@/lib/store', () => ({
 
 jest.mock('@/lib/subscriptionPaymentClient', () => ({
   fetchSubscriptionPricing: jest.fn(),
+}));
+
+jest.mock('@/lib/logger', () => ({
+  logger: { error: jest.fn() },
 }));
 
 const mockPricingConfig = {
@@ -67,53 +72,73 @@ describe('app/buyer/subscription-center.tsx', () => {
     localStorage.clear();
   });
 
-  it('renders free trial header, quota progress bar, and all 3 subscription plans with strikethrough original prices', async () => {
+  it('renders the free starter header, the remaining balance, and all 3 plans priced from the server', async () => {
     render(<SubscriptionCenter />);
+    expect(await screen.findByText('₹4,999')).toBeInTheDocument();
 
-    expect(screen.getByText(/Free Starter Account — 5 Free RFQs Included/i)).toBeInTheDocument();
-    expect(screen.getByText(/Remaining: 4 \/ 5/i)).toBeInTheDocument();
-    expect(screen.getByText(/Used: 1 \/ 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/Free Starter Account/i)).toBeInTheDocument();
+    expect(screen.getByText('Remaining: 4 free RFQs')).toBeInTheDocument();
+    expect(screen.queryByText(/Used:/i)).not.toBeInTheDocument();
     expect(screen.getByText('Silver Plan')).toBeInTheDocument();
     expect(screen.getByText('Gold Plan')).toBeInTheDocument();
     expect(screen.getByText('Diamond Plan')).toBeInTheDocument();
-
-    const v1Original = screen.getByText('₹50,000');
-    const v2Original = screen.getByText('₹75,000');
-    const v3Original = screen.getByText('₹1,00,000');
-    expect(v1Original).toBeInTheDocument();
-    expect(v1Original).toHaveClass('line-through');
-    expect(v2Original).toBeInTheDocument();
-    expect(v2Original).toHaveClass('line-through');
-    expect(v3Original).toBeInTheDocument();
-    expect(v3Original).toHaveClass('line-through');
+    expect(screen.getByText('₹7,499')).toBeInTheDocument();
+    expect(screen.getByText('₹9,999')).toBeInTheDocument();
   });
 
-  it('handles fetchSubscriptionPricing returning null or being unmounted', async () => {
+  it('shows no strike-through or invented original price anywhere on the page', async () => {
+    render(<SubscriptionCenter />);
+    await screen.findByText('₹4,999');
+
+    expect(screen.queryByText('₹50,000')).not.toBeInTheDocument();
+    expect(screen.queryByText('₹75,000')).not.toBeInTheDocument();
+    expect(screen.queryByText('₹1,00,000')).not.toBeInTheDocument();
+    expect(document.querySelector('.line-through')).toBeNull();
+  });
+
+  it('shows an explicit error and no price when pricing cannot be loaded', async () => {
     (fetchSubscriptionPricing as jest.Mock).mockResolvedValue(null);
+    render(<SubscriptionCenter />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Plan prices could not be loaded from the server');
+    expect(screen.getAllByText('Price unavailable').length).toBeGreaterThan(0);
+    expect(screen.queryByText('₹4,999')).not.toBeInTheDocument();
+    expect(screen.getByTestId('subscribe-btn-version_2')).toBeDisabled();
+    expect(screen.getByTestId('subscribe-btn-version_2')).toHaveTextContent('Price unavailable');
+  });
+
+  it('keeps every plan unpriced and disabled while the pricing request is still pending', () => {
+    (fetchSubscriptionPricing as jest.Mock).mockReturnValue(new Promise(() => undefined));
     const { unmount } = render(<SubscriptionCenter />);
+
+    expect(screen.getByTestId('subscribe-btn-version_1')).toBeDisabled();
+    expect(screen.getByTestId('subscribe-btn-version_1')).toHaveTextContent('Loading price…');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     unmount();
   });
 
-  it('renders the Free Starter Account banner with remaining and used quotas', () => {
+  it('renders the Free Starter Account banner with the remaining balance and no fixed allowance', () => {
     mockStore({ activeSubscription: 'free_trial', remainingFreeRFQs: 4 });
     render(<SubscriptionCenter />);
 
-    expect(screen.getByText(/Free Starter Account — 5 Free RFQs Included/i)).toBeInTheDocument();
-    expect(screen.getByText('Used: 1 / 5')).toBeInTheDocument();
-    expect(screen.getByText('Remaining: 4 / 5')).toBeInTheDocument();
-    expect(screen.getByText(/Every new buyer account receives/i)).toBeInTheDocument();
+    expect(screen.getByText(/Free Starter Account/i)).toBeInTheDocument();
+    expect(screen.getByText('Remaining: 4 free RFQs')).toBeInTheDocument();
+    expect(screen.queryByText(/Used:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/5 Free RFQs/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Version 0 \(V0: Free Starter\)/i)).toBeInTheDocument();
   });
 
   it('renders active plan status badge instead of free quota alert when on a paid plan', () => {
     mockStore({ activeSubscription: 'version_1' });
     render(<SubscriptionCenter />);
 
-    expect(screen.queryByText(/Free Starter Account — 5 Free RFQs Included/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Free Starter Account/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Active Premium Plan: Silver Plan/i)).toBeInTheDocument();
   });
 
   it('clicking a paid plan opens the real Zoho checkout modal and can be closed', async () => {
     render(<SubscriptionCenter />);
+    await screen.findByText('₹7,499');
 
     fireEvent.click(screen.getByTestId('subscribe-btn-version_2'));
     await waitFor(() => expect(screen.getByText('Secure Payment')).toBeInTheDocument());
@@ -262,15 +287,13 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText(/Active Premium Plan: Diamond Plan/i)).toBeInTheDocument();
   });
 
-  it('switches between 12-month and 6-month durations and updates prices dynamically', () => {
+  it('switches between 12-month and 6-month durations and updates prices dynamically', async () => {
     render(<SubscriptionCenter />);
 
-    expect(screen.getByText('₹50,000')).toBeInTheDocument();
-    expect(screen.getByText('₹75,000')).toBeInTheDocument();
-    expect(screen.getByText('₹1,00,000')).toBeInTheDocument();
-    expect(screen.getByText('₹4,999')).toBeInTheDocument();
+    expect(await screen.findByText('₹4,999')).toBeInTheDocument();
     expect(screen.getByText('₹7,499')).toBeInTheDocument();
     expect(screen.getByText('₹9,999')).toBeInTheDocument();
+    expect(screen.queryByText('₹50,000')).not.toBeInTheDocument();
     expect(screen.getAllByText('per month').length).toBe(3);
     expect(screen.getAllByText('+ 18% GST').length).toBe(3);
 
@@ -291,8 +314,10 @@ describe('app/buyer/subscription-center.tsx', () => {
   it('opens checkout modal with 6-month price multiplied by 6 months plus 18% GST', async () => {
     mockCreateBuyerPaymentLink.mockResolvedValueOnce('https://payments.zoho.in/mock-buyer-6m');
     render(<SubscriptionCenter />);
+    await screen.findByText('₹4,999');
 
     fireEvent.click(screen.getByRole('button', { name: '6 Months' }));
+    await screen.findByText('₹5,499');
     fireEvent.click(screen.getByTestId('subscribe-btn-version_1'));
 
     await waitFor(() => expect(screen.getByText('Secure Payment')).toBeInTheDocument());
@@ -314,7 +339,7 @@ describe('app/buyer/subscription-center.tsx', () => {
         id: 'buyer-ent-2',
         brandName: 'Brand Corp',
         corporateEmail: 'corp@brand.com',
-        phone: '+91 99988 77665',
+        mobileNumber: '+91 99988 77665',
       },
       currentUserSession: null,
     });
@@ -369,7 +394,7 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Missing Details', expect.any(String), 'warning');
   });
 
-  it('handles enterprise submission with existing localStorage items and done button', async () => {
+  it('shows success only after the database confirms the inquiry and leaves browser storage untouched', async () => {
     localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify([{ id: 'existing-inq' }]));
     mockStore({
       activeBuyerAccount: {
@@ -397,14 +422,25 @@ describe('app/buyer/subscription-center.tsx', () => {
       expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
     });
 
-    const stored = JSON.parse(localStorage.getItem('procucev_enterprise_inquiries') || '[]');
-    expect(stored.length).toBe(2);
+    expect(JSON.parse(localStorage.getItem('procucev_enterprise_inquiries') || '[]')).toEqual([{ id: 'existing-inq' }]);
+    expect(global.fetch).toHaveBeenCalledWith('/api/enterprise-inquiries', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({
+        'Content-Type': 'application/json',
+        'Idempotency-Key': expect.stringMatching(/^[0-9a-f-]{36}$/i),
+      }),
+      body: JSON.stringify({
+        companyName: 'Tata Power Ltd',
+        email: 'procurement@tatapower.com',
+        mobile: '+91 98765 43210',
+      }),
+    }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(screen.queryByText('Enquiry Received!')).not.toBeInTheDocument();
   });
 
-  it('handles enterprise submission when response has no data and localStorage has corrupted non-array', async () => {
+  it('keeps the form open and reports failure when the server does not return a persisted record', async () => {
     localStorage.setItem('procucev_enterprise_inquiries', '{"invalid": "shape"}');
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
@@ -428,9 +464,41 @@ describe('app/buyer/subscription-center.tsx', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
 
-    await waitFor(() => {
-      expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(UI_STRINGS.enterpriseInquiry.submitErrorMessage);
+    expect(screen.queryByText('Enquiry Received!')).not.toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.enterpriseInquiry.submitErrorTitle,
+      UI_STRINGS.enterpriseInquiry.submitErrorMessage,
+      'warning'
+    );
+    expect(localStorage.getItem('procucev_enterprise_inquiries')).toBe('{"invalid": "shape"}');
+  });
+
+  it('reuses one idempotency key when the buyer retries an uncertain submission', async () => {
+    const fetchMock = jest.fn()
+      .mockRejectedValueOnce(new Error('Response was lost after submission'))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, data: { id: 'ent-inq-retried' } }) });
+    global.fetch = fetchMock;
+    mockStore({
+      activeBuyerAccount: {
+        id: 'buyer-retry',
+        organizationName: 'Retry Buyer Ltd',
+        corporateEmail: 'retry@buyer.test',
+        mobileNumber: '+91 98765 43210',
+      },
     });
+
+    render(<SubscriptionCenter />);
+    fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
+    fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
+    await screen.findByText('Enquiry Received!');
+
+    const submissions = fetchMock.mock.calls.filter(([url]) => url === '/api/enterprise-inquiries');
+    const firstKey = submissions[0][1].headers['Idempotency-Key'];
+    const retryKey = submissions[1][1].headers['Idempotency-Key'];
+    expect(retryKey).toBe(firstKey);
   });
 
   it('handles pricing config missing individual plan entries', async () => {
@@ -446,7 +514,7 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText('Silver Plan')).toBeInTheDocument();
   });
 
-  it('handles enterprise submission when fetch fails with network error and corrupt localStorage', async () => {
+  it('does not claim to submit an inquiry when the network request fails', async () => {
     localStorage.setItem('procucev_enterprise_inquiries', '{"corrupt": true}');
     global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
     mockStore({
@@ -463,9 +531,13 @@ describe('app/buyer/subscription-center.tsx', () => {
     fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
     fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
 
-    await waitFor(() => {
-      expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
-    });
-    expect(mockShowToast).toHaveBeenCalledWith('Enquiry Submitted', expect.any(String), 'success');
+    expect(await screen.findByRole('alert')).toHaveTextContent(UI_STRINGS.enterpriseInquiry.submitErrorMessage);
+    expect(screen.queryByText('Enquiry Received!')).not.toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.enterpriseInquiry.submitErrorTitle,
+      UI_STRINGS.enterpriseInquiry.submitErrorMessage,
+      'warning'
+    );
+    expect(localStorage.getItem('procucev_enterprise_inquiries')).toBe('{"corrupt": true}');
   });
 });

@@ -2,14 +2,20 @@
 
 const storeService = require('../src/services/storeService');
 const rfqController = require('../src/controllers/rfqController');
+const pool = require('../src/db/pool');
+const domainQueries = require('../src/db/domainQueries');
 
 describe('PPO Generation and 48-Hour Closure Fix Tests', () => {
   beforeEach(() => {
     // Reset store RFQs
     storeService.rfqs = [];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    jest.spyOn(storeService, 'notifyOfRFQClosure').mockImplementation(() => {});
   });
 
-  test('checkAndClose48HourRFQs does not revert a PO Generated RFQ to Closed even if created > 48h ago', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  test('auto-close does not revert a PO Generated RFQ even if created > 48h ago', async () => {
     const fortyNineHoursAgo = new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString();
     const rfqPO = {
       id: 'rfq-po-test-1',
@@ -24,13 +30,13 @@ describe('PPO Generation and 48-Hour Closure Fix Tests', () => {
     };
     storeService.rfqs = [rfqPO];
 
-    const closed = storeService.checkAndClose48HourRFQs();
+    const closed = await storeService.closeExpiredRFQsDurably();
     expect(closed).toEqual([]);
     expect(storeService.rfqs[0].status).toBe('PO Generated');
     expect(storeService.rfqs[0].poFinalised).toBe(true);
   });
 
-  test('checkAndClose48HourRFQs does not revert an RFQ with poNumber or poFinalised even if status was set to another non-closed state', () => {
+  test('auto-close does not revert an RFQ with poNumber or poFinalised even if status was set to another non-closed state', async () => {
     const fiftyHoursAgo = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
     const rfqPO = {
       id: 'rfq-po-test-2',
@@ -43,12 +49,12 @@ describe('PPO Generation and 48-Hour Closure Fix Tests', () => {
     };
     storeService.rfqs = [rfqPO];
 
-    const closed = storeService.checkAndClose48HourRFQs();
+    const closed = await storeService.closeExpiredRFQsDurably();
     expect(closed).toEqual([]);
     expect(storeService.rfqs[0].status).toBe('In Evaluation');
   });
 
-  test('checkAndClose48HourRFQs does not close an Expired RFQ', () => {
+  test('auto-close does not close an Expired RFQ', async () => {
     const fiftyHoursAgo = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
     const rfqExpired = {
       id: 'rfq-exp-test-1',
@@ -59,12 +65,12 @@ describe('PPO Generation and 48-Hour Closure Fix Tests', () => {
     };
     storeService.rfqs = [rfqExpired];
 
-    const closed = storeService.checkAndClose48HourRFQs();
+    const closed = await storeService.closeExpiredRFQsDurably();
     expect(closed).toEqual([]);
     expect(storeService.rfqs[0].status).toBe('Expired');
   });
 
-  test('checkAndClose48HourRFQs still closes normal open RFQs older than 48 hours', () => {
+  test('auto-close closes normal open RFQs older than 48 hours in memory-only mode', async () => {
     const fiftyHoursAgo = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
     const openRfq = {
       id: 'rfq-open-test-1',
@@ -75,9 +81,78 @@ describe('PPO Generation and 48-Hour Closure Fix Tests', () => {
     };
     storeService.rfqs = [openRfq];
 
-    const closed = storeService.checkAndClose48HourRFQs();
+    const closed = await storeService.closeExpiredRFQsDurably();
     expect(closed.length).toBe(1);
     expect(storeService.rfqs[0].status).toBe('Closed');
+    expect(storeService.notifyOfRFQClosure).toHaveBeenCalledWith(closed[0]);
+  });
+
+  test('memory-only auto-close ignores null and invalid-date cache entries', async () => {
+    storeService.rfqs = [null, { id: 'rfq-invalid-date', createdAt: 'not-a-date', status: 'Open' }];
+    await expect(storeService.closeExpiredRFQsDurably()).resolves.toEqual([]);
+    await expect(storeService.closeExpiredRFQsDurably('invalid-time')).rejects.toThrow(TypeError);
+  });
+
+  test('RFQ reads do not trigger closure mutations or notifications', () => {
+    const oldOpenRfq = {
+      id: 'rfq-read-purity',
+      rfqNumber: 'RFQ-READ-PURITY',
+      createdAt: new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString(),
+      status: 'In Evaluation',
+    };
+    storeService.rfqs = [oldOpenRfq];
+
+    expect(storeService.getRFQs()[0].status).toBe('In Evaluation');
+    expect(storeService.getRFQById(oldOpenRfq.id).status).toBe('In Evaluation');
+    expect(storeService.notifyOfRFQClosure).not.toHaveBeenCalled();
+  });
+
+  test('durable closure updates storage before changing cache and notifying', async () => {
+    const dueRfq = {
+      id: 'rfq-durable-close',
+      rfqNumber: 'RFQ-DURABLE-CLOSE',
+      status: 'Closed',
+      createdAt: new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString(),
+    };
+    storeService.rfqs = [{ ...dueRfq, id: 'stale-cache-id', status: 'In Evaluation' }];
+    pool.hasStorage.mockReturnValue(true);
+    const closeSpy = jest.spyOn(domainQueries, 'closeExpiredRFQsInDB').mockImplementation(async () => {
+      expect(storeService.rfqs[0].status).toBe('In Evaluation');
+      expect(storeService.notifyOfRFQClosure).not.toHaveBeenCalled();
+      return [dueRfq];
+    });
+
+    await expect(storeService.closeExpiredRFQsDurably()).resolves.toEqual([dueRfq]);
+    expect(storeService.rfqs[0]).toEqual(dueRfq);
+    expect(storeService.notifyOfRFQClosure).toHaveBeenCalledWith(dueRfq);
+    expect(closeSpy).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.any(String));
+  });
+
+  test('failed durable closure leaves cached status and notifications untouched', async () => {
+    const dueRfq = {
+      id: 'rfq-durable-close-failure',
+      rfqNumber: 'RFQ-DURABLE-CLOSE-FAIL',
+      status: 'In Evaluation',
+      createdAt: new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString(),
+    };
+    storeService.rfqs = [dueRfq];
+    pool.hasStorage.mockReturnValue(true);
+    jest.spyOn(domainQueries, 'closeExpiredRFQsInDB').mockRejectedValue(new Error('database unavailable'));
+
+    await expect(storeService.closeExpiredRFQsDurably()).rejects.toThrow('database unavailable');
+    expect(storeService.rfqs[0]).toBe(dueRfq);
+    expect(storeService.notifyOfRFQClosure).not.toHaveBeenCalled();
+  });
+
+  test('persisted closures absent from cache still notify and notification errors are logged', async () => {
+    const dueRfq = { id: 'rfq-not-cached', rfqNumber: 'RFQ-NOT-CACHED', status: 'Closed' };
+    pool.hasStorage.mockReturnValue(true);
+    jest.spyOn(domainQueries, 'closeExpiredRFQsInDB').mockResolvedValue([dueRfq]);
+    storeService.notifyOfRFQClosure.mockImplementation(() => { throw new Error('notification failed'); });
+
+    await expect(storeService.closeExpiredRFQsDurably()).resolves.toEqual([dueRfq]);
+    expect(storeService.rfqs).toEqual([]);
+    expect(storeService.notifyOfRFQClosure).toHaveBeenCalledWith(dueRfq);
   });
 
   test('getRFQs heals an RFQ with poFinalised or poNumber that was erroneously set to Closed', () => {

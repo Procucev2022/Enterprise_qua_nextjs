@@ -8,6 +8,7 @@ import {
   fetchReportData,
 } from '@/lib/reportsClient';
 import type { ReportCategoryKey, ReportConfig } from '@/lib/reportsClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/reportsClient', () => {
   const actual = jest.requireActual('@/lib/reportsClient');
@@ -34,6 +35,7 @@ const GENERATING_LABEL = 'Generating Report...';
 const LOADING_TEXT = 'Fetching and preparing report dataset...';
 const EMPTY_TEXT = 'No records found for the selected date range or query.';
 const GENERIC_FAILURE_TEXT = 'Failed to generate report.';
+const EMPTY_CELL = UI_STRINGS.dataLoad.emptyCell;
 const EXCEL_LABEL = 'Excel (.xlsx)';
 const CSV_LABEL = 'CSV (.csv)';
 const SEARCH_PLACEHOLDER = 'Search report columns...';
@@ -462,20 +464,20 @@ describe('DailyDownloadableReports date filters', () => {
 });
 
 describe('DailyDownloadableReports table cells', () => {
-  test('fills blank company locations and last logins from the alternate fields while loading', async () => {
+  test('uses the alternate login fields for last login and shows a dash for blank locations', async () => {
     mockFetchReportData.mockResolvedValue(loaded(LOCATION_LOGIN_ROWS));
     renderReports();
     await waitForIdle();
 
     const rows = [0, 1, 2, 3].map((index) => readRow(index));
 
-    expect(rows.map((row) => row.CompanyLocation)).toEqual(['Pune', 'Chennai', 'All India', 'Mumbai']);
-    expect(rows.map((row) => row.LastLogin)).toEqual(['2026-06-01 09:30', '2026-05-29', 'Never', '2026-06-10 08:00']);
+    expect(rows.map((row) => row.CompanyLocation)).toEqual([EMPTY_CELL, EMPTY_CELL, EMPTY_CELL, 'Mumbai']);
+    expect(rows.map((row) => row.LastLogin)).toEqual(['2026-06-01 09:30', '2026-05-29', EMPTY_CELL, '2026-06-10 08:00']);
     expect(rows[0]).toMatchObject({ SellerLocation: 'Pune', DeliveryLocation: 'Surat', LoginDateTime: '2026-06-01 09:30' });
-    expect(rows[3]).toMatchObject({ SellerLocation: 'Pune', DeliveryLocation: '', LoginDateTime: '' });
+    expect(rows[3]).toMatchObject({ SellerLocation: 'Pune', DeliveryLocation: EMPTY_CELL, LoginDateTime: EMPTY_CELL });
   });
 
-  test('hands the cleaned-up rows, not the raw server rows, to the exports', async () => {
+  test('hands the server values, without any fallback text, to the exports', async () => {
     mockFetchReportData.mockResolvedValue(loaded(LOCATION_LOGIN_ROWS));
     renderReports();
     await waitForIdle();
@@ -485,12 +487,12 @@ describe('DailyDownloadableReports table cells', () => {
 
     const [excelRows] = mockExportExcel.mock.calls[0];
     const [csvRows] = mockExportCsv.mock.calls[0];
-    expect(excelRows.map((row) => row.CompanyLocation)).toEqual(['Pune', 'Chennai', 'All India', 'Mumbai']);
+    expect(excelRows.map((row) => row.CompanyLocation)).toEqual(['', null, '', 'Mumbai']);
     expect(excelRows.map((row) => row.LastLogin)).toEqual(['2026-06-01 09:30', '2026-05-29', '', '2026-06-10 08:00']);
     expect(csvRows).toEqual(excelRows);
   });
 
-  test('falls back to alternate location and login fields for rows that lack those columns', async () => {
+  test('uses the alternate login fields for rows that lack those columns and a dash for a missing location', async () => {
     mockFetchReportData.mockResolvedValue(
       loaded([
         { Seller: 'Alpha Supplies', CompanyLocation: 'Mumbai', LastLogin: '2026-06-10 08:00' },
@@ -504,12 +506,12 @@ describe('DailyDownloadableReports table cells', () => {
 
     expect(readHeaders()).toEqual(['Seller', 'CompanyLocation', 'LastLogin']);
     expect(readRow(0)).toEqual({ Seller: 'Alpha Supplies', CompanyLocation: 'Mumbai', LastLogin: '2026-06-10 08:00' });
-    expect(readRow(1)).toEqual({ Seller: 'Beta Tech', CompanyLocation: 'Nagpur', LastLogin: '2026-06-09 17:45' });
-    expect(readRow(2)).toEqual({ Seller: 'Gamma Works', CompanyLocation: 'Kochi', LastLogin: '2026-06-08' });
-    expect(readRow(3)).toEqual({ Seller: 'Delta Corp', CompanyLocation: 'All India', LastLogin: 'Never' });
+    expect(readRow(1)).toEqual({ Seller: 'Beta Tech', CompanyLocation: EMPTY_CELL, LastLogin: '2026-06-09 17:45' });
+    expect(readRow(2)).toEqual({ Seller: 'Gamma Works', CompanyLocation: EMPTY_CELL, LastLogin: '2026-06-08' });
+    expect(readRow(3)).toEqual({ Seller: 'Delta Corp', CompanyLocation: EMPTY_CELL, LastLogin: EMPTY_CELL });
   });
 
-  test('renders null and missing values as blank while keeping zero and false visible', async () => {
+  test('renders null and missing values as a dash while keeping zero and false visible', async () => {
     mockFetchReportData.mockResolvedValue(
       loaded([
         { Seller: 'Orion Fabricators', Quotes: 0, Remarks: null, Approved: false },
@@ -520,11 +522,11 @@ describe('DailyDownloadableReports table cells', () => {
     await waitForIdle();
 
     expect(readHeaders()).toEqual(['Seller', 'Quotes', 'Remarks', 'Approved']);
-    expect(readRow(0)).toEqual({ Seller: 'Orion Fabricators', Quotes: '0', Remarks: '', Approved: 'false' });
-    expect(readRow(1)).toEqual({ Seller: 'Zenith Valves', Quotes: '4', Remarks: '', Approved: 'true' });
+    expect(readRow(0)).toEqual({ Seller: 'Orion Fabricators', Quotes: '0', Remarks: EMPTY_CELL, Approved: 'false' });
+    expect(readRow(1)).toEqual({ Seller: 'Zenith Valves', Quotes: '4', Remarks: EMPTY_CELL, Approved: 'true' });
   });
 
-  test('shows the sourcing mode as given and falls back to Mode 0 when it is blank or null', async () => {
+  test('shows the sourcing mode as given and a dash when it is blank or null', async () => {
     mockFetchReportData.mockResolvedValue(
       loaded([
         { Seller: 'Orion Fabricators', SourcingMode: 'Mode 3' },
@@ -535,7 +537,7 @@ describe('DailyDownloadableReports table cells', () => {
     renderReports();
     await waitForIdle();
 
-    expect([0, 1, 2].map((index) => readRow(index).SourcingMode)).toEqual(['Mode 3', 'Mode 0', 'Mode 0']);
+    expect([0, 1, 2].map((index) => readRow(index).SourcingMode)).toEqual(['Mode 3', EMPTY_CELL, EMPTY_CELL]);
   });
 });
 

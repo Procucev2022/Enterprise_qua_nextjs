@@ -1,12 +1,9 @@
-const path = require('path');
+const crypto = require('crypto');
+const { logger } = require('../services/loggerService');
 
 // ==============================================================================
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
-
-const INQUIRIES_PERSISTENCE_FILE = typeof __dirname !== 'undefined'
-  ? path.join(__dirname, '../../data/enterprise_inquiries.json')
-  : './data/enterprise_inquiries.json';
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -87,16 +84,20 @@ const SOURCING_MODES = [
   },
 ];
 
+// Product rule: a free-trial buyer starts with this many RFQ credits for V1, V2 and V3.
+// V0 (Free Starter) RFQs never consume a credit.
+const BUYER_FREE_TRIAL_RFQ_CREDITS = 5;
+
 const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'free_trial',
     name: 'Free Trial Starter (V0)',
     price: '₹0',
-    billing: '5 Free RFQ Credits included for V1/V2/V3 + Unlimited V0',
-    description: 'Create unlimited V0 RFQs sent to Procucev verified vendors (0 credits deducted), plus 5 free RFQ credits for V1, V2, or V3.',
+    billing: `${BUYER_FREE_TRIAL_RFQ_CREDITS} Free RFQ Credits included for V1/V2/V3 + Unlimited V0`,
+    description: `Create unlimited V0 RFQs sent to Procucev verified vendors (0 credits deducted), plus ${BUYER_FREE_TRIAL_RFQ_CREDITS} free RFQ credits for V1, V2, or V3.`,
     features: [
       'V0 Free Starter: Unlimited RFQs to Procucev network vendors (0 credits deducted)',
-      '5 Free RFQ credits to trial V1 (Client Roster), V2 (Hybrid), and V3 (AI Autonomous)',
+      `${BUYER_FREE_TRIAL_RFQ_CREDITS} Free RFQ credits to trial V1 (Client Roster), V2 (Hybrid), and V3 (AI Autonomous)`,
       'Autonomous Voice, WhatsApp & SMS multi-channel follow-ups',
       'Interactive Quote Matrix & 1-click PO generation',
       'SHA-256 cryptographic audit transaction seals',
@@ -206,81 +207,253 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   },
 ];
 
-const INITIAL_SYSTEM_CONFIG = {
-  ollamaModel: 'Llama 3 (8B Instruct)',
-  ollamaActive: true,
-  ocrExtractionThreshold: 85,
-  whatsappAutoChaser: true,
-  voiceCallAutoChaser: true,
-  smsAutoChaser: true,
-  escalationIntervalHours: 24,
-  azureDbBackupFrequency: 'Daily',
-  rbacEnforced: true,
-};
+// Label written in place of a rating or score that a vendor has never received.
+const VENDOR_RATING_LABELS = Object.freeze({
+  UNRATED: 'not rated',
+});
+
+const VENDOR_EVALUATION_REQUEST = Object.freeze({
+  DEFAULT_STATUS: 'PENDING EVALUATION',
+  SUCCESS_MESSAGE: 'Evaluation request sent to vendor. The vendor has been notified to submit their performance evaluation details.',
+  // {vendorName} is filled by formatMessage. Returned in place of a new request when a saved evaluation exists.
+  EXISTING_EVALUATION_MESSAGE: 'A saved evaluation for {vendorName} already exists, so no new evaluation request was sent. The saved evaluation is shown instead.',
+});
+
+// Shown for every write to the admin settings endpoint. The backend stores no
+// editable setting, and no backend code reads one, so nothing can be saved.
+const SYSTEM_CONFIG_MESSAGES = Object.freeze({
+  READ_ONLY: 'System settings cannot be changed from this screen. The backend does not store any editable setting.',
+});
+
+// AI support chat. No model grounded in this application's data is connected, so
+// every question gets an explicit not_configured result instead of a canned reply.
+const SUPPORT_CHAT_STATUS = Object.freeze({
+  NOT_CONFIGURED: 'not_configured',
+});
+const SUPPORT_CHAT_MESSAGES = Object.freeze({
+  NOT_CONFIGURED: 'The AI support assistant is not connected to this server. Your message was not answered and no support ticket was created.',
+  PROMPT_REQUIRED: 'prompt is required.',
+});
+
+// Labels and outcomes for invitation and chaser messages. A status is written only
+// from a real provider result: 'sent' means the provider accepted the message.
+const CHASER_CHANNEL_LABELS = Object.freeze({
+  email: 'Email invitation',
+  whatsapp: 'WhatsApp invitation',
+  sms: 'SMS chaser',
+  call: 'Voice call',
+});
+const CHASER_OUTCOME_STATUS = Object.freeze({
+  SENT: 'sent',
+  FAILED: 'failed',
+  THROTTLED: 'throttled',
+  NOT_CONFIGURED: 'not_configured',
+  SKIPPED: 'skipped',
+  RECORDED: 'recorded',
+});
+const CHASER_OUTREACH_MESSAGES = Object.freeze({
+  NO_VENDORS_ASSIGNED: 'No vendors are assigned to this RFQ, so there is nobody to chase. Assign vendors first.',
+  NO_CHANNELS_SELECTED: 'No chaser channel was chosen. Choose at least one of call, whatsapp or sms, then retry.',
+  VOICE_NOT_CONFIGURED: 'No voice calling provider is connected to this backend, so no call was placed.',
+  NO_PHONE_ON_RECORD: 'The vendor has no phone number on record, so no message was sent.',
+  UNSUPPORTED_CHANNEL: 'This chaser channel is not supported, so nothing was sent.',
+  PROVIDER_NOT_ACCEPTED: 'The messaging provider did not accept the message.',
+  THROTTLED: 'The message was held back by a send cooldown, so it was not sent.',
+  NOTHING_SENT: 'No message reached a messaging provider. Check the result for each channel.',
+  FEED_TITLE_SENT: '{channel} sent to {vendorName}',
+  FEED_TITLE_NOT_SENT: '{channel} not sent to {vendorName}',
+  FEED_MESSAGE_SENT: 'RFQ {rfqNumber}: the messaging provider accepted the message.',
+  FEED_MESSAGE_NOT_SENT: 'RFQ {rfqNumber}: the message did not reach a messaging provider. Status: {status}. {error}',
+  AUDIT_BATCH_CHASER: 'Batch chaser for {rfqNumber} ({channels}): {sentCount} sent, {notSentCount} not sent.',
+});
 
 // Actor recorded on an audit entry when no signed-in user could be resolved for
-// the action. Previously each call site invented its own plausible-looking human
-// mailbox ('buyer@enterprise.com', 'procurement@enterprise.com',
-// 'auditor@procucev.ai'), which made an unattributed system action read as a
-// deliberate act by a named person.
+// the action. Call sites must not invent a person's mailbox for an unattributed
+// action, because that would make a system action read as a deliberate act by a
+// named person.
 const SYSTEM_ACTOR_EMAIL = 'system@procucev.ai';
+
+// A caller-supplied X-Request-Id is kept only when it matches this pattern. Anything else is
+// replaced with a random id, so a crafted header cannot pad or break structured log lines.
+const REQUEST_ID_CONFIG = Object.freeze({
+  HEADER_PATTERN: /^[A-Za-z0-9._:-]{1,128}$/,
+});
 // Time budget defaults for a newly raised RFQ. Real values, just not per-RFQ
 // choices — kept here rather than inline so the chaser cadence and the UI agree.
 const RFQ_DEFAULTS = {
   ALLOCATED_TIME: '24 hrs',
   ELAPSED_TIME: '0 hrs',
-  ALLOWED_EXTENSION_HOURS: Object.freeze([24, 48]),
-  DEFAULT_EXTENSION_HOURS: 24,
 };
-const ALLOWED_EXTENSION_HOURS = Object.freeze([24, 48]);
-const DEFAULT_EXTENSION_HOURS = 24;
-// Infrastructure rows the admin screen renders. The database row is replaced at
-// runtime with the live result of pool.checkDatabaseHealth() (see
-// storeService.refreshInfrastructureHealth), so the entry below is only the
-// placeholder shown before the first probe completes.
-//
-// The previous first entry described 'Azure Database for MySQL (Shared Identity
-// Schema)' as ONLINE with an 18ms latency and 99.99% uptime. That database is no
-// longer part of this application at all.
-const DATABASE_HEALTH_SERVICE_LABEL = 'PostgreSQL Database (Neon)';
-const INITIAL_AZURE_HEALTH = [
-  {
-    service: DATABASE_HEALTH_SERVICE_LABEL,
-    status: 'CHECKING',
-    latency: '—',
-    uptime: '—',
-    details: 'Awaiting the first connection health probe.',
-  },
-  {
-    service: 'Azure OpenAI (Doc Intelligence OCR)',
-    status: 'HEALTHY',
-    latency: '42ms',
-    uptime: '99.95%',
-    details: 'Deployment: gpt-4o-procure-v2, TPS: 140/sec',
-  },
-  {
-    service: 'Azure Cosmos DB (Chasing State Engine)',
-    status: 'ONLINE',
-    latency: '12ms',
-    uptime: '99.999%',
-    details: 'Multi-Region Replication, Automatic Partitioning',
-  },
-  {
-    service: 'Azure Communication Services (WhatsApp / Voice Gateway)',
-    status: 'ONLINE',
-    latency: '65ms',
-    uptime: '99.9%',
-    details: 'Enterprise WhatsApp Business API & AI Voice SIP Trunking Active',
-  },
-  {
-    service: 'Azure Key Vault & HSM Security (kv-procucev-prod)',
-    status: 'HEALTHY',
-    latency: '8ms',
-    uptime: '100%',
-    details: 'FIPS 140-2 Level 3 Hardware Security Module Active',
-  },
-];
+// One-time closing-deadline extension. The buyer picks whole days between EXTENSION_MIN_DAYS and
+// EXTENSION_MAX_DAYS (defined in validationSchemas.js). The extension is stored in hours.
+const EXTENSION_HOURS_PER_DAY = 24;
+const DEFAULT_EXTENSION_DAYS = 1;
+const RFQ_QUOTE_WRITE_RETRIES = 5;
+// Pause before retrying a quote write that lost a race with another write to the same RFQ. The pause
+// doubles per attempt up to MAX_MS, with jitter, so competing submissions stop colliding on each retry.
+const RFQ_QUOTE_WRITE_BACKOFF = Object.freeze({ BASE_MS: 25, MAX_MS: 400 });
+const RFQ_STATE_WRITE_RETRIES = 5;
+const PERSISTED_RECORD_WRITE_RETRIES = 5;
+const AUDIT_CHAIN_WRITE_MAX_ATTEMPTS = 5;
+const AUDIT_CHAIN_VERIFY_PAGE_SIZE = 500;
+const AUDIT_CHAIN_VERIFY_MAX_ROWS = 20000;
+const AUDIT_CHAIN_VERIFY_SNAPSHOT_ATTEMPTS = 3;
+const EVENT_OUTBOX_TYPES = Object.freeze({
+  AI_FEED: 'ai_feed',
+  NOTIFICATION: 'notification',
+  NOTIFICATION_BATCH: 'notification_batch',
+  ENTERPRISE_INQUIRY_EMAIL: 'enterprise_inquiry_email',
+  VENDOR_RATING_REVISION_EMAIL: 'vendor_rating_revision_email',
+  VENDOR_ONBOARDING_EMAIL: 'vendor_onboarding_email',
+  VENDOR_BULK_IMPORT_INVITATION_EMAIL: 'vendor_bulk_import_invitation_email',
+  HISTORICAL_VENDOR_ONBOARDING_EMAIL: 'historical_vendor_onboarding_email',
+  WHATSAPP_CREDENTIALS_EMAIL: 'whatsapp_credentials_email',
+  PAYMENT_DUES_EMAIL: 'payment_dues_email',
+  COMMUNICATION_DELIVERY: 'communication_delivery',
+  RFQ_CREATED_EMAIL: 'rfq_created_email',
+  RFQ_VENDOR_INVITE_EMAIL: 'rfq_vendor_invite_email',
+  // Plans the vendors of a minor-scoped RFQ whose database read failed when the RFQ was created.
+  RFQ_VENDOR_PLAN: 'rfq_vendor_plan',
+  RFQ_GATEWAY_NOTIFICATION_EMAIL: 'rfq_gateway_notification_email',
+  RFQ_QUOTE_RECEIVED_EMAIL: 'rfq_quote_received_email',
+  RFQ_VENDOR_QUOTE_ACK_EMAIL: 'rfq_vendor_quote_ack_email',
+  BUYER_PROFILE_COMPLETION_REMINDER_EMAIL: 'buyer_profile_completion_reminder_email',
+  RFQ_AUTO_CLOSURE_ACK_EMAIL: 'rfq_auto_closure_ack_email',
+  RFQ_VENDOR_INQUIRY_ACK_EMAIL: 'rfq_vendor_inquiry_ack_email',
+  DAILY_RFQ_REPORT_EMAIL: 'daily_rfq_report_email',
+  REGISTRATION_DECISION_EMAIL: 'registration_decision_email',
+  VENDOR_CATEGORY_UPDATE_EMAIL: 'vendor_category_update_email',
+});
 
+const EVENT_OUTBOX_DEFERRED_STATUS = Object.freeze({
+  BUYER_ONBOARDING: 'onboarding',
+});
+const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
+const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;
+const EVENT_OUTBOX_LEASE_MS = 5 * 60 * 1000;
+const EVENT_OUTBOX_RETRY_BASE_MS = 1000;
+const EVENT_OUTBOX_RETRY_MAX_MS = 15 * 60 * 1000;
+const EVENT_OUTBOX_ENQUEUE_ATTEMPTS = 3;
+const EVENT_OUTBOX_ENQUEUE_RETRY_MS = 50;
+const EVENT_OUTBOX_POLL_INTERVAL_MS = 60 * 1000;
+const EVENT_OUTBOX_RETENTION_DAYS = 30;
+// Expired outbox rows removed per purge run. Larger backlogs drain over later runs, so one run never
+// rewrites an unbounded number of rows in a single D1 window.
+const EVENT_OUTBOX_PURGE_BATCH_SIZE = 500;
+const D1_NOTIFICATION_INSERT_BATCH_SIZE = 14;
+const EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE = D1_NOTIFICATION_INSERT_BATCH_SIZE;
+const RFQ_AUTO_CLOSE_AFTER_MS = 48 * 60 * 60 * 1000;
+const RFQ_AUTO_CLOSE_POLL_INTERVAL_MS = 60 * 1000;
+const RFQ_AUTO_CLOSE_REASON = 'Official closure 48 hours after release';
+const RFQ_COMPARISON_NOTIFICATION_DELAY_MS = 5 * 60 * 1000;
+const RFQ_COMPARISON_RETRY_DELAY_MS = 60 * 1000;
+const RFQ_COMPARISON_MAX_ATTEMPTS = 5;
+const RFQ_COMPARISON_STALE_CLAIM_MS = 15 * 60 * 1000;
+const RFQ_COMPARISON_QUEUE_MAX_LIMIT = 100;
+const RFQ_COMPARISON_ERROR_MAX_LENGTH = 2000;
+const RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT = 1000;
+const RFQ_CHASER_MAX_ATTEMPTS = 5;
+const RFQ_CHASER_RETRY_BASE_MS = 30 * 1000;
+const RFQ_CHASER_RETRY_MAX_MS = 15 * 60 * 1000;
+const RFQ_CHASER_ERROR_MAX_LENGTH = 2000;
+// Database row in the admin infrastructure list. It is the only row: it starts as
+// CHECKING and is replaced by the live result of pool.checkDatabaseHealth() (see
+// storeService.refreshInfrastructureHealth). No other service is listed.
+const DATABASE_HEALTH_SERVICE_LABEL = 'Cloudflare D1 Database';
+const INFRASTRUCTURE_HEALTH = Object.freeze({
+  EMPTY_VALUE: '—',
+  STATUS: Object.freeze({
+    CHECKING: 'CHECKING',
+    ONLINE: 'ONLINE',
+    UNREACHABLE: 'UNREACHABLE',
+    NOT_CONFIGURED: 'NOT_CONFIGURED',
+  }),
+  MESSAGES: Object.freeze({
+    AWAITING_PROBE: 'Awaiting the first connection health probe.',
+    CONNECTION_FAILED: 'Database connection failed.',
+  }),
+});
+const DATABASE_QUERY_LOGGING = Object.freeze({
+  SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
+  D1_SUCCESS_SAMPLE_RATE_DEFAULT: 0.01,
+  D1_HIGH_READ_ROWS_THRESHOLD_DEFAULT: 1000,
+  // Failed and slow query log lines carry a preview of the SQL template, cut to this length.
+  SQL_PREVIEW_MAX_CHARS: 300,
+});
+const DATABASE_QUERY_CACHE = Object.freeze({
+  VENDOR_PAGE_COUNT_TTL_MS: 30 * 1000,
+});
+// Public-vendor lookups by major category read the indexed major_category column. The limits
+// bound how many vendor rows one lookup returns and how many category signals it accepts.
+const PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG = Object.freeze({
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 500,
+  MAX_SIGNALS: 45,
+});
+/**
+ * Unnecessary / deprecated tables automatically purged during migrations and deployments.
+ */
+const DEPRECATED_DATABASE_TABLES = Object.freeze([
+  'vendors_search_fts',
+  'system_error_logs',
+  'ai_classification_logs',
+  'user_login_logs',
+  'audit_logs',
+  'audit_chain_state',
+]);
+const GRAPHQL_CONFIG = Object.freeze({
+  MAX_BATCH_OPERATIONS: 5,
+  MAX_QUERY_LENGTH: 20000,
+  MAX_QUERY_FIELDS: 100,
+  MAX_QUERY_DEPTH: 10,
+  MAX_REQUEST_BODY_BYTES: '1mb',
+  ERROR_BATCH_EMPTY: 'Batched query array must not be empty.',
+  ERROR_BATCH_LIMIT: 'A GraphQL batch can contain at most 5 operations.',
+  ERROR_QUERY_LIMIT: 'GraphQL request exceeds the configured query complexity limit.',
+  ERROR_INVALID_VARIABLES: 'GraphQL variables must be a valid JSON object.',
+});
+// Cloudflare D1 rejects work once a database exceeds its resource budget for a 10 second
+// window ("D1 DB is overloaded"). The app treats that as a short overload: it pauses new
+// store loads and tells clients to retry after RETRY_AFTER_SECONDS.
+const D1_OVERLOAD_CONFIG = Object.freeze({
+  RETRY_AFTER_SECONDS: 15,
+  MESSAGE: 'The database is busy handling other requests. Please retry in a few seconds.',
+});
+// Transient D1 failures other than an overload are retried with a short, jittered backoff.
+// An overload is never retried: a retry spends the same per-window budget that caused it.
+const D1_RETRY_CONFIG = Object.freeze({
+  MAX_ATTEMPTS: 3,
+  BACKOFF_BASE_MS: 250,
+  BACKOFF_JITTER_MS: 100,
+});
+const STORE_HYDRATION_CONFIG = Object.freeze({
+  // Frontend log ingestion never reads the store, so it must not wait for a load.
+  LOG_INGESTION_PATHS: Object.freeze(['/api/logs', '/api/logs/client-error']),
+  // After a failed load, store-backed requests fail fast for this long instead of starting another load.
+  FAILURE_BACKOFF_MS: 5000,
+  FAILURE_RETRY_AFTER_SECONDS: 5,
+  SKIP_PATHS: Object.freeze([
+    '/',
+    '/health',
+    '/api/action-center/communications',
+    '/api/approvals',
+    '/api/auth',
+    '/api/bot',
+    '/api/buyer-profile',
+    '/api/crypto',
+    '/api/db',
+    '/api/document-vault',
+    '/api/enterprise-inquiries',
+    '/api/internal-tasks',
+    '/api/payment-dues',
+    '/api/pincode',
+    '/api/subscriptions',
+    '/api/tickets',
+    '/api/vendor-ingestion',
+    '/api/zoho',
+  ]),
+  UNAVAILABLE_MESSAGE: 'The application data store is temporarily unavailable. Please retry shortly.',
+});
 const QUALIFICATION_PILLARS = [
   { id: 'M1', name: 'Commercial Terms', weight: 25, color: '#3b82f6' },
   { id: 'M2', name: 'Technical Capabilities', weight: 15, color: '#06b6d4' },
@@ -292,7 +465,6 @@ const QUALIFICATION_PILLARS = [
 
 const AES_CONFIG = {
   ALGORITHM: 'aes-256-gcm',
-  FALLBACK_ALGORITHM: 'aes-256-cbc',
   KEY_LENGTH_BYTES: 32,
   IV_LENGTH_BYTES: 12,
   AUTH_TAG_LENGTH_BYTES: 16,
@@ -359,9 +531,9 @@ const AUTH_MESSAGES = {
   LOGOUT_REVOCATION_FAILED:
     'Your session could not be ended because the database is unreachable. Try again; if it persists, close the browser to discard the session locally.',
   IDENTITY_DB_UNAVAILABLE:
-    'The database is unreachable, so credentials cannot be verified right now. Confirm the DATABASE_URL in backend/.env is correct and that this host is allowed to reach the PostgreSQL instance, then retry.',
+    'The database is unreachable, so credentials cannot be verified right now. Please retry shortly.',
   IDENTITY_DB_NOT_CONFIGURED:
-    'No database is configured. Set DATABASE_URL in backend/.env so logins can be verified against real account records.',
+    'No database is configured. Ensure Cloudflare D1 database storage is configured so logins can be verified against real account records.',
   // Revocation is checked against the database, so an unreachable database means
   // the session cannot be confirmed as still valid. It fails closed and says so,
   // rather than reporting the credentials as invalid.
@@ -369,6 +541,8 @@ const AUTH_MESSAGES = {
     'Your session could not be confirmed because the database is unreachable. Try again in a moment; if it persists, sign in again.',
   OTP_STORAGE_FAILED:
     'The verification code could not be saved, so it has not been sent. Try requesting a new code in a moment.',
+  AUTH_STORAGE_UNAVAILABLE:
+    'Authentication is temporarily unavailable because the database could not be reached. Please retry shortly.',
   // Delivery is confirmed before "sent" is reported, so a failed send is told to
   // the visitor instead of leaving them waiting for a code that never arrives.
   OTP_DELIVERY_FAILED:
@@ -383,6 +557,10 @@ const AUTH_MESSAGES = {
     'This self-registered account is still awaiting administrator approval, so sign-in is blocked. You will be able to log in once it is approved.',
   ACCOUNT_ALREADY_EXISTS:
     'An account already exists for this email address and mobile number. Use the Sign In tab instead of creating a new account.',
+  VENDOR_DIRECTORY_ACCESS_KEY_NOT_CONFIGURED:
+    'Vendor Directory sign-in is unavailable because the directory access key is not configured on this server. Ask an administrator to set it, then try again.',
+  VENDOR_DIRECTORY_ACCESS_KEY_INVALID:
+    'Invalid directory access key. Please enter the valid passkey provided by Procucev.',
   VENDOR_DIRECTORY_CM_ONLY:
     'Access to the Vendor Directory is restricted to authorized @procucev.com corporate accounts.',
   VENDOR_DIRECTORY_PROCUCEV_EMAIL_REQUIRED:
@@ -395,9 +573,52 @@ const AUTH_MESSAGES = {
     'Maximum verification attempts exceeded. Please request a new code.',
   VENDOR_DIRECTORY_OTP_INVALID:
     'Invalid verification code. Please check and try again.',
+  VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE:
+    'Vendor Directory sign-in is temporarily unavailable because the database could not be reached. Please retry in a few minutes.',
   VENDOR_DIRECTORY_INACTIVITY_TIMEOUT:
     'Your directory session ended due to 5 minutes of inactivity. Please sign in again.',
 };
+
+const DOCUMENT_VAULT_MESSAGES = Object.freeze({
+  STORAGE_UNAVAILABLE:
+    'Document storage is temporarily unavailable. Your change was not saved. Please retry shortly.',
+});
+
+const PERSISTENCE_MESSAGES = Object.freeze({
+  DATABASE_UNAVAILABLE:
+    'Database storage is temporarily unavailable. No operation completed. Please retry shortly.',
+  PAYMENT_LINK_TRACKING_FAILED:
+    'Zoho created the payment link, but its tracking record could not be saved. Do not create another link; contact support before retrying.',
+  PAYMENT_STATUS_UPDATE_FAILED:
+    'Payment status could not be saved. Please retry webhook delivery.',
+  PAYMENT_DUES_DELIVERY_STATUS_FAILED:
+    'The email was attempted, but its delivery status could not be saved. Check communication history before retrying.',
+});
+
+const APPROVAL_MESSAGES = Object.freeze({
+  DATABASE_UNAVAILABLE: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+  ALREADY_DECIDED: 'This approval was already decided. Refresh the list before taking another action.',
+  PASSWORD_INVALID: 'The approver password is invalid. Check the selected approver and try again.',
+  PASSWORD_CONFIGURATION_UNAVAILABLE: 'Approver password verification is not configured. Contact an administrator.',
+});
+
+const REGISTRATION_MESSAGES = Object.freeze({
+  DATABASE_UNAVAILABLE: 'Registration storage is temporarily unavailable. No action was completed. Please retry shortly.',
+  ALREADY_PROCESSED: 'This registration has already been processed. Refresh the list before taking another action.',
+  NOT_FOUND: 'Registration record not found.',
+  ACTION_INVALID: 'Choose accept or reject for this registration.',
+});
+
+const REGISTRATION_DECISION_EMAIL_COPY = Object.freeze({
+  SUBJECT: '{accountType} account registration {decisionStatus}',
+  GREETING: 'Hello {recipientName},',
+  APPROVED: 'Your {accountType} account registration has been approved. Sign in using the password you created during registration.',
+  REJECTED: 'Your {accountType} account registration could not be approved. Contact support if you need clarification.',
+  SIGN_IN: 'Sign in: {signInUrl}',
+  SIGN_IN_LINK_LABEL: 'Sign in',
+  RECOVERY: 'If you cannot sign in, use the account recovery options on the sign-in page.',
+  SUPPORT: 'For assistance, contact {supportEmail}.',
+});
 
 // ==============================================================================
 // IDENTITY DATABASE (shared Procucev MySQL) - role + master-data mapping
@@ -471,6 +692,11 @@ const RFQ_SUMMARY_CONFIG = {
   MAX_PROMPT_ITEMS: 40,
   MAX_HEADLINE_CHARS: 140,
   MAX_RISK_NOTES: 5,
+  // Longest time the model chain may take for one RFQ summary. POST /api/rfqs waits for the summary.
+  // Model response time is outside our control, and complex summaries can take a while, so the budget
+  // is 10 minutes. The global Gemini budget (GEMINI_TOTAL_BUDGET_MS) still caps this value. When the
+  // budget runs out, the deterministic summary is used.
+  GEMINI_BUDGET_MS: 10 * 60 * 1000,
 };
 
 // ==============================================================================
@@ -616,6 +842,17 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     'surgical instrument': 'Surgical Instruments',
     'health equipment': 'Health Equipments',
     'health equipments': 'Health Equipments',
+    automation: 'Controllers',
+    instrumentation: 'Control & Instrument',
+    stationery: 'Stationery',
+    'office & stationery': 'Stationery',
+    'office and stationery': 'Stationery',
+    'office stationery': 'Stationery',
+    'office supplies': 'Stationery',
+    'paper & stationery': 'Stationery',
+    'paper and stationery': 'Stationery',
+    'printing & stationery': 'Stationery',
+    'printing and stationery': 'Stationery',
   },
 
   // Aliases for major category abbreviations/legacy names to canonical taxonomy names
@@ -737,6 +974,63 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     'medicines': { major: 'Occuptional Health and Safety', minor: 'Medicines' },
 
     // Existing Engineering & Industrial mappings
+    // ── Stationery & Office Supplies ──
+    'a4 copier paper': { major: 'Others – New Product', minor: 'Stationery' },
+    'copier paper': { major: 'Others – New Product', minor: 'Stationery' },
+    'a4 paper': { major: 'Others – New Product', minor: 'Stationery' },
+    'paper ream': { major: 'Others – New Product', minor: 'Stationery' },
+    'printing paper': { major: 'Others – New Product', minor: 'Stationery' },
+    'bond paper': { major: 'Others – New Product', minor: 'Stationery' },
+    'whiteboard marker': { major: 'Others – New Product', minor: 'Stationery' },
+    'whiteboard markers': { major: 'Others – New Product', minor: 'Stationery' },
+    'permanent marker': { major: 'Others – New Product', minor: 'Stationery' },
+    'permanent markers': { major: 'Others – New Product', minor: 'Stationery' },
+    'lever arch file': { major: 'Others – New Product', minor: 'Stationery' },
+    'lever arch files': { major: 'Others – New Product', minor: 'Stationery' },
+    'ball pens': { major: 'Others – New Product', minor: 'Stationery' },
+    'ball pen': { major: 'Others – New Product', minor: 'Stationery' },
+    'ballpoint pen': { major: 'Others – New Product', minor: 'Stationery' },
+    'ballpoint pens': { major: 'Others – New Product', minor: 'Stationery' },
+    'gel pen': { major: 'Others – New Product', minor: 'Stationery' },
+    'gel pens': { major: 'Others – New Product', minor: 'Stationery' },
+    'rollerball pen': { major: 'Others – New Product', minor: 'Stationery' },
+    'fountain pen': { major: 'Others – New Product', minor: 'Stationery' },
+    'box file': { major: 'Others – New Product', minor: 'Stationery' },
+    'box files': { major: 'Others – New Product', minor: 'Stationery' },
+    'ring binder': { major: 'Others – New Product', minor: 'Stationery' },
+    'ring binders': { major: 'Others – New Product', minor: 'Stationery' },
+    'file folder': { major: 'Others – New Product', minor: 'Stationery' },
+    'file folders': { major: 'Others – New Product', minor: 'Stationery' },
+    'marker pen': { major: 'Others – New Product', minor: 'Stationery' },
+    'marker pens': { major: 'Others – New Product', minor: 'Stationery' },
+    highlighter: { major: 'Others – New Product', minor: 'Stationery' },
+    highlighters: { major: 'Others – New Product', minor: 'Stationery' },
+    stapler: { major: 'Others – New Product', minor: 'Stationery' },
+    staplers: { major: 'Others – New Product', minor: 'Stationery' },
+    'staple pins': { major: 'Others – New Product', minor: 'Stationery' },
+    'paper clip': { major: 'Others – New Product', minor: 'Stationery' },
+    'paper clips': { major: 'Others – New Product', minor: 'Stationery' },
+    'sticky notes': { major: 'Others – New Product', minor: 'Stationery' },
+    'post-it': { major: 'Others – New Product', minor: 'Stationery' },
+    'post it': { major: 'Others – New Product', minor: 'Stationery' },
+    notepad: { major: 'Others – New Product', minor: 'Stationery' },
+    notepads: { major: 'Others – New Product', minor: 'Stationery' },
+    'writing pad': { major: 'Others – New Product', minor: 'Stationery' },
+    'writing pads': { major: 'Others – New Product', minor: 'Stationery' },
+    'correction pen': { major: 'Others – New Product', minor: 'Stationery' },
+    'correction tape': { major: 'Others – New Product', minor: 'Stationery' },
+    'punching machine': { major: 'Others – New Product', minor: 'Stationery' },
+    'hole punch': { major: 'Others – New Product', minor: 'Stationery' },
+    'paper cutter': { major: 'Others – New Product', minor: 'Stationery' },
+    eraser: { major: 'Others – New Product', minor: 'Stationery' },
+    erasers: { major: 'Others – New Product', minor: 'Stationery' },
+    pencil: { major: 'Others – New Product', minor: 'Stationery' },
+    pencils: { major: 'Others – New Product', minor: 'Stationery' },
+    sharpener: { major: 'Others – New Product', minor: 'Stationery' },
+    stationery: { major: 'Others – New Product', minor: 'Stationery' },
+    'office stationery': { major: 'Others – New Product', minor: 'Stationery' },
+    'office supplies': { major: 'Others – New Product', minor: 'Stationery' },
+
     // ── IT & Computing ──
     'laserjet printer': { major: 'IT', minor: 'Printers' },
     'inkjet printer': { major: 'IT', minor: 'Printers' },
@@ -845,8 +1139,16 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     tools: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
     'welding machine': { major: 'Engineering Spares - Mechanical', minor: 'Welding Equipment & Cutting Machines' },
     'welding electrode': { major: 'Engineering Spares - Mechanical', minor: 'Welding Materials' },
+    'pressure gauge': { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
+    'pressure gauges': { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
+    gauge: { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
+    gauges: { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
 
     // ── Engineering Spares - Electrical ──
+    'plc controller': { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
+    plc: { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
+    controller: { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
+    controllers: { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
     'circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
     'air circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
     'flood light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
@@ -977,13 +1279,15 @@ const GEMINI_CONFIG = {
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
   // Ordered models attempted in sequence: gemini-3.5-flash-lite down to reasoning fallback models.
   // Extraction automatically advances through the backup models upon error or 503 overload.
-  MODELS: (
-    process.env.GEMINI_MODELS ||
-    'gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash'
-  )
-    .split(',')
-    .map((m) => m.trim().replace(/\s+/g, '-'))
-    .filter(Boolean),
+  // Code-owned model chain to prevent runtime environment discrepancies or accidental configuration drift.
+  MODELS: [
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+  ],
   get PRIMARY_MODEL() {
     return this.MODELS[0] || 'gemini-3.5-flash-lite';
   },
@@ -1007,6 +1311,10 @@ const GEMINI_CONFIG = {
   MIN_ATTEMPT_MS: 0,
   MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,
   MAX_DOCUMENT_TEXT_CHARS: GEMINI_MAX_DOCUMENT_TEXT_CHARS,
+  // A model that rejects a request (HTTP 400) may still be served by the next model, because
+  // limits differ between models. The chain stops once this many rejections come in a row,
+  // which means the request itself is refused.
+  MAX_CONSECUTIVE_REJECTIONS: 2,
   // Maximum number of API keys attempted per individual model before advancing
   // to the next fallback model in the chain (prevents long key-retry loops on rate limits).
   MAX_KEY_ATTEMPTS_PER_MODEL: Number(process.env.GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL || 3),
@@ -1065,23 +1373,39 @@ const RFQ_ATTACHMENT_CONFIG = {
 // Configurable via environment variables (default: 5):
 // - MAX_CLIENT_VENDORS_PER_CATEGORY
 // - MAX_PROCUCEV_VENDORS_PER_CATEGORY
-function getEnvNumber(key, fallback = 5) {
-  let val = undefined;
+/** The raw value of an environment variable: a Cloudflare Worker binding first, then process.env. Undefined when unset or blank. */
+function readEnvValue(key) {
   if (
     typeof globalThis !== 'undefined' &&
     globalThis.__CF_ENV__ &&
     globalThis.__CF_ENV__[key] !== undefined &&
     globalThis.__CF_ENV__[key] !== ''
   ) {
-    val = globalThis.__CF_ENV__[key];
-  } else if (typeof process !== 'undefined' && process.env && process.env[key] !== undefined && process.env[key] !== '') {
-    val = process.env[key];
+    return globalThis.__CF_ENV__[key];
   }
+  if (typeof process !== 'undefined' && process.env && process.env[key] !== undefined && process.env[key] !== '') {
+    return process.env[key];
+  }
+  return undefined;
+}
+
+function getEnvNumber(key, fallback = 5) {
+  const val = readEnvValue(key);
   if (val !== undefined && val !== null) {
     const num = Number(val);
     if (!Number.isNaN(num) && num > 0) return num;
   }
   return fallback;
+}
+
+/**
+ * Comma-separated list from an environment variable. Blank entries are dropped. Returns a copy of
+ * `fallback` when the variable is unset or has no usable entry.
+ */
+function getEnvList(key, fallback = []) {
+  const raw = readEnvValue(key);
+  const items = raw === undefined ? [] : String(raw).split(',').map((item) => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : [...fallback];
 }
 
 const MAX_INVITE_VENDORS_PER_REQUEST = 20;
@@ -1096,7 +1420,56 @@ const VENDOR_ASSIGNMENT_LIMITS = {
   get TARGET_PER_MINOR_CATEGORY() {
     return getEnvNumber('TARGET_VENDORS_PER_MINOR_CATEGORY', 25);
   },
+  get MODE3_TOP_LIMIT() {
+    return getEnvNumber('MODE3_TOP_VENDORS_LIMIT', 10);
+  },
 };
+
+const VENDOR_DIRECTORY_QUERY_CONFIG = Object.freeze({
+  DEFAULT_PAGE_SIZE: 50,
+  MAX_PAGE_SIZE: 200,
+  MAX_CATEGORY_FILTERS: 25,
+  MAX_FILTER_STRING_LENGTH: 1000,
+  MAX_SEARCH_LENGTH: 200,
+  MIN_MINOR_POOL_FACTOR: 5,
+  MAX_POOL_LIMIT: PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT,
+  ALL_CATEGORIES_LABEL: 'All Categories',
+});
+
+// Each minor category of an RFQ is filled to the per-minor target from its own vendors, then from the
+// vendors under its parent major. These limits shape the database lookups behind that fill.
+// OVERFETCH_FACTOR reads more rows than the target, so the location and rating ranking has room to choose.
+// MAX_ROWS caps a single lookup at the bound the major-category lookup already uses.
+const RFQ_MINOR_INVITE_LOOKUP = Object.freeze({
+  OVERFETCH_FACTOR: 2,
+  MAX_ROWS: PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT,
+});
+
+// Recipients of the alert sent when an RFQ's minor category has fewer network vendors than the target.
+// RFQ_MINOR_SHORTFALL_ALERT_EMAILS (comma-separated) replaces the default list. A blank value keeps it.
+const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = Object.freeze([
+  'gmtrfq@procucev.com',
+  'quateam@procucev.com',
+  'anshul.goel@procucev.com',
+  'veerababu.v@procucev.com',
+]);
+
+const RFQ_MINOR_SHORTFALL_ALERT = Object.freeze({
+  get RECIPIENTS() {
+    return getEnvList('RFQ_MINOR_SHORTFALL_ALERT_EMAILS', RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS);
+  },
+  MESSAGES: Object.freeze({
+    SUBJECT: '[Action Required] RFQ {rfqNumber}: minor category vendor shortfall',
+    HEADLINE: 'Minor category vendor shortfall',
+    INTRO: 'RFQ {rfqNumber} ({title}) invites {target} network vendors for each minor category. The minor categories below have fewer network vendors than that target, so the rest of the invite list is filled from the parent major category.',
+    TABLE_MINOR: 'Minor category',
+    TABLE_MAJOR: 'Parent major category',
+    TABLE_FOUND: 'Minor vendors found',
+    TABLE_FILLED: 'Added from major category',
+    TEXT_LINE: '- {minorCategory} (major: {majorCategory}): {minorMatched} of {target} minor vendors found, {majorFilled} added from the major category',
+    ACTION: 'Onboard or map more vendors to these minor categories so future RFQs reach the target.',
+  }),
+});
 
 // ==============================================================================
 // EMAIL-TO-RFQ INGESTION
@@ -1251,25 +1624,30 @@ const ZOHO_CONFIG = new Proxy({}, {
   },
 });
 
+const ZOHO_WEBHOOK_RECEIPT_POLICY = Object.freeze({
+  LEASE_MS: 120000,
+  RETENTION_DAYS: 90,
+  // Expired receipts removed per purge run. Larger backlogs drain over later runs, so one run never
+  // rewrites an unbounded number of rows in a single D1 window.
+  PURGE_BATCH_SIZE: 500,
+});
+
+const ZOHO_WEBHOOK_MESSAGES = Object.freeze({
+  INVALID_SIGNATURE: 'Invalid signature.',
+  ACCOUNT_MISMATCH: 'Account mismatch.',
+  RETRY_DELIVERY: 'Webhook processing could not be durably confirmed. Please retry delivery.',
+  PAYMENT_ACTIVATION_RETRY: 'Payment activation could not be saved. Please retry delivery.',
+});
+
 function getSellerSubscriptionPricing() {
-  const gstRate = (zohoConfigOverrides.GST_RATE !== undefined)
-    ? zohoConfigOverrides.GST_RATE
-    : getSubscriptionGstRate();
+  const connect12Base = Number(process.env.SELLER_V1_12M_PRICE || 7499);
+  const connect6Base = Number(process.env.SELLER_V1_6M_PRICE || 4125);
 
-  const connect12Inclusive = Number(process.env.SELLER_V1_12M_PRICE || 7499);
-  const connect6Inclusive = Number(process.env.SELLER_V1_6M_PRICE || 4125);
-  const connect12Base = Math.round((connect12Inclusive / (1 + gstRate)) * 100) / 100;
-  const connect6Base = Math.round((connect6Inclusive / (1 + gstRate)) * 100) / 100;
+  const select12Base = Number(process.env.SELLER_V2_12M_PRICE || 14999);
+  const select6Base = Number(process.env.SELLER_V2_6M_PRICE || 8250);
 
-  const select12Inclusive = Number(process.env.SELLER_V2_12M_PRICE || 14999);
-  const select6Inclusive = Number(process.env.SELLER_V2_6M_PRICE || 8250);
-  const select12Base = Math.round((select12Inclusive / (1 + gstRate)) * 100) / 100;
-  const select6Base = Math.round((select6Inclusive / (1 + gstRate)) * 100) / 100;
-
-  const v312Inclusive = Number(process.env.SELLER_V3_12M_PRICE || 19999);
-  const v36Inclusive = Number(process.env.SELLER_V3_6M_PRICE || 11000);
-  const v312Base = Math.round((v312Inclusive / (1 + gstRate)) * 100) / 100;
-  const v36Base = Math.round((v36Inclusive / (1 + gstRate)) * 100) / 100;
+  const v312Base = Number(process.env.SELLER_V3_12M_PRICE || 19999);
+  const v36Base = Number(process.env.SELLER_V3_6M_PRICE || 11000);
 
   return {
     connect: { '12_months': connect12Base, '6_months': connect6Base },
@@ -1489,14 +1867,21 @@ const EMAIL_GATEWAY_CONFIG = {
   MIN_POLL_MS: 30000,
   // Cap per pass so a backlog cannot spend unbounded time and quota in one run.
   DEFAULT_MAX_PER_POLL: 10,
+  // Keep no-storage delivery retries useful without letting local fallback state grow without bound.
+  MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS: 100,
+  // A crashed or timed-out poll may release a pending delivery after this lease expires.
+  ACK_RETRY_CLAIM_LEASE_MS: 5 * 60 * 1000,
   // Inbound requisitions circulate to category-matched vendors upon creation, transitioning to Quotes Pending.
   INGESTED_STATUS: 'Quotes Pending',
   // Default sourcing mode for email-ingested RFQs: Version 2 (Hybrid Sourcing).
   INGESTED_SOURCING_MODE: 'mode_2',
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
-  DEFAULT_GATEWAY_ADDRESS: 'rfq@procucev.com',
-  DEFAULT_FALLBACK_RFQ_TITLE: 'Request for Quotation',
+  // Buyer requisitions mailbox. Read from EMAIL_GATEWAY_ADDRESS (or EMAIL_GATEWAY_USER) at
+  // access time and never defaulted. An empty string means the address is not configured.
+  get GATEWAY_ADDRESS() {
+    return String(process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || '').trim();
+  },
   MAX_LINE_ITEMS_PER_RFQ: 49,
   LABEL_PROCESSED: 'Processed',
   LABEL_ERROR: 'Error',
@@ -1520,7 +1905,12 @@ const VENDOR_EMAIL_GATEWAY_CONFIG = {
   DEFAULT_POLL_MS: 60000,
   MIN_POLL_MS: 30000,
   DEFAULT_MAX_PER_POLL: 10,
-  DEFAULT_GATEWAY_ADDRESS: 'srinu20252026@gmail.com',
+  // Dedicated vendor quotation mailbox. Read from VENDOR_EMAIL_GATEWAY_ADDRESS (or
+  // VENDOR_EMAIL_GATEWAY_USER) at access time and never defaulted. An empty string means
+  // the vendor mailbox is not configured.
+  get GATEWAY_ADDRESS() {
+    return String(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || '').trim();
+  },
   DEFAULT_FROM_NAME: 'Procucev Enterprise',
 };
 
@@ -1556,13 +1946,16 @@ function resolveChaserDelay(envVal, defaultMs) {
 }
 
 const CHASER_DELAYS = {
-  SMS_MS:       resolveChaserDelay(process.env.CHASER_SMS_DELAY_MS, FIVE_MINUTES_MS),
-  CALL_MS:      resolveChaserDelay(process.env.CHASER_CALL_DELAY_MS, SIX_HOURS_MS),
-  WHATSAPP_MS:  resolveChaserDelay(process.env.CHASER_WHATSAPP_DELAY_MS, TWELVE_HOURS_MS),
-  EMAIL_MS:     resolveChaserDelay(process.env.CHASER_EMAIL_DELAY_MS, TWENTY_FOUR_HOURS_MS),
+  SMS_MS: resolveChaserDelay(process.env.CHASER_SMS_DELAY_MS, FIVE_MINUTES_MS),
+  CALL_MS: resolveChaserDelay(process.env.CHASER_CALL_DELAY_MS, SIX_HOURS_MS),
+  WHATSAPP_MS: resolveChaserDelay(process.env.CHASER_WHATSAPP_DELAY_MS, TWELVE_HOURS_MS),
+  EMAIL_MS: resolveChaserDelay(process.env.CHASER_EMAIL_DELAY_MS, TWENTY_FOUR_HOURS_MS),
 };
 
 const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
+const PRESENCE_MIN_WRITE_INTERVAL_MS = 2 * 60 * 1000;
+const VENDOR_PRESENCE_MAX_IDENTIFIERS = 100;
+const VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH = 64;
 
 // ==============================================================================
 // SMS DLT TEMPLATE REGISTRY
@@ -1585,9 +1978,9 @@ const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
 // OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
-    NAME:     'RFQ_Notification_Seller_Service',
+    NAME: 'RFQ_Notification_Seller_Service',
     REFERENCE_NUMBER: '11-2WNNMUNY6YY1',
-    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
+    SMSGID: process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
     CATEGORY: 'SERVICE_IMPLICIT',
     // Exact approved template text — static parts must match character-for-character.
     TEMPLATE: 'RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.',
@@ -1597,29 +1990,29 @@ const SMS_DLT_TEMPLATES = {
     URL_SHORTENING: false,
   },
   OTP: {
-    NAME:     'OTP_Procucev_GMT',
-    SMSGID:   process.env.SMS_GATEWAY_SMSGID || '1102294821',
+    NAME: 'OTP_Procucev_GMT',
+    SMSGID: process.env.SMS_GATEWAY_SMSGID || '1102294821',
     CATEGORY: 'TRANSACTIONAL',
     TEMPLATE: 'OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do not share. - Team Procucev.',
     VARIABLES: ['otp'],
   },
   BUYER_BIDS_UNLOCKED: {
-    NAME:     'Buyer_Quote_Matrix_Ready',
+    NAME: 'Buyer_Quote_Matrix_Ready',
     REFERENCE_NUMBER: '11-44JHMUY9DRFC',
-    SMSGID:   process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179138668879258',
+    SMSGID: process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179138668879258',
     CATEGORY: 'SERVICE_IMPLICIT',
-    HEADER:   'PROCUC',
+    HEADER: 'PROCUC',
     TEMPLATE: 'RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.',
     VARIABLES: ['rfqLabel', 'quotesCount', 'matrixLink'],
     VARIABLE_TYPES: ['alp', 'num', 'urg'],
     URL_SHORTENING: false,
   },
   ACTION_CENTER_COMM: {
-    NAME:     'Action_Center_Alert',
+    NAME: 'Action_Center_Alert',
     REFERENCE_NUMBER: '11-ACCOMM-2026',
-    SMSGID:   process.env.SMS_GATEWAY_ACTION_CENTER_SMSGID || '1777179138668879299',
+    SMSGID: process.env.SMS_GATEWAY_ACTION_CENTER_SMSGID || '1777179138668879299',
     CATEGORY: 'SERVICE_IMPLICIT',
-    HEADER:   'PROCUC',
+    HEADER: 'PROCUC',
     TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',
     VARIABLES: ['recipientName', 'alertMessage', 'linkUrl'],
     VARIABLE_TYPES: ['alp', 'alp', 'urg'],
@@ -1670,7 +2063,12 @@ function unwrapAccountData(obj) {
       try {
         const parsed = JSON.parse(obj.raw);
         return { ...parsed, ...obj };
-      } catch (_) {}
+      } catch (error) {
+        logger.warn('Buyer account raw payload was not valid JSON', {
+          error,
+          operation: 'unwrap-account-data',
+        }, 'CONFIG_CONSTANTS');
+      }
     } else if (typeof obj.raw === 'object') {
       return { ...obj.raw, ...obj };
     }
@@ -1901,6 +2299,8 @@ const EMAIL_GATEWAY_MESSAGES = {
   QUOTE_VALIDATION_FAILED_DETAIL: 'Vendor quotation for RFQ {rfqNumber} from {vendorName} failed validation: {reason}.',
   QUOTE_ACK_SUBJECT: 'Quotation Received – RFQ {rfqNumber}',
   QUOTE_FAILURE_SUBJECT: 'Action Required – Quotation Could Not Be Processed for RFQ {rfqNumber}',
+  VENDOR_ISSUE_REPLY_REASON:
+    'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
   VENDOR_GATEWAY_REQUIRES_RFQ: 'Vendor email gateway only processes quotation replies for existing RFQs.',
@@ -1913,6 +2313,20 @@ const EMAIL_GATEWAY_MESSAGES = {
   RFQ_CREDITS_EXHAUSTED_DETAIL:
     'Free trial RFQ credits exhausted ({remaining} left, {needed} needed), so no RFQ was raised. Buyer notified.',
 };
+
+const EMAIL_GATEWAY_DELIVERY_KIND = Object.freeze({
+  BUYER_CREDENTIALS: 'BUYER_CREDENTIALS',
+  RFQ_NOT_CREATED: 'RFQ_NOT_CREATED',
+  VENDOR_CREDITS_EXHAUSTED: 'VENDOR_CREDITS_EXHAUSTED',
+  VENDOR_QUOTE_FAILURE: 'VENDOR_QUOTE_FAILURE',
+  VENDOR_PORTAL_REDIRECT: 'VENDOR_PORTAL_REDIRECT',
+  BUYER_UNAUTHORIZED_SENDER: 'BUYER_UNAUTHORIZED_SENDER',
+  VENDOR_UNAUTHORIZED_SENDER: 'VENDOR_UNAUTHORIZED_SENDER',
+  VENDOR_QUOTE_ACK: 'VENDOR_QUOTE_ACK',
+  VENDOR_INQUIRY_ACK: 'VENDOR_INQUIRY_ACK',
+  BUYER_QUOTE_RECEIVED: 'BUYER_QUOTE_RECEIVED',
+  BUYER_PROFILE_COMPLETION_REMINDER: 'BUYER_PROFILE_COMPLETION_REMINDER',
+});
 
 /**
  * Notice sent to a registered buyer whose RFQ email did not become an RFQ.
@@ -1942,6 +2356,37 @@ const RFQ_NOT_CREATED_NOTIFICATION = {
  */
 const VENDOR_FREE_CREDITS_LIMIT = 5;
 
+const RFQ_DOWNLOAD_ERRORS = Object.freeze({
+  VENDOR_NOT_FOUND: 'Vendor record not found.',
+  VENDOR_STORAGE_MISSING: 'Vendor record not found in persistent storage.',
+  RFQ_NOT_FOUND: 'RFQ {rfqId} not found.',
+  UNAUTHORIZED: 'You do not have permission to access this RFQ.',
+  CREDITS_EXHAUSTED: 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
+  VENDOR_STORAGE_UNAVAILABLE: 'Vendor account storage is temporarily unavailable. Try the download again.',
+  UNLOCK_STORAGE_UNAVAILABLE: 'The RFQ download could not be recorded safely. Please retry in a moment.',
+  UNKNOWN_FAILURE: 'The RFQ download could not be authorized or recorded. Please retry.',
+});
+
+const RFQ_CREATION_ERRORS = Object.freeze({
+  TITLE_REQUIRED: 'An RFQ needs a title before it can be created. Enter a title and submit again.',
+  GATEWAY_ADDRESS_NOT_CONFIGURED: 'This RFQ asks for an intake mailbox notification, but no gateway address is configured, so the RFQ was not created. Set EMAIL_GATEWAY_ADDRESS on the backend and retry.',
+  FREE_CREDITS_EXHAUSTED: `Your ${BUYER_FREE_TRIAL_RFQ_CREDITS} free trial RFQ credits for V1/V2/V3 have been fully used. Upgrade to a paid plan to raise more V1/V2/V3 RFQs, or continue using V0 Free Starter for Procucev Network RFQs.`,
+});
+
+const RFQ_NOTIFICATION_MESSAGES = Object.freeze({
+  VENDOR_CATEGORY_UPDATE_EMAIL_QUEUED:
+    'The vendor category update request is saved and queued. Delivery will retry automatically if the email provider is unavailable.',
+  VENDOR_CATEGORY_UPDATE_EMAIL_SENT:
+    'The email provider accepted the vendor category update request.',
+  VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED:
+    'The vendor category update email was not confirmed as sent. Retry shortly; the provider may have accepted the message before the response was lost.',
+  BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED: 'The email provider did not confirm acceptance.',
+});
+
+const RFQ_NOTIFICATION_ERROR_CODES = Object.freeze({
+  EMAIL_DELIVERY_NOT_ACCEPTED: 'EMAIL_DELIVERY_NOT_ACCEPTED',
+});
+
 /** Notification email content for vendor credit exhaustion */
 const VENDOR_CREDITS_EXHAUSTED_NOTIFICATION = {
   SUBJECT: `Action Required – ${VENDOR_FREE_CREDITS_LIMIT} Free Quotation Credits Exhausted for RFQ #{rfqNumber}`,
@@ -1957,7 +2402,6 @@ const UNAUTHORIZED_BUYER_NOTIFICATION = {
   SUBJECT: 'Enterprise QUA - Buyer Registration Required',
   HEADLINE: 'PROCUCEV ENTERPRISE',
   SUBLINE: 'Buyer Registration Required',
-  DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
 };
 
 /** RFQ creation acknowledgement notification sent to the buyer (Qua AI Email 2 Standard). */
@@ -1968,7 +2412,6 @@ const RFQ_ACKNOWLEDGEMENT_NOTIFICATION = {
   SUBLINE: 'RFQ Creation Acknowledgement',
   SUPPORT_PHONE: '+91 8247722944',
   SUPPORT_EMAIL: 'info@procucev.com',
-  DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
   TEAM_SIGNATURE: 'Team Qua AI\nProcucev Enterprise Solutions',
   QUOTES_TIMELINE: 'Suppliers start quoting within about 24 hours. Qua AI follows up with them and sends you the quotations side by side.',
   NEED_IT_FASTER: 'For any further questions or clarifications, please reach out to +91 8247722944/email to info@procucev.com',
@@ -1984,7 +2427,7 @@ const QUA_AI_EMAIL_TEMPLATES = {
     number: 1,
     name: 'RFQ created from email, account auto-created',
     who: 'Unregistered buyer',
-    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.',
+    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with only the email address, creates the RFQ, then sends this email. Other profile details stay blank until the buyer provides them.',
     subject: 'Congratulations, your RFQ {rfq_id} is live on Qua AI',
   },
   EMAIL_2_RFQ_CREATED: {
@@ -2085,6 +2528,13 @@ const QUA_AI_EMAIL_TEMPLATES = {
   },
 };
 
+// Outcome messages for POST /api/transactional-emails/send. A message is reported as
+// accepted only when the email provider accepted it.
+const TRANSACTIONAL_EMAIL_MESSAGES = Object.freeze({
+  ACCEPTED: 'Transactional email {templateId} was accepted by the email provider.',
+  NOT_SENT: 'Transactional email {templateId} was not sent. Delivery status: {status}. No email provider accepted it.',
+});
+
 const QUA_AI_EMAIL_SUPPORT = {
   PHONE: '+91 8247722944',
   EMAIL: 'info@procucev.com',
@@ -2105,13 +2555,6 @@ const PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES = [
 ];
 
 const PAYMENT_DUES_CHANNELS = ['email', 'message', 'whatsapp'];
-
-const DEFAULT_LOW_CREDIT_NOTIFICATION = {
-  subject: 'Low Credit Balance Notification – QUA AI',
-  buildMessage: ({ contactPerson = 'Valued Partner', availableCredits = 0 } = {}) =>
-    `Dear ${contactPerson},\n\nThis is to inform you that your QUA AI account currently has only ${availableCredits} credits remaining.\n\nPlease review your credit balance and take the necessary action to continue using the platform without interruption.\n\nKindly acknowledge receipt of this notification.\n\nRegards,\nQUA AI Team\nProcucev Enterprises Solutions Pvt Ltd.`,
-};
-
 
 /** Outcome of preparing an email for extraction. */
 const EMAIL_INGESTION_STATUS = {
@@ -2189,12 +2632,9 @@ const GEMINI_INLINE_MIME_TYPES = [
   'text/csv',
 ];
 
-// Normalisation defaults applied to every ingested RFQ line item. These mirror
-// AutomaticRfqServiceImpl.raiseRfq and RFQBuilderService in the Java app, which
-// are the values buyers' existing RFQs were created with.
+// Normalisation rules for ingested RFQs. These mirror AutomaticRfqServiceImpl.raiseRfq and
+// RFQBuilderService in the Java app. A line item with no stated unit or quantity is never filled in.
 const RFQ_INGESTION_CONFIG = {
-  DEFAULT_UNIT: 'Nos',
-  DEFAULT_QUANTITY: 1,
   DELIVERY_DATE_OFFSET_DAYS: 5,
   MAX_TITLE_LENGTH: 100,
   MAX_LINE_ITEMS_PER_RFQ: 49,
@@ -2232,11 +2672,6 @@ const BUYER_PROFILE_CONFIG = {
   // an ASCII currency code, and both applications must agree on the stored form.
   CURRENCY_SYMBOL: '₹',
   CURRENCY_REPLACEMENT: 'INR ',
-
-  // Default constitution applied when the stored row has none, matching the
-  // buyer form's initial `orgType` value.
-  DEFAULT_ORGANIZATION_TYPE: 'Public Limited',
-  DEFAULT_COUNTRY: 'India',
 };
 
 const BUYER_PROFILE_MESSAGES = {
@@ -2252,6 +2687,11 @@ const BUYER_PROFILE_MESSAGES = {
     'The buyer organization profile could not be read from the identity database. The record was not changed. Please retry in a moment.',
   PROFILE_SAVE_FAILED:
     'The buyer organization profile could not be saved to the identity database. No changes were applied. Please retry in a moment.',
+  DETAILS_IDENTIFIER_REQUIRED: 'Provide a buyer email, organization name, or account ID to look up profile details.',
+  DETAILS_INVALID_QUERY: 'Correct the highlighted buyer lookup fields and try again.',
+  DETAILS_NOT_FOUND: 'No buyer profile matched the supplied email, organization name, or account ID.',
+  DETAILS_LOAD_FAILED:
+    'Buyer profile details could not be verified because the identity database is temporarily unavailable. Please retry in a moment.',
   TAXONOMY_LOAD_FAILED:
     'The procurement category taxonomy could not be read from the identity database. Please retry in a moment.',
   PROFILE_SAVED: 'Buyer organization profile updated successfully.',
@@ -2292,6 +2732,11 @@ const {
   PINCODE_MESSAGE,
   PAN_REGEX,
   PAN_MESSAGE,
+  DUMMY_PANS,
+  DUMMY_PAN_MESSAGE,
+  isDummyPan,
+  usablePan,
+  clearDummyPanFields,
   CIN_REGEX,
   CIN_MESSAGE,
   WEBSITE_REGEX,
@@ -2300,6 +2745,8 @@ const {
   INDIAN_PINCODE_MESSAGE,
   ORGANIZATION_TYPES,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
   ISO_DATE_REGEX,
   ISO_DATE_MESSAGE,
   TIME_HORIZON_TYPES,
@@ -2393,6 +2840,33 @@ const VENDOR_INGESTION_AI_STATUS = {
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
 };
+
+/** Background ingestion job types, as stored in ingestion_jobs.job_type. */
+const VENDOR_INGESTION_JOB_TYPE = {
+  VENDOR_MASTER: 'VENDOR_MASTER',
+  PO_DUMP: 'PO_DUMP',
+  AI_CATEGORY: 'AI_CATEGORY',
+};
+
+/** Background ingestion job states, as stored in ingestion_jobs.status. */
+const VENDOR_INGESTION_JOB_STATUS = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+};
+
+/** Which category list the AI and the reviewer use: the buyer's own master, or the platform default. */
+const VENDOR_CATEGORY_MASTER_SOURCE = {
+  ORGANIZATION: 'ORGANIZATION',
+  PLATFORM_DEFAULT: 'PLATFORM_DEFAULT',
+};
+
+/**
+ * Statutory identifiers on a vendor record. They come from the supplier's own registration, so a buyer may read them
+ * but may not write them. The supplier can still change them through its self-service profile.
+ */
+const BUYER_LOCKED_STATUTORY_FIELDS = Object.freeze(['gst', 'gstin', 'pan', 'msme', 'annualTurnover']);
 
 /** How a PO line was attributed to a vendor-master row. */
 const VENDOR_MATCH_STRATEGY = {
@@ -2492,6 +2966,9 @@ const VENDOR_INGESTION_CONFIG = {
   // many times in total before the vendor is marked FAILED. Retrying is safe:
   // classification writes no category until a reply validates.
   AI_MAX_ATTEMPTS: 2,
+  // A background AI job whose progress has not moved for this long is treated as
+  // abandoned (its worker was stopped mid-run), so a new run may start.
+  AI_JOB_STALE_AFTER_MS: 10 * 60 * 1000,
   // PO lines summarised into one vendor's purchasing profile. Enough to
   // characterise what a supplier sells without sending an entire spend history,
   // which is what makes this one call per vendor rather than one per PO row.
@@ -2502,7 +2979,7 @@ const VENDOR_INGESTION_CONFIG = {
   // on a few thousand sequential SMTP sends.
   MAX_RECIPIENTS_PER_DISPATCH: 500,
   // Legal-entity suffixes stripped before a vendor name is used as a fallback
-  // match key, so "Apex Supplies Ltd." and "Apex Supplies Limited" collapse to
+  // match key, so "Example Supplies Ltd." and "Example Supplies Limited" collapse to
   // the same key. Vendor Code remains the preferred identifier; this is the last
   // resort, only reached when neither a code nor a GSTIN matched.
   NAME_NORMALIZATION_SUFFIXES: [
@@ -2545,6 +3022,7 @@ const VENDOR_INGESTION_MESSAGES = {
   VENDOR_MASTER_LIMIT: 'A Vendor Master may hold at most {max} suppliers.',
   PO_LIMIT: 'A PO dump may hold at most {max} line items.',
   MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
+  AI_JOB_FAILED: 'AI categorization stopped unexpectedly before every supplier was classified. Run the categorization again to resume.',
   MAPPING_NO_PO_HISTORY:
     'This supplier has no pre-purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
   CATEGORY_MASTER_EMPTY:
@@ -2673,7 +3151,7 @@ const INDIAN_STATES = Object.freeze([
   'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
 ]);
 
-const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
+
 const INDIAN_STATES_AND_CITIES = {
   "Andhra Pradesh": ["Visakhapatnam", "Vijayawada", "Guntur", "Tirupati", "Nellore", "Kurnool", "Kakinada", "Rajahmundry", "Kadapa", "Anantapur", "Eluru", "Ongole", "Chittoor", "Srikakulam", "Vizianagaram", "Machilipatnam", "Tenali", "Narasaraopet", "Chilakaluripet", "Bapatla", "Chirala", "Kavali", "Gudur", "Sullurpeta", "Naidupeta", "Venkatagiri", "Puttur", "Nagari", "Madanapalle", "Punganur", "Palamaner", "Pileru", "Rayachoti", "Proddatur", "Jammalamadugu", "Pulivendula", "Mydukur", "Nandyal", "Adoni", "Yemmiganur", "Dhone", "Atmakur", "Allagadda", "Banaganapalle", "Markapur", "Kanigiri", "Giddalur", "Podili", "Kandukur", "Addanki", "Parchur", "Repalle", "Ponnur", "Mangalagiri", "Tadepalli", "Sattenapalle", "Vinukonda", "Piduguralla", "Macherla", "Gurazala", "Amaravati", "Ibrahimpatnam", "Nuzvid", "Gudivada", "Pedana", "Vuyyuru", "Jaggayyapeta", "Nandigama", "Tiruvuru", "Kaikaluru", "Bhimavaram", "Tadepalligudem", "Tanuku", "Palakollu", "Narasapuram", "Nidadavole", "Kovvur", "Jangareddygudem", "Akividu", "Attili", "Amalapuram", "Mandapeta", "Ramachandrapuram", "Peddapuram", "Samalkot", "Pithapuram", "Tuni", "Yeleswaram", "Anakapalle", "Narsipatnam", "Yelamanchili", "Bheemunipatnam", "Pendurthi", "Parvathipuram", "Bobbili", "Salur", "Palasa", "Ichchapuram", "Tekkali", "Amadalavalasa", "Rajam", "Hindupur", "Dharmavaram", "Tadipatri", "Gooty", "Guntakal", "Rayadurg", "Kalyandurg", "Penukonda", "Puttaparthi", "Kadiri", "Palakonda"],
   "Arunachal Pradesh": ["Itanagar", "Naharlagun", "Pasighat", "Tawang", "Bomdila", "Ziro", "Along (Aalo)", "Tezu", "Roing", "Namsai", "Changlang", "Khonsa", "Seppa", "Daporijo", "Yingkiong", "Anini", "Koloriang", "Basar", "Jairampur", "Miao", "Deomali", "Bordumsa", "Lekang", "Wakro", "Dirang", "Rupa", "Bhalukpong", "Doimukh", "Nirjuli", "Yupia", "Sagalee", "Palin", "Mechuka", "Hawai", "Hayuliang", "Mariyang", "Tuting", "Boleng", "Likabali"],
@@ -2775,13 +3253,6 @@ const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
   SESSION_SCOPE: 'vendor_directory',
 });
 
-const DEFAULT_INTERNAL_MEMBERS = Object.freeze([
-  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
-  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
-  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
-  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
-  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
-]);
 
 const INTERNAL_TASK_CATEGORIES = Object.freeze({
   COMMUNICATION: 'COMMUNICATION',
@@ -2867,9 +3338,15 @@ const CREDIT_APPROVER_ROLES = Object.freeze([
   'category_manager',
 ]);
 
-const DEFAULT_CREDIT_APPROVER_EMAIL = Object.freeze(
-  process.env.CREDIT_APPROVER_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || 'admin@procucev.com'
-);
+// Destination for credit allocation and deduction approval alerts. Read from the
+// environment at call time. Returns null when neither variable is set, and callers
+// must not send an alert without a recipient.
+function getCreditApproverEmail() {
+  const configured = [process.env.CREDIT_APPROVER_EMAIL, process.env.ADMIN_NOTIFICATION_EMAIL]
+    .map((value) => String(value || '').trim())
+    .find(Boolean);
+  return configured || null;
+}
 
 const CALL_OUTCOMES = Object.freeze([
   'Connected - Interested',
@@ -2930,16 +3407,6 @@ const ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS = Object.freeze([
 
 const ACCOUNT_DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
 
-const CREDIT_APPROVAL_APPROVERS = Object.freeze([
-  'Srinu Sir',
-  'Sudheer Sir',
-]);
-
-const CREDIT_APPROVAL_INITIATORS = Object.freeze([
-  'Govardhan',
-  'Krishna',
-  'Chandhan',
-]);
 
 const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
 
@@ -2962,11 +3429,15 @@ const APPROVAL_REQUEST_TYPES = Object.freeze([
 const APPROVAL_STATUSES = Object.freeze(['Pending', 'Approved', 'Rejected']);
 
 
+// Daily RFQ report recipients are not stored here. dailyRfqReportService reads them from
+// DAILY_RFQ_REPORT_EMAILS (comma-separated) at call time. An empty value means the report has
+// no recipients, and the run is reported as not_configured rather than as delivered.
 const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
-  DEFAULT_RECIPIENTS: Object.freeze(['veerababu.v@procucev.com']),
   DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
   DEFAULT_SCHEDULE_MINUTE: 0,
+  SCHEDULE_GRACE_MINUTES: 5,
   DEFAULT_TIMEZONE: 'Asia/Kolkata',
+  MAX_TIMEZONE_LENGTH: 100,
   DEFAULT_ENABLED: true,
   INGESTION_CHANNEL_LABELS: Object.freeze({
     web_portal: 'Web Portal',
@@ -2977,14 +3448,205 @@ const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   }),
 });
 
+// Approver list for credit and approval requests. Emails come from the environment only
+// (null when unset). Each approver names the environment variable that holds its password.
+const APPROVER_CONFIG = Object.freeze([
+  {
+    id: 'srinu_sir',
+    name: 'Srinu Sir',
+    title: 'Director / Management Authority',
+    email: process.env.SRINU_APPROVER_EMAIL || null,
+    passwordEnvironmentVariable: 'SRINU_APPROVER_PASSWORD',
+  },
+  {
+    id: 'sudheer_sir',
+    name: 'Sudheer Sir',
+    title: 'Management Authority',
+    email: process.env.SUDHEER_APPROVER_EMAIL || null,
+    passwordEnvironmentVariable: 'SUDHEER_APPROVER_PASSWORD',
+  },
+]);
+
+// Approver names are the single source for validation enums. Derived, never typed twice.
+const CREDIT_APPROVAL_APPROVERS = Object.freeze(APPROVER_CONFIG.map((approver) => approver.name));
+
+// Matches an approver by exact name or id, case-insensitively. Substring matching is not used.
+function findApproverConfig(approverName) {
+  const normalizedName = String(approverName || '').trim().toLowerCase();
+  if (!normalizedName) return null;
+  return APPROVER_CONFIG.find(
+    (approver) => approver.name.toLowerCase() === normalizedName || approver.id === normalizedName
+  ) || null;
+}
+
+function resolveApproverPasswordEnvironmentVariable(approverName) {
+  const approver = findApproverConfig(approverName);
+  return approver ? approver.passwordEnvironmentVariable : null;
+}
+
+function isApproverPasswordConfigured(approverName) {
+  const environmentVariable = resolveApproverPasswordEnvironmentVariable(approverName);
+  return Boolean(environmentVariable && (process.env[environmentVariable] || process.env.APPROVER_PASSWORD));
+}
+
+function verifyApproverPassword(approverName, submittedPassword) {
+  if (typeof submittedPassword !== 'string' || submittedPassword.length === 0) return false;
+  const environmentVariable = resolveApproverPasswordEnvironmentVariable(approverName);
+  if (!environmentVariable) return false;
+  const expectedPassword = process.env[environmentVariable] || process.env.APPROVER_PASSWORD;
+  if (!expectedPassword) return false;
+
+  const expectedHash = crypto.createHash('sha256').update(expectedPassword, 'utf8').digest();
+  const submittedHash = crypto.createHash('sha256').update(submittedPassword, 'utf8').digest();
+  return crypto.timingSafeEqual(expectedHash, submittedHash);
+}
+
+// ==============================================================================
+// MESSAGES MOVED FROM SERVICES, BATCH CHASER CHANNELS AND TICKET MESSAGES
+// ==============================================================================
+// Each message object below was defined inside the service named in its comment.
+// That service imports its copy from this module and deletes its local definition.
+// Services whose messages are not listed here (emailService, whatsAppService) do not
+// import from this module yet, so their messages stay local.
+
+// smsService.js
+const SMS_MESSAGES = Object.freeze({
+  INVALID_MOBILE: 'Invalid mobile number format',
+  INVALID_ACTION_CENTER_MOBILE: 'Invalid mobile number format. A 10-digit Indian mobile number is required.',
+  RFQ_NUMBER_REQUIRED: 'An RFQ number is required to send this SMS.',
+  QUOTES_COUNT_REQUIRED: 'A whole number of quotes (0 or more) is required to send the buyer comparison SMS.',
+  MESSAGE_REQUIRED: 'Message text is required to send an Action Center SMS.',
+  RFQ_GATEWAY_NOT_CONFIGURED: 'RFQ SMS gateway credentials are not configured',
+  GATEWAY_NOT_CONFIGURED: 'SMS gateway credentials are not configured. Set SMS_GATEWAY_USER and SMS_GATEWAY_PASS before sending.',
+  THROTTLED: 'SMS was not dispatched because this recipient is temporarily rate-limited. Retry after 30 seconds.',
+  TEST_ENVIRONMENT: 'SMS was not dispatched because the test environment never sends live messages.',
+  GATEWAY_REJECTED: 'SMS gateway rejected the message',
+  NOT_SPECIFIED: 'Not specified',
+});
+
+// actionCenterNotificationService.js
+const ACTION_CENTER_MESSAGES = Object.freeze({
+  NOT_SPECIFIED: 'Not specified',
+  EMAIL_PROVIDER_UNAVAILABLE: 'Email delivery is unavailable: the mailer service has no deliver function.',
+  EMAIL_NOT_SENT: 'Email was not sent.',
+  SMS_NOT_SENT: 'SMS delivery failed.',
+  QUERY_FAILED: 'Action Center communication history could not be loaded from the database.',
+});
+
+// dailyRfqReportService.js
+const DAILY_REPORT_MESSAGES = Object.freeze({
+  NOT_SPECIFIED: 'Not specified',
+  NO_RECIPIENTS: 'No recipients are configured. Set DAILY_RFQ_REPORT_EMAILS to a comma-separated list of addresses, then retry.',
+});
+
+// transactionalEmailTemplates.js
+const TEMPLATE_MESSAGES = Object.freeze({
+  NOT_SPECIFIED: 'Not specified',
+});
+
+// mailerService.js
+// Shown when an optional descriptive field is missing.
+const MAILER_NOT_SPECIFIED = 'Not specified';
+// Shown for a rating or score that was never computed, for example a vendor with no previous rating.
+const MAILER_NOT_EVALUATED = 'Not evaluated';
+
+// Channels a batch chaser may use for one RFQ. Each channel can be chosen only once, so the
+// list length is also the most channels one request can name.
+const BATCH_CHASER_CHANNELS = Object.freeze(['call', 'whatsapp', 'sms']);
+
+// Ticket API messages. Placeholders such as {id} are filled with formatMessage().
+const TICKET_MESSAGES = Object.freeze({
+  SESSION_REQUIRED: 'An authenticated session is required to change a support ticket. Sign in and retry.',
+  STORAGE_UNAVAILABLE: 'Ticket storage is temporarily unavailable. No change was saved. Please retry shortly.',
+  NOT_FOUND: 'Ticket with ID "{id}" was not found.',
+  DELETED: 'Ticket {id} deleted.',
+  SUMMARY_FAILED: 'Failed to retrieve ticket summary statistics.',
+  LIST_FAILED: 'Failed to retrieve tickets.',
+  DETAIL_FAILED: 'Failed to fetch ticket details.',
+  CREATE_FAILED: 'Failed to create ticket record.',
+  UPDATE_FAILED: 'Failed to update ticket.',
+  ESCALATE_FAILED: 'Failed to escalate ticket.',
+  COMMENT_FAILED: 'Failed to add comment to ticket.',
+  DELETE_FAILED: 'Failed to delete ticket.',
+  EXPORT_FAILED: 'Failed to export tickets as CSV.',
+  CREATE_VALIDATION_FAILED: 'Validation failed on ticket payload.',
+  UPDATE_VALIDATION_FAILED: 'Validation failed on ticket update payload.',
+  ESCALATE_VALIDATION_FAILED: 'Validation failed on ticket escalation payload.',
+  COMMENT_VALIDATION_FAILED: 'Validation failed on ticket comment payload.',
+});
+
+// Form keys accepted on POST /api/tickets, mapped to the camelCase names the schema validates.
+// The Action Center form posts snake_case keys. A camelCase value, when present, wins over its alias.
+const TICKET_CREATE_FIELD_ALIASES = Object.freeze({
+  customer_name: 'customerName',
+  customer_email: 'customerEmail',
+  customer_phone: 'customerPhone',
+  assigned_to_name: 'assignedToName',
+});
+
+const RFQ_ATTACHMENT_EXTENSION_MIME_MAP = Object.freeze({
+  '.pdf': 'application/pdf',
+  '.eml': 'message/rfc822',
+  '.msg': 'application/vnd.ms-outlook',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.json': 'application/json',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+});
+
+/**
+ * Resolve a safe Content-Type header for a stored RFQ attachment, falling back
+ * to extension-based MIME detection when stored metadata is missing or generic.
+ */
+function resolveAttachmentContentType(declaredMimeType, fileName) {
+  const normalized =
+    typeof declaredMimeType === 'string'
+      ? declaredMimeType.split(';')[0].trim().toLowerCase()
+      : '';
+  if (normalized && normalized !== 'application/octet-stream' && normalized !== 'binary/octet-stream') {
+    return normalized;
+  }
+  const safeName = typeof fileName === 'string' ? fileName.trim().toLowerCase() : '';
+  const dotIdx = safeName.lastIndexOf('.');
+  if (dotIdx > -1) {
+    const ext = safeName.slice(dotIdx);
+    if (RFQ_ATTACHMENT_EXTENSION_MIME_MAP[ext]) {
+      return RFQ_ATTACHMENT_EXTENSION_MIME_MAP[ext];
+    }
+  }
+  return normalized || 'application/octet-stream';
+}
+
 module.exports = {
+  BUYER_FREE_TRIAL_RFQ_CREDITS,
+  SMS_MESSAGES,
+  ACTION_CENTER_MESSAGES,
+  DAILY_REPORT_MESSAGES,
+  TEMPLATE_MESSAGES,
+  MAILER_NOT_SPECIFIED,
+  MAILER_NOT_EVALUATED,
+  BATCH_CHASER_CHANNELS,
+  TICKET_MESSAGES,
+  TICKET_CREATE_FIELD_ALIASES,
+  REQUEST_ID_CONFIG,
+  APPROVER_CONFIG,
+  isApproverPasswordConfigured,
+  verifyApproverPassword,
   DAILY_RFQ_REPORT_CONFIG,
   ACCOUNT_DOCUMENT_CATEGORIES,
   ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,
   ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
   ACCOUNT_DOCUMENT_MAX_BYTES,
   CREDIT_APPROVAL_APPROVERS,
-  CREDIT_APPROVAL_INITIATORS,
   SELLER_QUOTE_CREDITS_ALLOWED,
   APPROVAL_REQUEST_TYPES,
   APPROVAL_STATUSES,
@@ -2996,16 +3658,14 @@ module.exports = {
   DEMO_STATUSES,
   CREDIT_ACCOUNT_TYPES,
   CREDIT_APPROVER_ROLES,
-  DEFAULT_CREDIT_APPROVER_EMAIL,
+  getCreditApproverEmail,
   CALL_OUTCOMES,
   PROPOSAL_STATUSES,
   ONBOARDING_STAGES,
 
-  DEFAULT_INTERNAL_MEMBERS,
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
   VENDOR_DIRECTORY_AUTH_CONFIG,
-  DEFAULT_VENDOR_DIRECTORY_PASSKEY,
   INDIAN_STATES,
   normalizePoDate,
   VENDOR_INGESTION_SESSION_STATUS,
@@ -3016,7 +3676,11 @@ module.exports = {
   VENDOR_MAPPING_SOURCE,
   VENDOR_AI_PROCESSING_STATUS,
   VENDOR_INGESTION_AI_STATUS,
+  VENDOR_INGESTION_JOB_TYPE,
+  VENDOR_INGESTION_JOB_STATUS,
+  VENDOR_CATEGORY_MASTER_SOURCE,
   VENDOR_MATCH_STRATEGY,
+  BUYER_LOCKED_STATUTORY_FIELDS,
   VENDOR_DISPATCH_TEMPLATE,
   VENDOR_EMAIL_STATUS,
   VENDOR_DISPATCH_STATUS,
@@ -3035,14 +3699,34 @@ module.exports = {
   BUYER_SUBSCRIPTION_PLANS,
   VENDOR_SUBSCRIPTION_PLANS,
   VENDOR_PLAN_RFQ_QUOTA,
-  INITIAL_SYSTEM_CONFIG,
-  INITIAL_AZURE_HEALTH,
+  VENDOR_RATING_LABELS,
+  VENDOR_EVALUATION_REQUEST,
+  SYSTEM_CONFIG_MESSAGES,
+  SUPPORT_CHAT_STATUS,
+  SUPPORT_CHAT_MESSAGES,
+  CHASER_CHANNEL_LABELS,
+  CHASER_OUTCOME_STATUS,
+  CHASER_OUTREACH_MESSAGES,
   DATABASE_HEALTH_SERVICE_LABEL,
+  INFRASTRUCTURE_HEALTH,
+  DATABASE_QUERY_LOGGING,
+  DATABASE_QUERY_CACHE,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
+  DEPRECATED_DATABASE_TABLES,
+  GRAPHQL_CONFIG,
+  STORE_HYDRATION_CONFIG,
+  D1_OVERLOAD_CONFIG,
+  D1_RETRY_CONFIG,
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   QUALIFICATION_PILLARS,
   AES_CONFIG,
   AUTH_MESSAGES,
+  DOCUMENT_VAULT_MESSAGES,
+  PERSISTENCE_MESSAGES,
+  APPROVAL_MESSAGES,
+  REGISTRATION_MESSAGES,
+  REGISTRATION_DECISION_EMAIL_COPY,
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
@@ -3053,6 +3737,8 @@ module.exports = {
   RFQ_CATEGORY_CLASSIFICATION,
   RFQ_INGESTION_CONFIG,
   RFQ_ATTACHMENT_CONFIG,
+  RFQ_ATTACHMENT_EXTENSION_MIME_MAP,
+  resolveAttachmentContentType,
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,
   EXTRACTION_REASON_MESSAGES,
@@ -3064,14 +3750,21 @@ module.exports = {
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_DELIVERY_KIND,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
   UNAUTHORIZED_BUYER_NOTIFICATION,
   RFQ_ACKNOWLEDGEMENT_NOTIFICATION,
   RFQ_NOT_CREATED_NOTIFICATION,
   VENDOR_FREE_CREDITS_LIMIT,
+  RFQ_DOWNLOAD_ERRORS,
+  RFQ_CREATION_ERRORS,
+  RFQ_NOTIFICATION_MESSAGES,
+  RFQ_NOTIFICATION_ERROR_CODES,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   ZOHO_CONFIG,
+  ZOHO_WEBHOOK_RECEIPT_POLICY,
+  ZOHO_WEBHOOK_MESSAGES,
   ZOHO_SUBSCRIPTION_PRICING,
   computeZohoPlanAmount,
   ZOHO_BUYER_SUBSCRIPTION_PRICING,
@@ -3093,6 +3786,11 @@ module.exports = {
   PINCODE_MESSAGE,
   PAN_REGEX,
   PAN_MESSAGE,
+  DUMMY_PANS,
+  DUMMY_PAN_MESSAGE,
+  isDummyPan,
+  usablePan,
+  clearDummyPanFields,
   CIN_REGEX,
   CIN_MESSAGE,
   WEBSITE_REGEX,
@@ -3112,26 +3810,69 @@ module.exports = {
   CHASER_DELAYS,
   SMS_DLT_TEMPLATES,
   PRESENCE_ONLINE_THRESHOLD_MS,
+  PRESENCE_MIN_WRITE_INTERVAL_MS,
+  VENDOR_PRESENCE_MAX_IDENTIFIERS,
+  VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH,
   VENDOR_ASSIGNMENT_LIMITS,
+  VENDOR_DIRECTORY_QUERY_CONFIG,
+  RFQ_MINOR_INVITE_LOOKUP,
+  RFQ_MINOR_SHORTFALL_ALERT,
   MAX_INVITE_VENDORS_PER_REQUEST,
   RFQ_MODES,
   RFQ_MODE_LABELS,
   RFQ_MODE_MAP,
-  ALLOWED_EXTENSION_HOURS,
-  DEFAULT_EXTENSION_HOURS,
+  EXTENSION_HOURS_PER_DAY,
+  DEFAULT_EXTENSION_DAYS,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  RFQ_QUOTE_WRITE_RETRIES,
+  RFQ_QUOTE_WRITE_BACKOFF,
+  RFQ_STATE_WRITE_RETRIES,
+  PERSISTED_RECORD_WRITE_RETRIES,
+  AUDIT_CHAIN_WRITE_MAX_ATTEMPTS,
+  AUDIT_CHAIN_VERIFY_PAGE_SIZE,
+  AUDIT_CHAIN_VERIFY_MAX_ROWS,
+  AUDIT_CHAIN_VERIFY_SNAPSHOT_ATTEMPTS,
+  EVENT_OUTBOX_TYPES,
+  EVENT_OUTBOX_DEFERRED_STATUS,
+  EVENT_OUTBOX_MAX_ATTEMPTS,
+  EVENT_OUTBOX_MAX_BATCH_SIZE,
+  EVENT_OUTBOX_LEASE_MS,
+  EVENT_OUTBOX_RETRY_BASE_MS,
+  EVENT_OUTBOX_RETRY_MAX_MS,
+  EVENT_OUTBOX_ENQUEUE_ATTEMPTS,
+  EVENT_OUTBOX_ENQUEUE_RETRY_MS,
+  EVENT_OUTBOX_POLL_INTERVAL_MS,
+  EVENT_OUTBOX_RETENTION_DAYS,
+  EVENT_OUTBOX_PURGE_BATCH_SIZE,
+  D1_NOTIFICATION_INSERT_BATCH_SIZE,
+  EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
+  RFQ_AUTO_CLOSE_AFTER_MS,
+  RFQ_AUTO_CLOSE_POLL_INTERVAL_MS,
+  RFQ_AUTO_CLOSE_REASON,
+  RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
+  RFQ_COMPARISON_RETRY_DELAY_MS,
+  RFQ_COMPARISON_MAX_ATTEMPTS,
+  RFQ_COMPARISON_STALE_CLAIM_MS,
+  RFQ_COMPARISON_QUEUE_MAX_LIMIT,
+  RFQ_COMPARISON_ERROR_MAX_LENGTH,
+  RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT,
+  RFQ_CHASER_MAX_ATTEMPTS,
+  RFQ_CHASER_RETRY_BASE_MS,
+  RFQ_CHASER_RETRY_MAX_MS,
+  RFQ_CHASER_ERROR_MAX_LENGTH,
   DEFAULT_CATEGORY_TAXONOMY,
   MAJOR_CATEGORY_ALIASES: RFQ_CATEGORY_CLASSIFICATION.MAJOR_CATEGORY_ALIASES,
   QUA_AI_EMAIL_TEMPLATES,
   QUA_AI_EMAIL_SUPPORT,
+  TRANSACTIONAL_EMAIL_MESSAGES,
   VENDOR_QUOTE_SUPPORT_CC,
   INDIAN_STATES_AND_CITIES,
   getIndianStates,
   getCitiesForState,
   parseSearchTokens,
-  INQUIRIES_PERSISTENCE_FILE,
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,
-  DEFAULT_LOW_CREDIT_NOTIFICATION,
   ACTION_CENTER_CHANNELS,
   ACTION_CENTER_ENTITY_TYPES,
   ACTION_CENTER_COMM_STATUSES,

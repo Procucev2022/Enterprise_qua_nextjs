@@ -5,15 +5,15 @@ import type {
   SellerDirectoryColumnKey,
   BuyerDirectoryColumnKey,
   SourcingModeDetail,
-  SystemConfig,
-  AzureServiceHealth,
   SidebarNavItem,
   RoleWorkspaceMeta,
   UserRole,
   OrganizationType,
   SourcingMode,
+  RFQItem,
 } from './types';
-import { UI_STRINGS } from './uiStrings';
+import { UI_STRINGS, formatString } from './uiStrings';
+import { EXTENSION_MIN_DAYS, EXTENSION_MAX_DAYS, isWholeExtensionDays } from './validationSchemas';
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -269,7 +269,7 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
  */
 export function entitledSourcingModes(
   subscriptionPlan?: string | null,
-  remainingFreeRFQs?: number,
+  remainingFreeRFQs?: number | null,
   unlimitedRfqAccess?: boolean
 ): SourcingMode[] {
   if (unlimitedRfqAccess) {
@@ -280,52 +280,12 @@ export function entitledSourcingModes(
   if (plan === 'unlimited') {
     return [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3];
   }
-  if (plan === 'free_trial' && remainingFreeRFQs !== undefined && remainingFreeRFQs <= 0) {
+  // A null count is a balance the server has not reported. It has always been read as no credits left.
+  if (plan === 'free_trial' && remainingFreeRFQs !== undefined && (remainingFreeRFQs === null || remainingFreeRFQs <= 0)) {
     return ['mode_0'];
   }
   return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
 }
-
-export const BUYER_SUBSCRIPTION_PLANS = [
-  {
-    id: 'buyer_starter',
-    name: 'Starter Enterprise',
-    rfqLimit: 50,
-    pricePerMonth: 4999,
-    features: ['Up to 50 active RFQs', 'Standard AI Chaser', 'Single Buyer Console'],
-  },
-  {
-    id: 'buyer_growth',
-    name: 'Growth Enterprise',
-    rfqLimit: 250,
-    pricePerMonth: 14999,
-    features: ['Up to 250 active RFQs', 'Multi-channel Voice & WhatsApp', 'Category Governance'],
-  },
-  {
-    id: 'buyer_custom',
-    name: 'Unlimited Enterprise',
-    rfqLimit: 99999,
-    pricePerMonth: 49999,
-    features: ['Unlimited RFQs', 'Dedicated Azure HSM Instance', 'Custom ERP Integrations'],
-  },
-];
-
-export const VENDOR_SUBSCRIPTION_PLANS = [
-  {
-    id: 'vendor_standard',
-    name: 'Verified Supplier',
-    pricePerMonth: 1999,
-    bidLimit: 30,
-    features: ['30 Quote Submissions / Month', 'Direct Telemetry Feedback'],
-  },
-  {
-    id: 'vendor_premium',
-    name: 'Preferred Partner',
-    pricePerMonth: 5999,
-    bidLimit: 99999,
-    features: ['Unlimited Quote Submissions', 'Top-tier AI Matching Priority', 'Dedicated Account Manager'],
-  },
-];
 
 /** RFQ downloads included per paid vendor plan per 3-month period (mirrors backend VENDOR_PLAN_RFQ_QUOTA). */
 export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, select: 100 };
@@ -334,71 +294,115 @@ export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, sele
 export const VENDOR_FREE_CREDITS_LIMIT = 5;
 
 /**
- * A vendor's displayable credit balance: plan quota less downloads used for a
- * Connect/Select subscriber, otherwise their free-tier balance (the default
- * VENDOR_FREE_CREDITS_LIMIT until the vendor's record stores a balance).
- * Reading the free-tier field alone rendered every subscriber as "0 Credits".
+ * The six qualification pillars a supplier is scored on. Names and weights match the vendor qualification form
+ * (app/vendor/qualification-form.tsx). `moduleKey` names the matching field of VendorEvaluationRecord.moduleScores.
+ * `accent` holds the colour classes each pillar uses on the buyer evaluation summary.
+ */
+export const VENDOR_EVALUATION_PILLARS = [
+  {
+    id: 'M1',
+    name: 'Commercial Terms',
+    weight: 25,
+    moduleKey: 'commercial',
+    accent: {
+      badge: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300',
+      score: 'text-indigo-600 dark:text-indigo-400',
+      bar: 'bg-indigo-600',
+      remarksBox: 'bg-indigo-50/70 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 text-indigo-900 dark:text-indigo-200',
+      remarksTitle: 'text-indigo-700 dark:text-indigo-300',
+    },
+  },
+  {
+    id: 'M2',
+    name: 'Technical Capabilities',
+    weight: 15,
+    moduleKey: 'technical',
+    accent: {
+      badge: 'bg-sky-100 dark:bg-cyan-950 text-sky-700 dark:text-cyan-300',
+      score: 'text-sky-600 dark:text-cyan-400',
+      bar: 'bg-sky-600',
+      remarksBox: 'bg-sky-50/70 dark:bg-cyan-950/50 border border-sky-100 dark:border-cyan-800/60 text-sky-900 dark:text-cyan-200',
+      remarksTitle: 'text-sky-700 dark:text-cyan-300',
+    },
+  },
+  {
+    id: 'M3',
+    name: 'Quality & Warranty',
+    weight: 20,
+    moduleKey: 'quality',
+    accent: {
+      badge: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300',
+      score: 'text-emerald-600 dark:text-emerald-400',
+      bar: 'bg-emerald-600',
+      remarksBox: 'bg-emerald-50/70 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/60 text-emerald-900 dark:text-emerald-200',
+      remarksTitle: 'text-emerald-700 dark:text-emerald-300',
+    },
+  },
+  {
+    id: 'M4',
+    name: 'Operational Delivery',
+    weight: 20,
+    moduleKey: 'delivery',
+    accent: {
+      badge: 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300',
+      score: 'text-purple-600 dark:text-purple-400',
+      bar: 'bg-purple-600',
+      remarksBox: 'bg-purple-50/70 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-800/60 text-purple-900 dark:text-purple-200',
+      remarksTitle: 'text-purple-700 dark:text-purple-300',
+    },
+  },
+  {
+    id: 'M5',
+    name: 'Financial Stability',
+    weight: 10,
+    moduleKey: 'financial',
+    accent: {
+      badge: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300',
+      score: 'text-amber-600 dark:text-amber-400',
+      bar: 'bg-amber-600',
+      remarksBox: 'bg-amber-50/70 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-800/60 text-amber-900 dark:text-amber-200',
+      remarksTitle: 'text-amber-700 dark:text-amber-300',
+    },
+  },
+  {
+    id: 'M6',
+    name: 'Governance & ESG',
+    weight: 10,
+    moduleKey: 'governance',
+    accent: {
+      badge: 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300',
+      score: 'text-rose-600 dark:text-rose-400',
+      bar: 'bg-rose-600',
+      remarksBox: 'bg-rose-50/70 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-800/60 text-rose-900 dark:text-rose-200',
+      remarksTitle: 'text-rose-700 dark:text-rose-300',
+    },
+  },
+] as const;
+
+/** Overall score at or above which a supplier passes the buyer gate. Shown on the evaluation summary. */
+export const VENDOR_EVALUATION_GATE_SCORE = 80;
+
+/** Attachment rows listed on the buyer evaluation summary before the rest are counted in a note. */
+export const VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT = 12;
+
+/**
+ * A vendor's displayable credit balance, or null when the record does not hold the number needed to compute it.
+ * A Connect/Select subscriber's balance is the plan quota less downloads used, so it needs `rfqDownloadsUsed`.
+ * Otherwise the balance is the stored free-tier count. No default is substituted for a missing count.
  */
 export function getVendorCreditBalance(vendor: {
   subscriptionPlan?: string;
   rfqDownloadsUsed?: number;
   freeQuotationCredits?: number;
-}): number {
+}): number | null {
   const quota = vendor.subscriptionPlan ? VENDOR_PLAN_RFQ_QUOTA[vendor.subscriptionPlan] : undefined;
-  if (quota !== undefined) return Math.max(0, quota - (Number(vendor.rfqDownloadsUsed) || 0));
-  if (vendor.freeQuotationCredits == null) return VENDOR_FREE_CREDITS_LIMIT;
-  return Math.max(0, Number(vendor.freeQuotationCredits) || 0);
+  if (quota !== undefined) {
+    if (typeof vendor.rfqDownloadsUsed !== 'number' || !Number.isFinite(vendor.rfqDownloadsUsed)) return null;
+    return Math.max(0, quota - vendor.rfqDownloadsUsed);
+  }
+  if (typeof vendor.freeQuotationCredits !== 'number' || !Number.isFinite(vendor.freeQuotationCredits)) return null;
+  return Math.max(0, vendor.freeQuotationCredits);
 }
-
-export const INITIAL_SYSTEM_CONFIG: SystemConfig = {
-  ollamaModel: 'Llama 3 (8B Instruct)',
-  ollamaActive: true,
-  ocrExtractionThreshold: 85,
-  whatsappAutoChaser: true,
-  voiceCallAutoChaser: true,
-  smsAutoChaser: true,
-  escalationIntervalHours: 24,
-  azureDbBackupFrequency: 'Daily',
-  rbacEnforced: true,
-};
-
-export const INITIAL_AZURE_HEALTH: AzureServiceHealth[] = [
-  {
-    service: 'Azure PostgreSQL Flexible Server (Neon Pooler)',
-    status: 'ONLINE',
-    latency: '18ms',
-    uptime: '99.99%',
-    details: 'Read/Write Active, SSL Require, Automated HA Clustering',
-  },
-  {
-    service: 'Azure OpenAI (Doc Intelligence OCR)',
-    status: 'HEALTHY',
-    latency: '42ms',
-    uptime: '99.95%',
-    details: 'Deployment: gpt-4o-procure-v2, TPS: 140/sec',
-  },
-  {
-    service: 'Azure Cosmos DB (Chasing State Engine)',
-    status: 'ONLINE',
-    latency: '12ms',
-    uptime: '99.999%',
-    details: 'Multi-Region Replication, Automatic Partitioning',
-  },
-  {
-    service: 'Azure Communication Services (WhatsApp / Voice Gateway)',
-    status: 'ONLINE',
-    latency: '65ms',
-    uptime: '99.9%',
-    details: 'Enterprise WhatsApp Business API & AI Voice SIP Trunking Active',
-  },
-  {
-    service: 'Azure Key Vault & HSM Security (kv-procucev-prod)',
-    status: 'HEALTHY',
-    latency: '8ms',
-    uptime: '100%',
-    details: 'FIPS 140-2 Level 3 Hardware Security Module Active',
-  },
-];
 
 export const AES_CONFIG = {
   ALGORITHM: 'AES-GCM',
@@ -767,6 +771,9 @@ export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
 /** Path of the sign-in screen. */
 export const LOGIN_ROUTE = '/login';
 
+/** Vendor quotation form. Chaser messages link to it with the RFQ number in the `rfq` query parameter. */
+export const VENDOR_QUOTATION_ROUTE = '/vendor/quotation-form';
+
 /**
  * Email OTP shape, mirroring IDENTITY_OTP_CONFIG on the backend. Both trace back
  * to the shared `otp_store` table the Java p2pservices app writes, whose `otp`
@@ -774,6 +781,13 @@ export const LOGIN_ROUTE = '/login';
  */
 export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 15;
+
+/**
+ * Placeholder mobile number that some auto-created buyer records carry. No one can
+ * receive a code on it, so the buyer onboarding screen refuses it for OTP dispatch
+ * and for submission.
+ */
+export const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 
 // PASSWORD_MIN_LENGTH is defined in ./validationSchemas and re-exported at the
 // bottom of this file. It lives there because the change-password schema needs it
@@ -831,19 +845,6 @@ export const ORGANIZATION_TYPE_OPTIONS: OrganizationType[] = [
 ];
 
 /**
- * Fallback used when an RFQ reaches dispatch without a target delivery date.
- *
- * A row the buyer adds by hand starts entirely blank — no quantity, unit,
- * category or date — because pre-filled values read as answers the buyer never
- * gave. This offset only backfills the RFQ header when no line item carries a
- * date, and mirrors DELIVERY_DATE_OFFSET_DAYS in RFQ_INGESTION_CONFIG on the
- * backend so a keyed RFQ and an ingested one land on the same default.
- */
-export const MANUAL_LINE_ITEM_DEFAULTS = {
-  TARGET_DATE_OFFSET_DAYS: 5,
-} as const;
-
-/**
  * Single currency the platform trades in. Amounts are grouped the Indian way
  * (1,45,000 rather than 145,000), so the symbol and the locale have to travel
  * together: pairing a rupee symbol with en-US grouping, or the reverse, is the
@@ -890,6 +891,57 @@ export function formatCurrency(amount: number): string {
  */
 export const DISPLAY_TIMEZONE = 'Asia/Kolkata';
 
+/** Milliseconds in one minute and in one day. */
+export const MILLISECONDS_PER_MINUTE = 60 * 1000;
+export const MILLISECONDS_PER_DAY = 24 * 60 * MILLISECONDS_PER_MINUTE;
+
+/** India Standard Time is UTC+05:30 all year. It has no daylight saving. */
+export const IST_UTC_OFFSET_MINUTES = 5 * 60 + 30;
+
+/**
+ * Minutes from RFQ creation to each follow-up channel. These match the backend defaults in
+ * backend/src/config/constants.js (CHASER_DELAYS). A deployment that sets a CHASER_*_DELAY_MS
+ * variable changes when messages are really sent, but not these displayed times.
+ */
+export const RFQ_FOLLOW_UP_DELAY_MINUTES = {
+  CALL: 6 * 60,
+  WHATSAPP: 12 * 60,
+  SMS: 5,
+  EMAIL: 24 * 60,
+} as const;
+
+/**
+ * The IST business window, in minutes after midnight. AI calls and WhatsApp follow-ups count only
+ * the time inside this window.
+ */
+export const FOLLOW_UP_BUSINESS_HOURS = {
+  OPEN_MINUTE_OF_DAY: 10 * 60,
+  CLOSE_MINUTE_OF_DAY: 18 * 60,
+} as const;
+
+/**
+ * An RFQ timestamp as epoch milliseconds, or null when the value is absent or unreadable.
+ *
+ * Reads the same forms as formatIndianDateTime. A zone-less "YYYY-MM-DD HH:mm:ss" value and a value
+ * tagged UTC are both read as UTC. A date-only value is read as midnight UTC.
+ */
+export function parseRfqTimestamp(value?: string | null): number | null {
+  if (!value || value.trim() === '') return null;
+  const trimmed = value.trim();
+
+  // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
+  // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
+  let normalized = trimmed;
+  if (/(\s+|_)UTC$/i.test(normalized)) {
+    normalized = `${normalized.replace(/(\s+|_)UTC$/i, '').trim().replace(' ', 'T')}Z`;
+  } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = `${normalized.replace(' ', 'T')}Z`;
+  }
+
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 /**
  * An RFQ timestamp as an Indian date and time, e.g. "04 Sep 2026, 02:55 pm IST".
  *
@@ -902,15 +954,11 @@ export const DISPLAY_TIMEZONE = 'Asia/Kolkata';
  */
 export function formatIndianDateTime(value?: string): string {
   if (!value || value.trim() === '') return '';
+  const trimmed = value.trim();
+  if (trimmed.endsWith(' IST')) return trimmed;
 
-  // A bare MySQL DATETIME has no zone designator, so one is added before parsing;
-  // without it the browser would read it in the viewer's local zone instead.
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(value.trim())
-    ? `${value.trim().replace(' ', 'T')}Z`
-    : value;
-
-  const parsed = Date.parse(normalized);
-  if (Number.isNaN(parsed)) return value;
+  const parsed = parseRfqTimestamp(trimmed);
+  if (parsed === null) return value;
 
   const formatted = new Intl.DateTimeFormat(CURRENCY.LOCALE, {
     timeZone: DISPLAY_TIMEZONE,
@@ -948,29 +996,70 @@ export function formatIndianDate(value?: string): string {
   }).format(new Date(parsed));
 }
 
-export const ALLOWED_EXTENSION_HOURS = [24, 48] as const;
-export const DEFAULT_EXTENSION_HOURS = 24 as const;
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/** Hours in one day. A closing-deadline extension is stored in hours, so day counts convert through this. */
+export const EXTENSION_HOURS_PER_DAY = 24;
+
+/** The extension the dialog starts on. The allowed range is EXTENSION_MIN_DAYS to EXTENSION_MAX_DAYS. */
+export const DEFAULT_EXTENSION_DAYS = 1;
 
 /**
- * Calculates a revised RFQ deadline extended by 24 or 48 hours.
- * If the current deadline is in the past, extensions are measured from now.
+ * Hours from creation to automatic closing. Mirrors RFQ_AUTO_CLOSE_AFTER_MS in the backend constants,
+ * which the closure sweep uses for RFQs stored before a closing time was saved.
  */
-export function calculateExtendedDeadline(
-  currentDeadline?: string,
-  hours: 24 | 48 = 24,
-  baseCreatedAt?: string
-): string {
-  let baseMs: number;
-  if (currentDeadline && !Number.isNaN(Date.parse(currentDeadline))) {
-    baseMs = Math.max(new Date(currentDeadline).getTime(), Date.now());
-  } else if (baseCreatedAt && !Number.isNaN(Date.parse(baseCreatedAt))) {
-    const createdMs = new Date(baseCreatedAt).getTime();
-    const default7Days = createdMs + 7 * 24 * 60 * 60 * 1000;
-    baseMs = Math.max(default7Days, Date.now());
-  } else {
-    baseMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  }
-  return new Date(baseMs + hours * 60 * 60 * 1000).toISOString();
+export const RFQ_AUTO_CLOSE_HOURS = 48;
+
+/**
+ * The closing time of an RFQ as an ISO instant. The stored closingDeadline is used when present. That
+ * covers every RFQ created since closing times were saved, and every RFQ extended since. Other RFQs close
+ * RFQ_AUTO_CLOSE_HOURS after creation, which is when the backend sweep closes them. Returns null when
+ * neither time can be read.
+ */
+export function resolveRfqClosingDeadline(rfq: Partial<Pick<RFQItem, 'closingDeadline' | 'createdAt'>>): string | null {
+  const stored = parseRfqTimestamp(rfq.closingDeadline);
+  if (stored !== null) return new Date(stored).toISOString();
+  const created = parseRfqTimestamp(rfq.createdAt);
+  if (created === null) return null;
+  return new Date(created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR).toISOString();
+}
+
+/**
+ * The closing time after a one-time extension of a whole number of days, as an ISO instant. The days are
+ * added to the current closing time, or to now when that time has already passed.
+ */
+export function calculateExtendedDeadline(currentClosing: string | null | undefined, days: number = DEFAULT_EXTENSION_DAYS): string {
+  const baseMs = Math.max(parseRfqTimestamp(currentClosing) ?? 0, Date.now());
+  return new Date(baseMs + days * EXTENSION_HOURS_PER_DAY * MS_PER_HOUR).toISOString();
+}
+
+/** The day count typed into the dialog, or null when it is blank, fractional or outside the range. */
+export function parseExtensionDays(input: string): number | null {
+  const trimmed = input.trim();
+  return isWholeExtensionDays(trimmed) ? Number(trimmed) : null;
+}
+
+/**
+ * The day count after one stepper click. A blank or non-numeric entry steps from the default, and the
+ * result is always kept between EXTENSION_MIN_DAYS and EXTENSION_MAX_DAYS.
+ */
+export function stepExtensionDays(input: string, delta: number): number {
+  const trimmed = input.trim();
+  const parsed = trimmed === '' ? Number.NaN : Number(trimmed);
+  const base = Number.isFinite(parsed) ? Math.trunc(parsed) : DEFAULT_EXTENSION_DAYS;
+  return Math.min(EXTENSION_MAX_DAYS, Math.max(EXTENSION_MIN_DAYS, base + delta));
+}
+
+/** Whole days for a stored extension in hours. A missing or non-positive value reads as the default. */
+export function extensionDaysFromHours(hours?: number): number {
+  if (!hours || hours <= 0) return DEFAULT_EXTENSION_DAYS;
+  return Math.max(EXTENSION_MIN_DAYS, Math.round(hours / EXTENSION_HOURS_PER_DAY));
+}
+
+/** A day count as buyers read it: "1 day", "3 days". */
+export function formatExtensionDayCount(days: number): string {
+  const template = days === 1 ? UI_STRINGS.rfqDetails.dayCountOne : UI_STRINGS.rfqDetails.dayCountOther;
+  return formatString(template, { count: days });
 }
 
 /**
@@ -1090,6 +1179,15 @@ export function formatFileSize(bytes: number): string {
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
+/**
+ * Roles the backend lets read the AI activity feed (GET /api/ai-feed). Any other role gets a 403,
+ * so the store does not request the feed for them.
+ */
+export const AI_FEED_VIEWER_ROLES: readonly UserRole[] = ['admin', 'category_manager', 'buyer'];
+
+/** Response header carrying the backend request id, copied into failed-request log entries. */
+export const REQUEST_ID_HEADER = 'x-request-id';
+
 /** URL prefix that scopes each role's workspace, used to guard route access. */
 export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
   buyer: '/buyer',
@@ -1100,8 +1198,20 @@ export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
 
 /** Vendor live presence threshold & polling intervals (ms) */
 export const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
-export const PRESENCE_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+export const PRESENCE_HEARTBEAT_INTERVAL_MS = 4 * 60 * 1000;
 export const PRESENCE_POLL_INTERVAL_MS = 30 * 1000;
+
+/** Admin infrastructure screen: how often the database status is re-read (ms). */
+export const DB_STATUS_POLL_INTERVAL_MS = 15 * 1000;
+/** Read-only database status endpoint (GET). */
+export const DB_STATUS_ENDPOINT = '/api/db/status';
+/** Support chat endpoint (POST). It answers only when a support service is connected. */
+export const SUPPORT_CHAT_ENDPOINT = '/api/support-chat';
+/** How long the support chat widget shows the copied confirmation (ms). */
+export const SUPPORT_CHAT_COPY_CONFIRMATION_MS = 2 * 1000;
+
+/** Category selector sentinel value indicating all categories are eligible. */
+export const ALL_CATEGORIES_OPTION = 'All Categories';
 
 /** RFQ vendor assignment limits per category (configurable via env) */
 export const VENDOR_ASSIGNMENT_LIMITS = {
@@ -1120,6 +1230,10 @@ export const VENDOR_ASSIGNMENT_LIMITS = {
     const num = Number(envVal);
     return Number.isFinite(num) && num > 0 ? num : 25;
   },
+  /** Maximum Procucev Network vendors surfaced in Mode 3 top shortlist. */
+  MODE3_TOP_VENDORS_LIMIT: 10,
+  /** Indexed candidate pool size pulled from the backend before client-side Mode 3 ranking. */
+  MODE3_CANDIDATE_POOL_SIZE: 100,
 };
 
 export {
@@ -1130,18 +1244,10 @@ export {
   PHONE_PATTERN,
   PINCODE_PATTERN,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  isWholeExtensionDays,
 } from './validationSchemas';
-
-export const UNLIMITED_ACCESS_EMAILS = new Set([
-  'sudheer.kangala@procucev.com',
-  'procucevvendor@gmail.com',
-]);
-
-export function hasUnlimitedAccess(emailOrSession?: { email?: string } | string | null): boolean {
-  if (!emailOrSession) return false;
-  const email = (typeof emailOrSession === 'string' ? emailOrSession : emailOrSession.email || '').trim().toLowerCase();
-  return UNLIMITED_ACCESS_EMAILS.has(email);
-}
 
 export const QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES = {
   EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED: {
@@ -1149,7 +1255,7 @@ export const QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES = {
     number: 1,
     name: 'RFQ created from email, account auto-created',
     who: 'Unregistered buyer',
-    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.',
+    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID, creates the RFQ, then sends this email.',
     subject: 'Congratulations, your RFQ {rfq_id} is live on Qua AI',
   },
   EMAIL_2_RFQ_CREATED: {
@@ -1257,7 +1363,6 @@ export const QUA_AI_EMAIL_SUPPORT = {
   COMPANY_NAME: 'Procucev Enterprise Solutions',
 } as const;
 
-export const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
 export const VENDOR_DIRECTORY_AUTH_STORAGE_KEY = 'procucev_vendor_directory_auth';
 
 export const VENDOR_DIRECTORY_AUTH_CONFIG = {
@@ -1269,6 +1374,45 @@ export const VENDOR_DIRECTORY_AUTH_CONFIG = {
 
 
 export const MAX_INVITE_VENDORS = 20;
+
+/**
+ * Notices the store shows when a server call fails or confirms an action. Each sentence states only what the
+ * server did or did not confirm. The placeholders are filled by formatString.
+ */
+export const STORE_MESSAGES = {
+  aiFeedLoadFailed: 'The AI activity feed could not be loaded from the server. The events shown are the last ones that loaded.',
+  buyerAccountCreateFailedTitle: 'Buyer Account Not Created',
+  buyerAccountCreateFailed: 'The server did not confirm the buyer account, so nothing was added. Try again.',
+  buyerAccountUnreachable: 'The buyer account could not be saved because the server could not be reached. Check your connection and try again.',
+  alignFailedTitle: 'Session Not Switched',
+  alignFailed: 'The server did not switch the active buyer account. The previous account is still active.',
+  alignUnreachable: 'The account switch could not be sent because the server could not be reached. The previous account is still active.',
+  alignedMessage: 'The session is now aligned to {name}.',
+  historicalUnreachable: 'Could not reach the server. Check your network connection and the server status.',
+  ratingRevisionSavedTitle: 'Rating Revision Submitted & Email Dispatched',
+  ratingRevisionSavedMessage: 'Revised performance rating ({newRating} ★, {newCompositeScore}%) saved and notification email dispatched to {vendorName}.',
+  vendorUpdateFailedTitle: 'Vendor Not Updated',
+  vendorUpdateFailed: 'The server did not save these vendor changes. The directory keeps the last saved values.',
+  vendorUnreachable: 'The request could not reach the server. Nothing was changed. Check your connection and try again.',
+  vendorDeleteFailedTitle: 'Vendor Not Removed',
+  vendorDeleteFailed: 'The server did not confirm the removal, so the vendor is still listed. Refresh the list and try again.',
+  vendorsRemovedMessage: '{count} supplier record(s) were deleted on the server.',
+  feedJustNow: 'Just now',
+  emailNoRecipientTitle: 'No Recipient Selected',
+  emailNoRecipient: 'Choose a vendor before opening the RFQ email. The email needs a recipient.',
+  poNetworkFailed: 'Network error while approving the pre-purchase order.',
+  chaserNotSentTitle: 'Chaser Not Sent',
+  chaserUnreachable: 'The chaser could not be sent because the server could not be reached. Nothing was sent.',
+  chaserRequestFailed: 'The server did not accept the chaser request. Nothing was sent.',
+  chaserNoneSent: 'No chaser message was accepted by a messaging provider. Check the RFQ follow-up log for each vendor and channel.',
+  chaserSentTitle: 'Chasers Sent',
+  chaserSentMessage: '{sent} of {total} chaser messages for {rfqNumber} were accepted by a messaging provider ({channels}).',
+  chaserVendorNotConnected: 'Single-vendor chasers are not connected to the server, so nothing was sent. Use the batch chaser for this RFQ.',
+  rfqCreatedTitle: 'RFQ Saved',
+  rfqCreatedMessage: '{rfqNumber} is saved. The server assigned {count} vendor(s).',
+  rfqCreatedFeedTitle: 'RFQ Created: {rfqNumber}',
+  rfqCreatedFeedMessage: 'The server assigned {count} vendor(s) to this RFQ.',
+} as const;
 
 export const INDIAN_STATES_AND_CITIES: Record<string, string[]> = {
   "Andhra Pradesh": ["Visakhapatnam", "Vijayawada", "Guntur", "Tirupati", "Nellore", "Kurnool", "Kakinada", "Rajahmundry", "Kadapa", "Anantapur", "Eluru", "Ongole", "Chittoor", "Srikakulam", "Vizianagaram", "Machilipatnam", "Tenali", "Narasaraopet", "Chilakaluripet", "Bapatla", "Chirala", "Kavali", "Gudur", "Sullurpeta", "Naidupeta", "Venkatagiri", "Puttur", "Nagari", "Madanapalle", "Punganur", "Palamaner", "Pileru", "Rayachoti", "Proddatur", "Jammalamadugu", "Pulivendula", "Mydukur", "Nandyal", "Adoni", "Yemmiganur", "Dhone", "Atmakur", "Allagadda", "Banaganapalle", "Markapur", "Kanigiri", "Giddalur", "Podili", "Kandukur", "Addanki", "Parchur", "Repalle", "Ponnur", "Mangalagiri", "Tadepalli", "Sattenapalle", "Vinukonda", "Piduguralla", "Macherla", "Gurazala", "Amaravati", "Ibrahimpatnam", "Nuzvid", "Gudivada", "Pedana", "Vuyyuru", "Jaggayyapeta", "Nandigama", "Tiruvuru", "Kaikaluru", "Bhimavaram", "Tadepalligudem", "Tanuku", "Palakollu", "Narasapuram", "Nidadavole", "Kovvur", "Jangareddygudem", "Akividu", "Attili", "Amalapuram", "Mandapeta", "Ramachandrapuram", "Peddapuram", "Samalkot", "Pithapuram", "Tuni", "Yeleswaram", "Anakapalle", "Narsipatnam", "Yelamanchili", "Bheemunipatnam", "Pendurthi", "Parvathipuram", "Bobbili", "Salur", "Palasa", "Ichchapuram", "Tekkali", "Amadalavalasa", "Rajam", "Hindupur", "Dharmavaram", "Tadipatri", "Gooty", "Guntakal", "Rayadurg", "Kalyandurg", "Penukonda", "Puttaparthi", "Kadiri", "Palakonda"],
@@ -1412,22 +1556,6 @@ export const DEFAULT_SELLER_DIRECTORY_COLUMNS: SellerDirectoryColumnConfig[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 
-
-export interface InternalTeamMember {
-  id: string;
-  name: string;
-  role: string;
-  email: string;
-  project?: string;
-}
-
-export const DEFAULT_INTERNAL_MEMBERS: InternalTeamMember[] = [
-  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
-  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
-  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
-  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
-  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
-];
 
 export const COMMUNICATION_CHANNELS = [
   { value: 'CALL', label: 'Call Log' },
@@ -1611,6 +1739,21 @@ export const CREDIT_APPROVAL_APPROVERS = [
   'Sudheer Sir',
 ] as const;
 
+export const APPROVER_CONFIG = [
+  {
+    id: 'srinu_sir',
+    name: 'Srinu Sir',
+    email: 'srinivas.mukku@procucev.com',
+    title: 'Director / Management Authority',
+  },
+  {
+    id: 'sudheer_sir',
+    name: 'Sudheer Sir',
+    email: 'sudheer.kangala@procucev.com',
+    title: 'Management Authority',
+  },
+] as const;
+
 export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];
 
 export const CREDIT_APPROVAL_INITIATORS = [
@@ -1666,3 +1809,82 @@ export const DEFAULT_APPROVAL_COLUMNS: Array<{
   { key: 'actions', label: 'Actions', visible: true, locked: true, order: 9 },
 ];
 
+
+/**
+ * The most category matches the RFQ line item category search lists at once. Typing narrows the list,
+ * so the keyboard never has to scroll past this many options.
+ */
+export const CATEGORY_SEARCH_RESULT_LIMIT = 10;
+
+/**
+ * The buyer's historical purchase periods, mapped to the server's time-horizon types. The server stores the
+ * horizon on the ingestion session and uses it to choose which PO rows count as purchasing evidence.
+ */
+export const VENDOR_INGESTION_HORIZON_BY_PERIOD = {
+  '1_year': 'LAST_1_YEAR',
+  '2_years': 'LAST_2_YEARS',
+  '3_years': 'LAST_3_YEARS',
+} as const;
+
+/** The reverse mapping, used when a saved ingestion session reports its horizon. */
+export const PERIOD_BY_VENDOR_INGESTION_HORIZON: Partial<Record<string, '1_year' | '2_years' | '3_years'>> = {
+  LAST_1_YEAR: '1_year',
+  LAST_2_YEARS: '2_years',
+  LAST_3_YEARS: '3_years',
+};
+
+/** Suppliers requested per page when the wizard loads AI category results. Matches the server's page cap. */
+export const VENDOR_MAPPING_PAGE_SIZE = 200;
+
+/**
+ * Canonical MIME types by lowercase file extension for RFQ supporting documents.
+ * Used as a fallback when browsers or object storage omit or generalize Content-Type.
+ */
+export const ATTACHMENT_EXTENSION_MIME_MAP: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.eml': 'message/rfc822',
+  '.msg': 'application/vnd.ms-outlook',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.json': 'application/json',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+/** Generic Content-Type values that should yield to extension-based inference. */
+export const ATTACHMENT_GENERIC_MIME_TYPES: ReadonlySet<string> = new Set([
+  '',
+  'application/octet-stream',
+  'binary/octet-stream',
+]);
+
+/**
+ * Resolve a concrete MIME type for an attachment from declared/response headers
+ * and fall back to its filename extension when empty or generic.
+ */
+export function resolveAttachmentMimeType(fileName?: string | null, declaredMimeType?: string | null): string {
+  const normalized =
+    typeof declaredMimeType === 'string'
+      ? declaredMimeType.split(';')[0].trim().toLowerCase()
+      : '';
+  if (normalized && !ATTACHMENT_GENERIC_MIME_TYPES.has(normalized)) {
+    return normalized;
+  }
+  const safeName = typeof fileName === 'string' ? fileName.trim().toLowerCase() : '';
+  const dotIdx = safeName.lastIndexOf('.');
+  if (dotIdx > -1) {
+    const inferred = ATTACHMENT_EXTENSION_MIME_MAP[safeName.slice(dotIdx)];
+    if (inferred) {
+      return inferred;
+    }
+  }
+  return normalized || 'application/octet-stream';
+}

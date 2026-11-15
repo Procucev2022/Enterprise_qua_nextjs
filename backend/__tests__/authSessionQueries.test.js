@@ -14,6 +14,7 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
   let rowsSpy;
 
   beforeEach(() => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [], rowCount: 0 });
     rowsSpy = jest.spyOn(pool, 'rows').mockResolvedValue([]);
   });
@@ -34,14 +35,17 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       // Two rows for one key would leave the older code still redeemable.
       expect(sql).toContain('on conflict (otp_key) do update set');
       expect(sql).toContain('attempts = 0');
+      expect(sql).toContain('email = excluded.email');
       expect(params[0]).toBe('+919157154504_EMAIL_a@b.com');
-      expect(params[1]).toBe('123456');
+      // The email is written with every OTP: the live D1 table declares it NOT NULL.
+      expect(params[1]).toBe('a@b.com');
+      expect(params[2]).toBe('123456');
       // An ISO string, not a raw Date object — D1's bind() only accepts
       // TEXT/INTEGER/REAL/BLOB/NULL, and pg accepts an ISO string for a
       // timestamptz column exactly as well as a Date.
-      expect(params[2]).toBe(new Date(expiresAt).toISOString());
+      expect(params[3]).toBe(new Date(expiresAt).toISOString());
     });
-    test('falls back to email column insert when NOT NULL constraint fails', async () => {
+    test('falls back to delete and insert, keeping the email, when the upsert rejects', async () => {
       const expiresAt = Date.now() + 60_000;
       querySpy
         .mockRejectedValueOnce(new Error('null value in column "email" violates not-null constraint: auth_otp_codes.email'))
@@ -55,36 +59,45 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       expect(querySpy.mock.calls[2][1]).toEqual(['+919157154504_EMAIL_a@b.com', 'a@b.com', '123456', new Date(expiresAt).toISOString()]);
     });
 
-    test('falls back to delete and insert when conflict occurs and email fallback fails', async () => {
+    test('uses the email hint when the OTP key does not carry one', async () => {
       const expiresAt = Date.now() + 60_000;
       querySpy
-        .mockRejectedValueOnce(new Error('auth_otp_codes.email NOTNULL constraint failed'))
-        .mockRejectedValueOnce(new Error('fail email fallback'))
-        .mockResolvedValueOnce({ rowCount: 1 })
+        .mockRejectedValueOnce(new Error('ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint'))
+        .mockResolvedValueOnce({ rowCount: 0 })
         .mockResolvedValueOnce({ rowCount: 1 });
 
       await real.saveOtp('customKey', '654321', expiresAt, 'test@example.com');
-      expect(querySpy).toHaveBeenCalledTimes(4);
-      expect(querySpy.mock.calls[2][0]).toContain('delete from auth_otp_codes where otp_key = $1');
-      expect(querySpy.mock.calls[3][0]).toContain('insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)');
+      expect(querySpy).toHaveBeenCalledTimes(3);
+      expect(querySpy.mock.calls[1][0]).toContain('delete from auth_otp_codes where otp_key = $1');
+      expect(querySpy.mock.calls[2][0]).toContain('insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)');
+      expect(querySpy.mock.calls[2][1]).toEqual(['customKey', 'test@example.com', '654321', new Date(expiresAt).toISOString()]);
     });
 
-    test('catches and logs if delete-insert fallback also fails', async () => {
+    test('refuses to store an OTP that names no email, before touching the database', async () => {
+      await expect(real.saveOtp('noEmailKey', '123456', Date.now() + 60_000)).rejects.toMatchObject({
+        code: 'OTP_EMAIL_REQUIRED',
+      });
+      expect(querySpy).not.toHaveBeenCalled();
+    });
+
+    test('fails closed if delete-insert fallback also fails', async () => {
       const expiresAt = Date.now() + 60_000;
       querySpy
         .mockRejectedValueOnce(new Error('primary failure'))
         .mockRejectedValueOnce(new Error('delete failure'));
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-      await expect(real.saveOtp('plainKey', '111111', expiresAt)).resolves.toBeUndefined();
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[AUTH_SESSION] saveOtp DB write failed:'), 'delete failure');
-      consoleSpy.mockRestore();
+      await expect(real.saveOtp('plainKey', '111111', expiresAt, 'plain@example.com')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+        cause: expect.objectContaining({ message: 'delete failure' }),
+      });
     });
 
-    test('handles string error in saveOtp and empty otpKey', async () => {
+    test('fails closed on a non-Error database rejection', async () => {
       const expiresAt = Date.now() + 60_000;
-      querySpy.mockRejectedValueOnce('raw string error');
-      await expect(real.saveOtp('', '123456', expiresAt)).resolves.toBeUndefined();
+      querySpy.mockRejectedValue('raw string error');
+      await expect(real.saveOtp('plainKey', '123456', expiresAt, 'plain@example.com')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
 
     test('parses Date object and empty string in parseExpiryTimestamp', async () => {
@@ -143,33 +156,30 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       expect(f5.expiresAt).toBe(0);
     });
 
-    test('falls back to memory store when DB returns no rows', async () => {
+    test('does not return a stale memory OTP when the configured database has no row', async () => {
       const expiresAt = Date.now() + 10_000;
-      await real.saveOtp('memKey', '999888', expiresAt);
+      await real.saveOtp('memKey', '999888', expiresAt, 'mem@example.com');
       rowsSpy.mockResolvedValueOnce([]);
 
-      const found = await real.findOtp('memKey');
-      expect(found).toMatchObject({ otpKey: 'memKey', code: '999888' });
+      await expect(real.findOtp('memKey')).resolves.toBeNull();
     });
 
-    test('falls back to memory store when DB throws error', async () => {
-      const expiresAt = Date.now() + 10_000;
-      await real.saveOtp('memKey2', '777888', expiresAt);
-      rowsSpy.mockRejectedValueOnce(new Error('Connection failure'));
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    test('fails closed when configured OTP lookup fails', async () => {
+      const cause = new Error('Connection failure');
+      rowsSpy.mockRejectedValueOnce(cause);
 
-      const found = await real.findOtp('memKey2');
-      expect(found).toMatchObject({ otpKey: 'memKey2', code: '777888' });
-      consoleSpy.mockRestore();
+      await expect(real.findOtp('memKey2')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+        cause,
+      });
     });
 
-    test('returns null when DB throws error and key is not in memory store', async () => {
+    test('fails closed when configured OTP lookup fails for a missing key', async () => {
       rowsSpy.mockRejectedValueOnce(new Error('Connection failure'));
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-      const found = await real.findOtp('absentKey');
-      expect(found).toBeNull();
-      consoleSpy.mockRestore();
+      await expect(real.findOtp('absentKey')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
 
     test('returns null when there is no code for the key', async () => {
@@ -199,12 +209,11 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       await expect(real.deleteOtp('k')).resolves.toBe(false);
     });
 
-    test('deletes from memory store if DB query throws', async () => {
-      await real.saveOtp('toDeleteMem', '123456', Date.now() + 60000);
+    test('fails closed if OTP deletion fails in configured storage', async () => {
+      await real.saveOtp('toDeleteMem', '123456', Date.now() + 60000, 'delete@example.com');
       querySpy.mockRejectedValueOnce(new Error('DB failure'));
 
-      const deleted = await real.deleteOtp('toDeleteMem');
-      expect(deleted).toBe(true);
+      await expect(real.deleteOtp('toDeleteMem')).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
     });
   });
 
@@ -221,17 +230,11 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       await expect(real.incrementOtpAttempts('k')).resolves.toBe(0);
     });
 
-    test('increments memory store attempts when DB query throws', async () => {
-      await real.saveOtp('memInc', '111222', Date.now() + 60000);
+    test('fails closed when configured attempt counter update fails', async () => {
+      await real.saveOtp('memInc', '111222', Date.now() + 60000, 'inc@example.com');
       querySpy.mockRejectedValue(new Error('DB failure'));
 
-      const count1 = await real.incrementOtpAttempts('memInc');
-      expect(count1).toBe(1);
-      const count2 = await real.incrementOtpAttempts('memInc');
-      expect(count2).toBe(2);
-
-      const countMissing = await real.incrementOtpAttempts('nonExistentKey');
-      expect(countMissing).toBe(0);
+      await expect(real.incrementOtpAttempts('memInc')).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
     });
   });
 
@@ -261,15 +264,15 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       expect(querySpy.mock.calls[2][0]).toContain('insert into auth_revoked_tokens');
     });
 
-    test('falls back to memoryRevokedTokens if both inserts fail', async () => {
+    test('fails closed if token revocation cannot be persisted', async () => {
       const expiresAt = Date.now() + 60_000;
       querySpy
         .mockRejectedValueOnce(new Error('fail 1'))
         .mockRejectedValueOnce(new Error('fail 2'));
 
-      await real.revokeToken('sig-memory-fallback', expiresAt);
-      const isRevoked = await real.isTokenRevoked('sig-memory-fallback');
-      expect(isRevoked).toBe(true);
+      await expect(real.revokeToken('sig-memory-fallback', expiresAt)).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
   });
 
@@ -286,7 +289,35 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
 
     test('propagates a read failure so the caller can fail closed', async () => {
       rowsSpy.mockRejectedValue(new Error('ECONNREFUSED'));
-      await expect(real.isTokenRevoked('sig-1')).rejects.toThrow('ECONNREFUSED');
+      await expect(real.isTokenRevoked('sig-1')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+    });
+
+    test('fails closed when the database is overloaded and no positive memory revocation exists', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const spy = jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+      await expect(real.isTokenRevoked('sig-overload-test')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+      spy.mockRestore();
+    });
+
+    test('fails closed when pool.rows throws a D1 overload error', async () => {
+      rowsSpy.mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+      await expect(real.isTokenRevoked('sig-retryable-test')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+    });
+
+    test('uses a known positive memory revocation during a database overload', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      await real.revokeToken('sig-known-revoked', Date.now() + 60_000);
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+
+      await expect(real.isTokenRevoked('sig-known-revoked')).resolves.toBe(true);
     });
   });
 
@@ -315,12 +346,9 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       });
     });
 
-    test('returns 0 counts if query fails', async () => {
+    test('fails closed if auth-state cleanup fails in configured storage', async () => {
       querySpy.mockRejectedValueOnce(new Error('DB failure'));
-      await expect(real.purgeExpiredAuthState()).resolves.toEqual({
-        otpsPurged: 0,
-        revokedTokensPurged: 0,
-      });
+      await expect(real.purgeExpiredAuthState()).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
     });
   });
 
@@ -362,6 +390,39 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
 
     test('incrementing a key the double does not hold reports zero', async () => {
       await expect(authSessionQueries.incrementOtpAttempts('never-stored')).resolves.toBe(0);
+    });
+  });
+
+  describe('unconfigured development storage', () => {
+    beforeEach(() => {
+      pool.hasStorage.mockReturnValue(false);
+    });
+
+    test('uses process memory only when no persistent database is configured', async () => {
+      const expiresAt = Date.now() + 60_000;
+      await real.saveOtp('offline-key', '111222', expiresAt);
+      await expect(real.findOtp('offline-key')).resolves.toMatchObject({ code: '111222', attempts: 0 });
+      await expect(real.incrementOtpAttempts('offline-key')).resolves.toBe(1);
+      await expect(real.deleteOtp('offline-key')).resolves.toBe(true);
+      await expect(real.findOtp('offline-key')).resolves.toBeNull();
+
+      await real.revokeToken('offline-signature', expiresAt);
+      await expect(real.isTokenRevoked('offline-signature')).resolves.toBe(true);
+      await expect(real.purgeExpiredAuthState()).resolves.toEqual({ otpsPurged: 0, revokedTokensPurged: 0 });
+      expect(querySpy).not.toHaveBeenCalled();
+      expect(rowsSpy).not.toHaveBeenCalled();
+    });
+
+    test('removes expired OTP and revocation entries during memory cleanup', async () => {
+      await real.saveOtp('expired-offline-key', '111222', Date.now() - 1000);
+      await real.revokeToken('expired-offline-signature', Date.now() - 1000);
+
+      await expect(real.purgeExpiredAuthState()).resolves.toEqual({
+        otpsPurged: 1,
+        revokedTokensPurged: 1,
+      });
+      await expect(real.findOtp('expired-offline-key')).resolves.toBeNull();
+      await expect(real.isTokenRevoked('expired-offline-signature')).resolves.toBe(false);
     });
   });
 });

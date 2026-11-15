@@ -1,3 +1,4 @@
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   fetchPaymentDuesSummary,
   fetchPaymentDues,
@@ -9,17 +10,23 @@ import {
   getPaymentDuesExportUrl,
 } from '@/lib/paymentDuesClient';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 
 describe('paymentDuesClient', () => {
   const originalFetch = global.fetch;
+  const originalRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    logger.isRemoteSyncEnabled = false;
+    jest.spyOn(logger, 'error');
     jest.spyOn(authClient, 'getToken').mockReturnValue('mock-jwt-token');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    logger.isRemoteSyncEnabled = originalRemoteSyncEnabled;
+    jest.restoreAllMocks();
   });
 
   describe('fetchPaymentDuesSummary', () => {
@@ -39,7 +46,7 @@ describe('paymentDuesClient', () => {
       });
 
       const res = await fetchPaymentDuesSummary();
-      expect(res).toEqual(mockSummary);
+      expect(res).toEqual({ summary: mockSummary });
       expect(global.fetch).toHaveBeenCalledWith('/api/payment-dues/summary', expect.any(Object));
     });
 
@@ -47,8 +54,8 @@ describe('paymentDuesClient', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
 
       const res = await fetchPaymentDuesSummary();
-      expect(res.totalLowCreditAccounts).toBe(0);
-      expect(res.zeroCredits).toBe(0);
+      expect(res.summary).toBeNull();
+      expect(res.error).toBeTruthy();
     });
 
     it('returns fallback summary when response is not ok', async () => {
@@ -58,7 +65,12 @@ describe('paymentDuesClient', () => {
       });
 
       const res = await fetchPaymentDuesSummary();
-      expect(res.totalLowCreditAccounts).toBe(0);
+      expect(res.summary).toBeNull();
+      expect(logger.error).toHaveBeenCalledWith(
+        'Payment dues summary fetch failed',
+        expect.objectContaining({ status: 500, errorName: 'HttpError', errorMessage: 'HTTP 500' }),
+        'PAYMENT_DUES_CLIENT'
+      );
     });
   });
 
@@ -168,7 +180,7 @@ describe('paymentDuesClient', () => {
       });
 
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Connection failed');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
   });
 
@@ -206,7 +218,7 @@ describe('paymentDuesClient', () => {
   });
 
   describe('sendPaymentDuesWhatsApp', () => {
-    it('dispatches WhatsApp notification and returns wa.me direct link', async () => {
+    it('reports a wa.me link as not sent, because no provider accepted the message', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -223,8 +235,28 @@ describe('paymentDuesClient', () => {
         message: 'Hello',
       });
 
-      expect(res.success).toBe(true);
+      expect(res.success).toBe(false);
+      expect(res.status).toBe('link_only');
       expect(res.directLink).toContain('wa.me');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.whatsAppLinkOnly);
+    });
+
+    it('reports success only when the API reports a provider send', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, status: 'sent', communication: { id: 'wa-2' } }),
+      });
+
+      const res = await sendPaymentDuesWhatsApp({
+        accountId: 'acc-1',
+        accountType: 'seller',
+        phone: '9876543210',
+        message: 'Hello',
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.status).toBe('sent');
+      expect(res.directLink).toBeUndefined();
     });
 
     it('handles exception in WhatsApp dispatch', async () => {
@@ -238,7 +270,7 @@ describe('paymentDuesClient', () => {
       });
 
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Timeout');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
   });
 
@@ -289,14 +321,86 @@ describe('paymentDuesClient', () => {
       });
 
       const history = await fetchPaymentDuesHistory('acc-1');
-      expect(history).toEqual(mockHistory);
+      expect(history).toEqual({ history: mockHistory });
     });
 
     it('returns empty array on error', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Failed'));
       const history = await fetchPaymentDuesHistory('acc-1');
-      expect(history).toEqual([]);
+      expect(history).toEqual({ history: [], error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.paymentDuesHistory }) });
     });
+  });
+
+  it('logs failures across fallback and notification operations without logging account payloads', async () => {
+    global.fetch = jest.fn()
+      .mockRejectedValueOnce(new Error('Summary transport unavailable'))
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'Service unavailable' }),
+      })
+      .mockRejectedValueOnce('Mail transport rejected')
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Message unavailable' }) })
+      .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({ success: false, error: 'WhatsApp unavailable' }) })
+      .mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ success: false, error: 'Invalid status' }) })
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ error: 'History unavailable' }) });
+
+    await fetchPaymentDuesSummary();
+    await fetchPaymentDues();
+    await sendPaymentDuesEmail({
+      accountId: 'private-account-id',
+      accountType: 'buyer',
+      recipientEmail: 'private@example.com',
+      subject: 'Private subject',
+      message: 'Private message',
+    });
+    await sendPaymentDuesMessage({ accountId: 'private-account-id', accountType: 'buyer', message: 'Private message' });
+    await sendPaymentDuesWhatsApp({ accountId: 'private-account-id', accountType: 'seller', phone: 'private-phone', message: 'Private message' });
+    await updatePaymentDuesAcknowledgement({ accountId: 'private-account-id', accountType: 'buyer', acknowledgementStatus: 'Acknowledged' });
+    await fetchPaymentDuesHistory('private-account-id');
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues summary fetch failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Summary transport unavailable' }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues account-list fetch failed',
+      expect.objectContaining({ status: 503, responseErrorPresent: true }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues email notification failed',
+      expect.objectContaining({ method: 'POST', errorName: 'UnknownError' }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues in-app message notification failed',
+      expect.objectContaining({ status: 200, responseErrorPresent: true, errorName: 'ApiResponseError' }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues WhatsApp notification failed',
+      expect.objectContaining({ status: 502, responseErrorPresent: true }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues acknowledgement update failed',
+      expect.objectContaining({ status: 400, responseErrorPresent: true }),
+      'PAYMENT_DUES_CLIENT'
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'Payment dues communication history fetch failed',
+      expect.objectContaining({ status: 404, responseErrorPresent: false }),
+      'PAYMENT_DUES_CLIENT'
+    );
+
+    for (const [, metadata] of jest.mocked(logger.error).mock.calls) {
+      expect(metadata).not.toHaveProperty('accountId');
+      expect(metadata).not.toHaveProperty('recipientEmail');
+      expect(metadata).not.toHaveProperty('phone');
+      expect(metadata).not.toHaveProperty('message');
+    }
   });
 
   describe('getPaymentDuesExportUrl', () => {
@@ -351,7 +455,7 @@ describe('paymentDuesClient', () => {
         message: 'Msg',
       });
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Network error');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: false,
@@ -376,7 +480,7 @@ describe('paymentDuesClient', () => {
         accountType: 'buyer',
         message: 'Msg',
       });
-      expect(resMsg.error).toBe('Network error');
+      expect(resMsg.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
 
       const resWA = await sendPaymentDuesWhatsApp({
         accountId: 'acc-1',
@@ -384,14 +488,14 @@ describe('paymentDuesClient', () => {
         phone: '12345678',
         message: 'Msg',
       });
-      expect(resWA.error).toBe('Network error');
+      expect(resWA.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
 
       const resAck = await updatePaymentDuesAcknowledgement({
         accountId: 'acc-1',
         accountType: 'buyer',
         acknowledgementStatus: 'Acknowledged',
       });
-      expect(resAck.error).toBe('Network error');
+      expect(resAck.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
 
 
@@ -402,7 +506,7 @@ describe('paymentDuesClient', () => {
         json: async () => ({ success: true, summary: null }),
       });
       const s = await fetchPaymentDuesSummary();
-      expect(s.totalLowCreditAccounts).toBe(0);
+      expect(s.summary).toBeNull();
 
       // 2. fetchPaymentDues when response is !ok
       global.fetch = jest.fn().mockResolvedValue({
@@ -428,7 +532,7 @@ describe('paymentDuesClient', () => {
         status: 404,
       });
       const hError = await fetchPaymentDuesHistory('acc-not-found');
-      expect(hError).toEqual([]);
+      expect(hError.history).toEqual([]);
 
       // 5. fetchPaymentDuesHistory when json.history is missing
       global.fetch = jest.fn().mockResolvedValue({
@@ -436,7 +540,7 @@ describe('paymentDuesClient', () => {
         json: async () => ({}),
       });
       const hEmpty = await fetchPaymentDuesHistory('acc-empty');
-      expect(hEmpty).toEqual([]);
+      expect(hEmpty.history).toEqual([]);
 
       // 6. getPaymentDuesExportUrl with default arguments
       const exportUrl = getPaymentDuesExportUrl();

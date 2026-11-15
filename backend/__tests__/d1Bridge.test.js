@@ -70,7 +70,18 @@ describe('d1Bridge', () => {
 
   describe('queryD1', () => {
     it('binds params and returns rows from D1 .all()', async () => {
-      const all = jest.fn().mockResolvedValue({ results: [{ id: 1 }] });
+      const all = jest.fn().mockResolvedValue({
+        results: [{ id: 1 }],
+        meta: {
+          rows_read: 12,
+          rows_written: 1,
+          duration: 3,
+          size_after: 4096,
+          served_by_region: 'ENAM',
+          served_by_primary: false,
+          served_by_colo: 'IAD',
+        },
+      });
       const bind = jest.fn().mockReturnValue({ all });
       const prepare = jest.fn().mockReturnValue({ bind });
       const db = { prepare };
@@ -80,7 +91,19 @@ describe('d1Bridge', () => {
 
       expect(prepare).toHaveBeenCalledWith('select * from t where a = ?');
       expect(bind).toHaveBeenCalledWith('x');
-      expect(result).toEqual({ rows: [{ id: 1 }] });
+      expect(result).toEqual({
+        rows: [{ id: 1 }],
+        rowCount: undefined,
+        meta: {
+          rowsRead: 12,
+          rowsWritten: 1,
+          durationMs: 3,
+          sizeAfterBytes: 4096,
+          servedByRegion: 'ENAM',
+          servedByPrimary: false,
+          servedByColo: 'IAD',
+        },
+      });
     });
 
     // Found live against the deployed Worker: the Invite Vendors "All
@@ -160,9 +183,21 @@ describe('d1Bridge', () => {
       expect(result).toEqual({ rows: [{ id: 1 }] });
     });
 
-    it('retries on D1 DB overloaded error and returns successful result on subsequent attempt', async () => {
+    it('does not retry a D1 overload, so the caller gets the failure at once', async () => {
+      const overload = new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window');
+      const all = jest.fn().mockRejectedValue(overload);
+      const prepare = jest.fn().mockReturnValue({ all });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      await expect(queryD1(db, 'select * from t')).rejects.toBe(overload);
+      expect(all).toHaveBeenCalledTimes(1);
+      expect(overload.d1Attempts).toBe(1);
+    });
+
+    it('retries a transient D1 error that is not an overload and returns the next result', async () => {
       const all = jest.fn()
-        .mockRejectedValueOnce(new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window'))
+        .mockRejectedValueOnce(new Error('D1 storage temporarily unavailable'))
         .mockResolvedValueOnce({ results: [{ id: 42 }] });
       const prepare = jest.fn().mockReturnValue({ all });
       const db = { prepare };
@@ -183,14 +218,64 @@ describe('d1Bridge', () => {
       expect(all).toHaveBeenCalledTimes(1);
     });
 
-    it('throws error when retry limit is exhausted on repeated overload errors', async () => {
+    it('stops after the first attempt for an overload, however the error repeats', async () => {
       const all = jest.fn().mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
       const prepare = jest.fn().mockReturnValue({ all });
       const db = { prepare };
 
       const { queryD1 } = require('../src/db/d1Bridge');
       await expect(queryD1(db, 'select * from t')).rejects.toThrow('overloaded');
+      expect(all).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives up after the configured attempts when a transient error keeps repeating', async () => {
+      const failure = new Error('D1 storage temporarily unavailable');
+      const all = jest.fn().mockRejectedValue(failure);
+      const prepare = jest.fn().mockReturnValue({ all });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      await expect(queryD1(db, 'select * from t')).rejects.toBe(failure);
       expect(all).toHaveBeenCalledTimes(3);
+      expect(failure.d1Attempts).toBe(3);
+    });
+
+    it('reports the 1-based positions of undefined bind values', () => {
+      const { findUndefinedParameterIndexes } = require('../src/db/d1Bridge');
+      expect(findUndefinedParameterIndexes(['a', undefined, null, 0, undefined])).toEqual([2, 5]);
+      expect(findUndefinedParameterIndexes(['a'])).toEqual([]);
+      expect(findUndefinedParameterIndexes(undefined)).toEqual([]);
+    });
+
+    it('drops system_error_logs queries when D1 is overloaded', async () => {
+      const { queryD1, markD1Overloaded, resetD1OverloadState, isD1Overloaded } = require('../src/db/d1Bridge');
+      markD1Overloaded();
+      expect(isD1Overloaded()).toBe(true);
+
+      const prepareMock = jest.fn();
+      const db = { prepare: prepareMock };
+      const res = await queryD1(db, 'INSERT INTO system_error_logs (id) VALUES ($1)', ['e1']);
+      expect(res).toEqual({ rows: [], rowCount: 0 });
+      expect(prepareMock).not.toHaveBeenCalled();
+
+      resetD1OverloadState();
+      expect(isD1Overloaded()).toBe(false);
+    });
+
+    it('marks D1 overloaded and does not retry when system_error_logs fails with retryable error', async () => {
+      const { queryD1, resetD1OverloadState, isD1Overloaded } = require('../src/db/d1Bridge');
+      resetD1OverloadState();
+
+      const all = jest.fn().mockRejectedValue(new Error('D1_ERROR: too many resources consumed within a 10 second window'));
+      const bind = jest.fn().mockReturnValue({ all });
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = { prepare };
+
+      const res = await queryD1(db, 'INSERT INTO system_error_logs (id) VALUES ($1)', ['e2']);
+      expect(res).toEqual({ rows: [], rowCount: 0 });
+      expect(all).toHaveBeenCalledTimes(1);
+      expect(isD1Overloaded()).toBe(true);
+      resetD1OverloadState();
     });
   });
 
@@ -229,7 +314,11 @@ describe('d1Bridge', () => {
           Promise.resolve(
             JSON.stringify({
               success: true,
-              result: [{ results: [{ email: 'a@b.com' }], success: true, meta: { changes: 0 } }],
+              result: [{
+                results: [{ email: 'a@b.com' }],
+                success: true,
+                meta: { changes: 0, rows_read: 4, rows_written: 0, duration: 2 },
+              }],
             })
           ),
       });
@@ -238,10 +327,14 @@ describe('d1Bridge', () => {
       const client = getD1HttpClient();
       const result = await queryD1(client, 'select email from "user" where a = $1', ['x']);
 
-      expect(result).toEqual({ rows: [{ email: 'a@b.com' }], rowCount: 0 });
+      expect(result).toEqual({
+        rows: [{ email: 'a@b.com' }],
+        rowCount: 0,
+        meta: { rowsRead: 4, rowsWritten: 0, durationMs: 2 },
+      });
     });
 
-    it('_execHttp (used directly by scripts/test-rfq-sms.js) still returns its own {rows, rowCount} shape', async () => {
+    it('_execHttp (used directly by scripts/test-rfq-sms.js) retains the raw metadata with its rows', async () => {
       process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
       process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
       process.env.CLOUDFLARE_API_TOKEN = 'token-1';
@@ -260,7 +353,7 @@ describe('d1Bridge', () => {
       const client = getD1HttpClient();
       const result = await client._execHttp('select id from rfqs where rfq_number = ?', ['RFQ-1']);
 
-      expect(result).toEqual({ rows: [{ id: 'rfq-1' }], rowCount: 0 });
+      expect(result).toEqual({ rows: [{ id: 'rfq-1' }], rowCount: 0, meta: { changes: 0 } });
     });
 
     it('handles non-JSON error response from D1 HTTP API', async () => {
@@ -324,7 +417,54 @@ describe('d1Bridge', () => {
 
       const batchRes = await client.batch([client.prepare('update t set a = 1')]);
       expect(batchRes).toHaveLength(1);
-      expect(batchRes[0]).toEqual({ rows: [{ ok: 1 }], rowCount: 1 });
+      expect(batchRes[0]).toEqual({ rows: [{ ok: 1 }], rowCount: 1, meta: { changes: 1 } });
+    });
+
+    it('handles batchHttp empty array, non-JSON, and API errors', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      const { getD1HttpClient, resetD1HttpClientCache } = require('../src/db/d1Bridge');
+      resetD1HttpClientCache();
+      const client = getD1HttpClient();
+
+      expect(await client._batchHttp([])).toEqual([]);
+      expect(await client._batchHttp(null)).toEqual([]);
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Error HTML Body'),
+      });
+      await expect(client._batchHttp([{ sql: 'select 1', params: [] }]))
+        .rejects.toThrow('D1 HTTP API returned non-JSON (500): Error HTML Body');
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({ success: false, errors: [{ message: 'Batch syntax error' }] })),
+      });
+      await expect(client._batchHttp([{ sql: 'bad sql', params: [] }]))
+        .rejects.toThrow('D1 HTTP batch failed (200): Batch syntax error');
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: () => Promise.resolve(JSON.stringify({ success: false })),
+      });
+      await expect(client._batchHttp([{ sql: 'bad sql', params: [] }]))
+        .rejects.toThrow('D1 HTTP batch failed (400)');
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({
+          success: true,
+          result: { rows: [{ ok: 2 }], rowCount: 1, meta: { changes: 1 } },
+        })),
+      });
+      const singleRes = await client._batchHttp([{ sql: 'select 2', params: [] }]);
+      expect(singleRes).toEqual([{ rows: [{ ok: 2 }], rowCount: 1, meta: { changes: 1 } }]);
     });
   });
 
@@ -353,9 +493,43 @@ describe('d1Bridge', () => {
       ]);
     });
 
-    it('retries batch on D1 DB overloaded error and succeeds on subsequent attempt', async () => {
+    it('binds reordered and repeated placeholders in SQL occurrence order', async () => {
+      const bind = jest.fn().mockReturnValue({});
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = {
+        prepare,
+        batch: jest.fn().mockResolvedValue([
+          { results: [], meta: { changes: 1 } },
+        ]),
+      };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      await batchD1(db, [{
+        text: 'UPDATE t SET value = $3 WHERE owner_id = $2 AND EXISTS (SELECT 1 FROM links WHERE id = $1 OR fallback_id = $1)',
+        params: ['link-id', 'owner-id', 'plan'],
+      }]);
+
+      expect(prepare).toHaveBeenCalledWith(
+        'UPDATE t SET value = ? WHERE owner_id = ? AND EXISTS (SELECT 1 FROM links WHERE id = ? OR fallback_id = ?)'
+      );
+      expect(bind).toHaveBeenCalledWith('plan', 'owner-id', 'link-id', 'link-id');
+    });
+
+it('does not retry a batch that hits a D1 overload', async () => {
+      const overload = new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window');
+      const batchMock = jest.fn().mockRejectedValue(overload);
+      const prepareMock = jest.fn().mockReturnValue({});
+      const db = { prepare: prepareMock, batch: batchMock };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      await expect(batchD1(db, [{ text: 'insert into t (id) values (1)' }])).rejects.toBe(overload);
+      expect(batchMock).toHaveBeenCalledTimes(1);
+      expect(overload.d1Attempts).toBe(1);
+    });
+
+    it('retries a transient batch failure that is not an overload and succeeds', async () => {
       const batchMock = jest.fn()
-        .mockRejectedValueOnce(new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window'))
+        .mockRejectedValueOnce(new Error('D1 storage temporarily unavailable'))
         .mockResolvedValueOnce([
           { results: [{ id: 1 }], meta: { changes: 1 } },
         ]);
@@ -368,14 +542,16 @@ describe('d1Bridge', () => {
       expect(results).toEqual([{ rows: [{ id: 1 }], rowCount: 1 }]);
     });
 
-    it('throws error when batchD1 exhausts retries on overload', async () => {
-      const batchMock = jest.fn().mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+    it('gives up on a batch after the configured attempts when a transient error repeats', async () => {
+      const failure = new Error('D1 storage temporarily unavailable');
+      const batchMock = jest.fn().mockRejectedValue(failure);
       const prepareMock = jest.fn().mockReturnValue({});
       const db = { prepare: prepareMock, batch: batchMock };
 
       const { batchD1 } = require('../src/db/d1Bridge');
-      await expect(batchD1(db, [{ text: 'insert into t (id) values (1)' }])).rejects.toThrow('overloaded');
+      await expect(batchD1(db, [{ text: 'insert into t (id) values (1)' }])).rejects.toBe(failure);
       expect(batchMock).toHaveBeenCalledTimes(3);
+      expect(failure.d1Attempts).toBe(3);
     });
 
     it('handles batch results that already have rows/rowCount (HTTP client)', async () => {
@@ -390,6 +566,34 @@ describe('d1Bridge', () => {
       const { batchD1 } = require('../src/db/d1Bridge');
       const results = await batchD1(db, [{ text: 'select 1' }]);
       expect(results).toEqual([{ rows: [{ id: 10 }], rowCount: 1 }]);
+    });
+
+    it('executes multi-statement batches with the atomic D1 HTTP adapter', async () => {
+      const batchMock = jest.fn().mockResolvedValue([
+        { rows: [], rowCount: 1, meta: { changes: 1 } },
+        { rows: [{ id: 1 }], rowCount: 1, meta: { changes: 1 } },
+      ]);
+      const bindMock = jest.fn().mockReturnValue({});
+      const prepareMock = jest.fn().mockImplementation(() => ({
+        bind: bindMock,
+      }));
+      const db = {
+        _isHttpClient: true,
+        prepare: prepareMock,
+        batch: batchMock,
+      };
+      const { batchD1 } = require('../src/db/d1Bridge');
+
+      const results = await batchD1(db, [
+        { text: 'delete from t where id = $1', params: [1] },
+        { text: 'insert into t (id) values ($1)', params: [1] },
+      ]);
+      expect(db.prepare).toHaveBeenCalledTimes(2);
+      expect(batchMock).toHaveBeenCalledTimes(1);
+      expect(results).toEqual([
+        { rows: [], rowCount: 1, meta: { changes: 1 } },
+        { rows: [{ id: 1 }], rowCount: 1, meta: { changes: 1 } },
+      ]);
     });
   });
 
@@ -423,7 +627,7 @@ describe('d1Bridge', () => {
       resetD1HttpClientCache();
       const client = getD1HttpClient();
       const res1 = await client._execHttp('select 1');
-      expect(res1).toEqual({ rows: [{ x: 1 }], rowCount: 1 });
+      expect(res1).toEqual({ rows: [{ x: 1 }], rowCount: 1, meta: { changes: 1 } });
 
       const res2 = await client._execHttp('select 2');
       expect(res2).toEqual({ rows: [], rowCount: undefined });

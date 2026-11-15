@@ -367,8 +367,8 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(ingestion.normalizeQuantity(input)).toBe(expected);
     });
 
-    test.each([0, -5, 'abc', null, undefined, ''])('defaults the unusable quantity %p to 1', (input) => {
-      expect(ingestion.normalizeQuantity(input)).toBe(RFQ_INGESTION_CONFIG.DEFAULT_QUANTITY);
+    test.each([0, -5, 'abc', null, undefined, ''])('leaves the unusable quantity %p missing (null), never 1', (input) => {
+      expect(ingestion.normalizeQuantity(input)).toBeNull();
     });
   });
 
@@ -446,18 +446,21 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
   });
 
   describe('normalizeLineItems', () => {
-    test('applies the documented defaults for quantity, unit and target date', () => {
-      const { entities } = ingestion.normalizeLineItems([
-        { description: 'Centrifugal Pump', quantity: 0 },
+    test('leaves an unusable quantity and a blank unit missing (null) instead of defaulting them', () => {
+      const { entities, lineValues } = ingestion.normalizeLineItems([
+        { description: 'Centrifugal Pump', quantity: 0, unitPrice: 500 },
       ]);
       expect(entities).toHaveLength(1);
       expect(entities[0]).toMatchObject({
         itemName: 'Centrifugal Pump',
-        quantity: RFQ_INGESTION_CONFIG.DEFAULT_QUANTITY,
-        unit: RFQ_INGESTION_CONFIG.DEFAULT_UNIT,
+        quantity: null,
+        unit: null,
         minorCategory: 'Pumps & Accessories',
       });
-      expect(entities[0].targetDate).toBe(ingestion.defaultTargetDate());
+      // A rate with no quantity cannot be valued, so the line stays unvalued.
+      expect(lineValues).toEqual([null]);
+      // No delivery date was stated, so none is invented: the line keeps an empty date.
+      expect(entities[0].targetDate).toBe('');
     });
 
     test('drops rows with no description rather than surfacing blank lines', () => {
@@ -648,6 +651,34 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect((await ingestion.buildRFQDraft()).classification.accepted).toBe(0);
     });
 
+    test('populates mandatory majorCategory and minorCategory at draft root and for each entity', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [
+          { itemName: 'Centrifugal Pump 500 GPM', quantity: 12 },
+          { itemName: 'Gate Valve 2 inch', quantity: 5 },
+        ],
+      });
+      expect(draft.majorCategory).toBeTruthy();
+      expect(draft.minorCategory).toBeTruthy();
+      expect(typeof draft.majorCategory).toBe('string');
+      expect(typeof draft.minorCategory).toBe('string');
+      expect(draft.extractedEntities.every((e) => e.majorCategory && e.minorCategory)).toBe(true);
+    });
+
+    test('honors payload.minorCategory and applies it to line items when valid', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        majorCategory: 'Civil Works',
+        minorCategory: 'Plumbing',
+        lineItems: [
+          { itemName: 'Unlisted construction supply item', quantity: 10 },
+        ],
+      });
+      expect(draft.majorCategory).toBe('Civil Works');
+      expect(draft.minorCategory).toBe('Plumbing');
+      expect(draft.extractedEntities[0].majorCategory).toBe('Civil Works');
+      expect(draft.extractedEntities[0].minorCategory).toBe('Plumbing');
+    });
+
     test('derives the estimated budget by summing the priced lines', async () => {
       const { draft } = await ingestion.buildRFQDraft({
         lineItems: [
@@ -672,6 +703,34 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
     test('leaves the estimated budget null when the document had no pricing', async () => {
       const { draft } = await ingestion.buildRFQDraft({ lineItems: [{ itemName: 'Centrifugal Pump' }] });
       expect(draft.estimatedBudget).toBeNull();
+    });
+
+    test('leaves targetDeliveryDate and line item targetDate empty when source is ai_extraction and no dates provided', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [{ itemName: 'Centrifugal Pump' }],
+        source: 'ai_extraction',
+      });
+      expect(draft.targetDeliveryDate).toBe('');
+      expect(draft.extractedEntities[0].targetDate).toBe('');
+    });
+
+    test('leaves targetDeliveryDate empty when allowEmptyDeliveryDate is true', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [{ itemName: 'Centrifugal Pump' }],
+        allowEmptyDeliveryDate: true,
+      });
+      expect(draft.targetDeliveryDate).toBe('');
+      expect(draft.extractedEntities[0].targetDate).toBe('');
+    });
+
+    test('preserves targetDeliveryDate and targetDate when supplied during ai_extraction', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [{ itemName: 'Centrifugal Pump', targetDate: '2026-12-25' }],
+        targetDeliveryDate: '2026-12-25',
+        source: 'ai_extraction',
+      });
+      expect(draft.targetDeliveryDate).toBe('2026-12-25');
+      expect(draft.extractedEntities[0].targetDate).toBe('2026-12-25');
     });
 
     test('processes all 100 valid items from a 200-item batch when requireValidQuantity is enabled', async () => {
@@ -883,7 +942,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const vendorRes = await request(app)
         .post('/api/vendors')
         .set(authHeader('vendor'))
-        .send({ name: 'Scoping Test Vendor', majorCategory: 'Civil Works' });
+        .send({ name: 'Scoping Test Vendor', majorCategory: 'Civil Works', minorCategories: ['Plumbing'] });
       vendorId = vendorRes.body.data.id;
 
       const buyerRes = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
@@ -900,6 +959,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const inCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-visible scoped enquiry',
         category: 'Civil Works',
+        extractedEntities: [{ itemName: 'GI pipe fitting set', technicalSpecs: 'Threaded, 50 mm, galvanised', quantity: 4, unit: 'Nos', majorCategory: 'Civil Works', minorCategory: 'Plumbing' }],
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',
@@ -913,6 +973,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const outCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-hidden scoped enquiry',
         category: 'Logistics',
+        extractedEntities: [{ itemName: 'DOL motor starter', technicalSpecs: '5.5 kW, 415 V, three phase', quantity: 2, unit: 'Nos', majorCategory: 'Engineering Spares - Electrical', minorCategory: 'Motors' }],
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',
@@ -1372,8 +1433,28 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       // 8. Past textual date string
       expect(ingestion.ensureFutureDeliveryDate('January 1, 2020', 5)).toBe(fallbackIso);
 
-      // 9. Substring minor match in isMinorUnderMajor (line 137)
-      expect(typeof ingestion.isMinorUnderMajor).toBe('function');
+      // 9. Excel Julian serial numbers (future and past)
+      expect(ingestion.ensureFutureDeliveryDate('46351', 5)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(ingestion.ensureFutureDeliveryDate('20000', 5)).toBe(fallbackIso);
+
+      // 10. Substring minor match in isMinorUnderMajor (line 137)
+      expect(ingestion.isMinorUnderMajor('Civil Works', 'Plumb')).toBe(true);
+
+      // 11. defaultMinorForMajor fallback to getMinorsForMajor (line 322-323)
+      ingestion.primeTaxonomyIndex([
+        { majorCategory: 'Custom Division', minorCategories: ['Custom Subcategory A', 'Custom Subcategory B'] },
+      ]);
+      expect(ingestion.defaultMinorForMajor('Custom Division')).toBe('Custom Subcategory A');
+      ingestion.primeTaxonomyIndex(taxonomy);
+
+      // 12. classifyLineItem with payloadMinorCategory and payloadCategory (lines 407-409)
+      const resPayloadBoth = ingestion.classifyLineItem(
+        { itemName: 'Unknown widget 123' },
+        'Civil Works',
+        'Plumbing'
+      );
+      expect(resPayloadBoth.majorCategory).toBe('Civil Works');
+      expect(resPayloadBoth.minorCategory).toBe('Plumbing');
     });
   });
 });

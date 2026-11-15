@@ -11,7 +11,7 @@ const { authHeader, TEST_USERS } = require('./testHelpers');
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 
 describe('Vendor Free-Credit and Subscription Validation Flow', () => {
-  const vendorEmail = 'vendor.apex@supplies.com';
+  const vendorEmail = 'vendor.test@supplier.test';
   let testVendor;
   let testRfqs = [];
 
@@ -24,10 +24,10 @@ describe('Vendor Free-Credit and Subscription Validation Flow', () => {
     // Reset vendors array and create a test vendor
     storeService.vendors = [];
     testVendor = {
-      id: 'v-test-apex',
-      name: 'Apex Industrial Supplies',
+      id: 'v-test-supplier',
+      name: 'Test Industrial Supplies',
       email: vendorEmail,
-      contactPerson: 'Apex Contact',
+      contactPerson: 'Test Contact',
       phone: '+91 98765 43210',
       majorCategory: 'Industrial Machinery',
       subscriptionPlan: 'premium',
@@ -141,15 +141,17 @@ describe('Vendor Free-Credit and Subscription Validation Flow', () => {
       // Resubmission to rfq-test-1
       storeService.consumeVendorQuotationCredit(testVendor.id, 'rfq-test-1');
       expect(testVendor.freeQuotationCredits).toBe(4);
-      expect(testVendor.quotedRfqIds).toHaveLength(1);
+      // Both canonical id ('rfq-test-1') AND rfqNumber ('RFQ-2026-00001') are
+      // stored for robust idempotency lookups, so length is 2 per unique RFQ.
+      expect(testVendor.quotedRfqIds).toHaveLength(2);
     });
   });
 
   describe('End-to-End Email Quotation Flow: First 5 Free -> 6th Exhausted -> Upgrade -> Post-Upgrade Quote', () => {
     const vendorGatewayConfig = {
       enabled: true,
-      user: 'srinu20252026@gmail.com',
-      address: 'srinu20252026@gmail.com',
+      user: 'vendor-smtp@supplier.test',
+      address: 'vendor-smtp@supplier.test',
       isVendorMailbox: true,
     };
 
@@ -160,9 +162,9 @@ describe('Vendor Free-Credit and Subscription Validation Flow', () => {
       for (let i = 1; i <= 5; i += 1) {
         const rfq = testRfqs[i - 1];
         const quoteEml = `From: ${vendorEmail}
-To: srinu20252026@gmail.com
+To: vendor-smtp@supplier.test
 Subject: Re: Quotation for ${rfq.rfqNumber}
-Message-ID: <quote-${i}@apexsupplies.com>
+Message-ID: <quote-${i}@supplier.test>
 Date: Tue, 22 Sep 2026 10:00:00 +0530
 Content-Type: text/plain
 
@@ -195,7 +197,8 @@ Remarks: Standard delivery included
       // Verify all 5 credits used
       const finalVendor = storeService.getVendorById(testVendor.id);
       expect(finalVendor.freeQuotationCredits).toBe(0);
-      expect(finalVendor.quotedRfqIds).toHaveLength(5);
+      // 5 RFQs × 2 identifiers each (canonical id + rfqNumber) = 10 entries.
+      expect(finalVendor.quotedRfqIds).toHaveLength(10);
     });
 
     test('Step 2 & 3: 6th RFQ quotation email without subscription is rejected with CREDITS_EXHAUSTED, dispatches upgrade notice, and creates NO bid', async () => {
@@ -208,9 +211,9 @@ Remarks: Standard delivery included
 
       const rfq6 = testRfqs[5]; // 6th RFQ
       const quote6Eml = `From: ${vendorEmail}
-To: srinu20252026@gmail.com
+To: vendor-smtp@supplier.test
 Subject: Re: Quotation for ${rfq6.rfqNumber}
-Message-ID: <quote-6-attempt@apexsupplies.com>
+Message-ID: <quote-6-attempt@supplier.test>
 Date: Tue, 22 Sep 2026 11:00:00 +0530
 Content-Type: text/plain
 
@@ -242,9 +245,9 @@ Lead Time: 10 days
 
       // Replying again to the email without subscribing: acknowledged with exhaustion email, NO BID created
       const replyAgainEml = `From: ${vendorEmail}
-To: srinu20252026@gmail.com
+To: vendor-smtp@supplier.test
 Subject: Re: Action Required – 5 Free Quotation Credits Exhausted for RFQ #${rfq6.rfqNumber}
-Message-ID: <reply-again-without-upgrade@apexsupplies.com>
+Message-ID: <reply-again-without-upgrade@supplier.test>
 Date: Tue, 22 Sep 2026 11:15:00 +0530
 Content-Type: text/plain
 
@@ -271,9 +274,9 @@ Please accept my quotation at INR 28,000.
 
       const rfq6 = testRfqs[5];
       const subscribedQuoteEml = `From: ${vendorEmail}
-To: srinu20252026@gmail.com
+To: vendor-smtp@supplier.test
 Subject: Re: Quotation for ${rfq6.rfqNumber}
-Message-ID: <quote-post-upgrade-success@apexsupplies.com>
+Message-ID: <quote-post-upgrade-success@supplier.test>
 Date: Tue, 22 Sep 2026 12:00:00 +0530
 Content-Type: text/plain
 
@@ -455,6 +458,7 @@ Remarks: Post-upgrade quotation
       // lineItems with specs and no budget or vendorName
       const email2 = mailerService.buildVendorCreditsExhaustedEmail(vendorEmail, {
         rfq: {
+          rfqNumber: 'RFQ-EDGE-2',
           lineItems: [
             { description: 'Component Spec', specs: 'Precision 0.01mm', unit: 'Pcs' },
           ],
@@ -465,9 +469,14 @@ Remarks: Post-upgrade quotation
 
       // Empty items
       const email3 = mailerService.buildVendorCreditsExhaustedEmail(vendorEmail, {
-        rfq: { items: [] },
+        rfq: { rfqNumber: 'RFQ-EDGE-3', items: [] },
       });
       expect(email3.html).toBeDefined();
+
+      // The RFQ number is required because the notice names the RFQ. A missing one is refused.
+      expect(() => mailerService.buildVendorCreditsExhaustedEmail(vendorEmail, { rfq: { items: [] } })).toThrow(
+        'Vendor credits exhausted notice requires rfqNumber before sending.'
+      );
     });
 
     test('buildRfqInviteEmail covers vendor credit status banners', () => {

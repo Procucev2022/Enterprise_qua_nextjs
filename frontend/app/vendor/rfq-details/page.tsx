@@ -85,28 +85,47 @@ function VendorRFQDetailsView() {
       let myVendorId: string | null = null;
       const email = currentUserSession?.email;
       if (email) {
+        // A 404 means this account has no vendor record, so it has no quote on this RFQ. Any other
+        // failure is shown as an error. Showing zero quotes then would read as "no quote submitted".
+        let lookupFailed = false;
         try {
           const token = authClient.getToken();
           const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
           });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && data.data) myVendorId = data.data.id;
+          if (res.status !== 404) {
+            const data = res.ok ? await res.json() : null;
+            if (res.ok && data?.success && data.data) myVendorId = data.data.id;
+            else lookupFailed = true;
           }
         } catch {
-          // No vendor record resolved: fall through and show zero quotes
-          // rather than every vendor's, which is the safe default.
+          lookupFailed = true;
+        }
+        if (lookupFailed) {
+          setState({ status: 'error', message: UI_STRINGS.vendorWorkspace.rfqProfileLoadFailed, canRetry: true });
+          return;
         }
       }
 
+      const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
+      const myVendorName = (currentUserSession?.orgName || currentUserSession?.name || '').toLowerCase().trim();
+      const scopedQuotes = (result.rfq.quotes || []).filter((quote) => {
+        if (myVendorId && quote.vendorId && String(quote.vendorId).toLowerCase() === myVendorId.toLowerCase()) return true;
+        if (sessionEmail && (quote as any).vendorEmail && String((quote as any).vendorEmail).toLowerCase() === sessionEmail) return true;
+        if (myVendorName && quote.vendorName && String(quote.vendorName).trim().toLowerCase() === myVendorName) return true;
+        return !myVendorId && !sessionEmail;
+      });
+
       const scopedRfq: RFQItem = {
         ...result.rfq,
-        quotes: (result.rfq.quotes || []).filter((quote) => quote.vendorId === myVendorId),
+        buyerAccountName: undefined,
+        buyerCompany: undefined,
+        sourcingMode: undefined as any,
+        quotes: scopedQuotes,
       };
       setState({ status: 'loaded', rfq: scopedRfq });
     },
-    [currentUserSession?.email]
+    [currentUserSession?.email, currentUserSession?.name, currentUserSession?.orgName]
   );
 
   useEffect(() => {

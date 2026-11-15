@@ -786,7 +786,8 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       ],
       ['the empty-taxonomy notice when there is no load error', null, UI_STRINGS.buyerProfile.taxonomyEmpty],
     ])('a search with no matches shows %s', async (_scenario, taxonomyError, expectedMessage) => {
-      useAppState({ categoryTaxonomyError: taxonomyError });
+      // An empty master is what the page shows when the taxonomy failed to load or is not configured.
+      useAppState({ categoryTaxonomy: [], categoryTaxonomyError: taxonomyError });
       await renderPage();
 
       fireEvent.change(screen.getByPlaceholderText(/Search supply categories/), {
@@ -856,7 +857,8 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
           gst: VALID_GST,
           majorCategory: MECHANICAL,
           minorCategories: ['Bearings & Accessories', 'Cables'],
-          location: 'Mumbai, Maharashtra, India',
+          // No country is invented: the record has none, so the location stops at the state.
+          location: 'Mumbai, Maharashtra',
         })
       );
       const [categoryUpdate] = requestsMatching('PUT', /\/api\/vendors\/v-100\/categories$/);
@@ -882,11 +884,12 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       expect(screen.getByText('Pumps & Accessories')).toBeInTheDocument();
     });
 
-    it('saves without credentials or a store callback and keeps the client-mapped list the server omits', async () => {
+    it('saves without credentials or a store callback and sends only the buyer-mapped list the server holds', async () => {
       getTokenSpy.mockReturnValue(null);
       useAppState({
         categoryTaxonomy: ELECTRICAL_ONLY,
         saveVendorProfileCategories: undefined,
+        // A shared store copy from another context. It is never sent as this vendor's own list.
         clientMappedCategories: ['Pumps & Accessories'],
       });
       installVendorApi({
@@ -901,7 +904,7 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       expect(profileUpdate.headers).toEqual({ 'Content-Type': 'application/json' });
       const [categoryUpdate] = requestsMatching('PUT', /\/categories$/);
       expect(categoryUpdate.body).toEqual({
-        clientMappedCategories: ['Pumps & Accessories'],
+        clientMappedCategories: [],
         vendorSelectedCategories: ['Bearings & Accessories', 'Cables'],
       });
       expect(addAuditLog).toHaveBeenCalledWith(
@@ -912,7 +915,8 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
         'Supplier details and manufacturing categories updated successfully.',
         'success'
       );
-      expect(screen.getByText('Pumps & Accessories')).toBeInTheDocument();
+      // The shared store copy is not shown as this vendor's buyer-mapped list.
+      expect(screen.queryByText('Pumps & Accessories')).not.toBeInTheDocument();
     });
 
     it('reports a generic failure when updating the profile is rejected without a reason', async () => {

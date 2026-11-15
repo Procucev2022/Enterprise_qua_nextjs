@@ -23,6 +23,7 @@ import {
 import { useApp } from '@/lib/store';
 import type { QuoteComparison, RFQAssignedVendor, RFQItem, VendorEntry } from '@/lib/types';
 import { formatCurrency, formatIndianDateTime } from '@/lib/constants';
+import { isDummyPan } from '@/lib/validationSchemas';
 
 interface VendorDetailsModalProps {
   isOpen: boolean;
@@ -177,10 +178,11 @@ export default function VendorDetailsModal({
     matchedVendor?.gst ||
     null;
 
-  const displayPan =
+  const rawPan =
     (matchedVendor as any)?.panNumber ||
     (matchedVendor as any)?.pan ||
-    (displayGstin && displayGstin.length === 15 ? displayGstin.slice(2, 12) : null);
+    null;
+  const displayPan = rawPan && !isDummyPan(rawPan) ? rawPan : null;
 
   const isEmpanelled = Boolean(
     matchedVendor?.status === 'PREFERRED ENTERPRISE SUPPLIER' ||

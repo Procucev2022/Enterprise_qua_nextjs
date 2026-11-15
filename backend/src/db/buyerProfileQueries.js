@@ -22,8 +22,9 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
-const { getD1Binding, getD1HttpClient } = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
+const { logger } = require('../services/loggerService');
 
 function hasD1() {
   return Boolean(getD1Binding() || getD1HttpClient());
@@ -70,6 +71,27 @@ function normalizeTurnover(value) {
 }
 
 /**
+ * Trim selected categories and collapse duplicate major/minor pairs without
+ * changing the display spelling of the first entry.
+ */
+function normalizeCategories(categories) {
+  if (!Array.isArray(categories)) return [];
+
+  const seen = new Set();
+  return categories.reduce((result, entry) => {
+    const major = text(entry && entry.major);
+    const minor = text(entry && entry.minor);
+    if (!major || !minor) return result;
+
+    const key = `${major.toLowerCase()}\u0000${minor.toLowerCase()}`;
+    if (seen.has(key)) return result;
+    seen.add(key);
+    result.push({ major, minor });
+    return result;
+  }, []);
+}
+
+/**
  * Shape a joined user + organization row into the profile the API returns.
  *
  * The account's own login email and mobile number are taken from the `user` row
@@ -85,7 +107,7 @@ function mapRowToProfile(row) {
     // Section 1 — legal entity and tax registration
     companyName: text(row.organization_name),
     brandName: preferred(row.brand_name, row.refference),
-    organizationType: text(row.type) || BUYER_PROFILE_CONFIG.DEFAULT_ORGANIZATION_TYPE,
+    organizationType: text(row.type),
     panNumber: text(row.pan),
     gstNumber: text(row.gstin),
     cinNumber: preferred(row.cin, row.crn),
@@ -97,7 +119,7 @@ function mapRowToProfile(row) {
     city: text(row.city),
     state: text(row.state),
     pincode: text(row.zip_code) || text(row.pincode),
-    country: text(row.country) || BUYER_PROFILE_CONFIG.DEFAULT_COUNTRY,
+    country: text(row.country),
 
     // Section 3 — primary procurement contact. Name falls back to the account
     // holder's name so a profile that has never been saved is not blank.
@@ -149,7 +171,9 @@ async function loadCategories(organizationId, userId) {
   if (userId) {
     rows = await pool.rows(
       `select division, category from org_division_category
-        where user_id = $1 and category is not null and category <> ''
+        where user_id = $1 and is_active = true
+          and division is not null and trim(division) <> ''
+          and category is not null and trim(category) <> ''
         order by division, category`,
       [userId],
       { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
@@ -159,14 +183,16 @@ async function loadCategories(organizationId, userId) {
   if (rows.length === 0 && organizationId) {
     rows = await pool.rows(
       `select division, category from org_division_category
-        where organization_id = $1 and category is not null and category <> ''
+        where organization_id = $1 and is_active = true
+          and division is not null and trim(division) <> ''
+          and category is not null and trim(category) <> ''
         order by division, category`,
       [organizationId],
       { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
     );
   }
 
-  return rows.map((row) => ({ major: text(row.division), minor: text(row.category) }));
+  return normalizeCategories(rows.map((row) => ({ major: row.division, minor: row.category })));
 }
 
 /**
@@ -206,21 +232,28 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
   // 1. Resolve exact user identity first (userId or email) to prevent multi-user organization bleeding
   if (userId || email) {
     const userConditions = [];
+    const d1UserConditions = [];
     const userParams = [];
     let idx = 1;
     if (userId) {
-      userConditions.push(`u.uuid = $${idx++}`);
+      userConditions.push(`u.uuid = $${idx}`);
+      d1UserConditions.push(`u.uuid = $${idx}`);
       userParams.push(userId);
+      idx++;
     }
     if (email) {
       userConditions.push(`(lower(u.username) = lower($${idx}) or lower(u.email) = lower($${idx}) or lower(o.email) = lower($${idx}))`);
+      // Omit `or o.email` on D1 in this first pass so SQLite can use the index on user table directly
+      d1UserConditions.push(`(u.username = $${idx} COLLATE NOCASE or u.email = $${idx} COLLATE NOCASE)`);
       userParams.push(email.trim());
       idx++;
     }
     const query = `${PROFILE_SELECT} where ${userConditions.join(' or ')} limit 1`;
+    const d1Text = `${PROFILE_SELECT} where ${d1UserConditions.join(' or ')} limit 1`;
     try {
       const rows = await pool.rows(query, userParams, {
         d1: true,
+        d1Text,
         useCache: true,
         tag: 'buyer_accounts',
         ttlMs: 60000,
@@ -239,24 +272,36 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
     }
   }
 
-  // 2. Explicit fallback to organization-level identifiers (organizationId or organizationName)
-  if (organizationId || organizationName) {
+  // 2. Explicit fallback to organization-level identifiers (organizationId or organizationName or org email)
+  if (organizationId || organizationName || email) {
     const orgConditions = [];
+    const d1OrgConditions = [];
     const orgParams = [];
     let idx = 1;
     if (organizationId) {
-      orgConditions.push(`o.uuid = $${idx++}`);
+      orgConditions.push(`o.uuid = $${idx}`);
+      d1OrgConditions.push(`o.uuid = $${idx}`);
       orgParams.push(organizationId);
+      idx++;
     }
     if (organizationName) {
-      orgConditions.push(`lower(o.organization_name) = lower($${idx++})`);
+      orgConditions.push(`lower(o.organization_name) = lower($${idx})`);
+      d1OrgConditions.push(`o.organization_name = $${idx} COLLATE NOCASE`);
       orgParams.push(organizationName.trim());
       idx++;
     }
+    if (email && !organizationId && !organizationName) {
+      orgConditions.push(`lower(o.email) = lower($${idx})`);
+      d1OrgConditions.push(`o.email = $${idx} COLLATE NOCASE`);
+      orgParams.push(email.trim());
+      idx++;
+    }
     const query = `${PROFILE_SELECT} where ${orgConditions.join(' or ')} limit 1`;
+    const d1Text = `${PROFILE_SELECT} where ${d1OrgConditions.join(' or ')} limit 1`;
     try {
       const rows = await pool.rows(query, orgParams, {
         d1: true,
+        d1Text,
         useCache: true,
         tag: 'buyer_accounts',
         ttlMs: 60000,
@@ -353,18 +398,23 @@ function buildProfileUpdate(patch, startIndex = 1) {
  * correctable.
  */
 async function replaceCategories(client, organizationId, userId, categories) {
+  // Serialize concurrent profile saves for one organization. Without a row
+  // lock, two transactions that both start with an empty category set can each
+  // delete zero rows and then insert duplicate copies of the same selection.
+  await client.query('select uuid from organization where uuid = $1 for update', [organizationId]);
   await client.query('delete from org_division_category where organization_id = $1', [organizationId]);
   if (userId) {
     await client.query('delete from org_division_category where user_id = $1', [userId]);
   }
 
-  if (!Array.isArray(categories) || categories.length === 0) return 0;
+  const normalizedCategories = normalizeCategories(categories);
+  if (normalizedCategories.length === 0) return 0;
 
   // One multi-row INSERT rather than one statement per category: a 10-category
   // selection is 10 network round trips to Neon otherwise, inside a transaction
   // that holds a connection open for all of them.
   const params = [];
-  const tuples = categories.map((entry) => {
+  const tuples = normalizedCategories.map((entry) => {
     const base = params.length;
     params.push(
       crypto.randomUUID(),
@@ -383,45 +433,147 @@ async function replaceCategories(client, organizationId, userId, categories) {
     params
   );
 
-  return categories.length;
+  return normalizedCategories.length;
 }
 
 /**
- * D1 equivalent of replaceCategories — D1 has no `client`/transaction object
- * to run these through (see updateProfile's D1 branch), so this runs the same
- * delete-then-insert sequence as plain `pool.query(..., { d1: true })` calls,
- * with `strftime` in place of Postgres's `now()`.
+ * Build D1 category replacement statements for updateProfile's atomic batch.
+ * Every insert has an organization existence guard. D1 expands repeated `$n`
+ * placeholders to positional bindings, so each 16-row INSERT SELECT stays
+ * below the 100-parameter statement limit even with the repeated guard value.
  */
-async function replaceCategoriesD1(organizationId, userId, categories) {
-  await pool.query('delete from org_division_category where organization_id = $1', [organizationId], { d1: true });
+function buildD1CategoryStatements(organizationId, userId, categories) {
+  const statements = [{
+    text: `delete from org_division_category
+            where organization_id = $1
+              and exists (select 1 from organization where uuid = $1)`,
+    params: [organizationId],
+  }];
   if (userId) {
-    await pool.query('delete from org_division_category where user_id = $1', [userId], { d1: true });
+    statements.push({
+      text: `delete from org_division_category
+              where user_id = $1
+                and exists (select 1 from organization where uuid = $2)`,
+      params: [userId, organizationId],
+    });
   }
 
-  if (!Array.isArray(categories) || categories.length === 0) return 0;
+  const normalizedCategories = normalizeCategories(categories);
+  for (let offset = 0; offset < normalizedCategories.length; offset += 16) {
+    const chunk = normalizedCategories.slice(offset, offset + 16);
+    const params = [];
+    const inserts = chunk.map((entry) => {
+      const base = params.length;
+      params.push(crypto.randomUUID(), entry.major, entry.minor, organizationId, userId || null);
+      return `select $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5},
+                     true, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+               where exists (select 1 from organization where uuid = $${base + 4})`;
+    });
+    statements.push({
+      text: `insert into org_division_category
+               (uuid, division, category, organization_id, user_id, is_active, created_ts)
+             ${inserts.join('\nUNION ALL\n')}`,
+      params,
+    });
+  }
 
-  const params = [];
-  const tuples = categories.map((entry) => {
-    const base = params.length;
-    params.push(
-      crypto.randomUUID(),
-      text(entry.major),
-      text(entry.minor),
+  return { statements, categoryCount: normalizedCategories.length };
+}
+
+function buildD1ProfileMutations({ organizationId, userId, patch, categories, actor }) {
+  const statements = [];
+  const { assignments, params, nextIndex } = buildProfileUpdate(patch);
+  if (assignments.length > 0) {
+    const actorIndex = nextIndex;
+    const uuidIndex = nextIndex + 1;
+    assignments.push(`last_modified_by = $${actorIndex}`, `last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+    params.push(actor || 'enterprise-workspace', organizationId);
+    statements.push({
+      text: `update organization set ${assignments.join(', ')} where uuid = $${uuidIndex}`,
+      params,
+    });
+  }
+
+  if (userId && patch.contactName !== undefined && patch.contactName !== null) {
+    const contactName = text(patch.contactName);
+    if (contactName !== '') {
+      statements.push({
+        text: `update "user" set full_name = $1, last_modified_by = $2,
+                last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+              where uuid = $3
+                and exists (select 1 from organization where uuid = $4)`,
+        params: [contactName, actor || 'enterprise-workspace', userId, organizationId],
+      });
+    }
+  }
+
+  let categoryCount = null;
+  if (categories !== undefined) {
+    const categoryWrite = buildD1CategoryStatements(organizationId, userId, categories);
+    statements.push(...categoryWrite.statements);
+    categoryCount = categoryWrite.categoryCount;
+  }
+
+  return { statements, fieldsUpdated: assignments.length, categoryCount };
+}
+
+function createD1AtomicityError(statementCount) {
+  const error = new Error('This buyer profile change needs an atomic Workers D1 batch; the D1 HTTP adapter cannot guarantee multi-statement atomicity.');
+  logger.error('Buyer profile update rejected because the D1 HTTP adapter cannot guarantee atomicity', {
+    error,
+    operation: 'updateBuyerProfile',
+    statementCount,
+  }, 'BUYER_PROFILE_D1');
+  return error;
+}
+
+async function updateProfileInD1({ organizationId, userId, patch, categories, actor }) {
+  const plan = buildD1ProfileMutations({ organizationId, userId, patch, categories, actor });
+  const d1Binding = getD1Binding();
+
+  if (!d1Binding) {
+    const existing = await pool.query('select uuid from organization where uuid = $1 limit 1', [organizationId], {
+      d1: true,
+    });
+    if (existing.rows.length === 0) return { updated: false, reason: 'ORG_NOT_FOUND' };
+    if (plan.statements.length === 1) {
+      await pool.query(plan.statements[0].text, plan.statements[0].params, { d1: true });
+      queryCache.invalidate('buyer_accounts');
+      return { updated: true, fieldsUpdated: plan.fieldsUpdated, categoryCount: plan.categoryCount };
+    }
+  }
+
+  const db = d1Binding || getD1HttpClient();
+  const startedAt = Date.now();
+  const statements = [
+    { text: 'select uuid from organization where uuid = $1 limit 1', params: [organizationId] },
+    ...plan.statements,
+  ];
+  try {
+    const results = await batchD1(db, statements);
+    const durationMs = Date.now() - startedAt;
+    if (!results[0]?.rows?.[0]) return { updated: false, reason: 'ORG_NOT_FOUND' };
+
+    pool.queryAuditor.auditQuery(statements.map(({ text }) => text).join('; '), [], durationMs, false);
+    logger.info('Atomic D1 buyer profile update completed', {
+      operation: 'updateBuyerProfile',
       organizationId,
-      userId || null
-    );
-    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, true, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
-  });
-
-  await pool.query(
-    `insert into org_division_category
-       (uuid, division, category, organization_id, user_id, is_active, created_ts)
-     values ${tuples.join(', ')}`,
-    params,
-    { d1: true }
-  );
-
-  return categories.length;
+      statementCount: statements.length,
+      categoryCount: plan.categoryCount,
+      durationMs,
+    }, 'BUYER_PROFILE_D1');
+    queryCache.invalidate('buyer_accounts');
+    return { updated: true, fieldsUpdated: plan.fieldsUpdated, categoryCount: plan.categoryCount };
+  } catch (err) {
+    logger.error('Atomic D1 buyer profile update failed', {
+      error: err,
+      operation: 'updateBuyerProfile',
+      organizationId,
+      statementCount: statements.length,
+      durationMs: Date.now() - startedAt,
+    }, 'BUYER_PROFILE_D1');
+    throw err;
+  }
 }
 
 /**
@@ -442,48 +594,10 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
     throw new Error('organizationId is required to update a buyer profile.');
   }
 
-  // D1 has no equivalent of pool.withTransaction — its batch() API only runs a
-  // pre-decided fixed list of statements, not "read, then conditionally decide
-  // what to write" (see insertBuyerAccount's identical comment in
-  // identityQueries.js for the fuller rationale). This runs the same steps
-  // sequentially instead, via plain pool.query(..., { d1: true }) calls.
+  // A D1 Worker batch executes the existence check and all profile/category
+  // writes atomically, so an insert error cannot leave the profile half saved.
   if (hasD1()) {
-    const existing = await pool.query('select uuid from organization where uuid = $1 limit 1', [organizationId], {
-      d1: true,
-    });
-    if (existing.rows.length === 0) {
-      return { updated: false, reason: 'ORG_NOT_FOUND' };
-    }
-
-    const { assignments, params, nextIndex } = buildProfileUpdate(patch);
-    if (assignments.length > 0) {
-      const actorIndex = nextIndex;
-      const uuidIndex = nextIndex + 1;
-      assignments.push(`last_modified_by = $${actorIndex}`, `last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
-      params.push(actor || 'enterprise-workspace', organizationId);
-      await pool.query(`update organization set ${assignments.join(', ')} where uuid = $${uuidIndex}`, params, {
-        d1: true,
-      });
-    }
-
-    if (userId && patch.contactName !== undefined && patch.contactName !== null) {
-      const contactName = text(patch.contactName);
-      if (contactName !== '') {
-        await pool.query(
-          `update "user" set full_name = $1, last_modified_by = $2, last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now') where uuid = $3`,
-          [contactName, actor || 'enterprise-workspace', userId],
-          { d1: true }
-        );
-      }
-    }
-
-    let categoryCount = null;
-    if (categories !== undefined) {
-      categoryCount = await replaceCategoriesD1(organizationId, userId, categories);
-    }
-
-    queryCache.invalidate('buyer_accounts');
-    return { updated: true, fieldsUpdated: assignments.length, categoryCount };
+    return updateProfileInD1({ organizationId, userId, patch, categories, actor });
   }
 
   return pool.withTransaction(async (client) => {
@@ -692,6 +806,7 @@ module.exports = {
   text,
   preferred,
   normalizeTurnover,
+  normalizeCategories,
   mapRowToProfile,
   loadCategories,
   findProfileByUserId,

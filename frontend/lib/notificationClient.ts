@@ -19,13 +19,13 @@ function authHeaders(): Record<string, string> {
 /**
  * The signed-in recipient's notifications, newest first, plus the unread count.
  *
- * Signed out, there is nothing to fetch — resolves to an empty list rather than
- * calling the API without a session. A transport or server failure also resolves
- * to an empty list with `success: false`, so the bell can quietly keep whatever
- * it last showed instead of flashing an error.
+ * Signed out, the API is not called. The result is an empty list with `success: false`
+ * and a session message, so no caller reads "no notifications" as a complete answer.
+ * A transport or server failure also resolves to an empty list with `success: false`,
+ * so the bell can quietly keep whatever it last showed instead of flashing an error.
  */
 export async function fetchNotifications(options: { limit?: number } = {}): Promise<NotificationListResult> {
-  if (!authClient.getToken()) return EMPTY;
+  if (!authClient.getToken()) return { ...EMPTY, success: false, error: UI_STRINGS.auth.sessionExpired };
 
   const url = options.limit ? `/api/notifications?limit=${options.limit}` : '/api/notifications';
   let res: Response;

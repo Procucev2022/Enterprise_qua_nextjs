@@ -9,6 +9,7 @@ import {
   deleteDocument,
 } from '@/lib/documentVaultClient';
 import type { DocumentVaultItem, DocumentVaultSummary } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/documentVaultClient', () => ({
   fetchDocuments: jest.fn(),
@@ -425,14 +426,17 @@ describe('DocumentVaultDashboard', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  test('displays error toast when initial load fails', async () => {
+  test('shows the load error in the table and dashes for the counts when the initial load fails', async () => {
     mockFetchDocuments.mockRejectedValueOnce(new Error('Network offline'));
 
     render(<DocumentVaultDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByRole('status')).toHaveTextContent('Network offline');
+      expect(screen.getByTestId('vault-load-error')).toHaveTextContent('Network offline');
     });
+    expect(screen.queryByTestId('vault-empty')).not.toBeInTheDocument();
+    expect(screen.getByTestId('stat-total-documents')).toHaveTextContent(UI_STRINGS.dataLoad.emptyCell);
+    expect(screen.getByTestId('stat-total-storage')).toHaveTextContent(UI_STRINGS.dataLoad.emptyCell);
   });
 
   test('handles empty file selection, automatic filename cleaning, and category fallback', async () => {
@@ -604,13 +608,15 @@ describe('DocumentVaultDashboard', () => {
     });
   });
 
-  test('displays fallback error message when initial load throws non-Error', async () => {
+  test('displays the network message when the initial load throws a non-Error value', async () => {
     mockFetchDocuments.mockRejectedValueOnce('Non error load failure');
 
     render(<DocumentVaultDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByRole('status')).toHaveTextContent('Failed to load document vault');
+      expect(screen.getByTestId('vault-load-error')).toHaveTextContent(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.documentVault })
+      );
     });
   });
 

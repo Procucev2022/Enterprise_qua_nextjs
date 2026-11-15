@@ -89,6 +89,23 @@ describe('storeService branch coverage — buyer accounts, vendors, RFQs, notifi
     });
   });
 
+  test('post-commit account cache updates can skip a duplicate database write', () => {
+    const buyer = storeService.addBuyerAccount({ organizationName: 'Committed Buyer', corporateEmail: 'committed@buyer.test' });
+    const vendor = storeService.addVendor({ name: 'Committed Vendor', email: 'committed@vendor.test' });
+    const persistBuyer = jest.spyOn(storeService, '_persistBuyerAccount').mockImplementation(() => {});
+    const persistVendor = jest.spyOn(storeService, '_persistVendor').mockImplementation(() => {});
+
+    const updatedBuyer = storeService.updateBuyerAccount(buyer.id, { creditBalance: 12 }, { persist: false });
+    const updatedVendor = storeService.updateVendor(vendor.id, { credits: 12 }, { persist: false });
+
+    expect(updatedBuyer.creditBalance).toBe(12);
+    expect(updatedVendor.credits).toBe(12);
+    expect(persistBuyer).not.toHaveBeenCalled();
+    expect(persistVendor).not.toHaveBeenCalled();
+    persistBuyer.mockRestore();
+    persistVendor.mockRestore();
+  });
+
   describe('getVendors in-memory scoping (no DB storage configured)', () => {
     test('returns all with the "all" scope and filters by buyer linkage otherwise', async () => {
       storeService.addVendor({ name: 'Pub', email: 'pub@v.com' });
@@ -155,22 +172,39 @@ describe('storeService branch coverage — buyer accounts, vendors, RFQs, notifi
       return storeService.createRFQ({ title: 'Inquiry RFQ', category: 'Pumps' }, buyer);
     }
 
-    test('addInquiryToRFQ returns null for an unknown RFQ', () => {
-      expect(storeService.addInquiryToRFQ('ghost', { message: 'hi' })).toBeNull();
+    test('addInquiryToRFQ returns null for an unknown RFQ', async () => {
+      await expect(storeService.addInquiryToRFQ('ghost', { message: 'hi' })).resolves.toBeNull();
     });
 
-    // NOTE: addInquiryToRFQ / replyToRFQInquiry currently call this.addFeedItem,
-    // which does not exist on StoreService (the real method is addAIFeedItem),
-    // so both throw after building the inquiry thread. These tests pin the
-    // CURRENT behaviour (the thread-building branches run, then the call throws)
-    // until the underlying bug is addressed — see the flag raised to the parent.
-    test('addInquiryToRFQ builds a new thread successfully', () => {
+    test('addInquiryToRFQ skips feed and audit side effects if its durable update finds no row', async () => {
       const rfq = makeRfq();
-      const res = storeService.addInquiryToRFQ(rfq.id, {
+      const aiFeedBefore = storeService.aiFeed.length;
+      const auditLogsBefore = storeService.auditLogs.length;
+      const durableUpdateSpy = jest.spyOn(storeService, 'updateRFQDurably').mockResolvedValue(null);
+      try {
+        await expect(storeService.addInquiryToRFQ(rfq.id, {
+          message: 'Please confirm the drawing revision.',
+          vendorName: 'Vendor Q',
+          vendorEmail: 'q@v.com',
+          vendorId: 'vq-1',
+        })).resolves.toBeNull();
+
+        expect(storeService.aiFeed).toHaveLength(aiFeedBefore);
+        expect(storeService.auditLogs).toHaveLength(auditLogsBefore);
+        expect(storeService.getRFQById(rfq.id).inquiries).toBeUndefined();
+      } finally {
+        durableUpdateSpy.mockRestore();
+      }
+    });
+
+    test('addInquiryToRFQ builds a new thread successfully', async () => {
+      const rfq = makeRfq();
+      const res = await storeService.addInquiryToRFQ(rfq.id, {
         message: 'Is stainless steel acceptable?',
         vendorName: 'Vendor Q',
         vendorEmail: 'q@v.com',
         vendorId: 'vq-1',
+        messageId: '<clarification-1@example.com>',
       });
       expect(res.inquiry).toBeDefined();
       // The thread was recorded on the RFQ.
@@ -179,17 +213,28 @@ describe('storeService branch coverage — buyer accounts, vendors, RFQs, notifi
       expect(stored.inquiries).toHaveLength(1);
 
       // A second message takes the existing-thread branch cleanly.
-      const res2 = storeService.addInquiryToRFQ(rfq.id, {
+      const res2 = await storeService.addInquiryToRFQ(rfq.id, {
         message: 'Following up on my earlier question.',
         vendorName: 'Vendor Q',
         vendorEmail: 'q@v.com',
         vendorId: 'vq-1',
+        messageId: '<clarification-2@example.com>',
       });
       expect(res2.inquiry.messages).toHaveLength(2);
+
+      const duplicate = await storeService.addInquiryToRFQ(rfq.id, {
+        message: 'Following up on my earlier question.',
+        vendorName: 'Vendor Q',
+        vendorEmail: 'q@v.com',
+        vendorId: 'vq-1',
+        messageId: '<clarification-2@example.com>',
+      });
+      expect(duplicate.duplicate).toBe(true);
+      expect(duplicate.inquiry.messages).toHaveLength(2);
     });
 
-    test('replyToRFQInquiry returns null for unknown RFQ or inquiry, and answers thread successfully', () => {
-      expect(storeService.replyToRFQInquiry('ghost', 'inq-x', { reply: 'hi' })).toBeNull();
+    test('replyToRFQInquiry returns null for unknown RFQ or inquiry, and answers thread successfully', async () => {
+      await expect(storeService.replyToRFQInquiry('ghost', 'inq-x', { reply: 'hi' })).resolves.toBeNull();
 
       const rfq = makeRfq();
       // Seed an inquiry directly on the RFQ.
@@ -205,9 +250,9 @@ describe('storeService branch coverage — buyer accounts, vendors, RFQs, notifi
       };
       storeService.updateRFQ(rfq.id, { inquiries: [inq] });
 
-      expect(storeService.replyToRFQInquiry(rfq.id, 'wrong-id', { reply: 'x' })).toBeNull();
+      await expect(storeService.replyToRFQInquiry(rfq.id, 'wrong-id', { reply: 'x' })).resolves.toBeNull();
       // The reply branch builds the thread successfully.
-      const res = storeService.replyToRFQInquiry(rfq.id, inq.id, { reply: 'Yes, that is fine.', repliedBy: 'Buyer Officer' });
+      const res = await storeService.replyToRFQInquiry(rfq.id, inq.id, { reply: 'Yes, that is fine.', repliedBy: 'Buyer Officer' });
       expect(res.inquiry.status).toBe('answered');
     });
   });

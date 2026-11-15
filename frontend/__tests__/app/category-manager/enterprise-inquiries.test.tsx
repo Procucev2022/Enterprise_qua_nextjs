@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import EnterpriseInquiriesConsole from '@/app/category-manager/enterprise-inquiries';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 
 jest.mock('@/lib/store');
 
@@ -47,6 +48,7 @@ describe('EnterpriseInquiriesConsole (Category Manager)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.spyOn(authClient, 'getToken').mockReturnValue('manager-token');
     mockUseApp.mockReturnValue({
       showToast: mockShowToast,
       currentUserSession: {
@@ -79,6 +81,7 @@ describe('EnterpriseInquiriesConsole (Category Manager)', () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     global.fetch = originalFetch;
   });
 
@@ -86,6 +89,13 @@ describe('EnterpriseInquiriesConsole (Category Manager)', () => {
     render(<EnterpriseInquiriesConsole />);
 
     expect(screen.getByText(/Refresh Leads|Refreshing/)).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/enterprise-inquiries?limit=100',
+        expect.objectContaining({ headers: { Authorization: 'Bearer manager-token' } })
+      );
+    });
 
     await waitFor(() => {
       expect(screen.getByText('Larsen & Toubro Heavy Engineering')).toBeInTheDocument();

@@ -162,7 +162,15 @@ describe('Unlimited Access Buyer & Vendor Accounts', () => {
             deliveryLocation: 'Mumbai Plant, Maharashtra',
             deliveryPincode: '400001',
             targetDeliveryDate: '2026-12-31',
-            lineItems: [{ itemName: 'Pump A', quantity: 10, unit: 'Nos', targetDate: '2026-12-31' }],
+            lineItems: [{
+              itemName: 'Pump A',
+              technicalSpecs: 'Centrifugal, 5 HP, cast iron casing',
+              quantity: 10,
+              unit: 'Nos',
+              targetDate: '2026-12-31',
+              majorCategory: 'Engineering Spares - Mechanical',
+              minorCategory: 'Pumps & Accessories',
+            }],
           });
 
         expect([200, 201]).toContain(response.status);

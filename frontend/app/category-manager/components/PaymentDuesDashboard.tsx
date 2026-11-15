@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   CreditCard,
   Building2,
@@ -83,20 +83,19 @@ export interface PaymentDuesDashboardProps {
   onSummaryChange?: (summary: PaymentDuesSummary) => void;
 }
 
+// Shown wherever a value is missing from the record or has not loaded. Never a substitute value.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
+
 export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDashboardProps = {}) {
   const strings = UI_STRINGS.actionCenter.paymentDues;
 
   // Account Data & Summary
   const [accounts, setAccounts] = useState<PaymentDuesAccount[]>([]);
   const [totalAccounts, setTotalAccounts] = useState<number>(0);
-  const [summary, setSummary] = useState<PaymentDuesSummary>({
-    totalLowCreditAccounts: 0,
-    totalBuyers: 0,
-    totalSellers: 0,
-    zeroCredits: 0,
-    oneToTwoCredits: 0,
-    acknowledgementPending: 0,
-  });
+  // Null until the summary loads, and again when a load fails, so no count reads as a real zero.
+  const [summary, setSummary] = useState<PaymentDuesSummary | null>(null);
+  // Set when a WhatsApp send did not reach a provider. The user opens the link with a button.
+  const [whatsAppDirectLink, setWhatsAppDirectLink] = useState<{ link: string; reason: string } | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -151,6 +150,8 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
     notes: '',
   });
   const [historyList, setHistoryList] = useState<PaymentDuesCommunication[]>([]);
+  // Set when the communication history could not be loaded. The modal shows it instead of "no history".
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [isSubmittingAction, setIsSubmittingAction] = useState<boolean>(false);
   const [summaryModalState, setSummaryModalState] = useState<{
     isOpen: boolean;
@@ -164,9 +165,25 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
     records: [],
   });
 
+  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
     setToastMessage({ text, type });
-    setTimeout(() => setToastMessage(null), 3500);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 3500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
   }, []);
 
   // Load saved column preferences from localStorage
@@ -225,20 +242,24 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
       };
       const res = await fetchPaymentDues(filters);
       if (res.error) {
+        setSummary(null);
         setLoadError(res.error);
         showToast('Failed to load low-credit accounts from database', 'error');
       } else {
         setAccounts(res.accounts);
         setTotalAccounts(res.total);
         setSummary(res.summary);
-        onSummaryChange?.(res.summary);
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('qua_payment_dues_updated', { detail: res.summary }));
+        if (res.summary) {
+          onSummaryChange?.(res.summary);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('qua_payment_dues_updated', { detail: res.summary }));
+          }
         }
         setLoadError(null);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load low-credit accounts from database';
+      setSummary(null);
       setLoadError(msg);
       showToast('Failed to load low-credit accounts from database', 'error');
     } finally {
@@ -322,7 +343,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const handleOpenEmailModal = (account: PaymentDuesAccount) => {
     setActiveActionAccount(account);
     const defaultSubject = 'Low Credit Balance Notification – QUA AI';
-    const defaultMessage = `Dear ${account.contactPerson || 'Valued Partner'},\n\nThis is to inform you that your QUA AI account currently has only ${account.availableCredits} credits remaining.\n\nPlease review your credit balance and take the necessary action to continue using the platform without interruption.\n\nKindly acknowledge receipt of this notification.\n\nRegards,\nQUA AI Team\nProcucev Enterprises Solutions Pvt Ltd.`;
+    const defaultMessage = `Dear ${account.contactPerson || 'Sir/Madam'},\n\nThis is to inform you that your QUA AI account currently has only ${account.availableCredits ?? EMPTY_VALUE} credits remaining.\n\nPlease review your credit balance and take the necessary action to continue using the platform without interruption.\n\nKindly acknowledge receipt of this notification.\n\nRegards,\nQUA AI Team\nProcucev Enterprises Solutions Pvt Ltd.`;
     setEmailForm({
       recipient: account.email && account.email !== '–' ? account.email : '',
       subject: defaultSubject,
@@ -346,7 +367,8 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
   const handleOpenWhatsAppModal = (account: PaymentDuesAccount) => {
     setActiveActionAccount(account);
-    const defaultMessage = `Dear ${account.contactPerson || 'Valued Partner'},\n\nThis is to inform you that your QUA AI account currently has only ${account.availableCredits} credits remaining.\n\nPlease review your credit balance and take the necessary action to continue using the platform without interruption.\n\nKindly acknowledge receipt of this notification.\n\nRegards,\nQUA AI Team\nProcucev Enterprises Solutions Pvt Ltd.`;
+    setWhatsAppDirectLink(null);
+    const defaultMessage = `Dear ${account.contactPerson || 'Sir/Madam'},\n\nThis is to inform you that your QUA AI account currently has only ${account.availableCredits ?? EMPTY_VALUE} credits remaining.\n\nPlease review your credit balance and take the necessary action to continue using the platform without interruption.\n\nKindly acknowledge receipt of this notification.\n\nRegards,\nQUA AI Team\nProcucev Enterprises Solutions Pvt Ltd.`;
     setWhatsAppForm({
       phone: account.phoneNumber && account.phoneNumber !== '–' ? account.phoneNumber : '',
       message: defaultMessage,
@@ -367,11 +389,16 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const handleOpenHistoryModal = async (account: PaymentDuesAccount) => {
     setActiveActionAccount(account);
     setIsHistoryModalOpen(true);
+    setHistoryError(null);
     try {
-      const history = await fetchPaymentDuesHistory(account.accountId);
-      setHistoryList(history);
+      const result = await fetchPaymentDuesHistory(account.accountId);
+      setHistoryList(result.history);
+      setHistoryError(result.error ?? null);
     } catch {
       setHistoryList([]);
+      setHistoryError(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.paymentDuesHistory })
+      );
     }
   };
 
@@ -431,12 +458,13 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
     if (res.success) {
       showToast('WhatsApp notification initiated and audit log updated successfully');
       setIsWhatsAppModalOpen(false);
-      if (res.directLink) {
-        window.open(res.directLink, '_blank', 'noopener,noreferrer');
-      }
+      setWhatsAppDirectLink(null);
       loadData();
     } else {
-      showToast(res.error || 'Failed to initiate WhatsApp notification', 'error');
+      const reason = res.error || strings.modals.whatsAppSendFailed;
+      // A link_only result did not reach a provider. The link is shown as a button the user presses. It is never opened automatically.
+      setWhatsAppDirectLink(res.status === 'link_only' && res.directLink ? { link: res.directLink, reason } : null);
+      showToast(reason, 'error');
     }
   };
 
@@ -488,7 +516,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   };
 
   // Acknowledgement Badge Component
-  const renderAckBadge = (status: PaymentDuesAcknowledgementStatus) => {
+  const renderAckBadge = useCallback((status: PaymentDuesAcknowledgementStatus) => {
     switch (status) {
       case 'Acknowledged':
         return (
@@ -509,10 +537,15 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </span>
         );
       case 'Notification Sent':
-      case 'Delivery Pending':
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
             <Send size={12} className="text-blue-600" /> Sent
+          </span>
+        );
+      case 'Delivery Pending':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+            <Clock size={12} className="text-amber-600" /> {strings.statuses.deliveryPending}
           </span>
         );
       case 'Failed':
@@ -528,7 +561,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </span>
         );
     }
-  };
+  }, [strings]);
 
   // Render Cell content by key
   const renderCellContent = (account: PaymentDuesAccount, key: PaymentDuesColumnKey) => {
@@ -827,7 +860,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
       label: strings.columns.acknowledgementStatus,
       render: (a) => renderAckBadge(a.acknowledgementStatus),
     },
-  ], [strings]);
+  ], [strings, renderAckBadge]);
 
   const totalPages = Math.ceil(totalAccounts / pageSize) || 1;
 
@@ -866,7 +899,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </div>
           <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
             <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
-              {summary.totalLowCreditAccounts}
+              {summary?.totalLowCreditAccounts ?? EMPTY_VALUE}
             </span>
             <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
               ≤ 2 credits
@@ -890,7 +923,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </div>
           <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
             <span className="text-base sm:text-lg font-bold text-sky-700 dark:text-sky-300 leading-none">
-              {summary.totalBuyers}
+              {summary?.totalBuyers ?? EMPTY_VALUE}
             </span>
             <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
               Top-up needed
@@ -914,7 +947,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </div>
           <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
             <span className="text-base sm:text-lg font-bold text-purple-700 dark:text-purple-300 leading-none">
-              {summary.totalSellers}
+              {summary?.totalSellers ?? EMPTY_VALUE}
             </span>
             <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
               Quote credits
@@ -938,7 +971,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </div>
           <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
             <span className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none">
-              {summary.zeroCredits}
+              {summary?.zeroCredits ?? EMPTY_VALUE}
             </span>
             <span className="text-[10px] text-rose-500 dark:text-rose-400 whitespace-nowrap">
               Exhausted
@@ -962,7 +995,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </div>
           <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
             <span className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none">
-              {summary.oneToTwoCredits}
+              {summary?.oneToTwoCredits ?? EMPTY_VALUE}
             </span>
             <span className="text-[10px] text-amber-600 dark:text-amber-400 whitespace-nowrap">
               Low balance
@@ -986,7 +1019,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </div>
           <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
             <span className="text-base sm:text-lg font-bold text-orange-600 dark:text-orange-400 leading-none">
-              {summary.acknowledgementPending}
+              {summary?.acknowledgementPending ?? EMPTY_VALUE}
             </span>
             <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
               Awaiting client
@@ -996,10 +1029,10 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
       </div>
 
       {/* TOOLBAR: SEARCH, ACCOUNT TYPE, CREDIT FILTER, ACKNOWLEDGEMENT STATUS, REFRESH, EXPORT CSV & GEAR ICON IN ONE HORIZONTAL ROW */}
-      <div className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
+      <div className="w-full min-w-0 max-w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-2 shadow-sm flex flex-row items-center gap-1.5 sm:gap-2 box-border">
         {/* Search input with maximum available width */}
         <div className="relative flex-1 min-w-[180px]">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={search}
@@ -1008,7 +1041,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
               setPage(1);
             }}
             placeholder={strings.toolbar.searchPlaceholder}
-            className="w-full pl-8 pr-7 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="w-full has-leading-icon has-trailing-icon pr-7 py-1.5 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
           {search && (
             <button
@@ -1016,7 +1049,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
                 setSearch('');
                 setPage(1);
               }}
-              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               title="Clear search"
               aria-label="Clear search"
             >
@@ -1364,8 +1397,14 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
                 <option value={100}>100</option>
               </select>
               <span className="ml-2">
-                Showing {Math.min((page - 1) * pageSize + 1, totalAccounts)} to{' '}
-                {Math.min(page * pageSize, totalAccounts)} of {totalAccounts} accounts
+                {loadError ? (
+                  UI_STRINGS.dataLoad.emptyCell
+                ) : (
+                  <>
+                    Showing {Math.min((page - 1) * pageSize + 1, totalAccounts)} to{' '}
+                    {Math.min(page * pageSize, totalAccounts)} of {totalAccounts} accounts
+                  </>
+                )}
               </span>
             </div>
 
@@ -1647,6 +1686,19 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
                 />
               </div>
 
+              {whatsAppDirectLink && (
+                <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 space-y-2">
+                  <p>{whatsAppDirectLink.reason}</p>
+                  <button
+                    type="button"
+                    onClick={() => window.open(whatsAppDirectLink.link, '_blank', 'noopener,noreferrer')}
+                    className="px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm"
+                  >
+                    Open WhatsApp link to send manually
+                  </button>
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
@@ -1783,7 +1835,11 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
             </div>
 
             <div className="p-5 overflow-y-auto space-y-3.5 flex-1">
-              {historyList.length === 0 ? (
+              {historyError ? (
+                <div role="alert" className="text-center py-12 text-rose-700 dark:text-rose-300 text-xs font-medium">
+                  {historyError}
+                </div>
+              ) : historyList.length === 0 ? (
                 <div className="text-center py-12 text-slate-400 text-xs">
                   {strings.modals.noHistoryFound}
                 </div>

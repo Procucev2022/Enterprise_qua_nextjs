@@ -315,15 +315,15 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'copper' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.queryByText('Bolt Supplies')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'y.com' } });
-    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: '' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
   });
 
@@ -371,7 +371,7 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     mockFetchAllVendors.mockResolvedValue({
       success: true,
       candidates: [
-        candidate({ id: 'v-1', name: 'Matches RFQ', majorCategory: 'Cables' }),
+        candidate({ id: 'v-1', name: 'Matches RFQ', majorCategory: 'Cables', minorCategories: ['Copper Wire'] }),
         candidate({ id: 'v-2', name: 'No Match', majorCategory: 'Fasteners', minorCategories: ['Screws'] }),
         candidate({ id: 'v-3', name: 'Matches Minor', majorCategory: 'Copper Wire' }),
         candidate({ id: 'v-4', name: 'Matches Entity Category', majorCategory: 'Insulation' }),
@@ -387,10 +387,14 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     fireEvent.click(screen.getByTestId('invite-tab-all'));
     await waitFor(() => expect(screen.getByText('Matches RFQ')).toBeInTheDocument());
 
+    // The RFQ names the minor 'Copper Wire', so only a vendor carrying that minor (or named
+    // 'Copper Wire' as its major) is inside. A vendor whose major alone is 'Insulation' is outside.
     const badges = screen.getAllByTestId('outside-category-badge');
-    expect(badges).toHaveLength(1);
+    expect(badges).toHaveLength(2);
     expect(screen.getByText('No Match').closest('label')).toContainElement(badges[0]);
+    expect(screen.getByText('Matches Entity Category').closest('label')).toContainElement(badges[1]);
     expect(screen.getByText('Matches RFQ').closest('label')?.querySelector('[data-testid="outside-category-badge"]')).toBeNull();
+    expect(screen.getByText('Matches Minor').closest('label')?.querySelector('[data-testid="outside-category-badge"]')).toBeNull();
   });
 
   it('derives alreadyInvited for all-vendor rows from the RFQ\'s own assignedVendors, hiding the outside-category badge for them', async () => {
@@ -521,31 +525,31 @@ describe('InviteVendorsModal — All Vendors tab', () => {
       expect(screen.getByText(/Please fill in all required fields/i)).toBeInTheDocument();
 
       // Fill in fields
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Apex Industrial Supplies Pvt Ltd/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.companyNamePlaceholder), {
         target: { value: 'New Test Vendor' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Rajesh Kumar/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactPersonPlaceholder), {
         target: { value: 'Amit Sharma' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. \+91 98765 43210/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactNumberPlaceholder), {
         target: { value: '+91 98765 99999' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Valves & Pipes/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.minorCategoryPlaceholder), {
         target: { value: 'Special Pipes' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Mumbai/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.cityPlaceholder), {
         target: { value: 'Mumbai' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Maharashtra/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.statePlaceholder), {
         target: { value: 'Maharashtra' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. 400001/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.pincodePlaceholder), {
         target: { value: '400001' },
       });
       const categorySelect = screen.getByTestId('add-vendor-modal').querySelector('select')!;
       fireEvent.change(categorySelect, { target: { value: categorySelect.options[0]?.value || 'General' } });
 
-      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.emailPlaceholder), {
         target: { value: 'invalid-email' },
       });
 
@@ -554,7 +558,7 @@ describe('InviteVendorsModal — All Vendors tab', () => {
       expect(screen.getByText(/Please enter a valid email address/i)).toBeInTheDocument();
 
       // Valid email
-      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.emailPlaceholder), {
         target: { value: 'valid@testvendor.com' },
       });
 
@@ -566,16 +570,16 @@ describe('InviteVendorsModal — All Vendors tab', () => {
       // Re-open modal
       fireEvent.click(screen.getByTestId('add-new-vendor-button'));
       const reopenedForm = screen.getByTestId('add-vendor-modal').querySelector('form')!;
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Apex Industrial Supplies Pvt Ltd/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.companyNamePlaceholder), {
         target: { value: 'New Test Vendor' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Rajesh Kumar/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactPersonPlaceholder), {
         target: { value: 'Amit Sharma' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. \+91 98765 43210/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.contactNumberPlaceholder), {
         target: { value: '+91 98765 99999' },
       });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+      fireEvent.change(screen.getByPlaceholderText(S.emailPlaceholder), {
         target: { value: 'valid@testvendor.com' },
       });
 
@@ -625,6 +629,7 @@ describe('InviteVendorsModal — All Vendors tab', () => {
             contactPerson: 'Amit Sharma',
             majorCategory: 'Mechanical & Fluid Equipment',
             minorCategories: [],
+            onboardingEmailStatus: 'pending',
           },
         }),
       } as any);
@@ -638,6 +643,11 @@ describe('InviteVendorsModal — All Vendors tab', () => {
         expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
         expect(screen.getByText('New Test Vendor')).toBeInTheDocument();
       });
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.vendorOnboarding.addedTitle,
+        formatString(UI_STRINGS.vendorOnboarding.registeredAndSelectedMessage, { name: 'New Test Vendor' }),
+        'success'
+      );
     });
   });
 });

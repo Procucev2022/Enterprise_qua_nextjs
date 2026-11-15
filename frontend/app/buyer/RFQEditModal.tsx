@@ -26,6 +26,7 @@ import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, res
 import { uploadRFQAttachment, classifyLineItems } from '@/lib/rfqClient';
 import { isPastDateString } from '@/lib/manualRfqModel';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import type {
   ExtractedEntity,
   RFQAttachment,
@@ -810,7 +811,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                   onClick={handleAutoCategorizeAll}
                   disabled={isCategorizing || form.lineItems.length === 0}
                   className="btn btn-secondary btn-xs text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
-                  title="Auto-identify and assign major/minor categories for all items"
+                  title={EDIT.autoCategorizeTitle}
                 >
                   {isCategorizing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
                   {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
@@ -890,22 +891,14 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                           </select>
                         </td>
                         <td className="px-2 py-2 align-top">
-                          <select
-                            aria-label={EDIT.colMinor}
+                          <CategorySearchInput
+                            label={EDIT.colMinor}
                             value={row.minorCategory}
-                            onChange={(e) => patchRow(row.id, { minorCategory: e.target.value })}
+                            options={withStoredValue(minorsFor(row.majorCategory), row.minorCategory)}
+                            onChange={(minor) => patchRow(row.id, { minorCategory: minor })}
                             disabled={row.majorCategory === ''}
-                            className="min-w-[10rem] font-semibold disabled:opacity-50"
-                          >
-                            <option value="">
-                              {row.majorCategory === '' ? EDIT.selectMajorFirst : ''}
-                            </option>
-                            {withStoredValue(minorsFor(row.majorCategory), row.minorCategory).map((minor) => (
-                              <option key={minor} value={minor}>
-                                {minor}
-                              </option>
-                            ))}
-                          </select>
+                            placeholder={row.majorCategory === '' ? EDIT.selectMajorFirst : UI_STRINGS.categorySearch.searchPlaceholder}
+                          />
                         </td>
                         <td className="px-2 py-2 align-top">
                           <input

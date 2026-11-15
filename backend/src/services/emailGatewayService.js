@@ -23,12 +23,14 @@
 // ==============================================================================
 
 const emailIngestionService = require('./emailIngestionService');
+const crypto = require('crypto');
 const geminiService = require('./geminiService');
 const rfqIngestionService = require('./rfqIngestionService');
 const storeService = require('./storeService');
 const rfqAttachmentService = require('./rfqAttachmentService');
 const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
+const cryptoService = require('./cryptoService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const identityQueries = require('../db/identityQueries');
@@ -40,6 +42,7 @@ const {
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_DELIVERY_KIND,
   EMAIL_GATEWAY_STATE,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
@@ -48,6 +51,8 @@ const {
   VENDOR_QUOTE_SUPPORT_CC,
   RFQ_MODES,
   RFQ_MODE_MAP,
+  EMAIL_REGEX,
+  BUYER_FREE_TRIAL_RFQ_CREDITS,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -111,7 +116,7 @@ const runtime = {
   ingestedThisRun: 0,
 };
 
-/** Live state for dedicated vendor quotation mailbox watcher (srinu20252026@gmail.com). */
+/** Live state for the dedicated vendor quotation mailbox watcher. */
 const vendorRuntime = {
   pollTimer: null,
   isPolling: false,
@@ -229,7 +234,7 @@ function resolveConfig(env = process.env) {
     // client@procucev.com can be collected by a login of intake@procucev.com.
     // Conflating them is what put a personal Gmail login in front of buyers as
     // though it were the address to forward requisitions to.
-    address: (env.EMAIL_GATEWAY_ADDRESS || env.EMAIL_GATEWAY_USER || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS).trim(),
+    address: (env.EMAIL_GATEWAY_ADDRESS || env.EMAIL_GATEWAY_USER || '').trim(),
     mailbox: (env.EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(
       Number(env.EMAIL_GATEWAY_POLL_MS || EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS),
@@ -246,7 +251,7 @@ function resolveConfig(env = process.env) {
 }
 
 /**
- * Resolve vendor gateway configuration from the environment (srinu20252026@gmail.com).
+ * Resolve vendor gateway configuration from the environment.
  */
 function resolveVendorConfig(env = process.env) {
   const splitList = (value) =>
@@ -266,13 +271,11 @@ function resolveVendorConfig(env = process.env) {
     // (VENDOR_GMAIL_* in mailerService).
     user: (
       env.VENDOR_EMAIL_GATEWAY_USER ||
-      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
       ''
     ).trim(),
     address: (
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
-      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
       ''
     ).trim(),
     mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
@@ -404,9 +407,6 @@ function isGatewayOrSystemEmail(email, config = {}) {
     process.env.VENDOR_SMTP_FROM,
     process.env.VENDOR_GMAIL_SENDER_EMAIL,
     process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL,
-    'srinu20252026@gmail.com',
-    'rfqprocucev@gmail.com',
-    'rfq@procucev.com',
   ]
     .filter(Boolean)
     .map((a) => {
@@ -898,7 +898,7 @@ async function getOrCreateBuyerAccount(email) {
       userResult = await identityQueries.insertBuyerAccount({
         email: normEmail,
         password: tempPassword,
-        phone: '9999999999',
+        phone: null,
         fullName: displayName,
         organizationName: orgName,
         resetPasswordRequired: true,
@@ -906,34 +906,81 @@ async function getOrCreateBuyerAccount(email) {
         createdBy: 'email-gateway-autonomous',
       });
     } catch (dbErr) {
-      logger.error('Failed to create identity user for unregistered buyer', dbErr, 'EMAIL_GATEWAY');
+      logger.error('Failed to create identity user for unregistered buyer', {
+        error: dbErr,
+        email: normEmail,
+        operation: 'email-gateway-buyer-onboarding',
+        retryable: pool.hasStorage(),
+      }, 'EMAIL_GATEWAY');
+      if (pool.hasStorage()) {
+        throw new RetryableIngestionError(
+          'Buyer identity storage is unavailable; the incoming request will be retried.',
+          { message: { fromAddress: normEmail } }
+        );
+      }
+    }
+
+    if (pool.hasStorage() && (!userResult || !userResult.user || !userResult.user.id)) {
+      logger.error('Buyer identity creation returned no durable user record', {
+        email: normEmail,
+        operation: 'email-gateway-buyer-onboarding',
+        retryable: true,
+      }, 'EMAIL_GATEWAY');
+      throw new RetryableIngestionError(
+        'Buyer identity storage returned no user record; the incoming request will be retried.',
+        { message: { fromAddress: normEmail } }
+      );
+    }
+
+    if (userResult && userResult.created === false && userResult.user && userResult.user.role === 'vendor') {
+      logger.warn('Rejected vendor identity as an email-gateway buyer', {
+        email: normEmail,
+        userId: userResult.user.id,
+        actualRole: userResult.user.role,
+      }, 'EMAIL_GATEWAY');
+      throw new Error('This sender address belongs to a vendor account and cannot create buyer RFQs.');
     }
 
     const userId = userResult?.user?.id || `buyer-user-${Date.now()}`;
     const orgId = userResult?.user?.orgId || `org-${Date.now()}`;
 
-    // Create in storeService (buyer_accounts)
-    const newBuyerAccount = storeService.addBuyerAccount({
-      id: userId,
-      organizationName: orgName,
-      brandName: displayName,
-      organizationType: 'Private Limited',
-      corporateEmail: normEmail,
-      contactPerson: displayName,
-      contactDesignation: 'Procurement Specialist',
-      mobileNumber: '+919999999999',
-      organizationId: orgId,
-      sourcingMode: 'mode_0',
-      subscriptionPlan: 'free_trial',
-      remainingFreeRFQs: 5,
-      status: 'PENDING_ONBOARDING',
-      onboardingRequired: true,
-      profileVerified: false,
-      emailVerified: false,
-      phoneVerified: false,
-      tempPasswordRequired: true,
-      isAutoRegistered: true,
-    });
+    // Create in buyer_accounts before RFQ processing. When configured storage
+    // is unavailable, preserve the email for retry and do not invent an
+    // isolate-only buyer identity that no future request can resolve.
+    let newBuyerAccount;
+    try {
+      newBuyerAccount = await storeService.addBuyerAccountDurably({
+        id: userId,
+        organizationName: orgName,
+        brandName: displayName,
+        corporateEmail: normEmail,
+        contactPerson: displayName,
+        mobileNumber: null,
+        organizationId: orgId,
+        sourcingMode: 'mode_0',
+        subscriptionPlan: 'free_trial',
+        remainingFreeRFQs: BUYER_FREE_TRIAL_RFQ_CREDITS,
+        status: 'PENDING_ONBOARDING',
+        onboardingRequired: true,
+        profileVerified: false,
+        emailVerified: false,
+        phoneVerified: false,
+        tempPasswordRequired: true,
+        isAutoRegistered: true,
+      });
+    } catch (accountError) {
+      logger.error('Buyer identity exists but its buyer-account mirror could not be persisted', {
+        error: accountError,
+        email: normEmail,
+        userId,
+        operation: 'email-gateway-buyer-onboarding',
+        retryable: true,
+      }, 'EMAIL_GATEWAY');
+      throw new RetryableIngestionError(
+        'Buyer account storage is unavailable; the incoming request will be retried.',
+        { message: { fromAddress: normEmail } }
+      );
+    }
 
     logger.info(
       `Autonomous buyer account created for unregistered sender ${normEmail}`,
@@ -1210,8 +1257,6 @@ function isOutgoingSystemMessage(message, config = {}) {
     process.env.VENDOR_SMTP_FROM,
     process.env.VENDOR_GMAIL_SENDER_EMAIL,
     process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL,
-    'srinu20252026@gmail.com',
-    'rfqprocucev@gmail.com',
   ]
     .map(normalizeAddress)
     .filter(Boolean);
@@ -1390,7 +1435,12 @@ async function shouldSendAutoReply(message, kind, { rfqNumber = null, config = {
  * Send one automatic reply if the guards allow it; never throws. Returns true
  * when the reply was handed to the mailer.
  */
-async function sendAutoReply(message, kind, send, { rfqNumber = null, config = {}, failureLog } = {}) {
+async function sendAutoReply(message, kind, send, {
+  rfqNumber = null,
+  config = {},
+  failureLog,
+  retryDelivery = null,
+} = {}) {
   const decision = await emailGateway.shouldSendAutoReply(message, kind, { rfqNumber, config });
   if (!decision.allowed) {
     logger.info(
@@ -1401,18 +1451,60 @@ async function sendAutoReply(message, kind, send, { rfqNumber = null, config = {
     return false;
   }
   try {
-    await send();
+    ensureMailDeliveryAccepted(await send(), `${kind} auto-reply`);
     return true;
   } catch (mailErr) {
     logger.error(failureLog || `Failed to send ${kind} auto-reply`, mailErr, 'EMAIL_GATEWAY');
+    if (retryDelivery && retryDelivery.deliveryKind && retryDelivery.payload) {
+      await queueFailedEmailGatewayDelivery(message, retryDelivery.deliveryKind, retryDelivery.payload);
+    }
     return false;
   }
+}
+
+/** Some mailer routes report provider refusal as `{ sent: false }` instead of throwing. */
+function ensureMailDeliveryAccepted(delivery, description) {
+  const refused = delivery === false
+    || (delivery && typeof delivery === 'object' && (delivery.sent === false || delivery.success === false));
+  if (refused) {
+    const providerReason = delivery && typeof delivery.reason === 'string' ? delivery.reason : null;
+    const providerStatus = delivery && typeof delivery.status === 'string' ? delivery.status : 'failed';
+    const error = new Error(`${description} was not accepted by a mail provider (${providerStatus})${providerReason ? `: ${providerReason}` : ''}`);
+    error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+    error.deliveryStatus = providerStatus;
+    error.providerReason = providerReason;
+    throw error;
+  }
+  return delivery;
 }
 
 // A pending acknowledgement older than this is dropped: by then the buyer has
 // long since seen the RFQ (or asked about it), and a late "Great news!" confuses.
 const ACK_RETRY_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const ACK_RETRIES_PER_POLL = 5;
+const ACK_CREDENTIAL_AAD_PREFIX = 'email-gateway-ack:';
+
+function hasAcknowledgementEncryptionKey() {
+  return Boolean(process.env.AES_ENCRYPTION_KEY || process.env.AES_SECRET_KEY);
+}
+
+function encryptAcknowledgementPassword(password, messageId) {
+  if (!hasAcknowledgementEncryptionKey()) {
+    throw new Error('AES_ENCRYPTION_KEY is required to persist onboarding credentials.');
+  }
+  return cryptoService.encrypt(password, {
+    additionalData: `${ACK_CREDENTIAL_AAD_PREFIX}${messageId}`,
+  }).encoded;
+}
+
+function decryptAcknowledgementPassword(encryptedPassword, messageId) {
+  if (!hasAcknowledgementEncryptionKey()) {
+    throw new Error('AES_ENCRYPTION_KEY is required to decrypt onboarding credentials.');
+  }
+  return cryptoService.decrypt(encryptedPassword, {
+    additionalData: `${ACK_CREDENTIAL_AAD_PREFIX}${messageId}`,
+  });
+}
 
 /**
  * Keep an acknowledgement that could not be sent, so a later poll retries it.
@@ -1420,18 +1512,132 @@ const ACK_RETRIES_PER_POLL = 5;
  * while mail was down never heard back at all.
  */
 async function queueAcknowledgement(rfqKey, ack) {
-  if (!rfqKey) return;
+  if (!rfqKey) return false;
   const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
-  if (ack.tempPassword) detailObj.tempPassword = ack.tempPassword;
+  if (ack.deliveryKind) detailObj.deliveryKind = ack.deliveryKind;
+  [
+    'reason',
+    'originalSubject',
+    'count',
+    'max',
+    'contactPhone',
+    'vendorName',
+    'missingFields',
+    'cc',
+    'gatewayAddress',
+    'quoteId',
+    'inquiryId',
+    'inquiryMessageId',
+    'buyerEmail',
+    'recipientName',
+    'quotesCount',
+  ].forEach((key) => {
+    if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
+  });
+  if (
+    ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT
+    && ack.itemCount !== undefined
+    && ack.itemCount !== null
+  ) {
+    detailObj.itemCount = ack.itemCount;
+  }
+  const messageId = `${rfqKey}#ack`;
+  let status = INGESTION_OUTCOME.ACK_PENDING;
+  if (ack.tempPassword) {
+    try {
+      detailObj.encryptedTempPassword = encryptAcknowledgementPassword(ack.tempPassword, messageId);
+    } catch (error) {
+      detailObj.credentialDeliveryUnavailable = true;
+      if (ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS) {
+        status = INGESTION_OUTCOME.ACK_ABANDONED;
+      }
+      logger.error('Buyer onboarding credentials were omitted from the retry ledger', {
+        error,
+        rfqKey,
+        credentialOmitted: true,
+      }, 'EMAIL_GATEWAY');
+    }
+  }
   if (ack.deliveryDate) detailObj.deliveryDate = ack.deliveryDate;
-  await emailGatewayQueries.recordProcessed({
-    messageId: `${rfqKey}#ack`,
-    status: INGESTION_OUTCOME.ACK_PENDING,
+  const recorded = await emailGatewayQueries.recordProcessed({
+    messageId,
+    status,
     detail: JSON.stringify(detailObj),
     fromAddress: ack.to,
-    subject: ack.rfqTitle,
-    rfqNumber: ack.rfqNumber,
+    subject: ack.originalSubject || ack.rfqTitle || ack.subject,
+    rfqId: ack.rfqId || null,
+    rfqNumber: ack.rfqNumber || null,
   });
+  if (!recorded) {
+    logger.error(ack.deliveryKind ? 'Failed email delivery could not be persisted in the gateway retry ledger' : 'Pending RFQ acknowledgement could not be persisted', {
+      messageId,
+      credentialIncluded: Boolean(detailObj.encryptedTempPassword),
+      deliveryKind: ack.deliveryKind || null,
+      status,
+    }, 'EMAIL_GATEWAY');
+  } else if (!pool.hasStorage()) {
+    logger.warn('Pending email delivery is tracked only in local memory without configured storage', {
+      messageId,
+      deliveryKind: ack.deliveryKind || null,
+    }, 'EMAIL_GATEWAY');
+  }
+  return recorded && status === INGESTION_OUTCOME.ACK_PENDING;
+}
+
+/** Persist and claim an acknowledgement before its first provider dispatch. */
+async function dispatchInitialAcknowledgement(rfqKey, ack, send, label, failureMessage) {
+  const queued = await emailGateway.queueAcknowledgement(rfqKey, ack);
+  let claimToken = null;
+  if (queued) {
+    claimToken = await emailGatewayQueries.claimPendingAcknowledgement(`${rfqKey}#ack`);
+    if (!claimToken) {
+      logger.warn('Initial email acknowledgement was left pending because another worker owns its dispatch claim', {
+        messageId: `${rfqKey}#ack`,
+        rfqNumber: ack.rfqNumber || null,
+        deliveryKind: ack.deliveryKind || null,
+      }, 'EMAIL_GATEWAY');
+      return;
+    }
+  }
+
+  try {
+    ensureMailDeliveryAccepted(await send(), label);
+  } catch (error) {
+    logger.error(failureMessage, {
+      error,
+      messageId: `${rfqKey}#ack`,
+      rfqNumber: ack.rfqNumber || null,
+      deliveryKind: ack.deliveryKind || null,
+      retryPersisted: queued,
+    }, 'EMAIL_GATEWAY');
+    if (claimToken) {
+      const released = await emailGatewayQueries.releaseClaimedAcknowledgement(`${rfqKey}#ack`, claimToken);
+      if (!released) {
+        logger.error('Failed acknowledgement claim release; retry will wait for its lease to expire', {
+          messageId: `${rfqKey}#ack`,
+          rfqNumber: ack.rfqNumber || null,
+        }, 'EMAIL_GATEWAY');
+      }
+    } else {
+      await emailGateway.queueAcknowledgement(rfqKey, ack);
+    }
+    return;
+  }
+
+  if (claimToken) {
+    const completed = await emailGatewayQueries.completeClaimedAcknowledgement(
+      `${rfqKey}#ack`,
+      claimToken,
+      INGESTION_OUTCOME.ACK_SENT,
+      'Acknowledgement sent on initial dispatch'
+    );
+    if (!completed) {
+      logger.error('Email provider accepted an acknowledgement but initial dispatch completion was not persisted', {
+        messageId: `${rfqKey}#ack`,
+        rfqNumber: ack.rfqNumber || null,
+      }, 'EMAIL_GATEWAY');
+    }
+  }
 }
 
 /** Ledger timestamps are `YYYY-MM-DD HH:MM:SS` UTC (D1) or a Date (Postgres). */
@@ -1444,24 +1650,28 @@ function ledgerTime(value) {
  * Retry acknowledgements that could not be sent earlier. Bounded per poll and
  * never throws: an acknowledgement must not hold up reading new mail.
  */
-async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now = Date.now() } = {}) {
+async function retryPendingAcknowledgements({
+  limit = ACK_RETRIES_PER_POLL,
+  now = Date.now(),
+  deliveryKinds = null,
+  excludeDeliveryKinds = null,
+} = {}) {
   const outcome = { sent: 0, abandoned: 0, stillPending: 0 };
-  const rows = await emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, limit);
+  const rows = await emailGatewayQueries.claimPendingAcknowledgements(limit, {
+    deliveryKinds,
+    excludeDeliveryKinds,
+    now,
+  });
   for (const row of rows) {
-    const record = (status, detail) =>
-      emailGatewayQueries.recordProcessed({
-        messageId: row.message_id,
-        status,
-        detail,
-        fromAddress: row.from_address,
-        subject: row.subject,
-        rfqNumber: row.rfq_number,
-      });
+    const record = (status, detail) => status === INGESTION_OUTCOME.ACK_PENDING
+      ? emailGatewayQueries.updateClaimedAcknowledgement(row.message_id, row.retry_claim_token, detail)
+      : emailGatewayQueries.completeClaimedAcknowledgement(row.message_id, row.retry_claim_token, status, detail);
 
     const queuedAt = ledgerTime(row.processed_at);
     if (!row.from_address || !Number.isFinite(queuedAt) || now - queuedAt > ACK_RETRY_MAX_AGE_MS) {
-      await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Acknowledgement not sent within 48 hours; dropped');
-      outcome.abandoned += 1;
+      const abandoned = await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Acknowledgement not sent within 48 hours; dropped');
+      if (abandoned) outcome.abandoned += 1;
+      else outcome.stillPending += 1;
       continue;
     }
 
@@ -1471,42 +1681,237 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
     } catch {
       saved = {};
     }
-    try {
-      if (saved.tempPassword) {
-        await mailerService.sendBuyerOnboardingWithRfqEmail({
-          to: row.from_address,
-          buyerName: saved.buyerName,
-          tempPassword: saved.tempPassword,
+    let retryTempPassword = null;
+    if (saved.encryptedTempPassword) {
+      try {
+        retryTempPassword = decryptAcknowledgementPassword(saved.encryptedTempPassword, row.message_id);
+      } catch (error) {
+        outcome.stillPending += 1;
+        logger.error('Pending buyer onboarding credentials could not be decrypted for retry', {
+          error,
+          messageId: row.message_id,
           rfqNumber: row.rfq_number,
-          rfqTitle: saved.rfqTitle || row.subject,
-          deliveryDate: saved.deliveryDate,
-          mobileNumber: saved.mobileNumber || '9999999999',
-          category: saved.category,
-          deliveryLocation: saved.deliveryLocation,
-          requiredBy: saved.requiredBy || saved.deliveryDate,
-          quoteDeadline: saved.quoteDeadline || saved.deadline,
-          suppliersInvited: saved.suppliersInvited,
-          items: saved.items,
-        });
-      } else {
-        await mailerService.sendRfqAcknowledgementEmail({
-          to: row.from_address,
-          buyerName: saved.buyerName,
-          rfqNumber: row.rfq_number,
-          rfqTitle: saved.rfqTitle || row.subject,
-          category: saved.category,
-          deliveryLocation: saved.deliveryLocation,
-          deliveryDate: saved.deliveryDate,
-          requiredBy: saved.requiredBy || saved.deliveryDate,
-          quoteDeadline: saved.quoteDeadline || saved.deadline,
-          suppliersInvited: saved.suppliersInvited,
-          items: saved.items,
-        });
+        }, 'EMAIL_GATEWAY');
+        continue;
       }
-      await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
-      outcome.sent += 1;
+    } else if (saved.tempPassword) {
+      try {
+        const encryptedTempPassword = encryptAcknowledgementPassword(saved.tempPassword, row.message_id);
+        const sanitizedDetail = { ...saved, encryptedTempPassword };
+        delete sanitizedDetail.tempPassword;
+        const rewritten = await record(INGESTION_OUTCOME.ACK_PENDING, JSON.stringify(sanitizedDetail));
+        if (!rewritten) {
+          outcome.stillPending += 1;
+          logger.error('Legacy plaintext onboarding credentials could not be scrubbed from the retry ledger', {
+            messageId: row.message_id,
+            rfqNumber: row.rfq_number,
+          }, 'EMAIL_GATEWAY');
+          continue;
+        }
+        retryTempPassword = saved.tempPassword;
+        saved = sanitizedDetail;
+      } catch (error) {
+        delete saved.tempPassword;
+        saved.credentialDeliveryUnavailable = true;
+        const scrubbed = await record(INGESTION_OUTCOME.ACK_ABANDONED, JSON.stringify(saved));
+        if (scrubbed) outcome.abandoned += 1;
+        else outcome.stillPending += 1;
+        logger.error('Legacy plaintext onboarding credentials could not be re-encrypted and were scrubbed', {
+          error,
+          messageId: row.message_id,
+          rfqNumber: row.rfq_number,
+        }, 'EMAIL_GATEWAY');
+        continue;
+      }
+    }
+
+    if (
+      saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS
+      && !retryTempPassword
+    ) {
+      const abandoned = await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Buyer credential retry has no encrypted credential');
+      if (abandoned) outcome.abandoned += 1;
+      else outcome.stillPending += 1;
+      logger.error('Buyer credential retry was abandoned because its encrypted password is missing', {
+        messageId: row.message_id,
+        fromAddress: row.from_address,
+      }, 'EMAIL_GATEWAY');
+      continue;
+    }
+
+    try {
+      if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS) {
+        ensureMailDeliveryAccepted(await mailerService.sendBuyerCredentialsEmail({
+          to: row.from_address,
+          recipientName: saved.buyerName,
+          tempPassword: retryTempPassword,
+          contactPhone: saved.contactPhone || null,
+        }), 'Buyer credentials retry');
+      } else if (
+        saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER
+        || saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER
+      ) {
+        ensureMailDeliveryAccepted(await mailerService.sendUnauthorizedBuyerNotificationEmail(row.from_address, {
+          subject: saved.originalSubject || row.subject,
+          gatewayAddress: saved.gatewayAddress || null,
+        }), 'Unauthorized sender notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED) {
+        ensureMailDeliveryAccepted(await mailerService.sendRfqNotCreatedEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          reason: saved.reason,
+          originalSubject: saved.originalSubject || row.subject,
+          count: saved.count,
+          max: saved.max,
+        }), 'RFQ-not-created notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED) {
+        ensureMailDeliveryAccepted(await mailerService.sendVendorCreditsExhaustedEmail(row.from_address, {
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          vendorName: saved.vendorName,
+          upgradeUrl: typeof mailerService.vendorUpgradeUrl === 'function' ? mailerService.vendorUpgradeUrl() : undefined,
+          cc: saved.cc,
+        }), 'Vendor credits exhausted notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE) {
+        ensureMailDeliveryAccepted(await mailerService.sendQuoteFailureEmail(row.from_address, {
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          vendorName: saved.vendorName,
+          reason: saved.reason,
+          missingFields: Array.isArray(saved.missingFields) ? saved.missingFields : [],
+          cc: saved.cc,
+        }), 'Vendor quote failure notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT) {
+        ensureMailDeliveryAccepted(await mailerService.sendComplexRfqPortalRedirectEmail(row.from_address, {
+          rfq: { rfqNumber: row.rfq_number, title: saved.rfqTitle || row.subject },
+          vendorName: saved.vendorName,
+          itemCount: Number(saved.itemCount) || 0,
+          cc: saved.cc,
+        }), 'Vendor portal redirect notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK) {
+        const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
+        const quote = Array.isArray(rfq?.quotes)
+          ? rfq.quotes.find((candidate) => String(candidate.id || '') === String(saved.quoteId || ''))
+          : null;
+        if (!rfq || !quote || !saved.quoteId) {
+          const error = new Error('Vendor quote acknowledgement retry references a missing persisted RFQ or quote.');
+          error.code = 'INVALID_PERSISTED_RECORD';
+          throw error;
+        }
+        ensureMailDeliveryAccepted(await mailerService.sendQuoteAcknowledgementEmail(row.from_address, {
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          vendorName: saved.vendorName || quote.vendorName || 'Vendor',
+          quote,
+          buyerEmail: saved.buyerEmail || null,
+        }), 'Vendor quote acknowledgement retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK) {
+        const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
+        const inquiry = Array.isArray(rfq?.inquiries)
+          ? rfq.inquiries.find((candidate) => String(candidate.id || '') === String(saved.inquiryId || ''))
+          : null;
+        const inquiryMessage = Array.isArray(inquiry?.messages)
+          ? inquiry.messages.find((candidate) => String(candidate.id || '') === String(saved.inquiryMessageId || ''))
+          : null;
+        const recipientEmail = String(row.from_address || '').trim();
+        if (
+          !rfq || !inquiry || !inquiryMessage || !saved.inquiryId || !saved.inquiryMessageId
+          || !EMAIL_REGEX.test(recipientEmail)
+          || recipientEmail.toLowerCase() !== String(inquiry.vendorEmail || '').trim().toLowerCase()
+          || !String(inquiryMessage.message || '').trim()
+        ) {
+          const error = new Error('Vendor inquiry acknowledgement retry references incomplete persisted data.');
+          error.code = 'INVALID_PERSISTED_RECORD';
+          throw error;
+        }
+        ensureMailDeliveryAccepted(await mailerService.sendVendorIssueAcknowledgementEmail(recipientEmail, {
+          rfq,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          vendorName: inquiry.vendorName || 'Vendor Partner',
+          issueMessage: inquiryMessage.message.slice(0, 500),
+          reason: EMAIL_GATEWAY_MESSAGES.VENDOR_ISSUE_REPLY_REASON,
+          cc: storeService.resolveBuyerEmailForRFQ(rfq) || undefined,
+        }), 'Vendor inquiry acknowledgement retry');
+      } else if (
+        saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED
+        || saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER
+      ) {
+        const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
+        const quote = Array.isArray(rfq?.quotes)
+          ? rfq.quotes.find((candidate) => String(candidate.id || '') === String(saved.quoteId || ''))
+          : null;
+        if (!rfq || !quote || !saved.quoteId) {
+          const error = new Error('Buyer quote notification retry references a missing persisted RFQ or quote.');
+          error.code = 'INVALID_PERSISTED_RECORD';
+          throw error;
+        }
+        const recipientName = saved.recipientName || saved.buyerName || rfq.buyerAccountName || 'Buyer';
+        if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER) {
+          ensureMailDeliveryAccepted(await mailerService.sendBuyerProfileCompletionReminderEmail({
+            to: row.from_address,
+            recipientName,
+            rfqNumber: rfq.rfqNumber,
+            rfqTitle: rfq.title,
+            quotesCount: Number(saved.quotesCount) || 1,
+          }), 'Buyer profile completion reminder retry');
+          storeService.markQuoteAckSent(rfq);
+        } else {
+          ensureMailDeliveryAccepted(await mailerService.sendQuoteReceivedEmail(row.from_address, {
+            rfq,
+            quote,
+            recipientName,
+          }), 'Buyer quote notification retry');
+        }
+      } else if (retryTempPassword) {
+        ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          tempPassword: retryTempPassword,
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          deliveryDate: saved.deliveryDate,
+          mobileNumber: saved.mobileNumber || null,
+          category: saved.category,
+          deliveryLocation: saved.deliveryLocation,
+          requiredBy: saved.requiredBy || saved.deliveryDate,
+          quoteDeadline: saved.quoteDeadline || saved.deadline,
+          suppliersInvited: saved.suppliersInvited,
+          items: saved.items,
+        }), 'Buyer onboarding acknowledgement retry');
+      } else {
+        ensureMailDeliveryAccepted(await mailerService.sendRfqAcknowledgementEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          category: saved.category,
+          deliveryLocation: saved.deliveryLocation,
+          deliveryDate: saved.deliveryDate,
+          requiredBy: saved.requiredBy || saved.deliveryDate,
+          quoteDeadline: saved.quoteDeadline || saved.deadline,
+          suppliersInvited: saved.suppliersInvited,
+          items: saved.items,
+        }), 'RFQ acknowledgement retry');
+      }
+      const completed = await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
+      if (completed) {
+        outcome.sent += 1;
+      } else {
+        outcome.stillPending += 1;
+        logger.error('Email provider accepted an acknowledgement but its claimed completion was not persisted', {
+          messageId: row.message_id,
+          rfqNumber: row.rfq_number,
+        }, 'EMAIL_GATEWAY');
+      }
     } catch (err) {
       outcome.stillPending += 1;
+      logger.error('Pending RFQ acknowledgement retry failed; event remains pending', {
+        error: err,
+        messageId: row.message_id,
+        rfqNumber: row.rfq_number,
+        fromAddress: row.from_address,
+      }, 'EMAIL_GATEWAY');
       // Every provider is paused: nothing else in this batch can go out either.
       if (err && err.code === 'MAIL_PROVIDERS_COOLING_DOWN') break;
     }
@@ -1538,44 +1943,108 @@ class RetryableIngestionError extends Error {
   }
 }
 
+/** The buyer's name as recorded, or null. Mail templates greet a null name with a plain "Hello,". */
 function buyerDisplayName(buyerAccount, message) {
   return (
     (buyerAccount && (buyerAccount.contactPerson || buyerAccount.organizationName)) ||
     (message && message.fromName) ||
-    'Valued Buyer'
+    null
   );
 }
 
+function emailGatewayNoticeKey(message, deliveryKind) {
+  const fallbackIdentity = [message?.fromAddress, message?.sentAt, message?.subject, message?.bodyText]
+    .map((value) => String(value || ''))
+    .join('\0');
+  const sourceId = message?.messageId || crypto.createHash('sha256').update(fallbackIdentity).digest('hex');
+  return `${sourceId}#notice-${deliveryKind.toLowerCase()}`;
+}
+
+async function queueFailedEmailGatewayDelivery(message, deliveryKind, delivery) {
+  try {
+    await emailGateway.queueAcknowledgement(emailGatewayNoticeKey(message, deliveryKind), {
+      to: message.fromAddress,
+      buyerName: delivery.buyerName,
+      rfqTitle: message.subject,
+      deliveryKind,
+      rfqId: delivery.rfqId,
+      rfqNumber: delivery.rfqNumber,
+      ...delivery,
+    });
+  } catch (error) {
+    logger.error('Failed email gateway notice could not be added to the retry ledger', {
+      error,
+      messageId: message.messageId || null,
+      deliveryKind,
+      recipient: message.fromAddress || null,
+    }, 'EMAIL_GATEWAY');
+  }
+}
+
 /** Tell a registered buyer their email did not become an RFQ, within the auto-reply guards. */
-function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max, authorisation = null } = {}) {
+async function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max, authorisation = null } = {}) {
   // If the buyer is unverified / pending onboarding and has a temporary password, dispatch their credentials too!
   if (
     authorisation &&
     (authorisation.isAutoRegistered || authorisation.isOnboardingPending) &&
     authorisation.tempPassword
   ) {
-    mailerService.sendBuyerCredentialsEmail({
+    const credentials = {
       to: message.fromAddress,
       recipientName: buyerDisplayName(buyerAccount, message),
       tempPassword: authorisation.tempPassword,
-      contactPhone: buyerAccount?.mobileNumber || '',
-    }).catch((err) => {
-      logger.error('Failed to dispatch buyer credentials on failed RFQ creation', err, 'EMAIL_GATEWAY');
-    });
+      contactPhone: buyerAccount?.mobileNumber || null,
+    };
+    try {
+      ensureMailDeliveryAccepted(await mailerService.sendBuyerCredentialsEmail(credentials), 'Buyer credentials notice');
+    } catch (error) {
+      logger.error('Failed to dispatch buyer credentials on failed RFQ creation', {
+        error,
+        messageId: message.messageId || null,
+        fromAddress: message.fromAddress || null,
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+      }, 'EMAIL_GATEWAY');
+      await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS, {
+        buyerName: credentials.recipientName,
+        tempPassword: credentials.tempPassword,
+        contactPhone: credentials.contactPhone,
+      });
+    }
   }
 
   return sendAutoReply(
     message,
     AUTO_REPLY_KIND.RFQ_NOT_CREATED,
-    () =>
-      mailerService.sendRfqNotCreatedEmail({
+    async () => {
+      const notice = {
         to: message.fromAddress,
         buyerName: buyerDisplayName(buyerAccount, message),
         reason,
         originalSubject: message.subject,
         count,
         max,
-      }),
+      };
+      try {
+        const delivery = await mailerService.sendRfqNotCreatedEmail(notice);
+        ensureMailDeliveryAccepted(delivery, 'RFQ-not-created notice');
+        return delivery;
+      } catch (error) {
+        logger.error('RFQ-not-created email provider did not accept the notice', {
+          error,
+          messageId: message.messageId || null,
+          fromAddress: message.fromAddress || null,
+          reason: notice.reason,
+        }, 'EMAIL_GATEWAY');
+        await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED, {
+          buyerName: notice.buyerName,
+          reason: notice.reason,
+          originalSubject: notice.originalSubject,
+          count: notice.count,
+          max: notice.max,
+        });
+        throw error;
+      }
+    },
     { config, failureLog: 'Failed to dispatch RFQ-not-created notice to buyer' }
   );
 }
@@ -1592,7 +2061,7 @@ function checkRfqCredits(buyerAccount, sourcingMode, needed) {
   const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3';
   const isV0 = sourcingMode === 'mode_0' || sourcingMode === 'v0' || sourcingMode === 'version_0';
   if (isPaidPlan || isV0) return { ok: true, applies: false };
-  const remaining = buyerAccount.remainingFreeRFQs !== undefined ? Number(buyerAccount.remainingFreeRFQs) : 5;
+  const remaining = buyerAccount.remainingFreeRFQs !== undefined ? Number(buyerAccount.remainingFreeRFQs) : BUYER_FREE_TRIAL_RFQ_CREDITS;
   return { ok: remaining >= needed, applies: true, remaining, needed };
 }
 
@@ -1642,24 +2111,22 @@ async function storeEmailAttachments(message) {
 
 /**
  * Resolve vendor record from sender email address or vendor directory.
- * Internal platform / gateway addresses (srinu20252026@gmail.com, rfqprocucev@gmail.com)
- * are NEVER resolved as a vendor.
+ * Configured internal platform / gateway addresses are NEVER resolved as a vendor.
  */
 async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   if (!fromAddress) return null;
   const email = String(fromAddress).trim().toLowerCase();
 
-  const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
-  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
+  // Only configured gateway addresses are excluded. No personal mailbox is assumed when they are unset.
+  const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || '').trim().toLowerCase();
+  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || '').trim().toLowerCase();
   const gmailApiAddr = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
 
   // Internal gateway accounts can NEVER be a vendor
   if (
-    email === vendorGatewayAddr ||
-    email === buyerGatewayAddr ||
-    (gmailApiAddr && email === gmailApiAddr) ||
-    email === 'srinu20252026@gmail.com' ||
-    email === 'rfqprocucev@gmail.com'
+    (vendorGatewayAddr && email === vendorGatewayAddr) ||
+    (buyerGatewayAddr && email === buyerGatewayAddr) ||
+    (gmailApiAddr && email === gmailApiAddr)
   ) {
     return null;
   }
@@ -1802,7 +2269,19 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           upgradeUrl: typeof mailerService.vendorUpgradeUrl === 'function' ? mailerService.vendorUpgradeUrl() : undefined,
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor credits exhausted email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor credits exhausted email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -1838,7 +2317,9 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     extraction = null;
   }
 
-  if (!extraction) {
+  // A vendor's question or issue is logged as an inquiry whether or not AI extraction ran, so
+  // the failure branch yields to it. Only a message that should have been a quote is refused here.
+  if ((!extraction || extraction.success === false) && !isVendorIssueOrQueryMessage(message)) {
     logger.warn(
       `Vendor quote from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} failed AI extraction`,
       { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
@@ -1857,7 +2338,21 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           missingFields: ['Quotation Details / AI Extraction'],
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor quote failure email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            reason: 'Quotation parsing failed due to AI extraction errors. Please ensure all quotation parameters are clearly stated.',
+            missingFields: ['Quotation Details / AI Extraction'],
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -1871,7 +2366,12 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     };
   }
 
-  const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
+  // Total RFQ quantity, used only to derive a unit price from a stated total. It is 0 when
+  // any line has no stated quantity, so no unit price is derived from a guessed quantity.
+  const rfqQuantities = rfqItems.map((it) => Number(it.quantity));
+  const rfqQty = rfqQuantities.length > 0 && rfqQuantities.every((q) => Number.isFinite(q) && q > 0)
+    ? rfqQuantities.reduce((acc, q) => acc + q, 0)
+    : 0;
 
   const emailText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
   const isIssueOrQuery = isVendorIssueOrQueryMessage(message) || Boolean(extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry));
@@ -1883,23 +2383,33 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
       'EMAIL_GATEWAY'
     );
 
-    storeService.addAuditLog({
-      userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
-      action: `Quotation creation failed for ${targetRfq.rfqNumber} from ${vendorRecord.name}: Reply identified as vendor issue/query. Bid not generated.`,
-      rfqNumber: targetRfq.rfqNumber,
-    });
-
+    let inquiryResult;
     if (typeof storeService.addInquiryToRFQ === 'function') {
       try {
-        storeService.addInquiryToRFQ(targetRfq.id, {
+        inquiryResult = await storeService.addInquiryToRFQ(targetRfq.id, {
           message: emailText,
           vendorName: vendorRecord.name,
           vendorEmail: message.fromAddress,
           vendorId: vendorRecord.id,
+          messageId: message.messageId,
         });
+        if (!inquiryResult) {
+          throw new Error(`RFQ ${targetRfq.rfqNumber} disappeared before its vendor inquiry could be saved.`);
+        }
       } catch (inqErr) {
         logger.error('Failed to log vendor inquiry to RFQ', inqErr, 'EMAIL_GATEWAY');
+        // Leave this inbound message retryable instead of acknowledging and
+        // marking it processed while its clarification is missing from the RFQ.
+        throw inqErr;
       }
+    }
+
+    if (!inquiryResult?.duplicate) {
+      storeService.addAuditLog({
+        userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
+        action: `Quotation creation failed for ${targetRfq.rfqNumber} from ${vendorRecord.name}: Reply identified as vendor issue/query. Bid not generated.`,
+        rfqNumber: targetRfq.rfqNumber,
+      });
     }
 
     await sendAutoReply(
@@ -1912,10 +2422,24 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           rfqTitle: targetRfq.title,
           vendorName: vendorRecord.name,
           issueMessage: emailText.slice(0, 500),
-          reason: 'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
+          reason: EMAIL_GATEWAY_MESSAGES.VENDOR_ISSUE_REPLY_REASON,
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor issue acknowledgment email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor issue acknowledgment email',
+        retryDelivery: pool.hasStorage() && inquiryResult?.inquiry?.id && inquiryResult?.inquiryMessageId
+          ? {
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+            payload: {
+              rfqId: targetRfq.id,
+              rfqNumber: targetRfq.rfqNumber,
+              inquiryId: inquiryResult.inquiry.id,
+              inquiryMessageId: inquiryResult.inquiryMessageId,
+            },
+          }
+          : null,
+      }
     );
 
     return {
@@ -1945,7 +2469,20 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           itemCount,
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send complex RFQ portal redirect email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send complex RFQ portal redirect email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            itemCount,
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -1957,7 +2494,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   }
 
   let unitPriceNum = Number(extraction.unitPrice);
-  if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Number(extraction.totalPrice) > 0) {
+  if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Number(extraction.totalPrice) > 0 && rfqQty > 0) {
     extraction.unitPrice = Math.round(Number(extraction.totalPrice) / rfqQty);
     unitPriceNum = extraction.unitPrice;
   }
@@ -1966,16 +2503,6 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     if (firstPriced) {
       extraction.unitPrice = Number(firstPriced.unitPrice);
       unitPriceNum = extraction.unitPrice;
-    }
-  }
-
-  // Second-chance extraction fallback if initial pass missed the price
-  if (!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) {
-    const fallbackText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
-    const fallback = geminiService.extractQuotationFallback(fallbackText, targetRfq);
-    if (Number(fallback.unitPrice) > 0) {
-      Object.assign(extraction, fallback);
-      unitPriceNum = Number(extraction.unitPrice);
     }
   }
 
@@ -1998,7 +2525,21 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           missingFields: ['Unit Price (₹)'],
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor quote failure email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
+            missingFields: ['Unit Price (₹)'],
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -2017,11 +2558,12 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     vendorName: vendorRecord.name,
     vendorCategory: vendorRecord.category || 'Client List',
     unitPrice: extraction.unitPrice,
-    totalPrice: extraction.totalPrice || extraction.unitPrice,
-    leadTimeDays: extraction.leadTimeDays || 7,
-    aiMatchScore: 0,
-    warrantyYears: extraction.warrantyYears || 1,
-    complianceStatus: extraction.complianceStatus || 'Fully Compliant',
+    totalPrice: extraction.totalPrice ?? null,
+    leadTimeDays: extraction.leadTimeDays ?? null,
+    // Not scored at ingestion. The UI derives its own score when this is null.
+    aiMatchScore: null,
+    warrantyYears: extraction.warrantyYears ?? null,
+    complianceStatus: extraction.complianceStatus || null,
     paymentTerms: extraction.paymentTerms || '',
     remarks: extraction.remarks || 'Email quotation submitted',
     submittedAt: new Date().toISOString(),
@@ -2029,14 +2571,35 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     submissionMethod: 'Email Submission',
     sourceMessageId: message.messageId || null,
     lineItemQuotes: extraction.lineItemQuotes || [],
-    taxes: extraction.taxes || 0,
-    deliveryCharges: extraction.deliveryCharges || 0,
+    taxes: extraction.taxes ?? null,
+    deliveryCharges: extraction.deliveryCharges ?? null,
     deliveryDate: extraction.deliveryDate || null,
     quotationValidity: extraction.quotationValidity || null,
   };
 
-  const updatedRFQ = storeService.addQuoteToRFQ(targetRfq.id, quote);
-  storeService.consumeVendorQuotationCredit(vendorRecord.id, targetRfq.id);
+  const quoteAckDecision = await emailGateway.shouldSendAutoReply(
+    message,
+    AUTO_REPLY_KIND.QUOTE_ACK,
+    { rfqNumber: targetRfq.rfqNumber }
+  );
+  const quoteSubmission = await storeService.submitVendorQuoteDurably(targetRfq.id, quote, {
+    includeDeliveryState: true,
+    ...(quoteAckDecision.allowed ? {
+      vendorQuoteAcknowledgement: {
+        idempotencyKey: emailGatewayNoticeKey(message, 'VENDOR_QUOTE_ACK'),
+        recipientEmail: message.fromAddress,
+        recipientName: vendorRecord.name,
+        buyerEmail,
+      },
+    } : {}),
+  });
+  const updatedRFQ = quoteSubmission?.rfq;
+  if (!updatedRFQ && pool.hasStorage()) {
+    const submissionError = new Error(`RFQ ${targetRfq.rfqNumber} could not be found in storage while saving its quote.`);
+    submissionError.statusCode = 503;
+    submissionError.code = 'PERSISTENCE_UNAVAILABLE';
+    throw submissionError;
+  }
 
   storeService.addAuditLog({
     userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
@@ -2057,20 +2620,43 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     }
   );
 
-  await sendAutoReply(
-    message,
-    AUTO_REPLY_KIND.QUOTE_ACK,
-    () =>
-      mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
+  if (quoteSubmission?.vendorQuoteAcknowledgementQueued === true) {
+    logger.info('Vendor quote acknowledgement is queued in the durable event outbox', {
+      rfqId: targetRfq.id,
+      rfqNumber: targetRfq.rfqNumber,
+      vendorId: vendorRecord.id,
+      quoteId: quote.id || null,
+    }, 'EMAIL_GATEWAY');
+  } else {
+    await sendAutoReply(
+      message,
+      AUTO_REPLY_KIND.QUOTE_ACK,
+      () =>
+        mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
+          rfqNumber: targetRfq.rfqNumber,
+          rfqTitle: targetRfq.title,
+          vendorName: vendorRecord.name,
+          quote,
+          buyerEmail,
+          cc: undefined,
+        }),
+      {
         rfqNumber: targetRfq.rfqNumber,
-        rfqTitle: targetRfq.title,
-        vendorName: vendorRecord.name,
-        quote,
-        buyerEmail,
-        cc: undefined,
-      }),
-    { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote acknowledgement email' }
-  );
+        failureLog: 'Failed to send vendor quote acknowledgement email',
+        retryDelivery: pool.hasStorage() && quoteSubmission?.quoteId ? {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          payload: {
+            rfqId: targetRfq.id,
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            quoteId: quoteSubmission.quoteId,
+            buyerEmail,
+          },
+        } : null,
+      }
+    );
+  }
 
   if (buyerEmail) {
     try {
@@ -2084,29 +2670,78 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           'EMAIL_GATEWAY'
         );
         storeService.queuePendingQuoteNotification(buyerEmail, { rfq: updatedRFQ || targetRfq, quote });
-        if (!storeService.hasQuoteAckBeenSent(targetRfq)) {
-          storeService.markQuoteAckSent(targetRfq);
-          await mailerService.sendBuyerProfileCompletionReminderEmail({
-            to: buyerEmail,
-            recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+        if (quoteSubmission?.buyerProfileReminderQueued === true || quoteSubmission?.autoClosureEmailQueued === true) {
+          logger.info('Buyer profile or auto-closure notice is owned by quote submission delivery', {
             rfqNumber: targetRfq.rfqNumber,
-            rfqTitle: targetRfq.title,
-            quotesCount: 1,
-          });
+            quoteId: quote.id || null,
+            storageConfigured: pool.hasStorage(),
+          }, 'EMAIL_GATEWAY');
+        } else if (!storeService.hasQuoteAckBeenSent(targetRfq)) {
+          storeService.markQuoteAckSent(targetRfq);
+          try {
+            const delivery = await mailerService.sendBuyerProfileCompletionReminderEmail({
+              to: buyerEmail,
+              recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+              rfqNumber: targetRfq.rfqNumber,
+              rfqTitle: targetRfq.title,
+              quotesCount: 1,
+            });
+            ensureMailDeliveryAccepted(delivery, 'Buyer profile completion reminder');
+          } catch (error) {
+            storeService._unmarkQuoteAckSent(targetRfq);
+            if (pool.hasStorage() && (quoteSubmission?.quoteId || quote.id)) {
+              await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER, {
+                rfqId: targetRfq.id,
+                rfqNumber: targetRfq.rfqNumber,
+                quoteId: quoteSubmission?.quoteId || quote.id,
+                recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+                quotesCount: 1,
+              });
+            }
+            throw error;
+          }
           storeService.addAuditLog({
             userEmail: buyerEmail,
             action: `Notification outcome: Sent quotation acknowledgment and profile update reminder to ${buyerEmail} for RFQ ${targetRfq.rfqNumber}`,
           });
         }
       } else {
-        await mailerService.sendQuoteReceivedEmail(buyerEmail, {
-          rfq: updatedRFQ || targetRfq,
-          quote,
-          recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
-        });
+        const committedRFQ = updatedRFQ || targetRfq;
+        if (quoteSubmission?.buyerQuoteNotificationQueued === true || quoteSubmission?.autoClosureEmailQueued === true) {
+          logger.info('Buyer quote email is owned by quote submission delivery', {
+            rfqNumber: targetRfq.rfqNumber,
+            quoteId: quote.id || null,
+            storageConfigured: pool.hasStorage(),
+          }, 'EMAIL_GATEWAY');
+        } else {
+          try {
+            const delivery = await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+              rfq: committedRFQ,
+              quote,
+              recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+            });
+            ensureMailDeliveryAccepted(delivery, 'Buyer quote notification');
+          } catch (error) {
+            if (pool.hasStorage() && (quoteSubmission?.quoteId || quote.id)) {
+              await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED, {
+                rfqId: targetRfq.id,
+                rfqNumber: targetRfq.rfqNumber,
+                quoteId: quoteSubmission?.quoteId || quote.id,
+                recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+              });
+            }
+            throw error;
+          }
+        }
       }
     } catch (mailErr) {
-      logger.error('Failed to send buyer quote received email', mailErr, 'EMAIL_GATEWAY');
+      logger.error('Failed to dispatch buyer quote notification', {
+        error: mailErr,
+        rfqId: targetRfq.id,
+        rfqNumber: targetRfq.rfqNumber,
+        quoteId: quote.id || quoteSubmission?.quoteId || null,
+        recipient: buyerEmail || null,
+      }, 'EMAIL_GATEWAY');
     }
   }
 
@@ -2242,9 +2877,19 @@ async function processMessage(rawSource, config = resolveConfig()) {
         () =>
           mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
             subject: message.subject,
-            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+            gatewayAddress: config.user || null,
           }),
-        { config, failureLog: 'Failed to dispatch registration notification to unregistered buyer emailing vendor inbox' }
+        {
+          config,
+          failureLog: 'Failed to dispatch registration notification to unregistered buyer emailing vendor inbox',
+          retryDelivery: {
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+            payload: {
+              originalSubject: message.subject,
+              gatewayAddress: config.user || null,
+            },
+          },
+        }
       );
       return {
         status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
@@ -2275,9 +2920,19 @@ async function processMessage(rawSource, config = resolveConfig()) {
       () =>
         mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
           subject: message.subject,
-          gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          gatewayAddress: config.user || null,
         }),
-      { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
+      {
+        config,
+        failureLog: 'Failed to dispatch registration notification to unauthorized sender',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER,
+          payload: {
+            originalSubject: message.subject,
+            gatewayAddress: config.user || null,
+          },
+        },
+      }
     );
     return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: reason, message };
   }
@@ -2363,8 +3018,14 @@ async function processMessage(rawSource, config = resolveConfig()) {
     },
     'EMAIL_GATEWAY'
   );
-  const credits = checkRfqCredits(authorisation.buyerAccount, sourcingMode, groups.length);
-  if (!credits.ok) {
+  // The cached buyer balance is only a useful guard when there is no durable
+  // store. With persistence enabled, the atomic RFQ write is authoritative:
+  // this isolate may have stale credits, and a separate balance read would add
+  // another database roundtrip before the transaction that enforces the limit.
+  const credits = pool.hasStorage()
+    ? null
+    : checkRfqCredits(authorisation.buyerAccount, sourcingMode, groups.length);
+  if (credits && !credits.ok) {
     logger.warn(
       'Email RFQ refused: free trial RFQ credits exhausted',
       { buyerAccountId: authorisation.buyerAccount.id, sourcingMode, remaining: credits.remaining, needed: credits.needed },
@@ -2383,6 +3044,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   const createdRFQs = [];
   let totalAccepted = 0;
   let totalNeedsReview = 0;
+  let creditsExhaustedAfterSomeRfqs = false;
   // Uploaded once, when the first RFQ is actually created, and shared by every
   // RFQ the email raises.
   let attachmentsPromise = null;
@@ -2423,19 +3085,25 @@ async function processMessage(rawSource, config = resolveConfig()) {
     totalAccepted += classification.accepted;
     totalNeedsReview += classification.needsReview;
 
-    const created = storeService.createRFQ(
-      {
+    const rfqData = {
+        // The message-group ledger may fail after the RFQ write commits. A
+        // stable ID lets a retry find and reuse that record instead of raising
+        // a second RFQ for the same Message-ID group.
+        id: groupKey
+          ? `rfq-email-${crypto.createHash('sha256').update(groupKey).digest('hex').slice(0, 32)}`
+          : undefined,
         title: draft.title,
         category: draft.category,
         sourcingMode,
-        // Held for review rather than circulated. Nothing has checked this yet.
+        // The gateway records the same active quote state used by the configured
+        // buyer sourcing plan; the create workflow handles routing after save.
         status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
         source: 'email_gateway',
         sourceEmail: message.fromAddress,
         buyerEmail: attribution.primaryBuyerAccount?.corporateEmail || message.fromAddress,
         sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
-        budget: draft.estimatedBudget || 0,
+        budget: draft.estimatedBudget ?? null,
         targetDeliveryDate: draft.targetDeliveryDate,
         extractedEntities: draft.extractedEntities,
         deliveryLocation: draft.deliveryLocation,
@@ -2447,9 +3115,42 @@ async function processMessage(rawSource, config = resolveConfig()) {
         sharedBuyerEmails: attribution.sharedBuyerEmails || [],
         isSharedRfq: Boolean(attribution.isSharedRfq),
         emailRfqScenario: attribution.scenario || null,
-      },
-      attribution.primaryBuyerAccount
-    );
+      };
+
+    let created;
+    try {
+      created = await storeService.createRFQDurably(rfqData, attribution.primaryBuyerAccount);
+    } catch (createErr) {
+      if (createErr.code === 'FREE_RFQ_CREDITS_EXHAUSTED') {
+        logger.warn('Email RFQ creation stopped after the persisted free-credit check rejected a group', {
+          buyerAccountId: authorisation.buyerAccount.id,
+          sourcingMode,
+          groupIndex,
+          createdCount: createdRFQs.length,
+          remaining: createErr.remaining,
+        }, 'EMAIL_GATEWAY');
+        await notifyRfqNotCreated(message, 'CREDITS_EXHAUSTED', notifyContext);
+        if (createdRFQs.length === 0) {
+          return {
+            status: INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED,
+            detail: EMAIL_GATEWAY_MESSAGES.RFQ_CREDITS_EXHAUSTED_DETAIL
+              .replace('{remaining}', String(createErr.remaining ?? 0))
+              .replace('{needed}', String(groups.length)),
+            message,
+          };
+        }
+        creditsExhaustedAfterSomeRfqs = true;
+        break;
+      }
+      logger.error('Failed to durably create email-ingested RFQ', {
+        error: createErr,
+        messageId: message.messageId || null,
+        groupKey,
+        groupIndex,
+        sender: message.fromAddress || null,
+      }, 'EMAIL_GATEWAY');
+      throw createErr;
+    }
 
     storeService.addAuditLog({
       userEmail: attribution.primaryBuyerAccount?.corporateEmail || message.fromAddress,
@@ -2458,14 +3159,14 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     if (typeof storeService.autoAssignVendorsFromDB === 'function') {
       try {
-        await storeService.autoAssignVendorsFromDB(created);
+        await storeService.autoAssignVendorsFromDB(created, { notifyShortfall: true });
       } catch (assignErr) {
         logger.warn('Failed to auto-assign vendors for email RFQ', { rfqNumber: created.rfqNumber, error: assignErr.message }, 'EMAIL_GATEWAY');
       }
     }
 
     if (groupKey) {
-      await emailGatewayQueries.recordProcessed({
+      const recorded = await emailGatewayQueries.recordProcessed({
         messageId: groupKey,
         status: INGESTION_OUTCOME.RFQ_GROUP_CREATED,
         detail: `RFQ ${groupIndex + 1} of ${groups.length} raised from this email`,
@@ -2474,19 +3175,12 @@ async function processMessage(rawSource, config = resolveConfig()) {
         rfqId: created.id,
         rfqNumber: created.rfqNumber,
       });
-    }
-
-    // Email-ingested RFQs must draw down sourcing credits the same way a
-    // portal/AI-created RFQ does — the HTTP createRFQ controller is bypassed
-    // here, so the credit rule is applied explicitly. V0 and paid plans are
-    // exempt (handled inside consumeRFQCreditIfApplicable).
-    const creditResult = storeService.consumeRFQCreditIfApplicable(authorisation.buyerAccount, sourcingMode);
-    if (creditResult.consumed) {
-      logger.info(
-        `Consumed 1 sourcing credit for email-ingested RFQ ${created.rfqNumber}`,
-        { rfqNumber: created.rfqNumber, sourcingMode, remaining: creditResult.remaining },
-        'EMAIL_GATEWAY'
-      );
+      if (!recorded) {
+        throw new RetryableIngestionError('The RFQ was saved, but its email idempotency record was not. Retry after storage recovers.', {
+          message,
+          onGiveUp: giveUpNotice,
+        });
+      }
     }
 
     createdRFQs.push(created);
@@ -2504,8 +3198,9 @@ async function processMessage(rawSource, config = resolveConfig()) {
       authorisation?.buyerAccount?.mobileNumber ||
       authorisation?.buyerAccount?.phone ||
       authorisation?.user?.phone ||
-      '9999999999';
-    const resolvedMobile = String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || '9999999999';
+      null;
+    // Null when the buyer has no phone on record. No placeholder number is sent.
+    const resolvedMobile = rawMobile ? String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || null : null;
 
     const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
       ? created.extractedEntities
@@ -2513,16 +3208,18 @@ async function processMessage(rawSource, config = resolveConfig()) {
         ? created.items
         : [];
 
+    // A field the document did not state stays null. It is not replaced with a stand-in name, quantity or unit.
     const normalizedLineItems = rawEntities.map((it) => ({
-      item_name: it.itemName || it.name || it.item_name || 'Line Item',
-      item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
-      qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
-      uom: it.unit || it.uom || 'Nos',
+      item_name: it.itemName || it.name || it.item_name || null,
+      item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || null,
+      qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : null),
+      uom: it.unit || it.uom || null,
     }));
 
+    // The number of suppliers actually assigned. With none assigned and no recorded count, it stays null.
     const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
       ? created.assignedVendors.length
-      : (created.procucevVendorCount || 5);
+      : (Number.isFinite(created.procucevVendorCount) ? created.procucevVendorCount : null);
 
     const notificationRecipients = Array.isArray(attribution.eligibleNotificationRecipients) && attribution.eligibleNotificationRecipients.length > 0
       ? attribution.eligibleNotificationRecipients
@@ -2548,7 +3245,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
             tempPassword: isAutoRegisteredPrimary ? authorisation.tempPassword : null,
             mobileNumber: resolvedMobile,
             category: created.category,
-            itemCount: normalizedLineItems.length || 1,
+            itemCount: normalizedLineItems.length,
             deliveryLocation: created.deliveryLocation,
             requiredBy: created.targetDeliveryDate,
             quoteDeadline: created.deadline,
@@ -2560,19 +3257,21 @@ async function processMessage(rawSource, config = resolveConfig()) {
           const ackDedupKey = recipient.isPrimary ? (groupKey || created.id) : (groupKey ? `${groupKey}#${recipient.email}` : `${created.id}#${recipient.email}`);
 
           if (isAutoRegisteredPrimary) {
-            try {
-              await mailerService.sendBuyerOnboardingWithRfqEmail(ack);
-            } catch (onboardErr) {
-              logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
-              await emailGateway.queueAcknowledgement(ackDedupKey, ack);
-            }
+            await dispatchInitialAcknowledgement(
+              ackDedupKey,
+              ack,
+              () => mailerService.sendBuyerOnboardingWithRfqEmail(ack),
+              'Buyer onboarding acknowledgement',
+              'Failed to dispatch buyer onboarding credential email'
+            );
           } else {
-            try {
-              await mailerService.sendRfqAcknowledgementEmail(ack);
-            } catch (ackErr) {
-              logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
-              await emailGateway.queueAcknowledgement(ackDedupKey, ack);
-            }
+            await dispatchInitialAcknowledgement(
+              ackDedupKey,
+              ack,
+              () => mailerService.sendRfqAcknowledgementEmail(ack),
+              'RFQ acknowledgement',
+              'Failed to dispatch RFQ acknowledgement email to buyer'
+            );
           }
         })
     );
@@ -2606,12 +3305,15 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  const ingestionDetail = EMAIL_GATEWAY_MESSAGES.INGESTED_DETAIL.replace(
+    '{count}',
+    String(totalAccepted)
+  ).replace('{needsReview}', String(totalNeedsReview));
   return {
     status: INGESTION_OUTCOME.INGESTED,
-    detail: EMAIL_GATEWAY_MESSAGES.INGESTED_DETAIL.replace(
-      '{count}',
-      String(totalAccepted)
-    ).replace('{needsReview}', String(totalNeedsReview)),
+    detail: creditsExhaustedAfterSomeRfqs
+      ? `${ingestionDetail} Remaining email groups were skipped because the buyer's free RFQ credits were exhausted.`
+      : ingestionDetail,
     message,
     rfq: createdRFQs[0],
     rfqs: createdRFQs,
@@ -2630,7 +3332,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
  *
  * Shares the exact same processMessage()/emailGatewayQueries ledger as the
  * IMAP path below — this is only a different transport for fetching
- * messages, not a second parsing pipeline. Uses navin.procucev@gmail.com
+ * messages, not a second parsing pipeline. Uses the configured gateway mailbox
  * (whatever GMAIL_SENDER_EMAIL/GMAIL_REFRESH_TOKEN actually point to — no
  * address is hardcoded here) via the same Gmail OAuth client outbound mail
  * already uses, so the refresh token needs the gmail.readonly and
@@ -2647,7 +3349,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
   }
   const auth = options.auth || mailerService.getGmailOAuthClient();
   if (!auth) {
-    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+    return { skipped: true, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
   }
 
   // Per-deployment kill switch for the CRON poll path. Mirrors the
@@ -2731,15 +3433,19 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
           }),
         POLL_CALL_TIMEOUT_MS,
         operationLabel
-      ).catch(() => {});
+      ).catch((modifyError) => {
+        logger.warn(`${operationLabel} did not complete for message ${id}`, modifyError, 'EMAIL_GATEWAY');
+      });
     };
 
     const markRead = (id, label) =>
       withTimeout(
-        gmail.users.messages.modify({ userId: 'me', id, requestBody: { removeLabelIds: ['UNREAD'] } }).catch(() => {}),
+        gmail.users.messages.modify({ userId: 'me', id, requestBody: { removeLabelIds: ['UNREAD'] } }),
         POLL_CALL_TIMEOUT_MS,
         label
-      ).catch(() => {});
+      ).catch((markReadError) => {
+        logger.warn(`${label} failed for message ${id}`, markReadError, 'EMAIL_GATEWAY');
+      });
 
     let pageToken;
     let pages = 0;
@@ -2902,7 +3608,23 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
               subject: result.message?.subject,
               uid: ref.id,
             });
-            logger.error(
+            // These outcomes are explained to the sender by an auto-reply, so they are expected results.
+            // Only a processing failure is an error.
+            const expectedOutcome = [
+              INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+              INGESTION_OUTCOME.NO_LINE_ITEMS,
+              INGESTION_OUTCOME.UNREADABLE,
+              INGESTION_OUTCOME.LINE_ITEMS_EXCEED_LIMIT,
+              INGESTION_OUTCOME.INVALID_RFQ,
+              INGESTION_OUTCOME.VENDOR_NOT_FOUND,
+              INGESTION_OUTCOME.SELF_MAIL_IGNORED,
+              INGESTION_OUTCOME.CREDITS_EXHAUSTED,
+              INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED,
+              INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED,
+              INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED,
+            ].includes(result.status);
+            logger.log(
+              expectedOutcome ? 'WARN' : 'ERROR',
               `RFQ creation failed for message ${resolvedMessageId} (${result.status}): ${result.detail || 'unknown reason'}`,
               {
                 messageId: resolvedMessageId,
@@ -2988,11 +3710,32 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
       ? 'Email ingestion ledger unavailable; unread mail left for the next poll'
       : (state.lastError || null);
 
-    // Acknowledgements are buyer mail, so only the buyer inbox poll retries
-    // them; skipped when the ledger is down or the poll is already out of time.
+    // Buyer acknowledgement work stays on the buyer poll. Vendor notices use
+    // the same ledger, but the vendor poll claims only its own retry kinds.
     let acknowledgements = null;
-    if (!config.isVendorMailbox && !ledgerUnavailable && !outOfTime) {
-      acknowledgements = await emailGateway.retryPendingAcknowledgements().catch((ackErr) => {
+    if (!ledgerUnavailable && !outOfTime) {
+      const retryOptions = config.isVendorMailbox
+        ? {
+          deliveryKinds: [
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+          ],
+        }
+        : {
+          excludeDeliveryKinds: [
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+          ],
+        };
+      acknowledgements = await emailGateway.retryPendingAcknowledgements(retryOptions).catch((ackErr) => {
         logger.error('Retrying pending RFQ acknowledgements failed', ackErr, 'EMAIL_GATEWAY');
         return null;
       });
@@ -3057,7 +3800,7 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
 function startBuyerPolling(config = resolveConfig()) {
   if (runtime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
   const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
@@ -3087,7 +3830,7 @@ function startBuyerPolling(config = resolveConfig()) {
 function startVendorPolling(config = resolveVendorConfig()) {
   if (vendorRuntime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
   const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
@@ -3114,7 +3857,7 @@ function startVendorPolling(config = resolveVendorConfig()) {
 /**
  * Run one polling pass across both monitored inboxes:
  *   1. Buyer Requisitions Mailbox (e.g. rfq@procucev.com)
- *   2. Vendor Quotations Mailbox (srinu20252026@gmail.com)
+ *   2. Vendor Quotations Mailbox (VENDOR_EMAIL_GATEWAY_ADDRESS)
  *
  * Executes both in parallel using Promise.allSettled so an error in one inbox
  * never blocks or disrupts the other.
@@ -3139,11 +3882,11 @@ async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig =
   const result = {
     executedAt: new Date().toISOString(),
     buyerMailbox: {
-      address: buyerConfig.address || buyerConfig.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      address: buyerConfig.address || buyerConfig.user || null,
       ...buyer,
     },
     vendorMailbox: {
-      address: vendorConfig.address || vendorConfig.user || VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      address: vendorConfig.address || vendorConfig.user || null,
       ...vendor,
     },
     totalConsidered: (buyer.considered || 0) + (vendor.considered || 0),
@@ -3311,7 +4054,10 @@ const emailGateway = {
   EMAIL_GATEWAY_MAX_ATTEMPTS,
   POLL_WORK_BUDGET_MS,
   EMAIL_GATEWAY_LEDGER_UNAVAILABLE,
-  resetAutoReplyMemory: () => recentAutoReplies.clear(),
+  resetAutoReplyMemory: () => {
+    recentAutoReplies.clear();
+    emailGatewayQueries.clearMemoryPendingAcknowledgements();
+  },
   pollOnce,
   pollViaGmailApi,
   pollVendorOnce,

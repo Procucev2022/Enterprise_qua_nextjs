@@ -59,7 +59,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
       const enc = cryptoService.encrypt(samplePlaintext);
       const res = await request(app)
         .post('/api/crypto/decrypt')
-        .set(authHeader('buyer'))
+        .set(authHeader('admin'))
         .send({
           ciphertext: enc.ciphertext,
           iv: enc.iv,
@@ -76,7 +76,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
       const enc = cryptoService.encrypt(samplePlaintext);
       const res = await request(app)
         .post('/api/crypto/decrypt')
-        .set(authHeader('buyer'))
+        .set(authHeader('admin'))
         .send({ token: enc.encoded });
 
       expect(res.status).toBe(200);
@@ -87,7 +87,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('should return 400 when decrypt payload fails schema validation', async () => {
       const res = await request(app)
         .post('/api/crypto/decrypt')
-        .set(authHeader('buyer'))
+        .set(authHeader('admin'))
         .send({ ciphertext: 'abc' }); // Missing IV and AuthTag
 
       expect(res.status).toBe(400);
@@ -102,7 +102,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
 
       const res = await request(app)
         .post('/api/crypto/decrypt')
-        .set(authHeader('buyer'))
+        .set(authHeader('admin'))
         .send({
           ciphertext: enc.ciphertext,
           iv: enc.iv,
@@ -118,6 +118,15 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('POST /api/crypto/decrypt requires authentication', async () => {
       const res = await request(app).post('/api/crypto/decrypt').send({ ciphertext: 'abc' });
       expect(res.status).toBe(401);
+    });
+
+    test('POST /api/crypto/decrypt is restricted to administrators', async () => {
+      const enc = cryptoService.encrypt(samplePlaintext);
+      const res = await request(app)
+        .post('/api/crypto/decrypt')
+        .set(authHeader('buyer'))
+        .send({ token: enc.encoded });
+      expect(res.status).toBe(403);
     });
   });
 
@@ -138,7 +147,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
       const enc = cryptoService.encrypt(samplePlaintext);
       const res = await request(app)
         .post('/api/crypto/verify-integrity')
-        .set(authHeader('buyer'))
+        .set(authHeader('admin'))
         .send({
           ciphertext: enc.ciphertext,
           iv: enc.iv,
@@ -157,7 +166,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
 
       const res = await request(app)
         .post('/api/crypto/verify-integrity')
-        .set(authHeader('buyer'))
+        .set(authHeader('admin'))
         .send({
           ciphertext: tamperedCiphertext,
           iv: enc.iv,
@@ -173,7 +182,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('should return 400 on invalid payload schema in verify-integrity', async () => {
       const res = await request(app)
         .post('/api/crypto/verify-integrity')
-        .set(authHeader('buyer'))
+        .set(authHeader('admin'))
         .send({ ciphertext: '' });
 
       expect(res.status).toBe(400);
@@ -183,6 +192,15 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('POST /api/crypto/verify-integrity requires authentication', async () => {
       const res = await request(app).post('/api/crypto/verify-integrity').send({ ciphertext: '' });
       expect(res.status).toBe(401);
+    });
+
+    test('POST /api/crypto/verify-integrity is restricted to administrators', async () => {
+      const enc = cryptoService.encrypt(samplePlaintext);
+      const res = await request(app)
+        .post('/api/crypto/verify-integrity')
+        .set(authHeader('buyer'))
+        .send({ ciphertext: enc.ciphertext, iv: enc.iv, authTag: enc.authTag });
+      expect(res.status).toBe(403);
     });
   });
 

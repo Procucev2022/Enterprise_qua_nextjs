@@ -377,6 +377,16 @@ describe('vendor quote attachment storage', () => {
   });
 });
 
+// One line item with every field the RFQ form requires, so the create requests below are valid RFQs.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
+
 describe('RFQ attachment HTTP routes', () => {
   describe('POST /api/rfqs/attachments', () => {
     test('stores a document and returns its metadata', async () => {
@@ -481,9 +491,53 @@ describe('RFQ attachment HTTP routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-type']).toContain('application/pdf');
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
       // Inline so a PDF or image previews rather than forcing a download.
       expect(res.headers['content-disposition']).toBe('inline; filename="annexure.pdf"');
       expect(res.body.toString()).toBe('%PDF-1.4 line item annexure');
+    });
+
+    test('infers .eml MIME type and defaults filename when metadata is incomplete', async () => {
+      const id = 'a1b2c3d4-3333-4000-8000-abcdefabcdef';
+      fakeR2Store.set(attachments.resolveObjectKey(id), {
+        body: Buffer.from('Subject: Test\n\nBody'),
+        ContentType: 'application/octet-stream',
+        Metadata: {
+          filename: encodeURIComponent('smaple "rfq" email.eml'),
+          size: '19',
+          uploadedat: '2026-11-14T10:00:00.000Z',
+        },
+      });
+
+      const res = await request(app)
+        .get(`/api/rfqs/attachments/${id}`)
+        .set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toContain('message/rfc822');
+      expect(res.headers['content-disposition']).toBe('inline; filename="smaple rfq email.eml"');
+    });
+
+    test('falls back to application/octet-stream when extension and declared type are unknown', async () => {
+      const { resolveAttachmentContentType } = require('../src/config/constants');
+      expect(resolveAttachmentContentType('', 'unknown.xyz')).toBe('application/octet-stream');
+      expect(resolveAttachmentContentType(null, null)).toBe('application/octet-stream');
+      expect(resolveAttachmentContentType('binary/octet-stream', 'document')).toBe('binary/octet-stream');
+
+      const id = 'a1b2c3d4-4444-4000-8000-abcdefabcdef';
+      fakeR2Store.set(attachments.resolveObjectKey(id), {
+        body: Buffer.from('opaque-bytes'),
+        ContentType: undefined,
+        Metadata: undefined,
+      });
+
+      const res = await request(app)
+        .get(`/api/rfqs/attachments/${id}`)
+        .set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toContain('application/octet-stream');
+      expect(res.headers['content-disposition']).toBe('inline; filename="attachment"');
     });
 
     test('requires a session', async () => {
@@ -540,6 +594,7 @@ describe('RFQ attachment HTTP routes', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
           attachments: [upload.body.data],
         });
 
@@ -559,6 +614,7 @@ describe('RFQ attachment HTTP routes', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);

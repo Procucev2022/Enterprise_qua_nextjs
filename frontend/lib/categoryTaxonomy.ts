@@ -591,6 +591,65 @@ export const KNOWN_KEYWORD_RULES: Array<{
 
   // ── Others – New Product ──
   {
+    keywords: [
+      'stationery',
+      'office stationery',
+      'office supplies',
+      'a4 copier paper',
+      'copier paper',
+      'a4 paper',
+      'paper ream',
+      'printing paper',
+      'bond paper',
+      'whiteboard marker',
+      'whiteboard markers',
+      'permanent marker',
+      'permanent markers',
+      'lever arch file',
+      'lever arch files',
+      'ball pens',
+      'ball pen',
+      'ballpoint pen',
+      'ballpoint pens',
+      'gel pen',
+      'gel pens',
+      'box file',
+      'box files',
+      'ring binder',
+      'ring binders',
+      'file folder',
+      'file folders',
+      'marker pen',
+      'marker pens',
+      'highlighter',
+      'highlighters',
+      'stapler',
+      'staplers',
+      'staple pins',
+      'paper clip',
+      'paper clips',
+      'sticky notes',
+      'post-it',
+      'post it',
+      'notepad',
+      'notepads',
+      'writing pad',
+      'writing pads',
+      'correction pen',
+      'correction tape',
+      'punching machine',
+      'hole punch',
+      'paper cutter',
+      'eraser',
+      'erasers',
+      'pencil',
+      'pencils',
+      'sharpener',
+    ],
+    major: 'Others – New Product',
+    minor: 'Stationery',
+  },
+  {
     keywords: ['health equipment', 'health equipments', 'stethoscope', 'pulse oximeter', 'bp monitor', 'medical device', 'medical equipment'],
     major: 'Others – New Product',
     minor: 'Health Equipments',
@@ -725,10 +784,8 @@ export function setCategoryTaxonomy(next: MajorMinorCategory[]): void {
       key = taxonomyKey(cleanMajor);
     }
 
-    if (!mergedMap.has(key)) {
-      mergedMap.set(key, { majorCategory: cleanMajor, minors: new Set<string>() });
-    }
-    const entry = mergedMap.get(key)!;
+    const entry = mergedMap.get(key) ?? { majorCategory: cleanMajor, minors: new Set<string>() };
+    mergedMap.set(key, entry);
 
     (group.minorCategories || []).forEach((m) => {
       const cleanMinor = String(m || '').trim().replace(/\s+/g, ' ');
@@ -805,11 +862,6 @@ export function hasMinorCategory(major: string, minor: string): boolean {
   return Boolean(minors && minors.has(taxonomyKey(minor)));
 }
 
-/** Standard procurement category taxonomy fallback when database is unseeded. */
-export function getDefaultCategoryTaxonomy(): MajorMinorCategory[] {
-  return groups;
-}
-
 /**
  * The major category the master owns a minor under, or an empty string.
  * Returns display name from majorsByKey. First major wins for duplicate minors.
@@ -822,7 +874,7 @@ export function findMajorForMinor(minor: string): string {
     const majorKey = taxonomyKey(group.majorCategory);
     const minors = minorsByMajorKey.get(majorKey);
     if (minors && minors.has(key)) {
-      return majorsByKey.get(majorKey)!;
+      return majorsByKey.get(majorKey) ?? group.majorCategory;
     }
   }
   return '';
@@ -936,7 +988,125 @@ export function countMinorCategories(): number {
   return groups.reduce((total, group) => total + (group.minorCategories?.length || 0), 0);
 }
 
+/**
+ * Returns all unique minor categories across the master taxonomy in sorted order.
+ * Reads from the currently loaded taxonomy groups or falls back to known taxonomy rules.
+ */
+export function getAllUniqueMinorCategories(): string[] {
+  const seen = new Set<string>();
+  if (groups.length > 0) {
+    groups.forEach((group) => {
+      (group.minorCategories || []).forEach((minor) => {
+        if (minor && minor.trim()) {
+          seen.add(minor.trim());
+        }
+      });
+    });
+  }
+  // Include any minor categories registered in KNOWN_KEYWORD_RULES
+  for (const rule of KNOWN_KEYWORD_RULES) {
+    if (rule.minor && rule.minor.trim()) {
+      seen.add(rule.minor.trim());
+    }
+  }
+  return Array.from(seen).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Resolves the exact Minor Category for a purchase order line item.
+ * Evaluates the line item description, technical specifications, and any optional input category/department
+ * against both the autoCategorizeItem engine (validated against loaded taxonomy) and the comprehensive
+ * KNOWN_KEYWORD_RULES database (matching all 300+ procurement categories).
+ *
+ * @param itemName Description or name of the line item (e.g. "Centrifugal Pump SS316", "Stainless Ball Valve")
+ * @param specs Technical specifications or grade details (e.g. "2 HP", "Grade 316")
+ * @param departmentOrCategory Optional department or category provided in the file
+ * @returns The resolved exact Minor Category string, or the fallback category/department, or empty string.
+ */
+export function resolveMinorCategory(
+  itemName?: string,
+  specs?: string,
+  departmentOrCategory?: string
+): string {
+  const safeName = (itemName || '').trim();
+  const safeSpecs = (specs || '').trim();
+  const safeDept = (departmentOrCategory || '').trim();
+
+  // 1. Try standard autoCategorizeItem first (handles loaded taxonomy validation)
+  const auto = autoCategorizeItem(safeName, safeSpecs);
+  if (auto.minorCategory) {
+    return auto.minorCategory;
+  }
+
+  // 2. Direct keyword pattern matching against KNOWN_KEYWORD_RULES database
+  // (Provides instant high-precision resolution even if dynamic taxonomy has not finished loading)
+  const cleanName = safeName.toLowerCase();
+  const nameTokens = cleanName
+    ? cleanName.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2)
+    : [];
+
+  if (cleanName) {
+    for (const rule of KNOWN_KEYWORD_RULES) {
+      if (rule.keywords.some((kw) => matchesRuleKeyword(cleanName, nameTokens, kw))) {
+        if (!isCategoryTaxonomyLoaded() || hasMinorCategory(rule.major, rule.minor)) {
+          return rule.minor;
+        }
+      }
+    }
+  }
+
+  if (safeSpecs) {
+    const cleanSpecs = safeSpecs.toLowerCase();
+    const specsTokens = cleanSpecs
+      ? cleanSpecs.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2)
+      : [];
+    for (const rule of KNOWN_KEYWORD_RULES) {
+      const nonMaterialKeywords = rule.keywords.filter((kw) => !MATERIAL_ONLY_KEYWORDS.has(kw.toLowerCase()));
+      if (nonMaterialKeywords.some((kw) => matchesRuleKeyword(cleanSpecs, specsTokens, kw))) {
+        if (!isCategoryTaxonomyLoaded() || hasMinorCategory(rule.major, rule.minor)) {
+          return rule.minor;
+        }
+      }
+    }
+  }
+
+  // 3. Check if departmentOrCategory explicitly matches a known Minor Category
+  if (safeDept && safeDept.toLowerCase() !== 'unmapped' && safeDept.toLowerCase() !== 'uncategorized') {
+    // A known Major Category is not an exact Minor Category
+    if (!hasMajorCategory(safeDept)) {
+      const deptLower = safeDept.toLowerCase();
+      // 3a. Exact match against rule minor
+      for (const rule of KNOWN_KEYWORD_RULES) {
+        if (rule.minor.toLowerCase() === deptLower) {
+          return rule.minor;
+        }
+      }
+      // 3b. Match against dynamic taxonomy minor
+      for (const group of groups) {
+        for (const minor of group.minorCategories) {
+          if (minor.toLowerCase() === deptLower) {
+            return minor;
+          }
+        }
+      }
+      // 3c. Match against specific item keyword rules
+      const deptTokens = deptLower.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2);
+      for (const rule of KNOWN_KEYWORD_RULES) {
+        if (rule.keywords.some((kw) => matchesRuleKeyword(deptLower, deptTokens, kw))) {
+          if (!isCategoryTaxonomyLoaded() || hasMinorCategory(rule.major, rule.minor)) {
+            return rule.minor;
+          }
+        }
+      }
+    }
+  }
+
+  // No exact Minor Category match found. Never assign an incorrect category.
+  return '';
+}
+
 /** Discard the loaded taxonomy. Used by tests and on sign-out. */
 export function clearCategoryTaxonomy(): void {
   setCategoryTaxonomy([]);
 }
+

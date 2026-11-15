@@ -7,23 +7,50 @@
 
 const approvalQueries = require('../db/approvalQueries');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+const { APPROVAL_MESSAGES, AUTH_MESSAGES } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
-function extractActor(req) {
-  if (req.user) {
-    return {
-      uuid: req.user.uuid || req.user.id || null,
-      name: req.user.fullName || req.user.name || req.user.email || 'Management Authority',
-      email: req.user.email || null,
-      role: req.user.role || 'admin',
-    };
+function sendApprovalError(res, error, fallbackMessage) {
+  if (error?.code === 'ACTOR_REQUIRED') {
+    return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN, retryable: false });
   }
-  return {
-    uuid: null,
-    name: req.headers['x-user-name'] || 'Management Authority',
-    email: req.headers['x-user-email'] || 'admin@procucev.com',
-    role: 'admin',
+  if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
+    return res.status(503).json({
+      success: false,
+      error: APPROVAL_MESSAGES.DATABASE_UNAVAILABLE,
+      retryable: true,
+    });
+  }
+  if (error?.code === 'APPROVAL_ALREADY_DECIDED') {
+    return res.status(409).json({
+      success: false,
+      error: APPROVAL_MESSAGES.ALREADY_DECIDED,
+      retryable: false,
+    });
+  }
+  if (error?.code === 'APPROVER_PASSWORD_INVALID') {
+    return res.status(401).json({ success: false, error: APPROVAL_MESSAGES.PASSWORD_INVALID, retryable: false });
+  }
+  if (error?.code === 'APPROVER_PASSWORD_NOT_CONFIGURED') {
+    return res.status(503).json({ success: false, error: APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE, retryable: false });
+  }
+  return res.status(500).json({ success: false, error: fallbackMessage });
+}
+
+/**
+ * Builds the acting approver from the authenticated session only. Request headers
+ * are never used as identity. Returns null when the session does not identify a user.
+ */
+function extractActor(req) {
+  const user = req.user;
+  if (!user) return null;
+  const actor = {
+    uuid: user.uuid || user.id || null,
+    name: user.fullName || user.name || user.email || null,
+    email: user.email || null,
+    role: user.role || null,
   };
+  return actor.uuid || actor.name ? actor : null;
 }
 
 /**
@@ -35,7 +62,7 @@ async function getSummary(req, res) {
     return res.json({ success: true, summary });
   } catch (err) {
     logger.error('Failed to fetch approval summary', err, 'APPROVAL_CONTROLLER');
-    return res.status(500).json({ success: false, error: 'Failed to retrieve approval summary statistics.' });
+    return sendApprovalError(res, err, 'Failed to retrieve approval summary statistics.');
   }
 }
 
@@ -65,7 +92,7 @@ async function getApprovals(req, res) {
     });
   } catch (err) {
     logger.error('Failed to retrieve approval requests', err, 'APPROVAL_CONTROLLER');
-    return res.status(500).json({ success: false, error: 'Failed to retrieve approval requests.' });
+    return sendApprovalError(res, err, 'Failed to retrieve approval requests.');
   }
 }
 
@@ -85,6 +112,9 @@ async function processAction(req, res) {
     }
 
     const actor = extractActor(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
     const updated = await approvalQueries.processApprovalAction(id, validation.sanitizedData, actor);
     if (!updated) {
       return res.status(404).json({ success: false, error: `Approval request "${id}" not found.` });
@@ -94,7 +124,7 @@ async function processAction(req, res) {
     return res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Failed to process approval action on ${req.params.id}`, err, 'APPROVAL_CONTROLLER');
-    return res.status(500).json({ success: false, error: 'Failed to process approval action.' });
+    return sendApprovalError(res, err, 'Failed to process approval action.');
   }
 }
 

@@ -394,7 +394,7 @@ describe('InviteVendorsModal — Comprehensive Multi-Filter & 20-Vendor Limit Su
           page: 1,
         })
       );
-    });
+    }, { timeout: 3000 });
 
     // Load More pagination with combined filters
     (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValueOnce({

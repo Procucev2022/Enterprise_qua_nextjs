@@ -42,10 +42,15 @@ afterEach(() => {
 });
 
 describe('fetchNotifications', () => {
-  it('resolves to an empty list without calling the API when signed out', async () => {
+  it('reports a session error without calling the API when signed out', async () => {
     global.fetch = jest.fn();
     const res = await fetchNotifications();
-    expect(res).toEqual({ success: true, notifications: [], unreadCount: 0 });
+    expect(res).toEqual({
+      success: false,
+      notifications: [],
+      unreadCount: 0,
+      error: UI_STRINGS.auth.sessionExpired,
+    });
     expect(global.fetch).not.toHaveBeenCalled();
   });
 

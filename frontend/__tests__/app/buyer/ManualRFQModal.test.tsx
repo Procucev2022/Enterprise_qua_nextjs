@@ -1,13 +1,15 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type {
   ExtractedEntity,
   RFQAttachment,
   RFQExtractionResult,
   RFQItem,
+  SourcingMode,
 } from '@/lib/types';
 
 const mockPush = jest.fn();
@@ -23,6 +25,14 @@ jest.mock('@/lib/rfqClient', () => ({
   fetchAllVendors: jest.fn(),
   requestVendorCategoryUpdateEmail: jest.fn(() => Promise.resolve({ success: true })),
 }));
+
+jest.mock('@/lib/validationSchemas', () => {
+  const actual = jest.requireActual('@/lib/validationSchemas');
+  return {
+    ...actual,
+    validatePincode: jest.fn(actual.validatePincode),
+  };
+});
 
 // The modal reads buyerVendors from useApp() inside a try/catch, since it can
 // render outside an AppProvider in some contexts. Defaults to throwing (the
@@ -42,12 +52,12 @@ jest.mock('@/lib/store', () => ({
         // never match any RFQ's category and every generic save test in this
         // file (not specifically testing category-matching) would break.
         majorCategory: require('../../../test-fixtures/categoryTaxonomy').CATEGORY_TAXONOMY_FIXTURE[0].majorCategory,
+        minorCategories: [require('../../../test-fixtures/categoryTaxonomy').CATEGORY_TAXONOMY_FIXTURE[0].minorCategories[0]],
       },
     ],
   })),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { useApp } = require('@/lib/store');
 
 // Reading a File is jsdom's business, not this dialog's: the request builder is
@@ -60,8 +70,8 @@ jest.mock('@/lib/documentExtraction', () => ({
   })),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const rfqClient = require('@/lib/rfqClient');
+const validationSchemas = require('@/lib/validationSchemas');
 
 const MODAL = UI_STRINGS.manualRfqModal;
 const MANUAL = UI_STRINGS.manualRfq;
@@ -115,15 +125,22 @@ function fillRow() {
   fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
     target: { value: categoriesData[0].majorCategory },
   });
-  fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-    target: { value: categoriesData[0].minorCategories[0] },
+  chooseCategory(within(row).getByLabelText(MODAL.colMinor), categoriesData[0].minorCategories[0]);
+  fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
+    target: { value: 'SS316 impeller, 2 HP' },
   });
   fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
   fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
 }
 
-/** Fill the mandatory delivery destination. */
-function fillDelivery() {
+/** Fill the mandatory header fields: the title, the target delivery date and the destination. */
+function fillHeaderFields() {
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+    target: { value: 'Centrifugal pump replacement' },
+  });
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
+    target: { value: '2099-12-01' },
+  });
   fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
     target: { value: 'Navi Mumbai Plant, Gate 3' },
   });
@@ -133,6 +150,9 @@ function fillDelivery() {
 }
 
 const clickSave = () => fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+/** Nothing is preselected, so a test that saves picks the sourcing mode it is about. */
+const chooseMode = (mode: SourcingMode) => fireEvent.click(screen.getByTestId(`manual-mode-${mode}`));
 
 /** One extracted line item, in the shape the extraction endpoint returns. */
 function extractedEntity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
@@ -185,6 +205,10 @@ import { setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 
 beforeEach(() => {
   jest.clearAllMocks();
+  validationSchemas.validatePincode.mockReset();
+  validationSchemas.validatePincode.mockImplementation(
+    jest.requireActual('@/lib/validationSchemas').validatePincode
+  );
   setCategoryTaxonomy(categoriesData);
   (useApp as jest.Mock).mockReturnValue({
     buyerVendors: [
@@ -193,10 +217,10 @@ beforeEach(() => {
         name: 'Default Enterprise Vendor',
         email: 'vendor@test.com',
         source: 'buyer_uploaded',
-        // Matches categoriesData[0], the category fillRow()/extractionResult()
-        // always set — Mode 1 assignment is category-scoped now, so a vendor
-        // with no category would never match any RFQ's category here.
+        // Carries the minor fillRow()/extractionResult() always set on the RFQ row. Mode 1
+        // assignment is minor-scoped, so a vendor without that minor would never match here.
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       },
     ],
   });
@@ -309,7 +333,7 @@ describe('ManualRFQModal: line items', () => {
     const minor = within(row).getByLabelText(MODAL.colMinor) as HTMLSelectElement;
 
     fireEvent.change(major, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minor, { target: { value: categoriesData[0].minorCategories[0] } });
+    chooseCategory(minor, categoriesData[0].minorCategories[0]);
     expect(minor.value).toBe(categoriesData[0].minorCategories[0]);
 
     fireEvent.change(major, { target: { value: categoriesData[1].majorCategory } });
@@ -330,11 +354,13 @@ describe('ManualRFQModal: validation', () => {
     renderModal();
     clickSave();
 
+    expect(screen.getByText(MANUAL.titleRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.targetDateRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.itemNameRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.specsRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.quantityRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.unitRequired)).toBeInTheDocument();
-    // Category is optional now — no error shown for a blank major/minor category.
-    expect(screen.queryByText(MANUAL.majorCategoryRequired)).not.toBeInTheDocument();
+    expect(screen.getByText(MANUAL.majorCategoryRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryLocationRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryPincodeRequired)).toBeInTheDocument();
   });
@@ -382,7 +408,8 @@ describe('ManualRFQModal: saving', () => {
   it('posts the form and hands back the server record', async () => {
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalledTimes(1));
@@ -409,7 +436,8 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('The RFQ could not be saved.'));
@@ -427,7 +455,8 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() =>
@@ -455,7 +484,8 @@ describe('ManualRFQModal: saving', () => {
 
     renderModal();
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(screen.getByText(/RFQ Created & Forwarded to Category Manager/i)).toBeInTheDocument());
@@ -520,7 +550,8 @@ describe('ManualRFQModal: supporting documents', () => {
     await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -533,6 +564,9 @@ describe('ManualRFQModal: header and item fields', () => {
     // Relative to today: the date input has min=today, so a fixed date goes stale.
     const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     renderModal();
+    fillRow();
+    fillHeaderFields();
+    // Set after the shared header fill, so these values are the ones the payload carries.
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
       target: { value: 'Monsoon Pump Overhaul' },
     });
@@ -540,8 +574,7 @@ describe('ManualRFQModal: header and item fields', () => {
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
       target: { value: futureDate },
     });
-    fillRow();
-    fillDelivery();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -558,7 +591,8 @@ describe('ManualRFQModal: header and item fields', () => {
     fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
       target: { value: 'SS316 impeller, 415V' },
     });
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -578,7 +612,7 @@ describe('ManualRFQModal: header and item fields', () => {
 });
 
 describe('ManualRFQModal: sourcing mode', () => {
-  it('starts on the first mode and switches on selection', async () => {
+  it('starts with no mode chosen and switches on selection', async () => {
     (useApp as jest.Mock).mockReturnValue({
       buyerVendors: [],
       activeBuyerAccount: { subscriptionPlan: 'version_3' },
@@ -586,17 +620,33 @@ describe('ManualRFQModal: sourcing mode', () => {
     renderModal();
     const mode1 = screen.getByLabelText(/(Mode 1|Version 1)/i);
     const mode3 = screen.getByLabelText(/(Mode 3|Version 3)/i);
-    expect(mode1).toBeChecked();
+    expect(mode1).not.toBeChecked();
+    expect(mode3).not.toBeChecked();
 
     fireEvent.click(mode3);
     expect(mode3).toBeChecked();
     expect(mode1).not.toBeChecked();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_3');
+  });
+
+  it('blocks save and shows the sourcing-mode message when no mode is chosen', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'version_3' },
+    });
+    renderModal();
+    fillRow();
+    fillHeaderFields();
+    clickSave();
+
+    expect(rfqClient.createRFQ).not.toHaveBeenCalled();
+    // Shown under the mode cards and in the submit banner.
+    expect(screen.getAllByText(MANUAL.sourcingModeRequired).length).toBeGreaterThanOrEqual(2);
   });
 
   it('unlocks all 3 modes for a free_trial buyer', async () => {
@@ -616,7 +666,7 @@ describe('ManualRFQModal: sourcing mode', () => {
 
   it('locks Mode 2 and Mode 3 for a version_1 buyer and blocks selecting them', async () => {
     (useApp as jest.Mock).mockReturnValue({
-      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded', majorCategory: categoriesData[0].majorCategory }],
+      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] }],
       activeBuyerAccount: { subscriptionPlan: 'version_1' },
     });
     renderModal();
@@ -630,11 +680,12 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(screen.getAllByText('LOCKED')).toHaveLength(2);
 
     fireEvent.click(mode2);
-    expect(mode1).toBeChecked();
+    expect(mode1).not.toBeChecked();
     expect(mode2).not.toBeChecked();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_1');
@@ -892,7 +943,8 @@ describe('ManualRFQModal: extraction from an attached document', () => {
       expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
     );
 
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -906,12 +958,13 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
   it('shows the empty-roster state and blocks dispatch when the buyer has no uploaded vendors for Version 1', async () => {
     (useApp as jest.Mock).mockReturnValue({ buyerVendors: [] });
     renderModal();
+    chooseMode('mode_1');
 
     expect(screen.getByText('No Private Vendors Uploaded Yet')).toBeInTheDocument();
     expect(screen.getByText('0 Suppliers Found')).toBeInTheDocument();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => {
@@ -931,14 +984,16 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           phone: '+91 98200 11111',
           source: 'historical_purchase_dump',
           majorCategory: categoriesData[0].majorCategory,
+          minorCategories: [categoriesData[0].minorCategories[0]],
         },
-        // No name/email/phone/contactPerson: exercises every fallback.
-        { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory },
+        // No name/email/phone/contactPerson: the payload carries an empty name, never an invented one.
+        { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] },
         // Not buyer-uploaded: must be excluded from both the preview and the payload.
-        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory },
+        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] },
       ],
     });
     renderModal();
+    chooseMode('mode_1');
 
     expect(screen.getByText('2 Suppliers Found')).toBeInTheDocument();
     expect(screen.getByText(/1\. Apex Industrial Dynamics/)).toBeInTheDocument();
@@ -948,7 +1003,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     expect(screen.queryByText('Category Manager Vendor')).not.toBeInTheDocument();
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -963,7 +1018,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       },
       {
         id: 'v-hist-2',
-        name: 'Enterprise Vendor',
+        name: '',
         email: null,
         contactPerson: null,
         phone: null,
@@ -982,7 +1037,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     fireEvent.click(mode3Checkbox);
 
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
     clickSave();
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
@@ -1011,7 +1066,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     // fillRow() sets the RFQ's category to categoriesData[0] ('Civil Works'),
     // which the IT vendor above does not cover at all.
     fillRow();
-    fillDelivery();
+    fillHeaderFields();
+    chooseMode('mode_1');
     clickSave();
 
     await waitFor(() => {
@@ -1038,9 +1094,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
         target: { value: testMajor },
       });
-      fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
-        target: { value: testMinor },
-      });
+      chooseCategory(within(row).getByLabelText(MODAL.colMinor), testMinor);
 
       // Select Mode 2
       const mode2Checkbox = screen.getByLabelText(/(Mode 2|Version 2)/i);
@@ -1213,7 +1267,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
       fireEvent.click(mode0Radio);
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1236,7 +1290,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
       fireEvent.click(mode0Radio);
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1256,7 +1310,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         rfq: savedRFQ({ sourcingMode: 'mode_0', category: '' }),
       });
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
+      chooseMode('mode_0');
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
       await waitFor(() => {
         expect(screen.getByText('RFQ Created & Forwarded to Category Manager')).toBeInTheDocument();
@@ -1379,6 +1434,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Switch to Mismatch category tab
       const mismatchTab = await screen.findByRole('button', { name: /Mismatch/i });
@@ -1396,8 +1452,11 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           })
         );
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Category Update Email Sent',
-          expect.stringContaining('mismatch@vendor.com'),
+          UI_STRINGS.vendorCategoryUpdate.sentTitle,
+          formatString(UI_STRINGS.vendorCategoryUpdate.sentMessage, {
+            vendorName: 'Mismatch Vendor',
+            vendorEmail: 'mismatch@vendor.com',
+          }),
           'success'
         );
       });
@@ -1406,11 +1465,12 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
         success: false,
         error: 'SMTP quota exceeded',
+        idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
       });
       fireEvent.click(emailBtn);
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Email Delivery Issue',
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
           'SMTP quota exceeded',
           'warning'
         );
@@ -1423,11 +1483,14 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       fireEvent.click(emailBtn);
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Error',
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
           'Network timeout',
           'warning'
         );
       });
+      expect(rfqClient.requestVendorCategoryUpdateEmail).toHaveBeenLastCalledWith(expect.objectContaining({
+        idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
+      }));
     });
 
     it('covers pincode validation branch edge cases: dummy, invalid format, and server rejection', async () => {
@@ -1525,7 +1588,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
 
       // Initially quota exhausted banner and bottom upgrade link are both present
       expect(screen.getByTestId('manual-rfq-quota-exhausted-banner')).toBeInTheDocument();
@@ -1568,6 +1631,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'alpha@eng.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-matched-2',
@@ -1575,6 +1639,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'beta@auto.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v3 = {
         id: 'v-other-3',
@@ -1589,6 +1654,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Toolbar search input
       const searchInput = screen.getByPlaceholderText(/Search suppliers by name/i);
@@ -1631,6 +1697,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         email: 'omega@elec.com',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-mode2-2',
@@ -1725,7 +1792,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
+      chooseMode('mode_1');
 
       // Submit with only mismatched vendor in candidate pool
       fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
@@ -1755,7 +1823,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
+      chooseMode('mode_1');
 
       // Attach file (first upload fails, keeping file in pendingFilesRef)
       const pendingFile = new File(['contract body'], 'pending_contract.pdf', { type: 'application/pdf' });
@@ -1820,7 +1889,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     it('covers categoryFetchSignals debounced fetchAllVendors execution', async () => {
       (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
         success: true,
-        candidates: [{ id: 'cand-1', name: 'Auto Fetched Vendor', majorCategory: categoriesData[0].majorCategory }],
+        candidates: [{ id: 'cand-1', name: 'Auto Fetched Vendor', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]] }],
       });
       renderModal();
       fillRow();
@@ -1831,6 +1900,21 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           expect.objectContaining({ search: categoriesData[0].majorCategory })
         );
       });
+    });
+
+    it('does not repeat the category lookup when only delivery details change', async () => {
+      renderModal();
+      fillRow();
+
+      await waitFor(() => expect(rfqClient.fetchAllVendors).toHaveBeenCalled());
+      const categoryLookupCount = (rfqClient.fetchAllVendors as jest.Mock).mock.calls.length;
+
+      fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
+        target: { value: 'Second delivery site' },
+      });
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+
+      expect(rfqClient.fetchAllVendors).toHaveBeenCalledTimes(categoryLookupCount);
     });
 
     it('covers handleSendCategoryUpdateEmail edge cases and badge statuses', async () => {
@@ -1855,6 +1939,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Switch to mismatch tab
       const mismatchTab = await screen.findByRole('button', { name: /Mismatch/i });
@@ -1867,66 +1952,89 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       const emailBtns = screen.getAllByRole('button', { name: /Send Email to Update Category/i });
       fireEvent.click(emailBtns[0]);
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Email Delivery Issue', 'Failed to dispatch email.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
+          UI_STRINGS.vendorCategoryUpdate.failureMessage,
+          'warning'
+        );
       });
 
       // Trigger email for vNoContact with empty error thrown
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockRejectedValueOnce({});
       fireEvent.click(emailBtns[1]);
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Error', 'Failed to send update email.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+          'warning'
+        );
       });
 
-      // Trigger email with success to show "Update Email Sent ✓" badge
+      // Trigger email with success to show the saved request state.
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
         success: true,
+        deliveryStatus: 'queued',
       });
       fireEvent.click(emailBtns[0]);
       await waitFor(() => {
-        expect(screen.getByText(/Update Email Sent ✓/i)).toBeInTheDocument();
+        expect(screen.getByText(UI_STRINGS.vendorCategoryUpdate.completedButton)).toBeInTheDocument();
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.queuedTitle,
+          expect.stringContaining('saved and will retry automatically'),
+          'success'
+        );
       });
     });
 
-    it('covers debounced pincode API validation with valid and invalid server responses', async () => {
-      renderModal();
-      const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
+    it('covers debounced pincode state for valid, invalid, and failed requests', async () => {
+      const validatePincode = validationSchemas.validatePincode;
+      jest.useFakeTimers();
+      try {
+        renderModal();
+        const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
 
-      // 1. Debounced valid 6-digit pin
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{
-          Status: 'Success',
-          PostOffice: [{ Name: 'Indiranagar', District: 'Bengaluru', State: 'Karnataka' }],
-        }],
-      } as Response);
-      fireEvent.change(pinInput, { target: { value: '560038' } });
-      await waitFor(() => {
+        // 1. Debounced valid 6-digit pin
+        validatePincode.mockResolvedValueOnce({
+          isValid: true,
+          postOffices: [{ Name: 'Indiranagar', District: 'Bengaluru', State: 'Karnataka' }],
+        });
+        fireEvent.change(pinInput, { target: { value: '560038' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
         expect(screen.getByText('Valid')).toBeInTheDocument();
-      });
 
-      // 2. Debounced invalid 6-digit pin with custom message
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ Status: 'Error', Message: 'No record found' }],
-      } as Response);
-      fireEvent.change(pinInput, { target: { value: '999991' } });
-      await waitFor(() => {
+        // 2. Debounced invalid 6-digit pin with custom message
+        validatePincode.mockResolvedValueOnce({ isValid: false });
+        fireEvent.change(pinInput, { target: { value: '999991' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
         expect(screen.getByText('Invalid')).toBeInTheDocument();
-      });
 
-      // 3. Debounced 6-digit pin with fetch rejection (network fallback)
-      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network offline'));
-      fireEvent.change(pinInput, { target: { value: '999992' } });
-      await new Promise((r) => setTimeout(r, 400));
+        // 3. Debounced 6-digit pin with fetch rejection (network fallback)
+        validatePincode.mockRejectedValueOnce(new Error('Network offline'));
+        fireEvent.change(pinInput, { target: { value: '999992' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
 
-      // 4. Blur on non-6-digit pin (skips validation)
-      fireEvent.change(pinInput, { target: { value: '12' } });
-      fireEvent.blur(pinInput);
+        // 4. Blur on non-6-digit pin (skips validation)
+        fireEvent.change(pinInput, { target: { value: '12' } });
+        fireEvent.blur(pinInput);
 
-      // 5. Blur on 6-digit pin with rejection
-      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Postal timeout'));
-      fireEvent.change(pinInput, { target: { value: '560002' } });
-      fireEvent.blur(pinInput);
+        // 5. Blur on 6-digit pin with rejection
+        validatePincode.mockRejectedValueOnce(new Error('Postal timeout'));
+        fireEvent.change(pinInput, { target: { value: '560002' } });
+        await act(async () => {
+          fireEvent.blur(pinInput);
+          await Promise.resolve();
+        });
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+        validatePincode.mockReset();
+      }
     });
 
     it('covers handleAutoCategorizeAll with mixed classified, unclassified, and invalid taxonomy items', async () => {
@@ -1967,6 +2075,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
               id: 'non-matching-id',
               itemName: 'Something Else',
               majorCategory: categoriesData[0].majorCategory,
+              minorCategories: [categoriesData[0].minorCategories[0]],
             },
             {
               id: items[0]?.id,
@@ -2046,6 +2155,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       const { unmount } = renderModal();
       fillRow();
+      chooseMode('mode_1');
 
       // Mode 1: With RFQ category set to Civil Works, matched count is 0
       // Click "View all 3 private vendors →" button
@@ -2086,7 +2196,9 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Switch to Mode 3
       const mode3Card = screen.getByTestId('manual-mode-mode_3');
       fireEvent.click(mode3Card);
-      expect(screen.getByText('General Industrial')).toBeInTheDocument();
+      // The vendor with no category shows the not-recorded placeholder, not an invented category.
+      expect(screen.queryByText('General Industrial')).not.toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.recordPlaceholders.notRecorded).length).toBeGreaterThanOrEqual(1);
       unmount();
 
       // Mode 2 when no category signals on RFQ (categoryFetchSignals.length === 0)
@@ -2125,7 +2237,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Test top useV0 button
       const { unmount: unmount1 } = renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const useV0Btns = screen.getAllByRole('button', { name: MODAL.useV0Action });
       expect(useV0Btns).toHaveLength(2);
       fireEvent.click(useV0Btns[0]);
@@ -2135,7 +2247,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Test bottom useV0 button
       const { unmount: unmount2 } = renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
       const useV0Btns2 = screen.getAllByRole('button', { name: MODAL.useV0Action });
       fireEvent.click(useV0Btns2[1]);
       expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
@@ -2156,7 +2268,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       const majorSelect = within(row).getByLabelText(MODAL.colMajor);
       fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
       const minorSelect = within(row).getByLabelText(MODAL.colMinor);
-      fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+      chooseCategory(minorSelect, categoriesData[0].minorCategories[0]);
       fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
 
       // Document extraction with a custom category not in taxonomy
@@ -2229,6 +2341,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         mobile: '9876543210',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       const v2 = {
         id: 'v-mode1-select-2',
@@ -2238,6 +2351,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         mobileNumber: '9123456789',
         source: 'buyer_uploaded',
         majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
       };
       useApp.mockReturnValue({
         activeSubscription: 'version_3',
@@ -2259,7 +2373,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
+      chooseMode('mode_1');
 
       // Click vendor card for v1 (which has no name, so card displays contactPerson)
       const v1Card = screen.getByText(/Alpha Contact Person/i).closest('div[class*="cursor-pointer"]') as HTMLElement;
@@ -2294,7 +2409,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
       renderModal();
       fillRow();
-      fillDelivery();
+      fillHeaderFields();
+      chooseMode('mode_1');
 
       // Attach document so pendingFilesRef has files
       const file1 = new File(['file 1 body'], 'failed_upload.pdf', { type: 'application/pdf' });
@@ -2309,7 +2425,110 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         expect(onCreated).toHaveBeenCalled();
       });
     });
+
+    it('covers adoptCreatedRFQ fallback and mode_0 uncategorized confirmation title', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0',
+          rfqNumber: 'RFQ-2026-UNCAT',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'mode_0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: undefined,
+      });
+
+      renderModal();
+      fillRow();
+      fillHeaderFields();
+      chooseMode('mode_0');
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
+
+    it('covers adoptCreatedRFQ with remaining count and v0 confirmation', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0-2',
+          rfqNumber: 'RFQ-2026-UNCAT-2',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'v0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: 5,
+      });
+
+      renderModal();
+      fillRow();
+      fillHeaderFields();
+      chooseMode('mode_0');
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
+
+    it('covers version_0 confirmation', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-uncat-v0-3',
+          rfqNumber: 'RFQ-2026-UNCAT-3',
+          title: 'Uncategorized Steel Pipes',
+          category: '',
+          sourcingMode: 'version_0',
+          extractedEntities: [],
+          status: 'Quotes Pending',
+        },
+        remainingFreeRFQs: 3,
+      });
+
+      renderModal();
+      fillRow();
+      fillHeaderFields();
+      chooseMode('mode_0');
+
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uncategorized (Pending CM)')).toBeInTheDocument();
+      });
+    });
   });
 });
 
 
+
+describe('ManualRFQModal: mandatory fields', () => {
+  it('marks every field except the budget as required, and the target date opens its calendar from the whole field', () => {
+    renderModal();
+
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toBeRequired();
+    const targetDate = screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i'));
+    expect(targetDate).toBeRequired();
+    expect(targetDate).toHaveClass('date-input-whole-field');
+    expect(within(firstRow()).getByLabelText(MODAL.colSpecs)).toBeRequired();
+    expect(within(firstRow()).getByLabelText(MODAL.colMajor)).toBeRequired();
+    expect(within(firstRow()).getByLabelText(MODAL.colMinor)).toBeRequired();
+    expect(screen.getByLabelText(/Estimated Budget/i)).not.toBeRequired();
+  });
+
+  it('shows the required mark beside each mandatory column heading', () => {
+    renderModal();
+
+    const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
+    expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker))).toHaveLength(6);
+  });
+});

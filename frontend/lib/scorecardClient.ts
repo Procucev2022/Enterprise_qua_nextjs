@@ -1,5 +1,9 @@
 import { authClient } from './authClient';
+import { logger } from './logger';
+import { UI_STRINGS, formatString } from './uiStrings';
 import type { ScorecardData } from './types';
+
+const SCORECARD_LOG_CATEGORY = 'SCORECARD_CLIENT';
 
 function authHeaders(): Record<string, string> {
   const token = authClient.getToken();
@@ -18,10 +22,18 @@ export interface ScorecardParams {
   executiveId?: string | null;
 }
 
+/** Result of the scorecard request. `data` is null when it could not be loaded. */
+export interface ScorecardResult {
+  data: ScorecardData | null;
+  error?: string;
+}
+
 /**
  * Fetch scorecard performance data for team or individual executive.
+ * On failure `data` is null and `error` says why.
  */
-export async function fetchScorecardData(params: ScorecardParams = {}): Promise<ScorecardData | null> {
+export async function fetchScorecardData(params: ScorecardParams = {}): Promise<ScorecardResult> {
+  const resource = UI_STRINGS.dataLoad.resources.scorecard;
   try {
     const query = new URLSearchParams();
     if (params.period) query.set('period', params.period);
@@ -32,11 +44,25 @@ export async function fetchScorecardData(params: ScorecardParams = {}): Promise<
     if (params.executiveId && params.executiveId !== 'all') query.set('executiveId', params.executiveId);
 
     const res = await fetch(`/api/scorecard?${query.toString()}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      return {
+        data: null,
+        error: formatString(UI_STRINGS.dataLoad.failedWithStatus, { resource, status: res.status }),
+      };
+    }
     const json = await res.json();
-    return json.data || null;
-  } catch {
-    return null;
+    if (!json?.data) {
+      return {
+        data: null,
+        error: formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource }),
+      };
+    }
+    return { data: json.data };
+  } catch (error: unknown) {
+    logger.error('Scorecard request failed', { error }, SCORECARD_LOG_CATEGORY);
+    return {
+      data: null,
+      error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource }),
+    };
   }
 }
-

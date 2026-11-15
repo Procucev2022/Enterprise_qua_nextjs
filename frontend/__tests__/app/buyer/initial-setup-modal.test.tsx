@@ -1,9 +1,12 @@
 import React from 'react';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within, waitFor } from '@testing-library/react';
 import * as XLSX from 'xlsx';
-import InitialSetupModal, { IngestionProgressCard } from '@/app/buyer/initial-setup-modal';
+import InitialSetupModal, { IngestionProgressCard, parseVendorMobile } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
+
+const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -136,6 +139,105 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     return file;
   };
 
+  const SESSION_ID = 'session-test-1';
+
+  /** One supplier the AI job categorised, as the server's vendors endpoint returns it. */
+  const APEX_MAPPING = {
+    id: 'mapping-apex',
+    vendorRecordId: 'vendor-record-apex',
+    sessionId: SESSION_ID,
+    vendorCode: 'V-101',
+    companyName: 'Apex Supplies Ltd.',
+    email: 'aarav@apex.in',
+    hasPoHistory: true,
+    poCount: 1,
+    totalSpend: 60000,
+    status: 'AI_MAPPED',
+    finalMajorCategory: 'Engineering Spares - Mechanical',
+    finalMinorCategories: ['Pumps & Accessories'],
+  };
+
+  const completedAiJob = (overrides: Record<string, unknown> = {}) => ({
+    id: 'job-ai-1',
+    jobType: 'AI_CATEGORY',
+    fileName: 'po_dump.xlsx',
+    status: 'COMPLETED',
+    totalRecords: 1,
+    processedRecords: 1,
+    importedRecords: 0,
+    skippedRecords: 0,
+    failedRecords: 0,
+    errorMessage: null,
+    ...overrides,
+  });
+
+  const jsonResponse = (body: unknown, ok = true) =>
+    Promise.resolve({ ok, status: ok ? 200 : 500, json: () => Promise.resolve(body) });
+
+  /**
+   * Stands in for the ingestion server: a saved session, the AI category job and the supplier mappings it stores.
+   * Install it before rendering, because the wizard reads the session when it opens. Each option replaces one part.
+   */
+  const installIngestionServer = (
+    options: {
+      session?: Record<string, unknown> | null;
+      startJob?: Record<string, unknown>;
+      startFails?: string;
+      pollJob?: Record<string, unknown>;
+      mappings?: Record<string, unknown>[];
+      vendorsFail?: boolean;
+      horizonClearsPo?: boolean;
+      createSessionFails?: boolean;
+      horizonFails?: boolean;
+    } = {}
+  ) => {
+    const fetchMock = jest.fn<Promise<unknown>, [string, RequestInit?]>((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (url === '/api/vendor-ingestion/session') {
+        if (method === 'POST') {
+          if (options.createSessionFails) return jsonResponse({ success: false, error: 'Session store unavailable' }, false);
+          return jsonResponse({ success: true, data: { id: SESSION_ID, horizonType: 'LAST_2_YEARS' } });
+        }
+        const session = options.session === undefined ? { id: SESSION_ID, horizonType: 'LAST_2_YEARS' } : options.session;
+        return jsonResponse({ success: true, data: { session } });
+      }
+      if (url.includes('/time-horizon')) {
+        if (options.horizonFails) return jsonResponse({ success: false, error: 'Horizon store unavailable' }, false);
+        return jsonResponse({ success: true, data: {}, poDataCleared: options.horizonClearsPo === true });
+      }
+      if (url.endsWith('/ai-categorize-job')) {
+        if (options.startFails) return jsonResponse({ success: false, error: options.startFails }, false);
+        return jsonResponse({ success: true, data: { job: options.startJob ?? completedAiJob() } });
+      }
+      if (url.includes('/jobs/')) {
+        return jsonResponse({ success: true, data: { job: options.pollJob ?? completedAiJob() } });
+      }
+      if (url.includes('/vendors?')) {
+        if (options.vendorsFail) return jsonResponse({ success: false }, false);
+        const mappings = options.mappings ?? [APEX_MAPPING];
+        // Pages are read the way the server pages them: by offset and limit
+        const params = new URL(url, 'http://localhost').searchParams;
+        const offset = Number(params.get('offset') ?? 0);
+        const limit = Number(params.get('limit') ?? 200);
+        return jsonResponse({ success: true, data: { vendors: mappings.slice(offset, offset + limit), total: mappings.length } });
+      }
+      return jsonResponse({ success: true, data: {} });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  };
+
+  /**
+   * The wizard reads the saved session in an effect right after it opens. In the browser that read finishes before
+   * anyone clicks; in a synchronous test it has not, so the test lets the pending responses settle first.
+   */
+  const settleOpeningRequests = () =>
+    act(async () => {
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+    });
+
   beforeAll(() => {
     (global as any).FileReader = MockFileReader;
     HTMLAnchorElement.prototype.click = jest.fn();
@@ -143,10 +245,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
   afterAll(() => {
     global.FileReader = originalFileReader;
+    logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
+    logger.clearLogs();
   });
 
   beforeEach(() => {
     jest.clearAllMocks();
+    logger.isRemoteSyncEnabled = false;
+    logger.clearLogs();
     global.fetch = jest.fn(() =>
       Promise.resolve({
         ok: true,
@@ -165,6 +271,11 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
   });
 
+  afterEach(() => {
+    // A test that fails before its own cleanup must not leave fake timers running for the next test.
+    jest.useRealTimers();
+  });
+
   it('renders null when initialSetupModalOpen is false', () => {
     (useApp as jest.Mock).mockReturnValue({
       initialSetupModalOpen: false,
@@ -181,8 +292,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('walks through the 5 steps and saves processed data with activeBuyerAccount null', () => {
+  it('walks through the 5 steps and saves processed data with activeBuyerAccount null', async () => {
     jest.useFakeTimers();
+    installIngestionServer();
     global.URL.createObjectURL = jest.fn(() => 'blob:mock');
     global.URL.revokeObjectURL = jest.fn();
 
@@ -198,22 +310,32 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
 
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
-    // STEP 1: Select Period
+    // Header displays clean title without Dual-File ERP Setup badge
+    expect(screen.getByRole('heading', { level: 2, name: /Buyer Initial Setup: Vendor Master & PO Data Ingestion/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Dual-File ERP Setup/i)).not.toBeInTheDocument();
+
+    // STEP 1: Select Period (Required Columns & template button should not be here)
     expect(screen.getByText(/Step 1: Choose Historical Purchase Period/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Download Vendor Master Template/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Required Columns/i)).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));
     expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('1_year');
 
     fireEvent.click(screen.getByText(/Last 3 Years \(36 Months\)/i));
     expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('3_years');
 
-    // Download Vendor Master template from Step 1 (Time Horizon)
-    fireEvent.click(screen.getByText(/Download Vendor Master Template/i));
-    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
-
     // Continue to STEP 2
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
     expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
+
+    // Required Columns section and Download Vendor Master Template button are in Step 2
+    expect(screen.getByText(/Required Columns/i)).toBeInTheDocument();
+    expect(screen.getByText(/Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN & Location/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Download Vendor Master Template/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
 
     // Step 2 starts empty (default selection removed)
     expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
@@ -247,7 +369,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     if (fileInput) {
       fireEvent.change(fileInput, { target: { files: [vendorFile] } });
     }
-    expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Uploaded', expect.any(String), 'success');
+    // The success toast follows the server's start-job request, so wait for it rather than checking at once
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Uploaded', expect.any(String), 'success'));
 
     // Clear Selection in Step 2 — click the stopPropagation-wrapped instance
     // inside the "already uploaded" summary panel (the last rendered one; a
@@ -280,29 +403,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [poFile] } });
     }
 
-    // Run AI Cross-Match simulation to enter STEP 4
+    // Run the AI Category Cross-Match. The server job finishes, and the wizard opens Step 4 (dispatch)
     fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
-    act(() => {
-      jest.advanceTimersByTime(1000);
-    });
-
-    // STEP 4: Category Review & Cross Join
-    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
-
-    // Tab filters in Step 4
-    const filterTabs = screen.getAllByRole('button');
-    const mappedTab = filterTabs.find((b) => b.textContent?.includes('Mapped'));
-    if (mappedTab) fireEvent.click(mappedTab);
-
-    const unmappedTab = filterTabs.find((b) => b.textContent?.includes('Unmapped'));
-    if (unmappedTab) fireEvent.click(unmappedTab);
-
-    const allTab = filterTabs.find((b) => b.textContent?.includes('All'));
-    if (allTab) fireEvent.click(allTab);
-
-    // Continue to Step 5 using Review Email Dispatch button
-    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
-    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+    expect(screen.queryByText(/Step 4: AI Cross-Match/i)).not.toBeInTheDocument();
 
     // Save and commit
     fireEvent.click(screen.getByText(/COMPLETE SETUP & INGEST/i));
@@ -311,9 +415,11 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useRealTimers();
   });
 
-  it('handles back button navigation and modal close (X button)', () => {
+  it('handles back button navigation and modal close (X button)', async () => {
     jest.useFakeTimers();
+    installIngestionServer();
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
     // Step 1 -> Step 2
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
@@ -346,28 +452,29 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText('3. PO Dump'));
     expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
 
-    // Upload PO file so Step 4 & 5 can be accessed
+    // Upload PO file so Step 4 (dispatch) can be accessed
     const poFile = createValidPoDumpFile();
     const poInput = container.querySelector('input[type="file"]');
     if (poInput) {
       fireEvent.change(poInput, { target: { files: [poFile] } });
     }
 
-    // Step 3 -> Step 4
-    fireEvent.click(screen.getByText('4. AI Category Join'));
-    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+    // Jumping to Step 4 before the AI run is refused, because the stored PO dump needs its categories first
+    fireEvent.click(screen.getByText('4. Dispatch Emails'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.aiCategory.runFirst)).toBeInTheDocument();
+
+    // Run the AI Category Cross-Match; the server job finishes and Step 4 opens
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
     // Back to step 3
     fireEvent.click(screen.getByText('Back to PO Dump'));
     expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
 
-    // Step 3 -> Step 5
-    fireEvent.click(screen.getByText('5. Dispatch Emails'));
-    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
-
-    // Back to step 4
-    fireEvent.click(screen.getByText('Back to Category Join'));
-    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+    // Step 3 -> Step 4 (dispatch) again before closing; the AI result is kept
+    fireEvent.click(screen.getByText('4. Dispatch Emails'));
+    expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument();
 
     // Close modal via top-right close button
     const closeBtns = screen.getAllByRole('button');
@@ -378,7 +485,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useRealTimers();
   });
 
-  it('handles excel file uploads, column aliases, empty values, errors, and cross-category AI parsing', () => {
+  it('handles excel file uploads, column aliases, empty values, errors, and cross-category AI parsing', async () => {
     // 1. Create valid Vendor Master workbook with alternate column aliases and empty fallbacks
     const wsVendors = XLSX.utils.json_to_sheet([
       {
@@ -512,7 +619,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         unit: '',
         unitprice: '',
         totalspend: '',
-        division: 'General',
+        division: '',
       },
     ]);
     const wbPO = XLSX.utils.book_new();
@@ -523,7 +630,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
     poFile.__buffer = poBuffer;
 
+    installIngestionServer();
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
     // Go to Step 2 (Vendor Master)
     fireEvent.click(screen.getByText('2. Vendor Master'));
@@ -576,6 +685,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(vInput, { target: { files: [vendorFile] } });
     }
 
+    // The vendor master is parsed asynchronously, and Step 3 opens only once vendors are stored.
+    await screen.findByText(/suppliers parsed and loaded into vendor master/i);
+
     // Go to Step 3 (PO Dump)
     fireEvent.click(screen.getByText('3. PO Dump'));
 
@@ -589,7 +701,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    const pChooseBtns = screen.getAllByText('Choose Another File');
+    // The PO dump is accepted through the step's file input, which is what offers Choose Another File.
+    const poUploadInput = container.querySelector('input[type="file"]');
+    if (poUploadInput) {
+      fireEvent.change(poUploadInput, { target: { files: [poFile] } });
+    }
+
+    // Offered only once the PO dump has parsed into records. The click is an optional branch, so it runs if the button is present.
+    const pChooseBtns = screen.queryAllByText('Choose Another File');
     if (pChooseBtns[0]) fireEvent.click(pChooseBtns[0]);
 
     const badTypeFile: any = new File(['not a spreadsheet'], 'resume.pdf', { type: 'application/pdf' });
@@ -612,6 +731,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-01-01',
           'Vendor Name': 'Apex Supplies Ltd.',
           'Item Name': 'Special Valves',
+          Specifications: 'Standard grade',
           Quantity: 10,
           'Unit Price': '$500',
           'Total Spend': '$0',
@@ -621,6 +741,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-01-02',
           'Vendor Name': 'Apex Supplies Ltd.',
           'Item Name': 'Special Valves 2',
+          Specifications: 'Standard grade',
           Quantity: 10,
           'Unit Price': '0',
           'Total Spend': '$5000',
@@ -630,6 +751,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-01-03',
           'Vendor Name': 'Delta Compressors Ltd',
           'Item Name': 'General Non-Matching Item',
+          Specifications: 'Standard grade',
           Quantity: 1,
           'Unit Price': 100,
           'Total Spend': 100,
@@ -639,6 +761,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': 45995.00011574074,
           'Vendor Name': 'Apex Supplies Ltd.',
           'Item Name': 'Decimal Date Test',
+          Specifications: 'Standard grade',
           Quantity: 1,
           'Unit Price': 100,
           'Total Spend': 100,
@@ -654,10 +777,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [edgePOFile] } });
     }
 
-    // Step 4 & Step 5 verification
-    fireEvent.click(screen.getByText('4. AI Category Join'));
-    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
-    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+    // Step 4 (dispatch) verification: the AI category run must finish before the review opens
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
   });
 
   it('supports read-only default table and toggling Edit Data mode', () => {
@@ -735,6 +857,25 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
   });
 
+  it('gives a manually added vendor row a crypto.randomUUID id and does not draw one from Math.random', () => {
+    const randomUUID = jest.spyOn(globalThis.crypto, 'randomUUID');
+    const mathRandom = jest.spyOn(Math, 'random');
+    try {
+      render(<InitialSetupModal />);
+      fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+      const randomCallsBefore = mathRandom.mock.calls.length;
+
+      fireEvent.click(screen.getByText(/Add Vendor Manually/i));
+
+      expect(randomUUID).toHaveBeenCalledTimes(1);
+      expect(mathRandom.mock.calls.length).toBe(randomCallsBefore);
+      expect(screen.getByText(/Editing Vendor Master Records \(1 Suppliers\)/i)).toBeInTheDocument();
+    } finally {
+      randomUUID.mockRestore();
+      mathRandom.mockRestore();
+    }
+  });
+
   it('clicks the empty-state Browse File button to trigger the hidden file input', () => {
     const { container } = render(<InitialSetupModal />);
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
@@ -746,7 +887,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(clickSpy).toHaveBeenCalled();
   });
 
-  it('classifies IT/software purchases and falls back to General Spares for unmatched categories', () => {
+  it('takes categories only from the AI result: a supplier the AI does not categorise goes to self-mapping', async () => {
     const wsVendors = XLSX.utils.json_to_sheet([
       // "SupplierVendorEmailAddress" isn't an exact normalized match for any
       // known email alias, only a substring superset — forces the getVal
@@ -766,7 +907,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     const wsPOs = XLSX.utils.json_to_sheet([
       {
         'PO Number': 'PO-7001',
+        'PO Date': '2025-02-01',
         'Vendor Name': 'CloudTech Solutions',
+        Specifications: 'Enterprise licence terms',
         'Item Name': 'Microsoft 365 workspace license subscription renewal, Azure cloud storage credits, BigQuery analytics data platform, Datacenter infrastructure server',
         Quantity: 1,
         'Unit Price': 100000,
@@ -774,7 +917,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       },
       {
         'PO Number': 'PO-7002',
+        'PO Date': '2025-02-02',
         'Vendor Name': 'Zenith Traders',
+        Specifications: 'Office consumables',
         'Item Name': 'Office stationery and miscellaneous supplies',
         Quantity: 5,
         'Unit Price': 100,
@@ -785,7 +930,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // minor-category keywords (cloud/license/bigquery/datacenter/etc.),
         // forcing the empty-secondSetMinors fallback.
         'PO Number': 'PO-7003',
+        'PO Date': '2025-02-03',
         'Vendor Name': 'Plain Software House',
+        Specifications: 'Generic software licence',
         'Item Name': 'Generic software',
         Quantity: 1,
         'Unit Price': 1000,
@@ -800,8 +947,49 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
     poFile.__buffer = poBuffer;
 
-    jest.useFakeTimers();
+    installIngestionServer({
+      mappings: [
+        {
+          ...APEX_MAPPING,
+          id: 'mapping-cloud',
+          vendorRecordId: 'vr-cloud',
+          vendorCode: '',
+          companyName: 'CloudTech Solutions',
+          email: 'sales@cloudtech.com',
+          poCount: 1,
+          totalSpend: 100000,
+          finalMajorCategory: 'Information Technology (IT) & Software',
+          finalMinorCategories: ['Enterprise Software & Licenses'],
+        },
+        {
+          ...APEX_MAPPING,
+          id: 'mapping-zenith',
+          vendorRecordId: 'vr-zenith',
+          vendorCode: '',
+          companyName: 'Zenith Traders',
+          email: 'info@zenith.com',
+          hasPoHistory: false,
+          poCount: 0,
+          totalSpend: 0,
+          finalMajorCategory: '',
+          finalMinorCategories: [],
+        },
+        {
+          ...APEX_MAPPING,
+          id: 'mapping-plain',
+          vendorRecordId: 'vr-plain',
+          vendorCode: '',
+          companyName: 'Plain Software House',
+          email: 'contact@plainsoftware.com',
+          poCount: 1,
+          totalSpend: 1000,
+          finalMajorCategory: '',
+          finalMinorCategories: [],
+        },
+      ],
+    });
     render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
     fireEvent.click(screen.getByText('2. Vendor Master'));
     const vInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -812,102 +1000,113 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.change(poInput, { target: { files: [poFile] } });
 
     fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
-    act(() => {
-      jest.advanceTimersByTime(1000);
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    // One supplier has an AI category, and two do not. Keyword matching no longer fills the gap.
+    expect(screen.getByText('3 Vendors')).toBeInTheDocument();
+    expect(screen.getByText('1 Suppliers')).toBeInTheDocument();
+    expect(screen.getByText('2 Suppliers')).toBeInTheDocument();
+  });
+
+  it('applies the AI category job result when the server completes it', async () => {
+    installIngestionServer({
+      mappings: [
+        {
+          ...APEX_MAPPING,
+          id: 'v-api-1',
+          vendorRecordId: 'v-api-1',
+          vendorCode: 'VND-API-1',
+          companyName: 'Api Matched Vendor',
+          email: 'api@vendor.com',
+          poCount: 1,
+          totalSpend: 1000,
+          finalMajorCategory: 'General Spares & Consumables',
+          finalMinorCategories: ['Customised Parts'],
+        },
+      ],
     });
 
-    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+    jest.useFakeTimers();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
+
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    const poFile = createValidPoDumpFile();
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    // The stored mapping is the one reviewed, so one supplier is categorised and none needs self-mapping
+    expect(screen.getByText('1 Suppliers')).toBeInTheDocument();
+    expect(screen.getByText('0 Suppliers')).toBeInTheDocument();
     jest.useRealTimers();
   });
 
-  it('applies the AI cross-match API result when the backend responds successfully', async () => {
-    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        success: true,
-        data: [
-          {
-            id: 'v-api-1',
-            vendorCode: 'VND-API-1',
-            companyName: 'Api Matched Vendor',
-            email: 'api@vendor.com',
-            contactPerson: 'API Contact',
-            phone: '+91 90000 00000',
-            address: 'API Address',
-            gstNumber: '27AAAAA0000A1Z0',
-            hasPoHistory: true,
-            categoriesMappedByBuyer: true,
-            itemsSupplied: ['API Item'],
-            pastPoSpend: '₹1,000 (1 POs)',
-            poCount: 1,
-            firstSetMajorCategory: 'General Spares & Consumables',
-            secondSetMinorCategories: ['Customised Parts'],
-          },
-        ],
+  it('keeps the buyer on Step 3 with the reason when the server cannot start the AI job', async () => {
+    const server = installIngestionServer({ startFails: 'Upload and confirm your PO dump before running the category match.' });
+
+    jest.useFakeTimers();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
+
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    const poFile = createValidPoDumpFile();
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    expect(await screen.findByText('Upload and confirm your PO dump before running the category match.')).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith('AI Category Cross-Match', 'Upload and confirm your PO dump before running the category match.', 'warning');
+    jest.useRealTimers();
+    expect(server).toHaveBeenCalled();
+  });
+
+  it('logs and shows the start-failure message when the AI job request cannot reach the server', async () => {
+    const server = installIngestionServer();
+    const serve = server.getMockImplementation()!;
+    server.mockImplementation((url: string, init?: RequestInit) =>
+      url.endsWith('/ai-categorize-job') ? Promise.reject(new Error('network down')) : serve(url, init)
+    );
+
+    jest.useFakeTimers();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
+
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    const poFile = createValidPoDumpFile();
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    expect(await screen.findByText(UI_STRINGS.vendorPoIngestion.aiCategory.startFailed)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(logger.buffer).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        level: 'ERROR',
+        category: 'VENDOR_INGESTION',
+        message: 'Could not start the AI category job',
+        metadata: expect.objectContaining({ error: expect.any(Error) }),
       }),
-    } as any);
-
-    jest.useFakeTimers();
-    const { container } = render(<InitialSetupModal />);
-
-    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
-    const vFile = createValidVendorMasterFile();
-    const vInput = container.querySelector('input[type="file"]');
-    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
-
-    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
-    const poFile = createValidPoDumpFile();
-    const poInput = container.querySelector('input[type="file"]');
-    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
-
-    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    act(() => {
-      jest.advanceTimersByTime(1000);
-    });
-
-    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+    ]));
     jest.useRealTimers();
-    fetchSpy.mockRestore();
-  });
-
-  it('logs and continues locally when the AI cross-match API call rejects', async () => {
-    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    const fetchSpy = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network down'));
-
-    jest.useFakeTimers();
-    const { container } = render(<InitialSetupModal />);
-
-    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
-    const vFile = createValidVendorMasterFile();
-    const vInput = container.querySelector('input[type="file"]');
-    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
-
-    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
-    const poFile = createValidPoDumpFile();
-    const poInput = container.querySelector('input[type="file"]');
-    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
-
-    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    act(() => {
-      jest.advanceTimersByTime(1000);
-    });
-
-    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
-    expect(consoleWarnSpy).toHaveBeenCalledWith('Backend AI cross-match API error:', expect.any(Error));
-
-    jest.useRealTimers();
-    fetchSpy.mockRestore();
-    consoleWarnSpy.mockRestore();
   });
 
   it('polls PO Dump job progress live instead of freezing at the initial 0-processed snapshot', async () => {
@@ -1003,13 +1202,16 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
   it('downloads vendor master Excel template and PO dump Excel template', () => {
     const { container } = render(<InitialSetupModal />);
-    // In Step 1: Time Horizon
-    const vendorTemplateBtn = screen.getByText(/Download Vendor Master Template/i);
-    fireEvent.click(vendorTemplateBtn);
-    expect(vendorTemplateBtn).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    // In Step 1: Time Horizon (vendor template is not here)
     expect(screen.queryByText(/Download Vendor Master Template/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Required Columns/i)).not.toBeInTheDocument();
+
+    // Navigate to Step 2: Vendor Master
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vendorTemplateBtn = screen.getByText(/Download Vendor Master Template/i);
+    expect(vendorTemplateBtn).toBeInTheDocument();
+    expect(screen.getByText(/Required Columns/i)).toBeInTheDocument();
+    fireEvent.click(vendorTemplateBtn);
 
     const vFile = createValidVendorMasterFile();
     const fileInput = container.querySelector('input[type="file"]');
@@ -1027,8 +1229,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       totalProcessed: 2,
       mappedCount: 1,
       mappedEmailsSent: 1,
+      mappedEmailsQueued: 0,
       unmappedCount: 1,
       unmappedEmailsSent: 1,
+      unmappedEmailsQueued: 0,
       failedEmailCount: 0,
       failedEmails: [],
       overallStatus: 'COMPLETED' as const,
@@ -1071,10 +1275,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    // Navigate to Step 5
-    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+    // Navigate to Step 4 (dispatch)
+    fireEvent.click(screen.getByText('4. Dispatch Emails'));
 
-    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+    expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument();
     expect(screen.getByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
 
     // Click Complete Setup & Ingest
@@ -1143,7 +1347,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       showToast: mockShowToast,
     });
 
+    installIngestionServer();
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
     fireEvent.click(screen.getByText('2. Vendor Master'));
     const vFile = createValidVendorMasterFile();
     const vInput = container.querySelector('input[type="file"]');
@@ -1164,14 +1370,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
     const submitBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
     await act(async () => {
       fireEvent.click(submitBtn);
     });
     expect(mockShowToast).toHaveBeenCalledWith('Ingestion Error', expect.any(String), 'warning');
-    expect(screen.getByTestId('step5-submission-error-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-submission-error-banner')).toBeInTheDocument();
   });
 
   it('cancels active background ingestion jobs when modal is closed', async () => {
@@ -1361,6 +1568,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       'PO Date': '2025-01-01',
       'Supplier Name': `Supplier ${i}`,
       'Item Description': `Item ${i}`,
+      Specifications: `Spec ${i}`,
       Quantity: 10,
       Price: 100,
       Total: 1000,
@@ -1655,8 +1863,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
 
     expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
-    // Auto-assigned vendor code VND-1001 should be rendered, not the email address in vendor code cell
-    expect(screen.getByText('VND-1001')).toBeInTheDocument();
+    // Auto-assigned sequential vendor code '1' should be rendered in the table cell, not the email address
+    expect(screen.getByRole('cell', { name: '1' })).toBeInTheDocument();
     expect(screen.getByText('govardhan.kilari@procucev.com')).toBeInTheDocument();
   });
 
@@ -1731,14 +1939,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
 
     expect(mockShowToast).toHaveBeenCalledWith(
-      'Invalid PO Sheet Headers',
-      expect.stringContaining('Sheet headers do not match PO Purchase Dump required fields'),
+      UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle,
+      expect.stringContaining(UI_STRINGS.vendorPoIngestion.poDump.missingColumnsTemplate.split('{columns}')[0]),
       'warning'
     );
     expect(screen.getByTestId('po-upload-error-banner')).toBeInTheDocument();
   });
 
-  it('displays a clear submission error banner on Step 5 when final ingestion fails', async () => {
+  it('displays a clear submission error banner on Step 4 when final ingestion fails', async () => {
     const failingIngest = jest.fn().mockRejectedValue(new Error('PostgreSQL database connection timed out'));
     (useApp as jest.Mock).mockReturnValue({
       initialSetupModalOpen: true,
@@ -1753,8 +1961,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       showToast: mockShowToast,
     });
 
+    installIngestionServer();
     const { container } = render(<InitialSetupModal />);
-    
+    await settleOpeningRequests();
+
     // Upload valid vendor master in Step 2
     fireEvent.click(screen.getByText('2. Vendor Master'));
     const vFile = createValidVendorMasterFile();
@@ -1777,8 +1987,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    // Go directly to Step 5
-    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+    // Run the AI Category Cross-Match so Step 4 opens with the stored categories
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
     const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
     await act(async () => {
@@ -1786,7 +1997,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
 
-    expect(screen.getByTestId('step5-submission-error-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-submission-error-banner')).toBeInTheDocument();
     expect(screen.getByText('Ingestion & Dispatch Error')).toBeInTheDocument();
     expect(screen.getByText(/PostgreSQL database connection timed out/i)).toBeInTheDocument();
     expect(mockShowToast).toHaveBeenCalledWith('Ingestion Error', expect.any(String), 'warning');
@@ -1794,7 +2005,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Dismiss error
     const dismissBtn = screen.getByTitle('Dismiss error');
     fireEvent.click(dismissBtn);
-    expect(screen.queryByTestId('step5-submission-error-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-submission-error-banner')).not.toBeInTheDocument();
   });
 
   it('blocks navigation to subsequent steps if vendor master is empty or has validation errors', async () => {
@@ -1924,7 +2135,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.queryByTestId('po-upload-error-banner')).not.toBeInTheDocument();
   });
 
-  it('blocks step 4 navigation without PO dump and handles files with zero recognizable rows', async () => {
+  it('blocks Step 4 without a PO dump, and handles files with zero recognizable rows', async () => {
     const { container } = render(<InitialSetupModal />);
 
     // Step 2: Upload valid vendor master
@@ -1938,12 +2149,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    // Navigate to step 3, then try to jump to step 4 without PO Dump (lines 391-397)
+    // PO dump is mandatory: Step 4 stays locked on Step 3 until a PO dump is uploaded
     fireEvent.click(screen.getByText('3. PO Dump'));
-    fireEvent.click(screen.getByText('4. AI Category Join'));
+    fireEvent.click(screen.getByText('4. Dispatch Emails'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
     expect(mockShowToast).toHaveBeenCalledWith(
-      'PO Dump Required',
-      expect.stringContaining('Historical PO Dump is required'),
+      UI_STRINGS.vendorPoIngestion.poDump.requiredTitle,
+      UI_STRINGS.vendorPoIngestion.poDump.requiredError,
       'warning'
     );
 
@@ -1996,9 +2209,11 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
   });
 
-  it('renders Step 5 setup summary without Template A and Template B sections after data upload', async () => {
+  it('renders Step 4 setup summary without Template A and Template B sections after data upload', async () => {
     jest.useFakeTimers();
+    installIngestionServer();
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
     // Step 2: Valid Vendor Master
     fireEvent.click(screen.getByText('2. Vendor Master'));
@@ -2017,22 +2232,12 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [poFile] } });
     }
 
-    // Run AI Category Cross-Match simulation from Step 3 to enter Step 4
-    const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
-    fireEvent.click(runJoinBtn);
-    act(() => {
-      jest.advanceTimersByTime(1200);
-    });
+    // Run the AI Category Cross-Match from Step 3; once the server job finishes, Step 4 (dispatch) opens
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
-    // Step 5: Review Email Dispatch & Finalize
-    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
-    await act(async () => {
-      await Promise.resolve();
-    });
-    jest.useRealTimers();
-
-    // Verify Step 5 header & description
-    expect(screen.getByText(/Step 5: Confirm Ingestion & Dispatch Tailored Onboarding Emails/i)).toBeInTheDocument();
+    // Verify Step 4 header & description
+    expect(screen.getByText(/Step 4: Confirm Ingestion & Dispatch Tailored Onboarding Emails/i)).toBeInTheDocument();
     expect(screen.getByText(/The platform will dispatch tailored credentials and category notices based on PO correlation/i)).toBeInTheDocument();
 
     // Verify Template A and Template B sections are NOT rendered
@@ -2041,18 +2246,22 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.queryByRole('button', { name: /View & Edit Template A/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /View & Edit Template B/i })).not.toBeInTheDocument();
 
-    // Verify remaining setup summary is intact
+    // Verify Step 4 renders only the 3 email dispatch confirmation cards and no extra cards or test data
     expect(screen.getByText(/Total Stored/i)).toBeInTheDocument();
     expect(screen.getByText(/PO Mapped/i)).toBeInTheDocument();
     expect(screen.getByText(/Self-Map Required/i)).toBeInTheDocument();
-    expect(screen.getByText(/3-Day Reminders/i)).toBeInTheDocument();
+    expect(screen.queryByText(/3-Day Reminders/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-completion-summary')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-skipped-vendors-list')).not.toBeInTheDocument();
 
-    // Verify Back to Category Join navigation
-    const backBtn = screen.getByRole('button', { name: /Back to Category Join/i });
+    // Verify Back to PO Dump navigation, then rerun the cross-match to return to Step 4
+    const backBtn = screen.getByRole('button', { name: /Back to PO Dump/i });
     expect(backBtn).toBeInTheDocument();
     fireEvent.click(backBtn);
-    expect(screen.getByText(/Review Email Dispatch & Finalize/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
     // Verify Completion button is present
     expect(screen.getByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
@@ -2062,8 +2271,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Test auth headers reading token from sessionStorage (lines 407-412)
     sessionStorage.setItem('procucev_auth_token', 'test-session-jwt-token');
     jest.useFakeTimers();
+    installIngestionServer();
 
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
     // Step 1: Choose 1_year
     fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));
@@ -2076,11 +2287,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(vInput, { target: { files: [vFile] } });
     }
 
-    // Step 3: Try running cross-match when poLineItems is empty (lines 1458-1463)
+    // Step 3 with no PO dump yet: Step 3 shows required badge + Run AI button (never Continue Without PO Dump) and blocks proceeding without PO dump
     fireEvent.click(screen.getByText('3. PO Dump'));
-    const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
-    fireEvent.click(runJoinBtn);
-    expect(mockShowToast).toHaveBeenCalledWith('PO Dump Required', expect.stringContaining('Historical PO Dump is required'), 'warning');
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredBadge)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Continue Without PO Dump/i })).not.toBeInTheDocument();
+    const runAiBtn = screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorPoIngestion.aiCategory.runAction, 'i') });
+    expect(runAiBtn).toBeInTheDocument();
+    fireEvent.click(runAiBtn);
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
 
     // Upload PO dump
     const poFile = createValidPoDumpFile();
@@ -2090,14 +2304,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [poFile] } });
     }
 
-    // Run simulation to Step 4
-    fireEvent.click(runJoinBtn);
-    act(() => {
-      jest.advanceTimersByTime(1200);
-    });
-
-    // Step 5: Review Email Dispatch & Finalize
-    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    // Run simulation; it lands on Step 4 (dispatch)
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
     jest.useRealTimers();
 
     // Complete setup with 1_year selected (line 1523: '1 Year')
@@ -2111,12 +2320,14 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     sessionStorage.removeItem('procucev_auth_token');
   });
 
-  it('covers getLastHistoricalDataError and error without message on Step 5 completion', async () => {
+  it('covers getLastHistoricalDataError and error without message on Step 4 completion', async () => {
     const { getLastHistoricalDataError } = jest.requireMock('@/lib/store');
     getLastHistoricalDataError.mockReturnValueOnce('External DB Sync Verification Failed');
     jest.useFakeTimers();
+    installIngestionServer();
 
     const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
 
     // Step 2
     fireEvent.click(screen.getByText('2. Vendor Master'));
@@ -2135,14 +2346,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [poFile] } });
     }
 
-    // Step 4
+    // Step 4: run the AI Category Cross-Match; the server job finishes and Step 4 (dispatch) opens
     fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
-    act(() => {
-      jest.advanceTimersByTime(1200);
-    });
-
-    // Step 5
-    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
     jest.useRealTimers();
 
     // Attempt final ingestion when getLastHistoricalDataError returns error (lines 1514-1518)
@@ -2151,7 +2357,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.click(completeBtn);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
-    expect(screen.getByTestId('step5-submission-error-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-submission-error-banner')).toBeInTheDocument();
     expect(screen.getByText('External DB Sync Verification Failed')).toBeInTheDocument();
 
     // Attempt final ingestion when processHistoricalPurchaseData throws an error without message (lines 1526-1530)
@@ -2191,7 +2397,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
 
     // Verify read-only table fallbacks (lines 2132, 2142, 2149, 2153, 2155, 2156)
-    expect(screen.getByText('VND-1001')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '1' })).toBeInTheDocument();
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
 
     // Toggle Edit Data mode (lines 2032, 2048, 2057, 2069-2076)
@@ -2210,24 +2416,26 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Clear rating input to test raw === '' branch (line 2074)
     fireEvent.change(ratingInput, { target: { value: '' } });
 
-    // Step 3: Upload PO with zero unit price and omitted specs/department (lines 2446, 2449, 2452, 2456)
+    // Step 3: Upload PO with omitted unit price and department (lines 2446, 2449, 2452, 2456)
     fireEvent.click(screen.getByText('3. PO Dump'));
     const sparsePoWb = XLSX.utils.book_new();
     const sparsePoWs = XLSX.utils.json_to_sheet([
       {
-        'PO Number': 'PO-SPARSE-1',
+        'PO Number': '',
         'PO Date': '2025-04-10',
         'Vendor Name': 'Minimalist Vendor Pvt Ltd',
         'Item Name': 'Electrical switchgear panel and breaker mccb', // lines 1222-1223
         Quantity: 2,
         'Total Spend': 2000,
-        // Specs, Unit Price, Department omitted
+        Specifications: 'Switchgear panel, 415 V',
+        // Unit Price and Department omitted
       },
       {
         'PO Number': 'PO-SPARSE-2',
         'PO Date': '2025-04-11',
         'Vendor Name': 'Minimalist Vendor Pvt Ltd',
         'Item Name': 'Civil works peb tmt steel structure', // lines 1226-1227
+        Specifications: 'Steel structure, Fe 500',
         Quantity: 1,
         'Total Spend': 5000,
       },
@@ -2248,8 +2456,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       });
     }
 
-    // Verify PO table displays default Department 'General' and fallback '—'
-    expect(screen.getAllByText('General').length).toBeGreaterThan(0);
+    // Nothing is defaulted. A column that a row leaves empty shows a dash.
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 
@@ -2257,65 +2464,59 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useFakeTimers();
     const origFetch = global.fetch;
 
-    const mockFetch = jest.fn().mockImplementation((url: string, init?: any) => {
-      if (typeof url === 'string') {
-        if (url.includes('/api/buyer-accounts/ai-cross-match')) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              success: true,
-              data: [
-                {
-                  id: 'j-1',
-                  companyName: 'Duplicate Email Vendor Ltd',
-                  vendorCode: 'VND-1001',
-                  email: 'sales@dup.com; SALES@DUP.COM, info@dup.com',
-                  phone: '+91 98111 22222',
-                  categoriesMappedByBuyer: true,
-                  poCount: 1,
-                  firstSetMajorCategory: 'Engineering Spares',
-                  secondSetMinorCategories: ['Valves'],
-                },
-                {
-                  id: 'j-2',
-                  companyName: 'Silent Supplier',
-                  vendorCode: 'VND-1002',
-                  email: '',
-                  phone: '',
-                  categoriesMappedByBuyer: false,
-                  poCount: 0,
-                },
-                {
-                  id: 'j-3',
-                  companyName: 'Email Only Supplier',
-                  vendorCode: 'VND-1003',
-                  email: 'emailonly@supplier.com',
-                  phone: '',
-                  categoriesMappedByBuyer: true,
-                  poCount: 1,
-                  firstSetMajorCategory: 'Electrical',
-                  secondSetMinorCategories: ['Cables'],
-                },
-                {
-                  id: 'j-4',
-                  companyName: 'Phone Only Supplier',
-                  vendorCode: 'VND-1004',
-                  email: '',
-                  phone: '+91 98333 44444',
-                  categoriesMappedByBuyer: false,
-                  poCount: 0,
-                },
-              ],
-            }),
-          });
-        }
-      }
-      return origFetch(url, init);
+    // The AI category job stores one mapping per supplier. The wizard reads them back from the server.
+    installIngestionServer({
+      mappings: [
+        {
+          vendorRecordId: 'j-1',
+          vendorCode: 'VND-1001',
+          companyName: 'Duplicate Email Vendor Ltd',
+          email: 'sales@dup.com',
+          hasPoHistory: true,
+          poCount: 1,
+          totalSpend: 25000,
+          finalMajorCategory: 'Engineering Spares',
+          finalMinorCategories: ['Valves'],
+        },
+        {
+          vendorRecordId: 'j-2',
+          vendorCode: 'VND-1002',
+          companyName: 'Silent Supplier',
+          email: '',
+          hasPoHistory: false,
+          poCount: 0,
+          totalSpend: 0,
+          finalMajorCategory: '',
+          finalMinorCategories: [],
+        },
+        {
+          vendorRecordId: 'j-3',
+          vendorCode: 'VND-1003',
+          companyName: 'Email Only Supplier',
+          email: 'emailonly@supplier.com',
+          hasPoHistory: true,
+          poCount: 1,
+          totalSpend: 1000,
+          finalMajorCategory: 'Electrical',
+          finalMinorCategories: ['Cables'],
+        },
+        {
+          vendorRecordId: 'j-4',
+          vendorCode: 'VND-1004',
+          companyName: 'Phone Only Supplier',
+          email: '',
+          hasPoHistory: false,
+          poCount: 0,
+          totalSpend: 0,
+          finalMajorCategory: '',
+          finalMinorCategories: [],
+        },
+      ],
     });
-    global.fetch = mockFetch;
 
     try {
       const { container } = render(<InitialSetupModal />);
+      await settleOpeningRequests();
 
       // Step 2: Upload Vendor Master
       fireEvent.click(screen.getByText('2. Vendor Master'));
@@ -2380,8 +2581,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         fireEvent.change(vInput, { target: { files: [richFile] } });
       }
 
-      // Check that vendorCode fallback was used for first row (line 677: VND-1001)
-      expect(screen.getByText('VND-1001')).toBeInTheDocument();
+      // Check that vendorCode fallback was used for first row (line 677: 1)
+      expect(screen.getByRole('cell', { name: '1' })).toBeInTheDocument();
 
       // Step 3: Upload PO Dump that matches Duplicate Email Vendor Ltd
       fireEvent.click(screen.getByText('3. PO Dump'));
@@ -2392,6 +2593,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'PO Date': '2025-05-15',
           'Vendor Name': 'Duplicate Email Vendor Ltd',
           'Item Name': 'Industrial stainless steel valve',
+          Specifications: 'DN50, flanged',
           Quantity: 10,
           'Total Spend': 25000,
           Department: 'Mechanical Engineering',
@@ -2410,33 +2612,13 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         fireEvent.change(poInput, { target: { files: [poFile] } });
       }
 
-      // Run AI Category Cross-Match
-      const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
-      await act(async () => {
-        fireEvent.click(runJoinBtn);
-        await Promise.resolve();
-        await Promise.resolve();
-        jest.advanceTimersByTime(1200);
-      });
+      // Run AI Category Cross-Match; once the server job finishes, Step 4 (dispatch) opens
+      fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+      await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
-      // In Step 4: Click the Filter Tabs
-      // 1. Click ✓ Mapped tab (line 2544)
-      const mappedTabBtn = screen.getByRole('button', { name: /✓ Mapped/i });
-      fireEvent.click(mappedTabBtn);
-      expect(screen.getByText('Duplicate Email Vendor Ltd')).toBeInTheDocument();
-
-      // 2. Click ⚠️ Unmapped tab (line 2552)
-      const unmappedTabBtn = screen.getByRole('button', { name: /⚠️ Unmapped/i });
-      fireEvent.click(unmappedTabBtn);
-      expect(screen.getAllByText('Silent Supplier').length).toBeGreaterThan(0);
-
-      // 3. Click All tab (line 2534)
-      const allTabBtn = screen.getByRole('button', { name: /All \(/i });
-      fireEvent.click(allTabBtn);
-      expect(screen.getByText('Duplicate Email Vendor Ltd')).toBeInTheDocument();
-
-      // Step 5: Proceed to Step 5
-      fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+      // Step 4 summarises the mapped and self-map suppliers
+      expect(screen.getByText(/PO Mapped/i)).toBeInTheDocument();
+      expect(screen.getByText(/Self-Map Required/i)).toBeInTheDocument();
 
       // Trigger submission error and dismiss error banner (line 2772, 2790)
       mockProcessHistoricalPurchaseData.mockRejectedValueOnce(new Error('Ingestion pipeline failed'));
@@ -2446,13 +2628,13 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         await Promise.resolve();
       });
 
-      const errorBanner = screen.getByTestId('step5-submission-error-banner');
+      const errorBanner = screen.getByTestId('dispatch-submission-error-banner');
       expect(errorBanner).toBeInTheDocument();
       const dismissBtn = errorBanner.querySelector('button');
       if (dismissBtn) {
         fireEvent.click(dismissBtn);
       }
-      expect(screen.queryByTestId('step5-submission-error-banner')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('dispatch-submission-error-banner')).not.toBeInTheDocument();
     } finally {
       global.fetch = origFetch;
       jest.useRealTimers();
@@ -2768,16 +2950,38 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.drop(poDropzone, { dataTransfer: { files: [] } });
     }
 
-    // Upload PO Dump with diverse items to exercise AI category classification (lines 1215-1228)
+    // 1. A row missing a mandatory field (Item Description/Short Text/Material Description) rejects the whole file
+    const badRowWb = XLSX.utils.book_new();
+    const badRowWs = XLSX.utils.json_to_sheet([
+      {
+        'PO Number': 'PO-BAD-1',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Name': '',
+        Specifications: 'DN50',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(badRowWb, badRowWs, 'PO');
+    const badRowBuf = XLSX.write(badRowWb, { type: 'array', bookType: 'xlsx' });
+    const badRowFile: any = new File([badRowBuf], 'bad_row_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    badRowFile.__buffer = badRowBuf;
+
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [badRowFile] } });
+    }
+    expect(screen.getByText(new RegExp(`Row 2: ${UI_STRINGS.vendorPoIngestion.poDump.fieldDescription}`))).toBeInTheDocument();
+
+    // 2. Upload PO Dump without Specifications on row 1 (empty date / 0 unitPrice render as '—') -> accepted
     const diversePoWb = XLSX.utils.book_new();
     const diversePoWs = XLSX.utils.json_to_sheet([
       {
         'PO Number': 'PO-DIV-1',
-        'PO Date': '', // empty date -> line 2446 '—'
+        'PO Date': '', // empty date -> '—'
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Globe gate valve with hydraulic hose', // lines 1216, 1217
+        'Item Name': 'Globe gate valve with hydraulic hose',
         Quantity: 2,
-        'Unit Price': 0, // 0 unitPrice -> line 2452 '—'
+        'Unit Price': 0, // 0 unitPrice -> '—'
         'Total Spend': 10000,
         Department: 'Hydraulics',
       },
@@ -2785,7 +2989,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-DIV-2',
         'PO Date': '2025-06-01',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Rotary air compressor and induction electric motor', // lines 1218, 1219
+        'Item Name': 'Rotary air compressor and induction electric motor',
+        Specifications: 'Induction motor, 15 HP',
         Quantity: 1,
         'Unit Price': 45000,
         'Total Spend': 45000,
@@ -2795,7 +3000,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-DIV-3',
         'PO Date': '2025-06-02',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Substation switchgear control panel with power cable and mccb breaker', // lines 1222, 1223
+        'Item Name': 'Substation switchgear control panel with power cable and mccb breaker',
+        Specifications: 'Panel, 415 V, 50 Hz',
         Quantity: 3,
         'Unit Price': 15000,
         'Total Spend': 45000,
@@ -2805,7 +3011,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Number': 'PO-DIV-4',
         'PO Date': '2025-06-03',
         'Vendor Name': 'Apex Supplies Ltd.',
-        'Item Name': 'Civil industrial steel works with peb structure and tmt bars', // lines 1226, 1227
+        'Item Name': 'Civil industrial steel works with peb structure and tmt bars',
+        Specifications: 'Fe 500 TMT bars',
         Quantity: 10,
         'Unit Price': 5000,
         'Total Spend': 50000,
@@ -2822,22 +3029,23 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     if (poInput) {
       fireEvent.change(poInput, { target: { files: [diversePoFile] } });
     }
+    expect(screen.queryByTestId('po-upload-error-banner')).not.toBeInTheDocument();
+    expect(screen.getByTestId('po-dump-uploaded-card')).toBeInTheDocument();
 
-    // Verify fallback '—' rendered for empty date and zero price
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
-
-    // Test Reset PO data button (lines 1150-1160, 2363)
-    const resetPoBtn = screen.getByTitle('Reset PO data to default sample');
+    // Test Reset PO data button
+    const resetPoBtn = screen.getByTitle('Reset PO data');
     fireEvent.click(resetPoBtn);
     expect(mockShowToast).toHaveBeenCalledWith('Reset Complete', expect.stringContaining('cleared'), 'info');
   });
 
-  it('covers all AI category cross-match classification keyword branches and empty joined vendors validation', async () => {
+  it('runs the AI category job across a mixed PO dump, and validates an empty result before ingestion', async () => {
     jest.useFakeTimers();
     const origFetch = global.fetch;
 
     try {
+      installIngestionServer();
       const { container, unmount } = render(<InitialSetupModal />);
+      await settleOpeningRequests();
 
       // Step 2: Upload 6 distinct vendors to hit all AI classification branches
       fireEvent.click(screen.getByText('2. Vendor Master'));
@@ -2871,32 +3079,40 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Mech: pump, globe, gate, valve, hose, compressor, motor (lines 1213-1219)
         {
           'PO Number': 'PO-M1',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Centrifugal pump and valve with hydraulic hose',
+          Specifications: 'DN50, cast iron',
           Quantity: 2,
           'Total Spend': 12000,
           Department: 'Mechanical',
         },
         {
           'PO Number': 'PO-M2',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Rotary compressor and electric motor',
+          Specifications: 'Motor, 7.5 kW',
           Quantity: 1,
           'Total Spend': 25000,
           Department: 'Mechanical',
         },
         {
           'PO Number': 'PO-M3',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Gate unit with hydraulic hose',
+          Specifications: 'Gate, PN16',
           Quantity: 1,
           'Total Spend': 8000,
           Department: 'Mechanical',
         },
         {
           'PO Number': 'PO-M4',
+          'PO Date': '2025-05-01',
           'Vendor Name': 'Mechanical Spares Ltd',
           'Item Name': 'Globe component with compressor',
+          Specifications: 'Globe, PN16',
           Quantity: 1,
           'Total Spend': 6000,
           Department: 'Mechanical',
@@ -2904,16 +3120,20 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Elec: panel + breaker, and switchgear + mccb without panel/breaker (lines 1220-1223)
         {
           'PO Number': 'PO-E1',
+          'PO Date': '2025-05-02',
           'Vendor Name': 'Volt Panels Electricals',
           'Item Name': 'Electrical panel and circuit breaker with armored cable',
+          Specifications: 'Panel, 415 V',
           Quantity: 3,
           'Total Spend': 35000,
           Department: 'Electrical',
         },
         {
           'PO Number': 'PO-E2',
+          'PO Date': '2025-05-03',
           'Vendor Name': 'Switchgear Only Ltd',
           'Item Name': 'Switchgear and mccb unit with armored cable',
+          Specifications: 'Switchgear, 1 kA',
           Quantity: 2,
           'Total Spend': 20000,
           Department: 'Electrical',
@@ -2921,16 +3141,20 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Civil: peb + tmt, and plain civil steel without peb/tmt (lines 1224-1228)
         {
           'PO Number': 'PO-C1',
+          'PO Date': '2025-05-04',
           'Vendor Name': 'Infra Civil Structures',
           'Item Name': 'Civil works peb structure and tmt steel reinforcement bars',
+          Specifications: 'Fe 500 TMT',
           Quantity: 10,
           'Total Spend': 45000,
           Department: 'Civil',
         },
         {
           'PO Number': 'PO-C2',
+          'PO Date': '2025-05-05',
           'Vendor Name': 'Plain Civil Works Ltd',
           'Item Name': 'Civil industrial steel structure',
+          Specifications: 'IS 2062 steel',
           Quantity: 5,
           'Total Spend': 30000,
           Department: 'Civil',
@@ -2938,8 +3162,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Gen: no special keywords -> lines 1230-1232
         {
           'PO Number': 'PO-G1',
+          'PO Date': '2025-05-06',
           'Vendor Name': 'General Hardware Works',
           'Item Name': 'Standard fasteners and office hardware supplies',
+          Specifications: 'Standard grade',
           Quantity: 50,
           'Total Spend': 5000,
           Department: 'General',
@@ -2947,8 +3173,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Cloud: cloud, azure, gcp, compute, storage, license, subscription, renewal, 365, bigquery, power bi, datacenter (lines 1184-1208)
         {
           'PO Number': 'PO-CL1',
+          'PO Date': '2025-05-07',
           'Vendor Name': 'Cloud Tech Corp',
           'Item Name': 'Azure cloud storage compute credits and office 365 subscription renewal with power bi data analytics in datacenter',
+          Specifications: 'Subscription licence',
           Quantity: 1,
           'Total Spend': 90000,
           Department: 'IT',
@@ -2956,8 +3184,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         // Min IT: matches microsoft/software but none of cloud/license/analytics/datacenter -> lines 1210-1211 (secondSetMinors.length === 0)
         {
           'PO Number': 'PO-MIT1',
+          'PO Date': '2025-05-08',
           'Vendor Name': 'Minimal Software Corp',
           'Item Name': 'Microsoft custom software utility',
+          Specifications: 'Custom utility',
           Quantity: 1,
           'Total Spend': 8000,
           Department: 'IT',
@@ -2976,19 +3206,12 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         fireEvent.change(poInput, { target: { files: [poFile] } });
       }
 
-      // Run AI Category Cross-Match without mock so fallback computeJoinedRecords executes all classification branches!
-      const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
-      fireEvent.click(runJoinBtn);
-      act(() => {
-        jest.advanceTimersByTime(1200);
-      });
+      // Run the AI Category Cross-Match. The server job finishes and Step 4 (dispatch) opens
+      fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+      await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+      expect(screen.getByText(/PO Mapped/i)).toBeInTheDocument();
 
-      // Verify Step 4 rendered
-      expect(screen.getByText('Mechanical Spares Ltd')).toBeInTheDocument();
-      expect(screen.getByText('Volt Panels Electricals')).toBeInTheDocument();
-
-      // Proceed to Step 5 and complete setup with 2_years or 3_years
-      fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+      // Complete setup with 2_years or 3_years
       jest.useRealTimers();
 
       const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
@@ -3003,18 +3226,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       // Unmount first render so DOM queries in container2 don't collide
       unmount();
 
-      // Now test empty joinedVendors branch (line 1507)
-      // Open modal fresh, mock ai-cross-match to return empty array []
+      // Empty result: the server stores no supplier mappings, so there is nothing to ingest
+      installIngestionServer({ mappings: [] });
       const { container: container2, unmount: unmount2 } = render(<InitialSetupModal />);
-      global.fetch = jest.fn().mockImplementation((url: string) => {
-        if (typeof url === 'string' && url.includes('/api/buyer-accounts/ai-cross-match')) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ success: true, data: [] }),
-          });
-        }
-        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
-      });
+      await settleOpeningRequests();
 
       fireEvent.click(screen.getByText('2. Vendor Master'));
       const vInput2 = container2.querySelector('input[type="file"]');
@@ -3039,14 +3254,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         });
       }
 
-      const runJoinBtn2 = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
-      fireEvent.click(runJoinBtn2);
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 700));
-      });
+      fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+      await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
 
-      // Navigate to Step 5
-      fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+      // Step 4 opens with no suppliers to ingest
       const completeBtn2 = screen.getByText(/COMPLETE SETUP & INGEST/i);
       await act(async () => {
         fireEvent.click(completeBtn2);
@@ -3087,5 +3298,998 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Line 1778: Plural 'Records'
     expect(screen.getByText(/2 Supplier Records Missing Required Fields/i)).toBeInTheDocument();
   });
+
+  it('requires a PO dump before Step 4 and accepts a 2-column PO sheet with Vendor/Supplier Name and Short Text (without Specifications)', async () => {
+    jest.useFakeTimers();
+    mockProcessHistoricalPurchaseData.mockResolvedValue(1);
+    installIngestionServer();
+
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Upload valid vendor master
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [vFile] } });
+    }
+
+    // PO dump is NOT optional: jumping directly to Step 4 is blocked with clear required guidance
+    fireEvent.click(screen.getByText('4. Dispatch Emails'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.poDump.requiredTitle,
+      UI_STRINGS.vendorPoIngestion.poDump.requiredError,
+      'warning'
+    );
+
+    // Upload PO dump with ONLY the 2 mandatory columns: Vendor/Supplier Name & Short Text (NO Specifications)
+    const poWb = XLSX.utils.book_new();
+    const poWs = XLSX.utils.json_to_sheet([
+      { 'Vendor/Supplier Name': 'Apex Supplies Ltd.', 'Short Text': 'Centrifugal Water Pump 500 GPM' },
+    ]);
+    XLSX.utils.book_append_sheet(poWb, poWs, 'POs');
+    const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'xlsx' });
+    const poFile: any = new File([poBuf], 'two_col_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = poBuf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    expect(mockShowToast).not.toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle,
+      expect.anything(),
+      'warning'
+    );
+
+    // Run AI Category Cross-Match -> opens Step 4
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorPoIngestion.aiCategory.runAction, 'i') }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    // Confirm final ingestion
+    const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Setup Complete',
+      expect.stringContaining('Dual-file vendor master and PO data ingested successfully'),
+      'success'
+    );
+
+    jest.useRealTimers();
+  });
+
+  it('drops the AI result when the PO dump is reset, and blocks Step 4 until a fresh PO dump is uploaded', async () => {
+    jest.useFakeTimers();
+    mockProcessHistoricalPurchaseData.mockResolvedValue(1);
+    installIngestionServer();
+
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    // Proceed to Step 2 & upload Vendor Master
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
+
+    // Step 3: Upload valid PO dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    // Run the AI Category Cross-Match to enter Step 4
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    // Reset the PO dump on Step 3. The reset drops both PO dump and AI result; Step 4 is blocked again
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    fireEvent.click(screen.getByText('Reset Template'));
+    expect(screen.queryByRole('button', { name: /Continue Without PO Dump/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorPoIngestion.aiCategory.runAction, 'i') })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('4. Dispatch Emails'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredError)).toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
+
+  it('displays clear error messages and skipped list on Step 4 when vendor records fail or are skipped during ingestion', async () => {
+    jest.useFakeTimers();
+    mockProcessHistoricalPurchaseData.mockResolvedValue(2);
+
+    const skippedSummary = {
+      importedCount: 2,
+      totalProcessed: 4,
+      mappedCount: 2,
+      mappedEmailsSent: 2,
+      mappedEmailsQueued: 0,
+      unmappedCount: 0,
+      unmappedEmailsSent: 0,
+      unmappedEmailsQueued: 0,
+      failedEmailCount: 0,
+      failedEmails: [],
+      skippedCount: 2,
+      skipped: [
+        { row: 3, vendorName: 'Failed Vendor Co', email: 'failed@vendor.com', reason: 'A vendor with the email failed@vendor.com already exists.' },
+        { row: 4, vendorName: 'Unsaved Vendor Co', email: 'unsaved@vendor.com', reason: 'Could not save this vendor. Retry after database connectivity is restored.' },
+      ],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+      lastIngestionSummary: skippedSummary,
+    });
+
+    installIngestionServer();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    // Proceed to Step 2 & upload Vendor Master
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [vFile] } });
+
+    // Step 3: Upload valid PO dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    // Run AI Cross Match; once the server job finishes, Step 4 (dispatch) opens
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    // Confirm final ingestion
+    const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    try {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Ingestion Completed with Warnings',
+        expect.stringContaining('2 record(s) failed or were skipped'),
+        'warning'
+      );
+
+      // Verify no extra summary cards or test data are displayed below Step 4
+      expect(screen.queryByTestId('dispatch-skipped-vendors-list')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('dispatch-completion-summary')).not.toBeInTheDocument();
+      expect(screen.queryByText(/3-Day Reminders/i)).not.toBeInTheDocument();
+
+      // Setup modal closes on ingestion completion
+      expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('validates vendor mobile numbers during Vendor Master upload, rejecting alphanumeric and invalid mobile numbers', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Create a Vendor Master Excel file containing alphanumeric and invalid mobile numbers
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-VAL-1',
+        'Company Name': 'Valid Mobile Enterprise',
+        Email: 'valid@enterprise.com',
+        Phone: '+91 98112 23344',
+      },
+      {
+        'Vendor Code': 'V-VAL-2',
+        'Company Name': 'Zero Prefix Enterprise',
+        Email: 'zero@enterprise.com',
+        Phone: '09876543210',
+      },
+      {
+        'Vendor Code': 'V-INV-ALPHA',
+        'Company Name': 'Alphanumeric Phone Vendor',
+        Email: 'alpha@vendor.com',
+        Phone: '98765abcde',
+      },
+      {
+        'Vendor Code': 'V-INV-SHORT',
+        'Company Name': 'Short Phone Vendor',
+        Email: 'short@vendor.com',
+        Phone: '12345',
+      },
+      {
+        'Vendor Code': 'V-INV-SYM',
+        'Company Name': 'Symbol Phone Vendor',
+        Email: 'symbol@vendor.com',
+        Phone: '98765#$@!',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_mobile_validation.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Displays clear upload error banner and toast for invalid/alphanumeric mobile numbers
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Invalid Mobile Numbers',
+      expect.stringContaining('vendor record(s) contain invalid or alphanumeric mobile numbers'),
+      'warning'
+    );
+    expect(screen.getByTestId('vendor-upload-error-banner')).toBeInTheDocument();
+    expect(screen.getByText(/Mobile numbers must be numeric values with exactly 10 digits/i)).toBeInTheDocument();
+
+    // Warning banner reports records missing required fields or invalid data
+    expect(screen.getByTestId('vendor-validation-warning-banner')).toBeInTheDocument();
+
+    // Read-only table displays invalid mobile badge
+    expect(screen.getByText(/Invalid Mobile \(98765abcde\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Invalid Mobile \(12345\)/i)).toBeInTheDocument();
+
+    // Attempting to navigate to Step 3 is rejected
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Validation Error in Vendor Master',
+      expect.stringContaining('Cannot proceed: 3 vendor record(s) contain missing or invalid required fields'),
+      'warning'
+    );
+    expect(screen.queryByText(/Step 3: Upload File 2/i)).not.toBeInTheDocument();
+
+    // Switch to Edit Data mode and verify inline error message
+    fireEvent.click(screen.getByText('Edit Data'));
+    expect(screen.getAllByText('Must be 10 numeric digits').length).toBeGreaterThanOrEqual(1);
+
+    // Fix the alphanumeric phone record in the table
+    const phoneInputs = screen.getAllByPlaceholderText('+91 Phone');
+    const alphaInput = phoneInputs.find((input: any) => input.value === '98765abcde');
+    if (alphaInput) {
+      fireEvent.change(alphaInput, { target: { value: '9876543210' } });
+      expect(alphaInput).toHaveValue('9876543210');
+    }
+  });
+
+  it('handles vendor codes during Vendor Master upload: retains provided codes, generates sequential 1, 2, 3 codes when absent, and prevents collisions', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Upload an Excel file where:
+    // - Row 1 has an explicit code '2'
+    // - Row 2 has NO vendor code
+    // - Row 3 has an explicit code 'VND-CUSTOM-99'
+    // - Row 4 has NO vendor code
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': '2',
+        'Company Name': 'Existing Code Two Supplier',
+        Email: 'two@supplier.com',
+        Phone: '9811223344',
+      },
+      {
+        'Company Name': 'No Code First Supplier',
+        Email: 'first@supplier.com',
+        Phone: '9822334455',
+      },
+      {
+        'Vendor Code': 'VND-CUSTOM-99',
+        'Company Name': 'Custom Coded Supplier',
+        Email: 'custom@supplier.com',
+        Phone: '9833445566',
+      },
+      {
+        'Company Name': 'No Code Second Supplier',
+        Email: 'second@supplier.com',
+        Phone: '9844556677',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_codes.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Verify Row 1 retained '2'
+    expect(screen.getByText('2')).toBeInTheDocument();
+    // Verify Row 3 retained 'VND-CUSTOM-99'
+    expect(screen.getByText('VND-CUSTOM-99')).toBeInTheDocument();
+
+    // Verify unassigned Row 2 received generated sequential code '1' (since '2' was already taken)
+    expect(screen.getByText('1')).toBeInTheDocument();
+
+    // Verify unassigned Row 4 received generated sequential code '3' (skipping '1' and '2')
+    expect(screen.getByText('3')).toBeInTheDocument();
+
+    // Enter Edit Data mode and click Add Vendor Row to verify the next generated code is '4'
+    fireEvent.click(screen.getByText('Edit Data'));
+    fireEvent.click(screen.getByText(/Add Vendor Row/i));
+
+    const codeInputs = screen.getAllByPlaceholderText('VND-CODE');
+    const codes = codeInputs.map((i: any) => i.value);
+    expect(codes).toContain('4');
+  });
+
+  it('handles country code in vendor mobile number: accepts with or without +91, validates 10 digits after country code, and stores without duplication', async () => {
+    // 1. Direct helper function unit testing covering all boundary branches
+    expect(parseVendorMobile(null).isValid).toBe(true);
+    expect(parseVendorMobile(undefined).isValid).toBe(true);
+    expect(parseVendorMobile('' as any).isValid).toBe(true);
+    expect(parseVendorMobile('   ').isValid).toBe(true);
+    expect(parseVendorMobile(12345 as any).isValid).toBe(true);
+    expect(parseVendorMobile('98765abcde').isValid).toBe(false);
+    expect(parseVendorMobile('98765#$@!').isValid).toBe(false);
+    expect(parseVendorMobile('+91 12345').isValid).toBe(false);
+    expect(parseVendorMobile('+91 981122334455').isValid).toBe(false);
+
+    // Valid formats with and without +91
+    expect(parseVendorMobile('+91 9811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('9811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('+91+91 9811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('919811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('09811223344')).toEqual({
+      isValid: true,
+      nationalNumber: '9811223344',
+      storedNumber: '+91 9811223344',
+    });
+    expect(parseVendorMobile('+91 9157154504')).toEqual({
+      isValid: true,
+      nationalNumber: '9157154504',
+      storedNumber: '+91 9157154504',
+    });
+
+    // 2. Integration test in InitialSetupModal via Excel upload
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-CC-1',
+        'Company Name': 'Standard Country Code Supplier',
+        Email: 'standard@supplier.com',
+        Phone: '+91 9811223344',
+      },
+      {
+        'Vendor Code': 'V-CC-2',
+        'Company Name': 'No Country Code Supplier',
+        Email: 'nocountry@supplier.com',
+        Phone: '9822334455',
+      },
+      {
+        'Vendor Code': 'V-CC-3',
+        'Company Name': 'Duplicate Country Code Supplier',
+        Email: 'duplicate@supplier.com',
+        Phone: '+91+91 9833344455',
+      },
+      {
+        'Vendor Code': 'V-CC-4',
+        'Company Name': 'Numeric 91 Prefix Supplier',
+        Email: 'numeric91@supplier.com',
+        Phone: '919844455566',
+      },
+      {
+        'Vendor Code': 'V-CC-5',
+        'Company Name': 'Zero Prefixed Supplier',
+        Email: 'zero@supplier.com',
+        Phone: '09855566677',
+      },
+      {
+        'Vendor Code': 'V-CC-6',
+        'Company Name': 'Indian 91 National Number Supplier',
+        Email: 'in91@supplier.com',
+        Phone: '9157154504',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_mobile_country_codes.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Zero validation errors or warning banners
+    expect(screen.queryByTestId('vendor-upload-error-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vendor-validation-warning-banner')).not.toBeInTheDocument();
+
+    // Verify all mobile numbers are stored with +91 country code and 10 digits without duplication
+    expect(screen.getByText('+91 9811223344')).toBeInTheDocument();
+    expect(screen.getByText('+91 9822334455')).toBeInTheDocument();
+    expect(screen.getByText('+91 9833344455')).toBeInTheDocument();
+    expect(screen.getByText('+91 9844455566')).toBeInTheDocument();
+    expect(screen.getByText('+91 9855566677')).toBeInTheDocument();
+    expect(screen.getByText('+91 9157154504')).toBeInTheDocument();
+
+    // Ensure no duplicated country code text exists in table
+    expect(screen.queryByText(/\+91\s*\+91/)).not.toBeInTheDocument();
+
+    // Test Edit Data onBlur formatting
+    fireEvent.click(screen.getByText('Edit Data'));
+    const phoneInputs = screen.getAllByPlaceholderText('+91 Phone');
+    // Change first input without +91 and blur to format
+    await act(async () => {
+      fireEvent.change(phoneInputs[0], { target: { value: '9899988877' } });
+      fireEvent.blur(phoneInputs[0]);
+    });
+    expect(phoneInputs[0]).toHaveValue('+91 9899988877');
+  });
+
+  it('accepts a PO dump that gives only vendor/supplier name and item description/short text/material description without specifications, and shows a dash for omitted columns', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [createValidVendorMasterFile()] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+
+    // Only the two mandatory columns are present (no Specifications, PO number, date, quantity, spend, unit price or category).
+    const poWb = XLSX.utils.book_new();
+    const poWs = XLSX.utils.json_to_sheet([
+      { 'Vendor Name / Code': 'Minimal Supply Co', 'Item Name & Description': 'Gate valve' },
+      { 'Vendor Name / Code': 'Minimal Supply Co', 'Item Name & Description': 'Hydraulic hose' },
+    ]);
+    XLSX.utils.book_append_sheet(poWb, poWs, 'PO');
+    const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'xlsx' });
+    const poFile: any = new File([poBuf], 'minimal_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = poBuf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(screen.getAllByText('Minimal Supply Co').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    expect(mockShowToast).not.toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle,
+      expect.anything(),
+      'warning'
+    );
+  });
+
+  it('reads no category from the PO dump: the template and preview carry no Category column', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 1 -> Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
+
+    // Step 2: Upload valid vendor master file
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Step 3: Go to PO Dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // The required columns banner lists the two mandatory columns
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner)).toBeInTheDocument();
+
+    // The template lists the PO columns without a Category column: categories come from the AI job
+    const aoaSpy = jest.spyOn(XLSX.utils, 'aoa_to_sheet');
+    const origCreateObjectURL = global.URL.createObjectURL;
+    global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
+    fireEvent.click(screen.getByText(/Download PO Dump Template/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
+    expect(aoaSpy).toHaveBeenLastCalledWith([
+      ['PO Number', 'PO Date', 'Vendor Name', 'Item Description', 'Specifications', 'Quantity', 'Unit', 'Unit Price (INR)', 'Total Spend (INR)'],
+    ]);
+    aoaSpy.mockRestore();
+    global.URL.createObjectURL = origCreateObjectURL;
+
+    // Create a PO file with line items to verify minor category auto-resolution
+    const wb = XLSX.utils.book_new();
+    const poRows = [
+      {
+        'PO Number': 'PO-VALVE-01',
+        'PO Date': '2024-01-10',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'Stainless Steel Ball Valve 2 inch', Specifications: 'SS316, 2 inch',
+        Quantity: 10,
+        'Total Spend (INR)': 45000,
+      },
+      {
+        'PO Number': 'PO-PUMP-02',
+        'PO Date': '2024-01-11',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'High Head Centrifugal Pump', Specifications: 'Multistage, 15 HP',
+        Quantity: 2,
+        'Total Spend (INR)': 120000,
+      },
+      {
+        'PO Number': 'PO-STEEL-03',
+        'PO Date': '2024-01-12',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'TMT Steel Rebar 16mm', Specifications: 'Fe 500D, 16 mm',
+        Quantity: 50,
+        'Total Spend (INR)': 75000,
+      },
+      {
+        'PO Number': 'PO-NET-04',
+        'PO Date': '2024-01-13',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'Generic Item with Category', Specifications: 'Standard grade',
+        Quantity: 5,
+        'Total Spend (INR)': 25000,
+        Category: 'Networking Equipment',
+      },
+      {
+        'PO Number': 'PO-UNMAPPED-05',
+        'PO Date': '2024-01-14',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'Custom Nonstandard Fixture 999', Specifications: 'Made to drawing',
+        Quantity: 1,
+        'Total Spend (INR)': 15000,
+        Department: 'Administrative Services',
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(poRows);
+    XLSX.utils.book_append_sheet(wb, ws, 'PO Purchase Dump');
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const poFile: any = new File([buf], 'po_minor_categories.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = buf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Verify PO Dump uploaded successfully
+    expect(screen.getByText(/PO Dump Uploaded Successfully/i)).toBeInTheDocument();
+
+    // The preview has no Category column, and the file's Category value is not shown either
+    const tableHeaders = screen.getAllByRole('columnheader');
+    const headerTexts = tableHeaders.map((th) => th.textContent?.trim());
+    expect(headerTexts).not.toContain('Category');
+    expect(headerTexts).not.toContain('Department');
+    expect(screen.queryByText('Networking Equipment')).not.toBeInTheDocument();
+
+    // Keyword matching no longer assigns minor categories to line items, and nothing shows as Mapped or Unmapped
+    expect(screen.queryByText('Hoses, Valves & Fittings')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pumps & Accessories')).not.toBeInTheDocument();
+    expect(screen.queryByText('TMT BARS')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unmapped')).not.toBeInTheDocument();
+    expect(screen.queryByText('Mapped')).not.toBeInTheDocument();
+    expect(screen.queryByText('Administrative Services')).not.toBeInTheDocument();
+  });
+
+  it('truncates long vendor and PO details with tooltip popups on hover', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+
+    // Upload Vendor Master with long details
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-LONG-1',
+        'Company Name': 'Ultra Mega Long Engineering Systems Global Private Limited',
+        'Contact Person': 'Alexander Bartholomew Montgomery-Smith',
+        Email: 'alexander.montgomery-smith@ultramegalongengineering.international.com',
+        Phone: '+91 98201 98201',
+        GSTIN: '27AABCU9603R1ZM',
+        Address: 'Plot No. 42-B, Industrial Innovation Cyber Park, Phase IV, Hinjewadi Rajiv Gandhi Infotech Park, Pune, Maharashtra 411057',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'long_vendors.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const vendorInput = fileInputs[0];
+    if (vendorInput) {
+      await act(async () => {
+        fireEvent.change(vendorInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Assert that table elements have truncation and title tooltips
+    const companyEl = screen.getByText('Ultra Mega Long Engineering Systems Global Private Limited');
+    expect(companyEl).toHaveAttribute('title', 'Ultra Mega Long Engineering Systems Global Private Limited');
+
+    const contactEl = screen.getByText('Alexander Bartholomew Montgomery-Smith');
+    expect(contactEl).toHaveAttribute('title', 'Alexander Bartholomew Montgomery-Smith');
+
+    const emailEl = screen.getByText('alexander.montgomery-smith@ultramegalongengineering.international.com');
+    expect(emailEl).toHaveAttribute('title', 'alexander.montgomery-smith@ultramegalongengineering.international.com');
+
+    const addressEl = screen.getByText(/Hinjewadi Rajiv Gandhi Infotech Park/);
+    expect(addressEl).toHaveAttribute('title', 'Plot No. 42-B, Industrial Innovation Cyber Park, Phase IV, Hinjewadi Rajiv Gandhi Infotech Park, Pune, Maharashtra 411057');
+  });
+
+  /** Uploads the Vendor Master and the PO dump on their steps, leaving the wizard on Step 3, ready to run the AI job. */
+  const uploadVendorAndPoDump = (container: HTMLElement) => {
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) fireEvent.change(vInput, { target: { files: [createValidVendorMasterFile()] } });
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poInputs = container.querySelectorAll('input[type="file"]');
+    fireEvent.change(poInputs[poInputs.length - 1], { target: { files: [createValidPoDumpFile()] } });
+  };
+
+  const runAiCategoryJob = () => fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+
+  it('keeps polling a running AI job, then opens Step 4 when the job completes', async () => {
+    jest.useFakeTimers();
+    installIngestionServer({
+      startJob: completedAiJob({ status: 'PROCESSING', processedRecords: 0 }),
+      pollJob: completedAiJob({ status: 'COMPLETED', processedRecords: 1 }),
+    });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    // While the job runs, its progress card shows, the run button is locked, and the wizard stays on Step 3
+    expect(await screen.findByText(/AI Category Ingestion/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Extracting Categories/i })).toBeDisabled();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // The next poll reports completion, and Step 4 opens with the stored categories
+    await act(async () => {
+      jest.advanceTimersByTime(2100);
+    });
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+    jest.useRealTimers();
+  });
+
+  it.each([
+    ['the server gives a reason', 'The model quota is exhausted.', 'The model quota is exhausted.'],
+    ['the server gives none', null, UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure],
+  ])('shows an AI job failure when %s', async (_case, errorMessage, expected) => {
+    jest.useFakeTimers();
+    installIngestionServer({
+      startJob: completedAiJob({ status: 'PROCESSING' }),
+      pollJob: completedAiJob({ status: 'FAILED', errorMessage }),
+    });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+    // The job is running, so its poll is scheduled once the start response has been applied
+    await screen.findByText(/AI Category Ingestion/i);
+
+    await act(async () => {
+      jest.advanceTimersByTime(2100);
+    });
+    expect(await screen.findByTestId('ai-job-error-banner')).toHaveTextContent(expected);
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+    jest.useRealTimers();
+  });
+
+  it('tells the buyer the results are unavailable when the supplier mappings cannot be read', async () => {
+    installIngestionServer({ vendorsFail: true });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(UI_STRINGS.vendorPoIngestion.aiCategory.resultsFailed)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith('AI Category Results', UI_STRINGS.vendorPoIngestion.aiCategory.resultsFailed, 'warning');
+    expect(logger.buffer).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'ERROR', message: 'Could not load AI category results' }),
+    ]));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+  });
+
+  it('reads every page of supplier mappings before it opens Step 4', async () => {
+    const mappings = Array.from({ length: 205 }, (_, i) => ({
+      ...APEX_MAPPING,
+      id: `mapping-${i}`,
+      vendorRecordId: `vendor-record-${i}`,
+      vendorCode: `VC-${i}`,
+      companyName: `Supplier ${i}`,
+      email: `supplier${i}@example.test`,
+    }));
+    const server = installIngestionServer({ mappings });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+    expect(screen.getByText('205 Vendors')).toBeInTheDocument();
+    expect(server.mock.calls.filter(([url]) => String(url).includes('/vendors?'))).toHaveLength(2);
+  });
+
+  it('opens Step 4 with no suppliers when the server returns no supplier list', async () => {
+    const server = installIngestionServer();
+    const serve = server.getMockImplementation()!;
+    server.mockImplementation((url: string, init?: RequestInit) =>
+      url.includes('/vendors?') ? jsonResponse({ success: true, data: {} }) : serve(url, init)
+    );
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+    expect(screen.getByText('0 Vendors')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['still open', false],
+    ['already closed', true],
+  ])('ignores a supplier read that finishes after the wizard closed, while the wizard is %s', async (_state, closeFirst) => {
+    const server = installIngestionServer();
+    const serve = server.getMockImplementation()!;
+    let finishRead = undefined as (() => void) | undefined;
+    server.mockImplementation((url: string, init?: RequestInit) => {
+      if (!url.includes('/vendors?')) return serve(url, init);
+      return new Promise((resolve) => {
+        finishRead = () => resolve({ ok: true, json: () => Promise.resolve({ success: true, data: { vendors: [APEX_MAPPING], total: 1 } }) });
+      });
+    });
+    const { container, unmount } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+    await waitFor(() => expect(finishRead).toBeDefined());
+
+    if (closeFirst) unmount();
+    await act(async () => {
+      finishRead?.();
+    });
+    expect(logger.buffer).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: 'Could not load AI category results' }),
+    ]));
+    if (!closeFirst) unmount();
+  });
+
+  it('ignores a failed supplier read that arrives after the wizard has closed', async () => {
+    const server = installIngestionServer();
+    const serve = server.getMockImplementation()!;
+    let failRead = undefined as (() => void) | undefined;
+    server.mockImplementation((url: string, init?: RequestInit) => {
+      if (!url.includes('/vendors?')) return serve(url, init);
+      return new Promise((_resolve, reject) => {
+        failRead = () => reject(new Error('network down'));
+      });
+    });
+    const { container, unmount } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+    await waitFor(() => expect(failRead).toBeDefined());
+
+    unmount();
+    await act(async () => {
+      failRead?.();
+    });
+    expect(logger.buffer).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: 'Could not load AI category results' }),
+    ]));
+  });
+
+  it('explains a failed AI job start even when the error response is not JSON', async () => {
+    const server = installIngestionServer();
+    const serve = server.getMockImplementation()!;
+    server.mockImplementation((url: string, init?: RequestInit) =>
+      url.endsWith('/ai-categorize-job')
+        ? Promise.resolve({ ok: false, status: 502, json: () => Promise.reject(new Error('not JSON')) })
+        : serve(url, init)
+    );
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(UI_STRINGS.vendorPoIngestion.aiCategory.startFailed)).toBeInTheDocument();
+  });
+
+  it('asks the buyer to reload when no ingestion session exists for the AI run', async () => {
+    installIngestionServer({ session: null, createSessionFails: true });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.aiCategory.sessionNotReady)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+  });
+
+  it('leaves the wizard without a session when the created session has no id', async () => {
+    const server = installIngestionServer({ session: null });
+    const serve = server.getMockImplementation()!;
+    server.mockImplementation((url: string, init?: RequestInit) =>
+      url === '/api/vendor-ingestion/session' && init?.method === 'POST' ? jsonResponse({ success: true, data: {} }) : serve(url, init)
+    );
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.aiCategory.sessionNotReady)).toBeInTheDocument();
+  });
+
+  it('creates the session with the chosen period when the server has none', async () => {
+    const server = installIngestionServer({ session: null });
+    render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    expect(server).toHaveBeenCalledWith('/api/vendor-ingestion/session', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ horizonType: 'LAST_2_YEARS' }),
+    }));
+  });
+
+  it('adopts the period a saved session already uses, and keeps the chosen one when it has none', async () => {
+    installIngestionServer({ session: { id: SESSION_ID, horizonType: 'LAST_3_YEARS', vendorMasterRowCount: 0, poRowCount: 0 } });
+    render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('3_years');
+  });
+
+  it('keeps the chosen period when a saved session has no horizon', async () => {
+    installIngestionServer({ session: { id: SESSION_ID, horizonType: null, vendorMasterRowCount: 0, poRowCount: 0 } });
+    render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    expect(mockSetHistoricalPurchaseDataPeriod).not.toHaveBeenCalled();
+  });
+
+  it('saves a changed period on the server, and clears the PO dump when the server does', async () => {
+    const server = installIngestionServer({ horizonClearsPo: true });
+    render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(
+      'PO Dump Cleared',
+      UI_STRINGS.vendorPoIngestion.horizon.changeWarning,
+      'info'
+    ));
+    expect(server).toHaveBeenCalledWith(expect.stringContaining('/time-horizon'), expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify({ horizonType: 'LAST_1_YEAR' }),
+    }));
+    expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('1_year');
+  });
+
+  it('reports when a changed period could not be saved on the server', async () => {
+    installIngestionServer({ horizonFails: true });
+    render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText(/Last 3 Years \(36 Months\)/i));
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(
+      'Period Not Saved',
+      UI_STRINGS.vendorPoIngestion.aiCategory.periodNotSaved,
+      'warning'
+    ));
+  });
+
+  it('refuses a period change while the AI category job runs', async () => {
+    installIngestionServer({
+      startJob: completedAiJob({ status: 'PROCESSING' }),
+      pollJob: completedAiJob({ status: 'PROCESSING' }),
+    });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+    await screen.findByText(/AI Category Ingestion/i);
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    fireEvent.click(screen.getByText('Back to Period'));
+    fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));
+
+    expect(mockShowToast).toHaveBeenCalledWith('Period Locked', UI_STRINGS.vendorPoIngestion.aiCategory.blockedWhileRunning, 'warning');
+  });
+
+  it('refuses to reset or replace the PO dump while the AI category job runs', async () => {
+    installIngestionServer({
+      startJob: completedAiJob({ status: 'PROCESSING' }),
+      pollJob: completedAiJob({ status: 'PROCESSING' }),
+    });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+    await screen.findByText(/AI Category Ingestion/i);
+
+    fireEvent.click(screen.getByText('Reset Template'));
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.aiCategory.blockedWhileRunning)).toBeInTheDocument();
+
+    const poInputs = container.querySelectorAll('input[type="file"]');
+    fireEvent.change(poInputs[poInputs.length - 1], { target: { files: [createValidPoDumpFile()] } });
+    expect(screen.getByText('PO Dump Uploaded Successfully')).toBeInTheDocument();
+  });
 });
-
+

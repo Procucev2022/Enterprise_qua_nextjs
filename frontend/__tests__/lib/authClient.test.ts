@@ -54,20 +54,21 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
       });
     });
 
-    test('requestOtp dispatches verification code', async () => {
+    test('requestOtp dispatches verification code and returns no demo or dev code', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
           success: true,
           message: 'Verification OTP dispatched to buyer@procucev.com',
-          demoCode: '1234',
           expiresInSeconds: 600,
         }),
       });
 
       const res = await authClient.requestOtp('buyer@procucev.com', '9157154504', 'buyer');
       expect(res.success).toBe(true);
-      expect(res.demoCode).toBe('1234');
+      expect(res).not.toHaveProperty('demoCode');
+      expect(res).not.toHaveProperty('demoEmailCode');
+      expect(res).not.toHaveProperty('demoMobileCode');
     });
 
     test('verifyOtp signs in user upon successful verification', async () => {
@@ -214,7 +215,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
 
       const res = await authClient.requestOtp('buyer@test.com', '9157154504', 'buyer');
       expect(res.success).toBe(false);
-      expect(res.demoCode).toBeUndefined();
+      expect(res).not.toHaveProperty('demoCode');
       expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
     });
 

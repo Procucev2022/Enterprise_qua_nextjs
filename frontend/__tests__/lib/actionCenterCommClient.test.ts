@@ -1,3 +1,4 @@
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   dispatchActionCenterCommunication,
   fetchActionCenterCommunications,
@@ -23,6 +24,7 @@ describe('actionCenterCommClient', () => {
         ok: true,
         json: async () => ({
           success: true,
+          queued: true,
           message: 'Dispatched successfully',
           communication: { id: 'comm-100', channel: 'EMAIL' },
           emailResult: { success: true },
@@ -54,6 +56,7 @@ describe('actionCenterCommClient', () => {
         })
       );
       expect(res.success).toBe(true);
+      expect(res.queued).toBe(true);
       expect(res.message).toBe('Dispatched successfully');
       expect(res.communication?.id).toBe('comm-100');
       expect(res.completedTask?.id).toBe('task-1');
@@ -152,7 +155,7 @@ describe('actionCenterCommClient', () => {
       });
 
       expect(res.success).toBe(false);
-      expect(res.error).toBe('HTTP 503: Failed to dispatch communication');
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: 503 }));
     });
 
     it('handles network error exception with Error instance', async () => {
@@ -169,7 +172,7 @@ describe('actionCenterCommClient', () => {
       });
 
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Connection timed out');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
 
     it('handles non-Error rejection exception gracefully', async () => {
@@ -186,7 +189,8 @@ describe('actionCenterCommClient', () => {
       });
 
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Network error');
+      expect(res.status).toBe('failed');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
   });
 

@@ -1,7 +1,12 @@
 import * as XLSX from 'xlsx';
 import { authClient } from './authClient';
 import { EMAIL_PATTERN, GSTIN_PATTERN, INDIAN_MOBILE_PATTERN, INDIAN_PINCODE_PATTERN } from './validationSchemas';
-import type { VendorUploadImportResponse, VendorUploadRow, VendorUploadRowResult } from './types';
+import type {
+  VendorBulkInvitationResponse,
+  VendorUploadImportResponse,
+  VendorUploadRow,
+  VendorUploadRowResult,
+} from './types';
 
 /**
  * Category manager vendor bulk upload — parsing, validation, template
@@ -203,22 +208,9 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
   });
 }
 
-/** Builds and downloads a blank Vendor Master template with one example row. */
+/** Builds and downloads a Vendor Master template that contains only the column headers. No sample rows. */
 export function downloadVendorUploadTemplate(): void {
-  const exampleRow = {
-    'Vendor Code': 'VEND-001',
-    'Company Name': 'Acme Hydraulics Pvt Ltd',
-    'Person Name': 'Ramesh Kumar',
-    'Email Id': 'ramesh@acmehydraulics.example',
-    'Mobile No': '9876543210',
-    GSTIN: '29AAAPL5929R1ZX',
-    'Pin Code': '560047',
-    City: 'Bengaluru',
-    State: 'Karnataka',
-    Category: 'Hoses, Valves & Fittings',
-    Products: 'Hydraulic pumps, valves, cylinders',
-  };
-  const worksheet = XLSX.utils.json_to_sheet([exampleRow], { header: [...VENDOR_TEMPLATE_HEADERS] });
+  const worksheet = XLSX.utils.aoa_to_sheet([[...VENDOR_TEMPLATE_HEADERS]]);
   const workbook: XLSX.WorkBook = { Sheets: { 'Vendor Master': worksheet }, SheetNames: ['Vendor Master'] };
   const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
@@ -232,10 +224,62 @@ export function downloadVendorUploadTemplate(): void {
   URL.revokeObjectURL(url);
 }
 
-// 1000 rows/chunk against a batched multi-row INSERT (never one query per
-// row server-side) cuts a 634k-row upload down to ~635 requests instead of
-// ~3,200 at the old 200/chunk size.
+// Rows sent per bulk-import request, so no single request carries the whole file.
 const BULK_IMPORT_CHUNK_SIZE = 15;
+
+export async function sendBulkVendorInvitations(
+  vendorIds: string[],
+  onProgress?: (completed: number, total: number) => void
+): Promise<VendorBulkInvitationResponse> {
+  const aggregate: VendorBulkInvitationResponse = {
+    sentCount: 0,
+    queuedCount: 0,
+    failedCount: 0,
+    results: [],
+  };
+  const uniqueIds = Array.from(new Set(vendorIds.map((id) => id.trim()).filter(Boolean)));
+
+  for (let i = 0; i < uniqueIds.length; i += BULK_IMPORT_CHUNK_SIZE) {
+    const chunk = uniqueIds.slice(i, i + BULK_IMPORT_CHUNK_SIZE);
+    let results: VendorBulkInvitationResponse['results'] = [];
+    const token = authClient.getToken();
+    try {
+      const response = await fetch('/api/vendors/bulk-import/invitations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ vendorIds: chunk }),
+      });
+      let body: { success?: boolean; data?: VendorBulkInvitationResponse } = {};
+      try {
+        body = await response.json();
+      } catch {
+        body = {};
+      }
+      if (!response.ok || !body.success || !body.data) {
+        results = chunk.map((vendorId) => ({ vendorId, status: 'failed' }));
+      } else {
+        const resultsByVendorId = new Map<string, VendorBulkInvitationResponse['results'][number]>(
+          (Array.isArray(body.data.results) ? body.data.results : [])
+            .map((result) => [result.vendorId, result] as const)
+        );
+        results = chunk.map((vendorId) => resultsByVendorId.get(vendorId) || ({ vendorId, status: 'failed' }));
+      }
+    } catch {
+      results = chunk.map((vendorId) => ({ vendorId, status: 'failed' }));
+    }
+
+    aggregate.results.push(...results);
+    aggregate.sentCount = aggregate.results.filter((result) => result.status === 'sent' || result.status === 'already_sent').length;
+    aggregate.queuedCount = aggregate.results.filter((result) => result.status === 'queued').length;
+    aggregate.failedCount = aggregate.results.length - aggregate.sentCount - aggregate.queuedCount;
+    onProgress?.(Math.min(i + chunk.length, uniqueIds.length), uniqueIds.length);
+  }
+
+  return aggregate;
+}
 
 /**
  * Sends only the already-valid rows to the backend, in bounded chunks —
@@ -263,6 +307,7 @@ export async function bulkImportVendorRows(
     duplicates: 0,
     failed: 0,
     onboardingFailed: 0,
+    onboardingSkipped: 0,
     results: [],
   };
 
@@ -321,6 +366,7 @@ export async function bulkImportVendorRows(
       aggregate.duplicates += body.data.duplicates;
       aggregate.failed += body.data.failed;
       aggregate.onboardingFailed = (aggregate.onboardingFailed || 0) + (body.data.onboardingFailed || 0);
+      aggregate.onboardingSkipped = (aggregate.onboardingSkipped || 0) + (body.data.onboardingSkipped || 0);
       aggregate.results.push(...body.data.results);
     }
 

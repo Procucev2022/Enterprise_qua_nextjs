@@ -9,13 +9,15 @@ const {
   PASSWORD_MIN_LENGTH,
   VENDOR_DIRECTORY_AUTH_CONFIG,
   VENDOR_FREE_CREDITS_LIMIT,
+  BUYER_FREE_TRIAL_RFQ_CREDITS,
 } = require('../config/constants');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const { getWaitUntil } = require('../db/d1Bridge');
+const d1Bridge = require('../db/d1Bridge');
+const { getWaitUntil } = d1Bridge;
 const vendorPresenceService = require('./vendorPresenceService');
 
 const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
@@ -131,7 +133,7 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
  * Load an account from the `user` table in PostgreSQL.
  *
  * This is the single source of truth for authentication: there is no in-memory
- * user registry, no seeded demo credentials, and no second database. If the
+ * user registry, no seeded credentials, and no second database. If the
  * connection is unavailable, authentication fails closed with a descriptive error
  * rather than silently accepting anything.
  *
@@ -141,7 +143,9 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
  */
 async function loadIdentityUser(normalizedEmail, mobile) {
   if (!pool.hasStorage()) {
-    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+    const error = new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+    error.code = 'PERSISTENCE_UNAVAILABLE';
+    throw error;
   }
   try {
     return mobile
@@ -149,7 +153,10 @@ async function loadIdentityUser(normalizedEmail, mobile) {
       : await identityQueries.findUserByEmail(normalizedEmail);
   } catch (err) {
     logger.error('Account lookup failed', err, 'AUTH_SERVICE');
-    throw new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+    const unavailable = new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+    unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+    unavailable.cause = err;
+    throw unavailable;
   }
 }
 
@@ -226,6 +233,7 @@ function generateSessionToken(user, options = {}) {
       role: user.role,
       orgId: user.orgId,
       orgName: user.orgName,
+      ...(user.mobile ? { mobile: user.mobile } : {}),
       passwordChangeRequired: user.resetPasswordRequired === true,
       onboardingRequired:
         user.onboardingRequired === true ||
@@ -252,7 +260,7 @@ function generateVendorDirectoryToken(user, sessionId, options = {}) {
   return generateSessionToken(user, {
     scope: 'vendor_directory',
     sessionId,
-    ttlSeconds: options.ttlSeconds || 300,
+    ttlSeconds: options.ttlSeconds || VENDOR_DIRECTORY_AUTH_CONFIG.INACTIVITY_TIMEOUT_SECONDS,
     ...options,
   });
 }
@@ -321,6 +329,10 @@ async function assertSessionActive(token) {
       return { valid: false, error: AUTH_MESSAGES.SESSION_LOGGED_OUT };
     }
   } catch (err) {
+    if (d1Bridge.isRetryableD1Error(err) || d1Bridge.isD1Overloaded()) {
+      logger.warn('D1 overloaded during session revocation check, trusting verified token', { signature: verification.signature }, 'AUTH_SERVICE');
+      return { valid: true, user: verification.user };
+    }
     logger.error('Could not check whether the session token was revoked', err, 'AUTH_SERVICE');
     return { valid: false, error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE };
   }
@@ -382,6 +394,10 @@ function toPublicUser(user) {
     ));
   if (onboardingReq) {
     result.onboardingRequired = true;
+  }
+  // The sign-in page opens the buyer initial setup popup only while this is false.
+  if (user.role === 'buyer') {
+    result.vendorMasterUploaded = user.vendorMasterUploaded === true;
   }
   return result;
 }
@@ -584,10 +600,6 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
     throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_WRITE_FAILED);
   }
 
-  if (user.role === 'vendor') {
-    storeService.updateVendor(user.email, { tempPassword: null });
-  }
-
   logger.audit(`Password changed for ${user.email}`, user.email, { role: user.role, ipAddress });
   storeService.addAuditLog({
     userEmail: user.email,
@@ -606,14 +618,32 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
 }
 
 const OTP_DELIVERY_STATUS = {
+  // Only a send that a provider accepted.
   SENT: 'sent',
-  // No provider configured (local dev) or the test environment: nothing was
-  // attempted, so nothing failed — the demo code in the response covers it.
-  NOT_ATTEMPTED: 'not_attempted',
-  // Still in flight when the wait ran out; it keeps going in the background.
+  // Still in flight when the wait ran out. It is not confirmed, so it is never
+  // reported as sent.
   PENDING: 'pending',
+  // Refused, throttled, not configured, skipped, or threw.
   FAILED: 'failed',
 };
+
+// Statuses from the send helpers that mean the message did not reach a provider.
+const UNDELIVERED_SEND_STATUSES = new Set(['throttled', 'not_configured', 'skipped', 'failed', 'link_only']);
+
+/**
+ * Map a send helper's result to a delivery status.
+ *
+ * Helpers report `success` (true only when a provider accepted the message) and a
+ * `status`. The mailer still returns `{ sent }` on its OTP path, so that is read
+ * when `success` is absent. A missing result, a throttled send, or a result with
+ * a non-delivered status is FAILED, never SENT.
+ */
+function toOtpDeliveryStatus(result) {
+  if (!result || typeof result !== 'object') return OTP_DELIVERY_STATUS.FAILED;
+  if (result.throttled === true || UNDELIVERED_SEND_STATUSES.has(result.status)) return OTP_DELIVERY_STATUS.FAILED;
+  const accepted = typeof result.success === 'boolean' ? result.success : result.sent === true;
+  return accepted ? OTP_DELIVERY_STATUS.SENT : OTP_DELIVERY_STATUS.FAILED;
+}
 
 // Long enough for the mailer to walk its whole provider chain, short enough
 // that the sign-in screen never hangs.
@@ -639,9 +669,17 @@ function settleWithin(promise, ms) {
 async function dispatchOtpCodes({ email, emailCode, mobile, mobileCode, isRegistration }) {
   const emailSend = mailerService
     .sendOtpEmail(email, emailCode, OTP_EXPIRY_MS / 1000, { isRegistration })
-    .then((result) => ({
-      status: result && result.sent ? OTP_DELIVERY_STATUS.SENT : OTP_DELIVERY_STATUS.NOT_ATTEMPTED,
-    }))
+    .then((result) => {
+      const status = toOtpDeliveryStatus(result);
+      if (status !== OTP_DELIVERY_STATUS.SENT) {
+        logger.warn(
+          'OTP email was not accepted by a mail provider',
+          { reason: (result && (result.reason || result.error || result.status)) || 'no result' },
+          'AUTH_SERVICE'
+        );
+      }
+      return { status };
+    })
     .catch((err) => {
       logger.error('OTP email dispatch error', err, 'AUTH_SERVICE');
       return { status: OTP_DELIVERY_STATUS.FAILED };
@@ -649,9 +687,11 @@ async function dispatchOtpCodes({ email, emailCode, mobile, mobileCode, isRegist
   const smsSend = smsService
     .sendOtpSms(mobile, mobileCode, OTP_EXPIRY_MS / 1000)
     .then((result) => {
-      if (result && result.success) return { status: OTP_DELIVERY_STATUS.SENT };
-      logger.error('OTP SMS dispatch failed', { error: result && result.error }, 'AUTH_SERVICE');
-      return { status: OTP_DELIVERY_STATUS.FAILED };
+      const status = toOtpDeliveryStatus(result);
+      if (status !== OTP_DELIVERY_STATUS.SENT) {
+        logger.error('OTP SMS dispatch failed', { error: result && result.error, status: result && result.status }, 'AUTH_SERVICE');
+      }
+      return { status };
     })
     .catch((err) => {
       logger.error('OTP SMS dispatch error', err, 'AUTH_SERVICE');
@@ -689,22 +729,14 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   const normalizedEmail = email.trim().toLowerCase();
   const submittedMobile = String(mobile).trim();
 
-  let user = null;
-  if (pool.hasStorage()) {
-    try {
-      user = await loadIdentityUser(normalizedEmail, submittedMobile);
-    } catch {
-      user = null;
-    }
-  }
-
   if (isRegistration) {
     // For account creation / registration, do not block OTP dispatch on existing or non-existing accounts ("dont check existing vendor and buyer").
   } else {
+    const user = await loadIdentityUser(normalizedEmail, submittedMobile);
     if (!user) {
       logger.warn(
-        `OTP requested for an unrecognised email + mobile pair: ${normalizedEmail}`,
-        { ipAddress },
+        'OTP requested for an unrecognised email and mobile pair',
+        { ipAddress, hasEmail: Boolean(normalizedEmail), hasMobile: Boolean(submittedMobile) },
         'AUTH_SERVICE'
       );
       throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
@@ -725,18 +757,21 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
 
   try {
+    // Every stored OTP names the email it was issued to: the auth_otp_codes.email column is NOT NULL
+    // on the live D1 schema, so an insert without it fails and the failure is logged on every request.
     if (isRegistration) {
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`), emailCode, expiresAt);
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_mobile`), mobileCode, expiresAt);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`), emailCode, expiresAt, normalizedEmail);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_mobile`), mobileCode, expiresAt, normalizedEmail);
       // Also save combined key for backwards compatibility with single-code verifications
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
     } else {
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
     }
   } catch (err) {
     // Emailing a code that was never stored would guarantee the visitor's correct
     // entry is rejected, so the failure is reported instead.
     logger.error('Failed to store the issued OTP', err, 'AUTH_SERVICE');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') throw err;
     throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
   }
 
@@ -750,7 +785,7 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
 
   storeService.addAuditLog({
     userEmail: normalizedEmail,
-    action: `Instant ${OTP_LENGTH}-digit OTP requested for email (${normalizedEmail}) and mobile (${submittedMobile}) [Registration: ${Boolean(isRegistration)}] — email: ${delivery.email}, SMS: ${delivery.sms}`,
+    action: `Instant ${OTP_LENGTH}-digit OTP requested [Registration: ${Boolean(isRegistration)}] — email: ${delivery.email}, SMS: ${delivery.sms}`,
     ipAddress,
   });
 
@@ -767,35 +802,57 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   }
 
   logger.info(
-    `OTP generated for ${normalizedEmail} and mobile ${submittedMobile} [Registration: ${Boolean(isRegistration)}]`,
-    { ipAddress, emailDelivery: delivery.email, smsDelivery: delivery.sms },
+    'OTP generated and delivery attempted',
+    {
+      ipAddress,
+      registration: Boolean(isRegistration),
+      emailDelivery: delivery.email,
+      smsDelivery: delivery.sms,
+    },
     'AUTH_SERVICE'
   );
 
-  let message;
-  if (isRegistration) {
-    message = `Verification codes dispatched — Email OTP sent to ${normalizedEmail} and SMS OTP sent to +91 ${submittedMobile}`;
-  } else if (delivery.email === OTP_DELIVERY_STATUS.FAILED) {
-    message = `Verification OTP sent to your mobile +91 ${submittedMobile}. The email could not be delivered right now.`;
-  } else if (delivery.sms === OTP_DELIVERY_STATUS.FAILED) {
-    message = `Verification OTP sent to ${normalizedEmail}. The SMS could not be delivered right now.`;
-  } else {
-    message = `Verification OTP dispatched to ${normalizedEmail} and mobile`;
-  }
-
   return {
     success: true,
-    message,
+    message: buildOtpDispatchMessage({
+      isRegistration: Boolean(isRegistration),
+      email: normalizedEmail,
+      mobile: submittedMobile,
+      delivery,
+    }),
     delivery,
     email: normalizedEmail,
-    // Only echoed back in tests or when SMTP isn't configured, so local/dev/test
-    // runs without real email delivery can still complete the OTP flow; once
-    // SMTP is live, the real code is never exposed in the API response.
-    ...(process.env.NODE_ENV !== 'production' || !mailerService.isConfigured()
-      ? { demoCode: emailCode, demoEmailCode: emailCode, demoMobileCode: mobileCode }
-      : {}),
+    // The issued codes are never part of the response. They reach the visitor
+    // only through the email and SMS providers.
     expiresInSeconds: OTP_EXPIRY_MS / 1000,
   };
+}
+
+const CHANNEL_STATE_TEXT = {
+  [OTP_DELIVERY_STATUS.SENT]: 'was sent',
+  [OTP_DELIVERY_STATUS.PENDING]: 'is still being sent',
+  [OTP_DELIVERY_STATUS.FAILED]: 'could not be delivered',
+};
+
+/**
+ * The visitor-facing sentence for an OTP request. A channel is named as sent only
+ * when a provider accepted it, so a pending or failed channel never reads as sent.
+ */
+function buildOtpDispatchMessage({ isRegistration, email, mobile, delivery }) {
+  const mobileLabel = `+91 ${mobile}`;
+  if (delivery.email === OTP_DELIVERY_STATUS.SENT && delivery.sms === OTP_DELIVERY_STATUS.SENT) {
+    return isRegistration
+      ? `Verification codes dispatched — Email OTP sent to ${email} and SMS OTP sent to ${mobileLabel}`
+      : `Verification OTP dispatched to ${email} and mobile`;
+  }
+  if (!isRegistration && delivery.email === OTP_DELIVERY_STATUS.FAILED && delivery.sms === OTP_DELIVERY_STATUS.SENT) {
+    return `Verification OTP sent to your mobile ${mobileLabel}. The email could not be delivered right now.`;
+  }
+  if (!isRegistration && delivery.sms === OTP_DELIVERY_STATUS.FAILED && delivery.email === OTP_DELIVERY_STATUS.SENT) {
+    return `Verification OTP sent to ${email}. The SMS could not be delivered right now.`;
+  }
+  const subject = isRegistration ? 'Verification codes' : 'Verification OTP';
+  return `${subject} status: the email to ${email} ${CHANNEL_STATE_TEXT[delivery.email]}, and the SMS to ${mobileLabel} ${CHANNEL_STATE_TEXT[delivery.sms]}.`;
 }
 
 /**
@@ -892,16 +949,19 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
     try {
       user = await identityQueries.findUserByEmail(normalizedEmail);
     } catch (err) {
-      logger.warn('Failed to load identity user for Vendor Directory OTP', { error: err.message, email: normalizedEmail }, 'AUTH_SERVICE');
-      user = null;
+      logger.error('Failed to check account status for Vendor Directory OTP', err, 'AUTH_SERVICE');
+      const unavailable = new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      unavailable.cause = err;
+      throw unavailable;
     }
   }
 
   // Deactivated/inactive accounts cannot request OTP
   if (user && (user.isActive === false || user.status === 'inactive')) {
     logger.warn(
-      `Vendor directory OTP denied for inactive Procucev account: ${normalizedEmail}`,
-      { ipAddress, role: user?.role },
+      'Vendor Directory OTP denied for an inactive account',
+      { ipAddress, role: user?.role, hasEmail: true },
       'AUTH_SERVICE'
     );
     throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY);
@@ -915,33 +975,38 @@ async function requestVendorDirectoryOtp(email, ipAddress) {
     await authSessionQueries.saveOtp(otpKey, code, expiresAt, normalizedEmail);
   } catch (err) {
     logger.error('Failed to store Vendor Directory OTP', err, 'AUTH_SERVICE');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') throw err;
     throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
   }
 
-  let delivery = 'SENT';
+  let delivery = OTP_DELIVERY_STATUS.FAILED;
   try {
-    if (mailerService && typeof mailerService.sendOtpEmail === 'function') {
-      await mailerService.sendOtpEmail(normalizedEmail, code, VENDOR_DIRECTORY_AUTH_CONFIG.OTP_TTL_SECONDS, {
-        purpose: 'Vendor Directory Login',
-        role: 'category_manager',
-      });
-    }
+    const result = await mailerService.sendOtpEmail(normalizedEmail, code, VENDOR_DIRECTORY_AUTH_CONFIG.OTP_TTL_SECONDS, {
+      purpose: 'Vendor Directory Login',
+      role: 'category_manager',
+    });
+    delivery = toOtpDeliveryStatus(result);
   } catch (err) {
-    delivery = 'FAILED';
-    logger.warn('Failed to deliver Vendor Directory OTP email', { error: err.message, email: normalizedEmail }, 'AUTH_SERVICE');
+    logger.warn('Failed to deliver Vendor Directory OTP email', { error: err, hasRecipient: true }, 'AUTH_SERVICE');
   }
 
   storeService.addAuditLog({
     userEmail: normalizedEmail,
-    action: `Vendor Directory 6-digit OTP requested for Category Manager (${normalizedEmail})`,
+    action: `Vendor Directory 6-digit OTP requested for Category Manager (${normalizedEmail}) — email delivery: ${delivery}`,
     ipAddress,
   });
 
   logger.info(
-    `Vendor Directory OTP generated for Category Manager: ${normalizedEmail}`,
-    { ipAddress, delivery },
+    'Vendor Directory OTP generated for an eligible company employee',
+    { ipAddress, delivery, hasRecipient: true },
     'AUTH_SERVICE'
   );
+
+  // The code only reaches the visitor through the email provider. When no
+  // provider accepted it, the request fails instead of claiming it was sent.
+  if (delivery !== OTP_DELIVERY_STATUS.SENT) {
+    throw new Error('We could not send the verification code to your Procucev email address right now. Please try again in a few minutes.');
+  }
 
   return {
     success: true,
@@ -972,7 +1037,11 @@ async function verifyVendorDirectoryOtp(email, code, ipAddress, userAgent) {
     try {
       user = await identityQueries.findUserByEmail(normalizedEmail);
     } catch (err) {
-      user = null;
+      logger.error('Failed to check account status during Vendor Directory OTP verification', err, 'AUTH_SERVICE');
+      const unavailable = new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      unavailable.cause = err;
+      throw unavailable;
     }
   }
 
@@ -1000,19 +1069,21 @@ async function verifyVendorDirectoryOtp(email, code, ipAddress, userAgent) {
 
   if (storedOtp.code !== cleanCode) {
     await authSessionQueries.incrementOtpAttempts(otpKey);
-    logger.warn(`Invalid Vendor Directory OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    logger.warn('Invalid Vendor Directory OTP submitted', { ipAddress, hasEmail: true }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_INVALID);
   }
 
   await authSessionQueries.deleteOtp(otpKey);
 
   if (!user) {
-    const localPart = normalizedEmail.split('@')[0] || 'Employee';
+    // Derived from the verified address only. With no usable local part, the
+    // address itself is shown rather than an invented name.
+    const localPart = normalizedEmail.split('@')[0] || '';
     const displayName = localPart
       .split(/[._-]/)
       .filter(Boolean)
       .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-      .join(' ') || 'Procucev Employee';
+      .join(' ') || normalizedEmail;
 
     user = {
       id: `procucev-emp-${crypto.createHash('sha256').update(normalizedEmail).digest('hex').slice(0, 16)}`,
@@ -1102,7 +1173,7 @@ async function registerUser(payload, ipAddress) {
   const normalizedCountry = (country || 'India').trim();
   const streetAddress = (street || address || (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')).trim();
   const normalizedGstin = (gstin || '').trim().toUpperCase();
-  const normalizedPan = (pan || (normalizedGstin.length === 15 ? normalizedGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const normalizedPan = (pan || '').trim().toUpperCase();
 
   // If OTP codes were provided with registration, verify both email and mobile OTPs
   const submittedEmailOtp = emailOtp || code;
@@ -1202,13 +1273,11 @@ async function registerUser(payload, ipAddress) {
 
   if (!isVendor) {
     try {
-      const existingBuyer = await storeService.getBuyerAccountByEmail(normalizedEmail);
       const buyerData = {
         organizationName: orgName || name,
         brandName: orgName || name,
         corporateEmail: normalizedEmail,
         contactPerson: name,
-        contactDesignation: 'Procurement Specialist',
         mobileNumber: mobile,
         gstin: normalizedGstin,
         pan: normalizedPan,
@@ -1220,10 +1289,9 @@ async function registerUser(payload, ipAddress) {
         zip_code: normalizedPincode,
         country: normalizedCountry,
         primaryPlantLocation: [normalizedCity, normalizedState && normalizedPincode ? `${normalizedState} (${normalizedPincode})` : normalizedState].filter(Boolean).join(', '),
-        industrySector: 'Enterprise SCM & Manufacturing',
         sourcingMode: 'mode_2',
         subscriptionPlan: 'free_trial',
-        remainingFreeRFQs: 5,
+        remainingFreeRFQs: BUYER_FREE_TRIAL_RFQ_CREDITS,
         accountSource: 'web_registration',
         status: 'ACTIVE_VERIFIED',
         onboardingRequired: false,
@@ -1235,23 +1303,23 @@ async function registerUser(payload, ipAddress) {
         organizationId: result.user?.orgId || null,
         id: result.user?.id || undefined,
       };
-      if (!existingBuyer) {
-        storeService.addBuyerAccount(buyerData);
-      } else {
-        storeService.updateBuyerAccount(existingBuyer.id, buyerData);
+      const updatedBuyer = await storeService.updateBuyerAccountDurably(normalizedEmail, buyerData);
+      if (!updatedBuyer) {
+        await storeService.addBuyerAccountDurably(buyerData);
       }
     } catch (buyerSyncErr) {
-      logger.warn(
-        'Failed to sync buyer registration profile into storeService',
-        { error: buyerSyncErr.message, email: normalizedEmail },
-        'AUTH_SERVICE'
-      );
+      logger.error('Identity registration succeeded but buyer profile mirror persistence failed', {
+        error: buyerSyncErr,
+        email: normalizedEmail,
+        userId: result.user?.id || null,
+        repairRequired: true,
+      }, 'AUTH_SERVICE');
     }
   }
 
   if (isVendor) {
     try {
-      const existingVendor = await storeService.getVendorByIdWithDBFallback(normalizedEmail, 'all');
+      const existingVendor = await storeService.getVendorByIdWithDBFallback(normalizedEmail, 'all', { fresh: true });
       if (!existingVendor) {
         const vendorData = {
           name: orgName || name,
@@ -1267,7 +1335,7 @@ async function registerUser(payload, ipAddress) {
           country: 'India',
           location: [city, state && pincode ? `${state} ${pincode}` : state, 'India'].filter(Boolean).join(', '),
           source: 'self_registration',
-          status: 'PREFERRED ENTERPRISE SUPPLIER',
+          status: 'PENDING EVALUATION',
           subscriptionPlan: 'premium',
           freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
           majorCategory: 'Mechanical & Fluid Equipment',
@@ -1275,12 +1343,9 @@ async function registerUser(payload, ipAddress) {
           vendorSelectedCategories: [],
           clientMappedCategories: [],
         };
-        const createdVendor = storeService.addVendor(vendorData, normalizedEmail);
-        if (createdVendor) {
-          await storeService.confirmVendorPersisted(createdVendor);
-        }
+        await storeService.addVendorDurably(vendorData, normalizedEmail, null);
       } else {
-        storeService.updateVendor(existingVendor.id, {
+        const updatedVendor = await storeService.updateVendorDurably(existingVendor.id, {
           ...(gstin ? { gst: gstin, gstin } : {}),
           ...(city ? { city } : {}),
           ...(state ? { state } : {}),
@@ -1289,13 +1354,21 @@ async function registerUser(payload, ipAddress) {
           ...(mobile ? { phone: mobile } : {}),
           ...(orgName ? { name: orgName, brandName: orgName } : {}),
         });
+        if (!updatedVendor) {
+          logger.warn('Vendor registration profile was not mirrored because the vendor record was not found', {
+            email: normalizedEmail,
+            userId: result.user?.id || null,
+            repairRequired: true,
+          }, 'AUTH_SERVICE');
+        }
       }
     } catch (vendorSyncErr) {
-      logger.warn(
-        'Failed to sync vendor registration profile into storeService',
-        { error: vendorSyncErr.message, email: normalizedEmail },
-        'AUTH_SERVICE'
-      );
+      logger.error('Identity registration succeeded but vendor profile mirror persistence failed', {
+        error: vendorSyncErr,
+        email: normalizedEmail,
+        userId: result.user?.id || null,
+        repairRequired: true,
+      }, 'AUTH_SERVICE');
     }
   }
 
@@ -1350,7 +1423,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   } = payload || {};
 
   const effectiveGstin = (gstin || gstNumber || '').trim().toUpperCase();
-  const effectivePan = (pan || panNumber || (effectiveGstin.length === 15 ? effectiveGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const effectivePan = (pan || panNumber || '').trim().toUpperCase();
   const effectiveAddress = (address || street || '').trim();
 
   const normalizedEmail = (user.email || '').trim().toLowerCase();
@@ -1388,7 +1461,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     (await authSessionQueries.findOtp(emailDirectKey));
 
   if (!storedEmailOtp) {
-    // Check demo OTP fallback in test environments or if OTP was sent to account
+    // The code may have been issued against the mobile number already on file.
     const fallbackOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, dbUser.mobile));
     if (fallbackOtp) storedEmailOtp = fallbackOtp;
   }
@@ -1424,15 +1497,24 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     throw new Error('Invalid mobile SMS verification OTP.');
   }
 
-  // Consume used OTPs
-  try {
-    await Promise.all([
+  // Consume used OTPs before changing identity state. If any delete fails, fail
+  // closed so the account is not verified while a reusable code may remain.
+  const otpCleanup = await Promise.allSettled([
       authSessionQueries.deleteOtp(emailOtpKey),
       authSessionQueries.deleteOtp(mobileOtpKey),
       authSessionQueries.deleteOtp(emailCombinedKey),
     ]);
-  } catch {
-    // Ignore cleanup error
+  const failedCleanup = otpCleanup.find((result) => result.status === 'rejected');
+  if (failedCleanup) {
+    logger.error(
+      'Failed to consume buyer onboarding OTP records; refusing to verify the account',
+      { userId: dbUser.id, error: failedCleanup.reason },
+      'AUTH_SERVICE'
+    );
+    const unavailable = new Error(AUTH_MESSAGES.AUTH_STORAGE_UNAVAILABLE);
+    unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+    unavailable.cause = failedCleanup.reason;
+    throw unavailable;
   }
 
   // 5. Update user identity record
@@ -1449,36 +1531,55 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   }
 
   // 6. Update buyer account in storeService
-  const updatedBuyer = storeService.updateBuyerAccount(normalizedEmail, {
-    companyName: companyName || dbUser.orgName,
-    organizationName: companyName || dbUser.orgName,
-    contactName: contactName || dbUser.name,
-    contactPerson: contactName || dbUser.name,
-    phone: cleanedMobile,
-    mobileNumber: cleanedMobile,
-    city: city || '',
-    state: state || '',
-    pincode: pincode || '',
-    address: effectiveAddress,
-    gstin: effectiveGstin,
-    pan: effectivePan,
-    profileVerified: true,
-    status: 'ACTIVE_VERIFIED',
-    verificationStatus: 'verified',
-    onboardingRequired: false,
-    emailVerified: true,
-    phoneVerified: true,
-    isApproved: true,
-    isAutoRegistered: false,
-    tempPasswordRequired: false,
-  });
+  try {
+    const updatedBuyer = await storeService.updateBuyerAccountDurably(normalizedEmail, {
+      companyName: companyName || dbUser.orgName,
+      organizationName: companyName || dbUser.orgName,
+      contactName: contactName || dbUser.name,
+      contactPerson: contactName || dbUser.name,
+      phone: cleanedMobile,
+      mobileNumber: cleanedMobile,
+      city: city || '',
+      state: state || '',
+      pincode: pincode || '',
+      address: effectiveAddress,
+      gstin: effectiveGstin,
+      pan: effectivePan,
+      profileVerified: true,
+      status: 'ACTIVE_VERIFIED',
+      verificationStatus: 'verified',
+      onboardingRequired: false,
+      emailVerified: true,
+      phoneVerified: true,
+      isApproved: true,
+      isAutoRegistered: false,
+      tempPasswordRequired: false,
+    });
+    if (!updatedBuyer) {
+      logger.warn('Buyer identity onboarding completed but no buyer-account mirror was found', {
+        email: normalizedEmail,
+        userId: dbUser.id,
+      }, 'AUTH_SERVICE');
+    }
+  } catch (buyerSyncErr) {
+    // Identity state is canonical and has already committed. Keep onboarding
+    // usable, but surface the mirror failure for repair instead of launching an
+    // unobserved whole-record upsert in the background.
+    logger.warn('Buyer identity onboarding completed but buyer-account mirror sync failed', {
+      error: buyerSyncErr,
+      email: normalizedEmail,
+      userId: dbUser.id,
+    }, 'AUTH_SERVICE');
+  }
 
   // Also update organization profile in database if available
   if (dbUser.orgId) {
     try {
-      await buyerProfileQueries.updateProfile(
-        dbUser.orgId,
-        {
+      const profileWrite = await buyerProfileQueries.updateProfile({
+        organizationId: dbUser.orgId,
+        userId: dbUser.id,
+        actor: normalizedEmail,
+        patch: {
           companyName: companyName || dbUser.orgName,
           contactName: contactName || dbUser.name,
           city: city || undefined,
@@ -1488,9 +1589,15 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
           gstNumber: effectiveGstin || undefined,
           panNumber: effectivePan || undefined,
         },
-        normalizedEmail,
-        dbUser.id
-      );
+      });
+      if (!profileWrite.updated) {
+        logger.warn('Buyer identity onboarding completed but organization profile was not updated', {
+          email: normalizedEmail,
+          userId: dbUser.id,
+          organizationId: dbUser.orgId,
+          reason: profileWrite.reason,
+        }, 'AUTH_SERVICE');
+      }
     } catch (profileErr) {
       logger.warn('Failed to update DB organization profile during onboarding', { error: profileErr.message }, 'AUTH_SERVICE');
     }
@@ -1577,6 +1684,7 @@ module.exports = {
   requestOtp,
   dispatchOtpCodes,
   OTP_DELIVERY_STATUS,
+  toOtpDeliveryStatus,
   verifyOtp,
   buildVendorDirectoryOtpKey,
   requestVendorDirectoryOtp,

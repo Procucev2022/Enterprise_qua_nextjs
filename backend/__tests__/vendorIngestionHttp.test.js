@@ -28,6 +28,7 @@ describe('vendor ingestion HTTP boundary', () => {
     ['uploadPoDump', 'confirmPoDump', (r) => [r.user, 's1', { rows: undefined, fileName: undefined, replaceExisting: false }], { imported: 1 }, { imported: 1 }],
     ['runJoin', 'runVendorPoJoin', (r) => [r.user, 's1'], { matched: 1 }, { matched: 1 }],
     ['categorizeBatch', 'processCategorizationBatch', (r) => [r.user, 's1', { batchSize: undefined }], { done: true }, { done: true }],
+    ['startCategorizationJob', 'startCategorizationJob', (r) => [r.user, 's1'], { id: 'job-ai' }, { job: { id: 'job-ai' } }, 202],
     ['reRunAi', 'reRunCategorization', (r) => [r.user, 's1', 'v1'], { mapping: { id: 'm1' } }, { id: 'm1' }],
     ['listVendors', 'listMappings', (r) => [r.user, 's1', { status: undefined, confidence: undefined, hasPoHistory: undefined, search: undefined, limit: undefined, offset: undefined }], { vendors: [] }, { vendors: [] }],
     ['reviewVendorCategory', 'reviewMapping', (r) => [r.user, 's1', 'v1', r.body], { mapping: { id: 'm1' } }, { id: 'm1' }],

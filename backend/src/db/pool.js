@@ -11,9 +11,14 @@
 // ==============================================================================
 
 const { Pool } = require('pg');
-const { getD1Binding, getD1HttpClient, queryD1 } = require('./d1Bridge');
+const d1Bridge = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient, queryD1 } = d1Bridge;
 const { queryCache } = require('./queryCache');
 const { queryAuditor } = require('./queryAuditor');
+const { logger } = require('../services/loggerService');
+const { recordD1Statement } = require('../services/requestContext');
+const { DATABASE_QUERY_LOGGING } = require('../config/constants');
+const crypto = require('crypto');
 
 const DEFAULT_POOL_MAX = 10;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
@@ -82,7 +87,10 @@ function createPool(env = process.env) {
   pool.on('error', (err) => {
     // Idle client dropped connection or transient network reset - log and prevent process termination
     if (process.env.NODE_ENV !== 'test') {
-      console.warn('[DATABASE_POOL] Transient idle client error (recovering):', err.message);
+      logger.warn('Transient idle database client error; pool recovery continues', {
+        error: err,
+        recovery: 'client released by pool error handler',
+      }, 'DATABASE_POOL');
     }
   });
   return pool;
@@ -127,6 +135,31 @@ function hasStorage() {
   return !!poolModule.pool || !!getD1Binding() || !!getD1HttpClient();
 }
 
+/** The SQL verb (SELECT, INSERT, ...) that starts a statement. Used to filter query logs. */
+function getSqlOperation(sql) {
+  return /^\s*([a-z]+)/i.exec(String(sql || ''))?.[1]?.toUpperCase() || 'UNKNOWN';
+}
+
+/**
+ * The statement template with whitespace collapsed and every quoted literal replaced by '?'.
+ * Parameter values are bound separately and never appear in the SQL text, so the preview carries
+ * no request data. It is cut to DATABASE_QUERY_LOGGING.SQL_PREVIEW_MAX_CHARS.
+ */
+function buildSqlPreview(sql) {
+  const compact = String(sql || '')
+    .replace(/\s+/g, ' ')
+    .replace(/'(?:[^']|'')*'/g, "'?'")
+    .trim();
+  const limit = DATABASE_QUERY_LOGGING.SQL_PREVIEW_MAX_CHARS;
+  return compact.length > limit ? `${compact.slice(0, limit)}...` : compact;
+}
+
+/** The SQLite error code (for example SQLITE_CONSTRAINT) named in a D1 error message, when there is one. */
+function extractSqliteErrorCode(err) {
+  const match = /SQLITE_[A-Z_]+/.exec(String(err?.message || ''));
+  return match ? match[0] : undefined;
+}
+
 /**
  * Run a parameterised query and return the full pg result.
  *
@@ -151,7 +184,10 @@ function hasStorage() {
  * param instead of one array.
  */
 async function query(text, params = [], options = {}) {
-  const d1 = getD1Binding() || getD1HttpClient();
+  // D1 is an explicit per-query opt-in. Automatically routing every query to
+  // D1 made unported PostgreSQL-only features fail intermittently with
+  // "no such table" as soon as a Worker binding was present.
+  const d1 = options.d1 ? (getD1Binding() || getD1HttpClient()) : null;
   const sql = options.d1Text || text;
   const boundParams = options.d1Params || params;
   const isWrite = /^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|UPSERT)\b/i.test(sql);
@@ -184,18 +220,139 @@ async function query(text, params = [], options = {}) {
   // 2. Query execution with latency measurement
   const startTime = Date.now();
   let result;
-  if (d1) {
-    result = await queryD1(d1, sql, boundParams);
-  } else {
-    if (!poolModule.pool) {
-      throw new Error(NOT_CONFIGURED_MESSAGE);
+  const table = queryAuditor.detectTable(sql);
+  const queryId = crypto.createHash('sha256').update(sql.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
+  const operation = getSqlOperation(sql);
+  const provider = d1
+    ? (d1._isHttpClient ? 'cloudflare-d1-http' : 'cloudflare-d1')
+    : 'postgres';
+  try {
+    if (d1) {
+      if (
+        options.useCache &&
+        cacheKey &&
+        !isWrite &&
+        typeof d1Bridge.isD1Overloaded === 'function' &&
+        d1Bridge.isD1Overloaded()
+      ) {
+        const staleData = queryCache.getStale(cacheKey, boundParams);
+        if (staleData !== null) {
+          logger.warn('Serving stale cached D1 data while the database is overloaded', {
+            queryId,
+            table,
+            provider,
+            cacheKey,
+          }, 'DATABASE_QUERY');
+          queryAuditor.auditQuery(sql, boundParams, 0, true);
+          return { rows: staleData, rowCount: staleData.length, isCacheHit: true, isStaleFallback: true };
+        }
+      }
+      try {
+        result = await queryD1(d1, sql, boundParams);
+      } catch (error) {
+        if (
+          options.useCache &&
+          cacheKey &&
+          !isWrite &&
+          typeof d1Bridge.isRetryableD1Error === 'function' &&
+          d1Bridge.isRetryableD1Error(error)
+        ) {
+          const staleData = queryCache.getStale(cacheKey, boundParams);
+          if (staleData !== null) {
+            logger.warn('Serving stale cached D1 data after a retryable query failure', {
+              queryId,
+              table,
+              provider,
+              error,
+              cacheKey,
+            }, 'DATABASE_QUERY');
+            queryAuditor.auditQuery(sql, boundParams, 0, true);
+            return { rows: staleData, rowCount: staleData.length, isCacheHit: true, isStaleFallback: true };
+          }
+        }
+        throw error;
+      }
+    } else {
+      if (!poolModule.pool) {
+        throw new Error(NOT_CONFIGURED_MESSAGE);
+      }
+      result = await poolModule.pool.query(text, params);
     }
-    result = await poolModule.pool.query(text, params);
+  } catch (err) {
+    const durationMs = Date.now() - startTime;
+    const overloaded = d1 ? d1Bridge.isD1OverloadError(err) : false;
+    const undefinedParameterIndexes = d1 ? d1Bridge.findUndefinedParameterIndexes(boundParams) : [];
+    if (d1) recordD1Statement({ durationMs, failed: true, overloaded });
+    logger.error('Database query failed', {
+      error: err,
+      errorName: err?.name,
+      errorCode: err?.code,
+      sqliteErrorCode: extractSqliteErrorCode(err),
+      queryId,
+      operation,
+      table,
+      sqlPreview: buildSqlPreview(sql),
+      durationMs,
+      parameterCount: boundParams.length,
+      ...(undefinedParameterIndexes.length > 0 ? { undefinedParameterIndexes } : {}),
+      provider,
+      retryable: d1 ? d1Bridge.isRetryableD1Error(err) : false,
+      overloaded,
+      attempts: err?.d1Attempts,
+    }, 'DATABASE_QUERY');
+    throw err;
   }
   const durationMs = Date.now() - startTime;
 
   // 3. Continuous query auditing
   queryAuditor.auditQuery(sql, boundParams, durationMs, false);
+  if (d1) {
+    recordD1Statement({
+      durationMs,
+      rowsRead: result?.meta?.rowsRead,
+      rowsWritten: result?.meta?.rowsWritten,
+    });
+    const configuredSampleRate = Number(
+      process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE ?? DATABASE_QUERY_LOGGING.D1_SUCCESS_SAMPLE_RATE_DEFAULT
+    );
+    const sampleRate = Number.isFinite(configuredSampleRate)
+      ? Math.min(1, Math.max(0, configuredSampleRate))
+      : DATABASE_QUERY_LOGGING.D1_SUCCESS_SAMPLE_RATE_DEFAULT;
+    const configuredHighReadThreshold = Number(
+      process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD ??
+      DATABASE_QUERY_LOGGING.D1_HIGH_READ_ROWS_THRESHOLD_DEFAULT
+    );
+    const highReadThreshold = Number.isFinite(configuredHighReadThreshold) && configuredHighReadThreshold >= 0
+      ? configuredHighReadThreshold
+      : DATABASE_QUERY_LOGGING.D1_HIGH_READ_ROWS_THRESHOLD_DEFAULT;
+    const isSlow = durationMs >= queryAuditor.slowQueryThresholdMs;
+    const rowsRead = result?.meta?.rowsRead;
+    const isHighRead = Number.isFinite(rowsRead) &&
+      rowsRead >= highReadThreshold;
+    if (isSlow || isHighRead || Math.random() < sampleRate) {
+      logger.info('D1 query completed', {
+        queryId,
+        table,
+        operation,
+        access: isWrite ? 'write' : 'read',
+        durationMs,
+        parameterCount: boundParams.length,
+        returnedRows: Array.isArray(result?.rows) ? result.rows.length : undefined,
+        changedRows: result?.rowCount,
+        rowsRead,
+        rowsWritten: result?.meta?.rowsWritten,
+        databaseDurationMs: result?.meta?.durationMs,
+        databaseSizeAfterBytes: result?.meta?.sizeAfterBytes,
+        servedByRegion: result?.meta?.servedByRegion,
+        servedByPrimary: result?.meta?.servedByPrimary,
+        servedByColo: result?.meta?.servedByColo,
+        highRead: isHighRead,
+        provider,
+        slow: isSlow,
+        ...(isSlow || isHighRead ? { sqlPreview: buildSqlPreview(sql) } : {}),
+      }, 'DATABASE_QUERY');
+    }
+  }
 
   // 4. Cache storage if cache was enabled for this query
   if (options.useCache && cacheKey && !isWrite && result && Array.isArray(result.rows)) {
@@ -221,16 +378,20 @@ async function rows(text, params = [], options = {}) {
 
 /**
  * Run `fn` inside a transaction.
- * On Cloudflare D1, provides an active D1 query client wrapper.
- * On PostgreSQL (or test mocks), runs within a checked-out transaction client.
+ * PostgreSQL callbacks run on one checked-out transaction client. D1 does not
+ * support an interactive transaction callback: its atomic batch API requires
+ * the complete statement list in advance, so D1 callers must use batchD1.
  */
 async function withTransaction(fn) {
   const d1 = getD1Binding() || getD1HttpClient();
   if (d1) {
-    const client = {
-      query: (sql, params = []) => query(sql, params, { d1: true }),
-    };
-    return await fn(client);
+    const error = new Error('Interactive transactions are unavailable on D1; build a fixed statement list and use batchD1 with a Workers D1 binding.');
+    logger.error('Interactive transaction rejected for D1', {
+      error,
+      provider: d1._isHttpClient ? 'cloudflare-d1-http' : 'cloudflare-d1',
+      operation: 'withTransaction',
+    }, 'DATABASE_TRANSACTION');
+    throw error;
   }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);
@@ -243,8 +404,14 @@ async function withTransaction(fn) {
     return result;
   } catch (err) {
     // A rollback can itself fail if the connection has already dropped. The
-    // original error is what the caller needs to see, so this one is swallowed.
-    await client.query('ROLLBACK').catch(() => {});
+    // original transaction error is still rethrown, while the secondary failure
+    // is recorded so a broken connection is visible in operational logs.
+    await client.query('ROLLBACK').catch((rollbackError) => {
+      logger.error('Database transaction rollback failed after the original operation failed', {
+        error: rollbackError,
+        originalError: err,
+      }, 'DATABASE_TRANSACTION');
+    });
     throw err;
   } finally {
     client.release();
@@ -258,9 +425,10 @@ async function withTransaction(fn) {
  * connection now, so a single reachability answer covers login and the
  * dashboards together rather than reporting two independent datastores.
  */
-const HEALTH_CHECK_SQL = `select (select count(*) from "user" where is_active = true) as user_count,
-    (select count(*) from vendors) as vendor_count,
-    (select count(*) from rfqs) as rfq_count`;
+const HEALTH_CHECK_SQL = `SELECT 1 AS ok,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM "user" WHERE is_active = true LIMIT 50)) AS user_count,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM vendors LIMIT 50)) AS vendor_count,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM rfqs LIMIT 50)) AS rfq_count`;
 
 const D1_HEALTH_CHECK_SQL = `SELECT 1 AS ok,
   (SELECT COUNT(*) FROM (SELECT 1 FROM "user" WHERE is_active = true LIMIT 50)) AS user_count,
@@ -381,7 +549,9 @@ async function checkDatabaseHealth() {
     // One round trip rather than three: the health check runs on every admin
     // page load and on boot, and three separate counts meant three billable
     // queries for one answer.
-    const result = await runHealthCheckQuery(() => query(HEALTH_CHECK_SQL));
+    const result = await runHealthCheckQuery(() =>
+      query(HEALTH_CHECK_SQL, [], { d1: true, d1Text: D1_HEALTH_CHECK_SQL })
+    );
     const row = (result.rows && result.rows[0]) || {};
     return {
       isConfigured: true,

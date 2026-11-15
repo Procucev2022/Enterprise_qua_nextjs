@@ -15,7 +15,7 @@ concurrency:
 jobs:
   request-copilot-review:
     if: github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ secrets.COPILOT_REVIEW_TOKEN }}
       REPO: ${{ github.repository }}

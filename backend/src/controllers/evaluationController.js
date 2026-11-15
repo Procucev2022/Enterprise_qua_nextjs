@@ -1,20 +1,31 @@
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
+const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 
-function getEvaluations(req, res, next) {
+async function getEvaluations(req, res, next) {
   try {
     logger.info('Fetching vendor evaluations list', { query: req.query }, 'EVALUATION_CONTROLLER');
+    const queryValidation = validatePayload(VALIDATION_SCHEMAS.evaluationListQuery, req.query || {});
+    if (!queryValidation.isValid) {
+      logger.warn('Rejected evaluation list query with invalid parameters', { fields: Object.keys(queryValidation.errors) }, 'EVALUATION_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'Invalid evaluation query.', errors: queryValidation.errors });
+    }
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
-    const evals = storeService.getEvaluations(limit);
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: evals });
+
+    // A vendor lookup reads storage directly, so a saved record is found even when
+    // it is older than the in-memory window of recent evaluations.
+    const evals = queryValidation.sanitizedData.vendorId
+      ? await storeService.getVendorEvaluationsDurably(queryValidation.sanitizedData.vendorId, limit)
+      : storeService.getEvaluations(limit);
+    return res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: evals });
   } catch (err) {
     logger.error('Error fetching vendor evaluations', err, 'EVALUATION_CONTROLLER');
-    next(err);
+    return next(err);
   }
 }
 
-function createEvaluation(req, res, next) {
+async function createEvaluation(req, res, next) {
   try {
     // A qualification evaluation is a vendor's own self-assessment. Only a
     // vendor may submit one — previously any authenticated role, with any
@@ -54,7 +65,7 @@ function createEvaluation(req, res, next) {
     };
 
     logger.info(`Creating vendor evaluation for: ${identity.vendorName}`, { vendorName: identity.vendorName }, 'EVALUATION_CONTROLLER');
-    const created = storeService.createEvaluation({ ...body, ...identity });
+    const created = await storeService.createEvaluationDurably({ ...body, ...identity });
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating vendor evaluation', err, 'EVALUATION_CONTROLLER');

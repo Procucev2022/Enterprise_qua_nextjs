@@ -8,8 +8,11 @@
  */
 
 const pool = require('./pool');
+const d1Bridge = require('./d1Bridge');
 const { USER_SELECT, mapRowToUser, normalizePhone } = require('./identityQueries');
-const { IDENTITY_PHONE_CONFIG } = require('../config/constants');
+const { queryCache } = require('./queryCache');
+const { logger } = require('../services/loggerService');
+const { IDENTITY_PHONE_CONFIG, EVENT_OUTBOX_TYPES } = require('../config/constants');
 const { BOT_BRIDGE_CONFIG } = require('../config/botBridgeConfig');
 
 /** Columns the bot's user record needs on top of the sign-in shape. */
@@ -23,6 +26,7 @@ const BOT_USER_SELECT = `
 `;
 
 const D1_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+const [PENDING_VERIFICATION, VERIFIED] = BOT_BRIDGE_CONFIG.VERIFICATION_STATES;
 
 /**
  * Every stored spelling of one phone number.
@@ -87,9 +91,12 @@ async function findUsersByOrgUuid(orgUuid, limit = 50) {
 }
 
 /** One account by primary key, in the sign-in shape. */
-async function findUserByUuid(uuid) {
+async function findUserByUuid(uuid, { fresh = false } = {}) {
   if (!uuid) return null;
-  const rows = await pool.rows(`${USER_SELECT} where u.uuid = $1 limit 1`, [String(uuid)], { d1: true });
+  const rows = await pool.rows(`${USER_SELECT} where u.uuid = $1 limit 1`, [String(uuid)], {
+    d1: true,
+    ...(fresh ? { useCache: false } : {}),
+  });
   return mapRowToUser(rows[0]);
 }
 
@@ -123,30 +130,216 @@ async function setWhatsAppStatus(uuid, { registeredViaWhatsApp = false, verifica
     d1: true,
     d1Text: `update "user" set ${set}, last_modified_ts = ${D1_NOW} ${where}`,
   });
-  return (result.rowCount || 0) > 0;
+  const updated = (result.rowCount || 0) > 0;
+  if (updated) queryCache.invalidate('user');
+  return updated;
 }
 
 /**
- * Give a WhatsApp-registered account a temporary password it must change.
- *
- * The bot registers accounts with a random password nobody is told; once the
- * email is verified the account gets a fresh one that is emailed to its owner,
- * as QUA did, flagged for change on first sign-in like EQUA's vendor onboarding.
- * Stored as identityQueries stores every password here.
+ * Complete first-time email verification, set the temporary password, and
+ * persist its encrypted delivery intent as one PostgreSQL transaction or D1
+ * atomic Worker batch. A D1 HTTP adapter cannot safely provide this contract.
  */
-async function setTemporaryPassword(uuid, password) {
-  const params = [password, BOT_BRIDGE_CONFIG.ACTOR, String(uuid)];
-  const set = 'password = $1, reset_password = true, last_modified_by = $2';
-  const result = await pool.query(`update "user" set ${set}, last_modified_ts = now() where uuid = $3`, params, {
-    d1: true,
-    d1Text: `update "user" set ${set}, last_modified_ts = ${D1_NOW} where uuid = $3`,
-  });
-  return (result.rowCount || 0) > 0;
+async function verifyWhatsAppEmailAndQueueCredentials(uuid, {
+  password,
+  eventId,
+  payload,
+  registeredViaWhatsApp = false,
+  requireApproval = false,
+} = {}) {
+  if (!pool.hasStorage()) throw new Error(pool.NOT_CONFIGURED_MESSAGE);
+  if (!uuid || !password || !eventId || !payload || typeof payload !== 'object') {
+    throw new Error('A user, temporary password and durable credential event are required.');
+  }
+
+  const assignments = ['verification_status = $1', 'password = $2', 'reset_password = true'];
+  const params = [VERIFIED, password];
+  const bind = (sql, value) => {
+    params.push(value);
+    assignments.push(sql.replace('?', `$${params.length}`));
+  };
+  if (registeredViaWhatsApp) {
+    assignments.push('is_whats_app = true');
+    bind('source_type = ?', BOT_BRIDGE_CONFIG.ACCOUNT_SOURCE_TYPE);
+  }
+  if (requireApproval) assignments.push('is_approved = false');
+  bind('last_modified_by = ?', BOT_BRIDGE_CONFIG.ACTOR);
+  params.push(String(uuid));
+  const userIndex = params.length;
+  params.push(PENDING_VERIFICATION);
+  const pendingIndex = params.length;
+  params.push(String(eventId));
+  const eventIndex = params.length;
+  const updateSql = `UPDATE "user" SET ${assignments.join(', ')}, last_modified_ts = now()
+    WHERE uuid = $${userIndex} AND verification_status = $${pendingIndex}
+      AND NOT EXISTS (SELECT 1 FROM event_outbox WHERE id = $${eventIndex} AND status <> 'dead')
+    RETURNING uuid`;
+  const d1UpdateSql = `UPDATE "user" SET ${assignments.join(', ')}, last_modified_ts = ${D1_NOW}
+    WHERE uuid = $${userIndex} AND verification_status = $${pendingIndex}
+      AND NOT EXISTS (SELECT 1 FROM event_outbox WHERE id = $${eventIndex} AND status <> 'dead')
+    RETURNING uuid`;
+  const eventType = EVENT_OUTBOX_TYPES.WHATSAPP_CREDENTIALS_EMAIL;
+  const eventRaw = JSON.stringify(payload);
+  const startedAt = Date.now();
+  const binding = d1Bridge.getD1Binding();
+  const httpClient = d1Bridge.getD1HttpClient();
+
+  try {
+    let transitioned;
+    if (binding || httpClient) {
+      if (!binding) {
+        const error = new Error('WhatsApp credential delivery requires an atomic D1 Worker batch.');
+        error.code = 'ATOMIC_BATCH_REQUIRED';
+        throw error;
+      }
+      const results = await d1Bridge.batchD1(binding, [
+        { text: d1UpdateSql, params },
+        {
+          text: `INSERT INTO event_outbox (id, event_type, raw)
+            SELECT $1, $2, $3 WHERE changes() = 1
+            ON CONFLICT (id) DO UPDATE SET status = 'pending', raw = excluded.raw,
+              attempts = 0, available_at = CURRENT_TIMESTAMP, lease_until = NULL,
+              lease_token = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE event_outbox.status = 'dead' RETURNING id`,
+          params: [eventId, eventType, eventRaw],
+        },
+      ]);
+      transitioned = Boolean(results[0]?.rows?.length);
+      if (transitioned && !results[1]?.rows?.length) {
+        throw new Error('WhatsApp verification changed without a durable credential delivery event.');
+      }
+    } else {
+      transitioned = await pool.withTransaction(async (client) => {
+        const update = await client.query(updateSql, params);
+        if (!update.rows.length) return false;
+        const event = await client.query(
+          `INSERT INTO event_outbox (id, event_type, raw) VALUES ($1, $2, $3)
+            ON CONFLICT (id) DO UPDATE SET status = 'pending', raw = EXCLUDED.raw,
+              attempts = 0, available_at = CURRENT_TIMESTAMP, lease_until = NULL,
+              lease_token = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE event_outbox.status = 'dead' RETURNING id`,
+          [eventId, eventType, eventRaw]
+        );
+        if (!event.rows.length) throw new Error('WhatsApp verification changed without a durable credential delivery event.');
+        return true;
+      });
+    }
+
+    if (transitioned) queryCache.invalidate('user');
+    logger.info('WhatsApp email verification and credential delivery intent persisted', {
+      accountId: String(uuid),
+      eventType,
+      outboxId: eventId,
+      transitioned,
+      provider: binding ? 'cloudflare-d1' : (httpClient ? 'cloudflare-d1-http' : 'postgres'),
+      durationMs: Date.now() - startedAt,
+    }, 'BOT_BRIDGE');
+    return transitioned;
+  } catch (error) {
+    logger.error('WhatsApp email verification and credential delivery persistence failed', {
+      error,
+      accountId: String(uuid),
+      eventType,
+      outboxId: eventId,
+      provider: binding ? 'cloudflare-d1' : (httpClient ? 'cloudflare-d1-http' : 'postgres'),
+      durationMs: Date.now() - startedAt,
+    }, 'BOT_BRIDGE');
+    throw error;
+  }
+}
+
+/** Replace credentials only when prior delivery is dead-lettered or its retained event was purged. */
+async function retryWhatsAppCredentialDelivery(uuid, { password, eventId, payload } = {}) {
+  if (!pool.hasStorage()) throw new Error(pool.NOT_CONFIGURED_MESSAGE);
+  if (!uuid || !password || !eventId || !payload || typeof payload !== 'object') {
+    throw new Error('A user, temporary password and durable credential event are required.');
+  }
+
+  const eventType = EVENT_OUTBOX_TYPES.WHATSAPP_CREDENTIALS_EMAIL;
+  const params = [password, BOT_BRIDGE_CONFIG.ACTOR, String(uuid), VERIFIED, String(eventId)];
+  const updateSql = `UPDATE "user" SET password = $1, reset_password = true, last_modified_by = $2,
+      last_modified_ts = now()
+    WHERE uuid = $3 AND verification_status = $4 AND reset_password = true
+      AND NOT EXISTS (SELECT 1 FROM event_outbox WHERE id = $5 AND status <> 'dead')
+    RETURNING uuid`;
+  const d1UpdateSql = `UPDATE "user" SET password = $1, reset_password = 1, last_modified_by = $2,
+      last_modified_ts = ${D1_NOW}
+    WHERE uuid = $3 AND verification_status = $4 AND reset_password = 1
+      AND NOT EXISTS (SELECT 1 FROM event_outbox WHERE id = $5 AND status <> 'dead')
+    RETURNING uuid`;
+  const eventRaw = JSON.stringify(payload);
+  const startedAt = Date.now();
+  const binding = d1Bridge.getD1Binding();
+  const httpClient = d1Bridge.getD1HttpClient();
+
+  try {
+    let transitioned;
+    if (binding || httpClient) {
+      if (!binding) {
+        const error = new Error('WhatsApp credential delivery requires an atomic D1 Worker batch.');
+        error.code = 'ATOMIC_BATCH_REQUIRED';
+        throw error;
+      }
+      const results = await d1Bridge.batchD1(binding, [
+        { text: d1UpdateSql, params },
+        {
+          text: `INSERT INTO event_outbox (id, event_type, raw)
+            SELECT $1, $2, $3 WHERE changes() = 1
+            ON CONFLICT (id) DO UPDATE SET status = 'pending', raw = excluded.raw,
+              attempts = 0, available_at = CURRENT_TIMESTAMP, lease_until = NULL,
+              lease_token = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE event_outbox.status = 'dead' RETURNING id`,
+          params: [eventId, eventType, eventRaw],
+        },
+      ]);
+      transitioned = Boolean(results[0]?.rows?.length);
+      if (transitioned && !results[1]?.rows?.length) {
+        throw new Error('WhatsApp credential retry was not durably queued.');
+      }
+    } else {
+      transitioned = await pool.withTransaction(async (client) => {
+        const update = await client.query(updateSql, params);
+        if (!update.rows.length) return false;
+        const event = await client.query(
+          `INSERT INTO event_outbox (id, event_type, raw) VALUES ($1, $2, $3)
+            ON CONFLICT (id) DO UPDATE SET status = 'pending', raw = EXCLUDED.raw,
+              attempts = 0, available_at = CURRENT_TIMESTAMP, lease_until = NULL,
+              lease_token = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE event_outbox.status = 'dead' RETURNING id`,
+          [eventId, eventType, eventRaw]
+        );
+        if (!event.rows.length) throw new Error('WhatsApp credential retry was not durably queued.');
+        return true;
+      });
+    }
+
+    if (transitioned) queryCache.invalidate('user');
+    logger.info('WhatsApp credentials were replaced and durably requeued', {
+      accountId: String(uuid),
+      eventType,
+      outboxId: eventId,
+      transitioned,
+      provider: binding ? 'cloudflare-d1' : (httpClient ? 'cloudflare-d1-http' : 'postgres'),
+      durationMs: Date.now() - startedAt,
+    }, 'BOT_BRIDGE');
+    return transitioned;
+  } catch (error) {
+    logger.error('WhatsApp credentials could not be replaced and requeued', {
+      error,
+      accountId: String(uuid),
+      eventType,
+      outboxId: eventId,
+      provider: binding ? 'cloudflare-d1' : (httpClient ? 'cloudflare-d1-http' : 'postgres'),
+      durationMs: Date.now() - startedAt,
+    }, 'BOT_BRIDGE');
+    throw error;
+  }
 }
 
 module.exports = {
   phoneVariants,
-  setTemporaryPassword,
+  verifyWhatsAppEmailAndQueueCredentials,
+  retryWhatsAppCredentialDelivery,
   findUsersByPhone,
   findUsersByOrgUuid,
   findUserByUuid,

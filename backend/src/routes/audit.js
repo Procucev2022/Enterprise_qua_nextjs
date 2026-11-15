@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const auditController = require('../controllers/auditController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireRole } = require('../middleware/auth');
 
-// Every role gets read access to the audit trail (per the documented RBAC matrix);
-// admin-only export/purge would go here if those actions existed.
-router.get('/', authenticate, auditController.getAuditLogs);
-router.post('/', authenticate, auditController.createAuditLog);
-router.get('/verify', authenticate, auditController.verifyIntegrity);
+// The system-wide audit trail contains activity across all accounts. Only admins
+// may read or verify it. Browsers do not write audit events over HTTP. The browser
+// logs its own actions through the frontend logger, and the server records the
+// events it handles itself.
+router.get('/', authenticate, requireRole('admin'), auditController.getAuditLogs);
+router.get('/verify', authenticate, requireRole('admin'), auditController.verifyIntegrity);
 
 module.exports = router;

@@ -65,31 +65,6 @@ export const DEFAULT_FILTER: PublicVendorFilterState = {
   pageSize: 24,
 };
 
-export const MAJOR_CATEGORIES = [
-  'All Categories',
-  'Mechanical',
-  'Electrical',
-  'Civil & Construction',
-  'IT & Software',
-  'Chemical & Petrochemical',
-  'Automotive',
-  'Electronics',
-  'FMCG & Consumer',
-  'Packaging',
-  'Textile & Garments',
-  'Metals & Alloys',
-  'Medical & Pharma',
-  'Logistics & Warehousing',
-  'Safety & Security',
-  'Office & Stationery',
-  'Furniture & Fixtures',
-  'Agriculture & Food',
-  'Energy & Power',
-  'Oil & Gas',
-  'Mining & Minerals',
-  'General Industrial',
-];
-
 /**
  * Masks an email for public display (e.g. "sXXXX@gmail.com" or "mXXXX@japl.org").
  */

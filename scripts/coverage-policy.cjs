@@ -1,28 +1,35 @@
 const fs = require('fs');
 const path = require('path');
-let stripTypeScriptTypes = require('module').stripTypeScriptTypes;
-if (typeof stripTypeScriptTypes !== 'function') {
+let stripTypeScriptTypes;
+try {
+  let ts;
   try {
-    const ts = require(path.join(__dirname, '../frontend/node_modules/typescript'));
-    stripTypeScriptTypes = (source) => {
-      const result = ts.transpileModule(source, {
-        compilerOptions: {
-          target: ts.ScriptTarget.ESNext,
-          module: ts.ModuleKind.ESNext,
-          verbatimModuleSyntax: true,
-          jsx: ts.JsxEmit.Preserve,
-          removeComments: false,
-        },
-        reportDiagnostics: true,
-      });
-      if (result.diagnostics && result.diagnostics.length > 0) {
-        throw new Error('TypeScript syntax error');
-      }
-      return result.outputText;
-    };
+    ts = require(path.join(__dirname, '../backend/node_modules/typescript'));
   } catch {
-    stripTypeScriptTypes = () => '';
+    ts = require(path.join(__dirname, '../frontend/node_modules/typescript'));
   }
+  stripTypeScriptTypes = (source) => {
+    const result = ts.transpileModule(source, {
+      compilerOptions: {
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+        verbatimModuleSyntax: true,
+        jsx: ts.JsxEmit.Preserve,
+        removeComments: false,
+      },
+      reportDiagnostics: true,
+    });
+    if (result.diagnostics && result.diagnostics.length > 0) {
+      throw new Error('TypeScript syntax error');
+    }
+    return result.outputText;
+  };
+} catch {
+  // If TypeScript is unavailable, fail closed: an unparsed source file must not
+  // be mistaken for a declaration-only file and silently exempted from coverage.
+  stripTypeScriptTypes = () => {
+    throw new Error('TypeScript is required to inspect declaration-only sources.');
+  };
 }
 
 const COVERAGE_THRESHOLDS = Object.freeze({ statements: 90, branches: 90, functions: 90, lines: 90 });

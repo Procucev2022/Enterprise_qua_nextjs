@@ -15,6 +15,8 @@ const CHECKS = [
   ['TypeScript typecheck', 'CI_TYPECHECK_STATUS'],
   ['Lint', 'CI_LINT_STATUS'],
   ['Database migrations', 'CI_MIGRATIONS_STATUS'],
+  ['PostgreSQL / D1 schema parity', 'CI_SCHEMA_PARITY_STATUS'],
+  ['Schema parity checker tests', 'CI_SCHEMA_PARITY_TESTS_STATUS'],
 ];
 
 function readJsonSafe(filePath) {

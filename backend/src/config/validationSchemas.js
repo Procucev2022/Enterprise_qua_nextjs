@@ -6,6 +6,77 @@
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const BULK_IMPORT_SESSION_ID_REGEX = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|bulk-import-\d+-[a-z0-9]{1,12})$/i;
+const VENDOR_BULK_INVITATION_MAX_IDS = 15;
+const BOT_EMAIL_RECIPIENT_LIMIT = 50;
+const BOT_EMAIL_ATTACHMENT_LIMIT = 10;
+const BOT_EMAIL_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const BOT_EMAIL_ATTACHMENT_MAX_BASE64_LENGTH = Math.ceil(BOT_EMAIL_ATTACHMENT_MAX_BYTES / 3) * 4;
+const BASE64_CONTENT_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+const BOT_EMAIL_BODY_MAX_LENGTH = 1_000_000;
+const { BOT_BRIDGE_CONFIG } = require('./botBridgeConfig');
+
+// Approver names come from APPROVER_CONFIG in constants.js. constants.js loads this module
+// at its own top level, so the lookup is deferred until validation runs to avoid a cycle.
+function getCreditApproverNames() {
+  return require('./constants').CREDIT_APPROVAL_APPROVERS;
+}
+
+// Chaser channel names come from BATCH_CHASER_CHANNELS in constants.js, read the same deferred way.
+function getBatchChaserChannels() {
+  return require('./constants').BATCH_CHASER_CHANNELS;
+}
+
+function validateBotEmailAddressList(value, required) {
+  const addresses = Array.isArray(value) ? value : [value];
+  if (required && addresses.length === 0) return 'At least one email recipient is required.';
+  if (addresses.length > BOT_EMAIL_RECIPIENT_LIMIT) {
+    return `Use no more than ${BOT_EMAIL_RECIPIENT_LIMIT} email recipients in one message.`;
+  }
+  if (addresses.some((address) => typeof address !== 'string'
+    || address.trim().length > 320
+    || !EMAIL_REGEX.test(address.trim()))) {
+    return 'Every recipient must be a valid email address.';
+  }
+  return null;
+}
+
+function validateBotEmailAttachments(value) {
+  if (!Array.isArray(value)) return 'Attachments must be a list.';
+  if (value.length > BOT_EMAIL_ATTACHMENT_LIMIT) {
+    return `Attach no more than ${BOT_EMAIL_ATTACHMENT_LIMIT} files.`;
+  }
+  for (const attachment of value) {
+    if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment)) {
+      return 'Each attachment must include a filename, content type, and base64 file data.';
+    }
+    if (Object.keys(attachment).some((field) => !['fileName', 'contentType', 'fileData'].includes(field))) {
+      return 'Attachment fields are limited to filename, content type, and base64 file data.';
+    }
+    const { fileName, contentType, fileData } = attachment;
+    if (typeof fileName !== 'string' || fileName.trim().length === 0 || fileName.length > 255) {
+      return 'Attachment filenames must be between 1 and 255 characters.';
+    }
+    if (typeof contentType !== 'string' || contentType.trim().length === 0 || contentType.length > 255) {
+      return 'Attachment content types must be between 1 and 255 characters.';
+    }
+    if (typeof fileData !== 'string' || fileData.length === 0) {
+      return 'Attachment file data must be valid base64.';
+    }
+    if (fileData.length > BOT_EMAIL_ATTACHMENT_MAX_BASE64_LENGTH) {
+      return `Each attachment must be ${BOT_EMAIL_ATTACHMENT_MAX_BYTES / (1024 * 1024)} MB or smaller.`;
+    }
+    if (fileData.length % 4 !== 0 || !BASE64_CONTENT_PATTERN.test(fileData)) {
+      return 'Attachment file data must be valid base64.';
+    }
+    const decodedBytes = Math.floor(fileData.length * 3 / 4) - (fileData.endsWith('==') ? 2 : fileData.endsWith('=') ? 1 : 0);
+    if (decodedBytes > BOT_EMAIL_ATTACHMENT_MAX_BYTES) {
+      return `Each attachment must be ${BOT_EMAIL_ATTACHMENT_MAX_BYTES / (1024 * 1024)} MB or smaller.`;
+    }
+  }
+  return null;
+}
 
 // Delivery pincode or zipcode. Broader than an Indian six-digit PIN because the
 // same field carries international zipcodes for export orders, which are
@@ -53,6 +124,23 @@ const PROCUCEV_EMAIL_MESSAGE = 'Enter a valid corporate Procucev email address e
 // migrated from the previous schema may hold shorter passwords, and rejecting
 // them at login would lock those users out instead of prompting a change.
 const PASSWORD_MIN_LENGTH = 8;
+// One-time RFQ closing-deadline extension, chosen by the buyer in whole days. The frontend
+// validationSchemas.ts mirrors these bounds, so the form and the server agree on the range.
+const EXTENSION_MIN_DAYS = 1;
+const EXTENSION_MAX_DAYS = 30;
+const EXTENSION_DAYS_MESSAGE = `Extension must be a whole number of days from ${EXTENSION_MIN_DAYS} to ${EXTENSION_MAX_DAYS}.`;
+/** True for a whole number of days inside the extension range. Blank or non-numeric input is false. */
+function isWholeExtensionDays(value) {
+  if (value === null || value === undefined || value === '') return false;
+  const num = Number(value);
+  return Number.isInteger(num) && num >= EXTENSION_MIN_DAYS && num <= EXTENSION_MAX_DAYS;
+}
+const CLIENT_LOG_LIMITS = Object.freeze({
+  MESSAGE_LENGTH: 5000,
+  CATEGORY_LENGTH: 100,
+  STACK_TRACE_LENGTH: 12000,
+  METADATA_KEYS: 100,
+});
 
 // ------------------------------------------------------------------------------
 // VENDOR MASTER & PO DATA INGESTION
@@ -80,6 +168,33 @@ const DISPATCH_TEMPLATES = ['CATEGORY_MAPPED', 'SELF_MAP_REQUIRED', 'GENERAL_ONB
 // Income-tax PAN: five letters, four digits, one letter.
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
 const PAN_MESSAGE = 'PAN must be 10 characters in the format AAAAA9999A, for example AAACL1234F.';
+
+// Sample/placeholder PANs that do not represent a real business tax registration.
+// Mirrors DUMMY_PANS, isDummyPan, and usablePan in frontend/lib/validationSchemas.ts.
+const DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+const REPEATED_LETTER_PAN_REGEX = /^([A-Z])\1{4}[0-9]{4}\1$/;
+const DUMMY_PAN_MESSAGE = 'Enter your registered business PAN; sample or placeholder PANs are not allowed.';
+
+function isDummyPan(pan) {
+  if (!pan || typeof pan !== 'string') return false;
+  const clean = pan.trim().toUpperCase();
+  if (!clean) return false;
+  return DUMMY_PANS.has(clean) || REPEATED_LETTER_PAN_REGEX.test(clean);
+}
+
+function usablePan(pan) {
+  if (typeof pan !== 'string') return null;
+  const clean = pan.trim().toUpperCase();
+  if (!PAN_REGEX.test(clean) || isDummyPan(clean)) return null;
+  return clean;
+}
+
+function clearDummyPanFields(record) {
+  if (!record || typeof record !== 'object') return record;
+  if (isDummyPan(record.pan)) delete record.pan;
+  if (isDummyPan(record.panNumber)) delete record.panNumber;
+  return record;
+}
 
 // MCA Corporate Identity Number: listing status, 5-digit industry code, 2-letter
 // state, 4-digit year, 3-letter ownership code, 6-digit registration number.
@@ -144,6 +259,87 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 ]);
 
 const VALIDATION_SCHEMAS = {
+  requestVendorEvaluation: {
+    notes: { type: 'string', required: false, maxLength: 1000 },
+  },
+  evaluationListQuery: {
+    vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },
+  },
+  clientLogEntry: {
+      level: { type: 'string', required: false, enum: ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL', 'AUDIT'] },
+    message: {
+      type: 'string', required: true, minLength: 1, maxLength: CLIENT_LOG_LIMITS.MESSAGE_LENGTH,
+      message: 'Log message is required.',
+    },
+    category: { type: 'string', required: false, maxLength: CLIENT_LOG_LIMITS.CATEGORY_LENGTH },
+    stackTrace: { type: 'string', required: false, maxLength: CLIENT_LOG_LIMITS.STACK_TRACE_LENGTH },
+    metadata: {
+      type: 'object',
+      required: false,
+      custom: (value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          return 'metadata must be a JSON object.';
+        }
+        if (Object.keys(value).length > CLIENT_LOG_LIMITS.METADATA_KEYS) {
+          return `metadata must contain no more than ${CLIENT_LOG_LIMITS.METADATA_KEYS} fields.`;
+        }
+        return null;
+      },
+    },
+  },
+  createEnterpriseInquiry: {
+    companyName: {
+      type: 'string', required: true, minLength: 2, maxLength: 200,
+      message: 'Company name must be 2 to 200 characters.',
+    },
+    email: {
+      type: 'string', required: true, maxLength: 320, pattern: EMAIL_REGEX,
+      message: 'Enter a valid corporate email address.',
+    },
+    mobile: {
+      type: 'string', required: true, minLength: 8, maxLength: 32, pattern: PHONE_REGEX,
+      message: 'Enter a valid mobile number including country code.',
+    },
+    notes: { type: 'string', required: false, maxLength: 2000 },
+  },
+  updateEnterpriseInquiry: {
+    status: {
+      type: 'string', required: false,
+      enum: ['NEW', 'CONTACTED', 'IN_DISCUSSION', 'CONTRACT_SIGNED', 'CLOSED'],
+      message: 'Choose a valid enterprise inquiry status.',
+    },
+    notes: { type: 'string', required: false, maxLength: 2000 },
+  },
+  listEnterpriseInquiries: {
+    limit: {
+      type: 'number', required: false, min: 1, max: 500,
+      custom: (value) => Number.isInteger(Number(value)) ? null : 'Limit must be a whole number.',
+    },
+  },
+  enterpriseInquiryId: {
+    id: { type: 'string', required: true, minLength: 1, maxLength: 64 },
+  },
+  enterpriseInquiryIdempotencyKey: {
+    idempotencyKey: {
+      type: 'string', required: true, maxLength: 36, pattern: UUID_REGEX,
+      message: 'Idempotency-Key must be a UUID.',
+    },
+  },
+  requestVendorCategoryUpdate: {
+    idempotencyKey: {
+      type: 'string', required: false, maxLength: 36, pattern: UUID_REGEX,
+      message: 'Idempotency key must be a UUID.',
+    },
+    vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },
+    vendorEmail: {
+      type: 'string', required: false, maxLength: 320, pattern: EMAIL_REGEX,
+      message: 'Enter a valid vendor email address.',
+    },
+    vendorName: { type: 'string', required: false, maxLength: 512 },
+    rfqCategory: { type: 'string', required: false, maxLength: 1000 },
+    rfqTitle: { type: 'string', required: false, maxLength: 200 },
+    rfqNumber: { type: 'string', required: false, maxLength: 120 },
+  },
   accountDocumentUpload: {
     documentName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Document name is required.' },
     category: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'Valid document category is required.' },
@@ -167,6 +363,10 @@ const VALIDATION_SCHEMAS = {
   },
 
   buyerCreditApprovalRequest: {
+    idempotencyKey: {
+      type: 'string', required: false, maxLength: 36, pattern: UUID_REGEX,
+      message: 'Idempotency key must be a UUID.',
+    },
     amount: {
       type: 'number',
       required: true,
@@ -176,17 +376,15 @@ const VALIDATION_SCHEMAS = {
       message: 'Credit amount must be a positive integer.',
     },
     reason: { type: 'string', required: false, maxLength: 1000 },
+    // The maker is the signed-in account (buyerAccountController), so no initiator name is
+    // accepted from the request body.
     approverName: {
       type: 'string',
       required: true,
-      enum: ['Srinu Sir', 'Sudheer Sir'],
-      message: 'Approver must be Srinu Sir or Sudheer Sir.',
-    },
-    initiatorName: {
-      type: 'string',
-      required: true,
-      enum: ['Govardhan', 'Krishna', 'Chandhan'],
-      message: 'Initiator must be Govardhan, Krishna, or Chandhan.',
+      get enum() {
+        return getCreditApproverNames();
+      },
+      message: 'Approver must be one of the configured approvers.',
     },
   },
 
@@ -230,6 +428,48 @@ const VALIDATION_SCHEMAS = {
       message: 'Valid acknowledgement status is required.',
     },
     notes: { type: 'string', required: false, maxLength: 2000 },
+  },
+
+  // One line item of an RFQ being created. A row is complete only when a vendor can quote
+  // against it: what is wanted, how it is specified, how many and in which unit, and the
+  // category it routes under. The minor category is checked by validateRFQLineItemsForCreate
+  // because it does not apply when the major category is All Categories.
+  createRFQLineItem: {
+    itemName: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 200,
+      message: 'Each line item needs a description of the item.',
+    },
+    technicalSpecs: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 2000,
+      message: 'Each line item needs a specification, such as material, size or standard.',
+    },
+    quantity: {
+      type: 'number',
+      required: true,
+      custom: (val) => (Number(val) > 0 ? null : 'Each line item needs a quantity above zero.'),
+      message: 'Each line item needs a quantity above zero.',
+    },
+    unit: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 40,
+      message: 'Each line item needs a unit, for example Nos, Kg or Mtr.',
+    },
+    majorCategory: {
+      type: 'string',
+      required: true,
+      pattern: /\S/,
+      maxLength: 200,
+      message: 'Each line item needs a major category.',
+    },
+    minorCategory: { type: 'string', required: false, maxLength: 200 },
   },
 
   createRFQ: {
@@ -277,8 +517,16 @@ const VALIDATION_SCHEMAS = {
       pattern: EMAIL_REGEX,
       message: 'Source email must be a valid email address.',
     },
+    targetGatewayEmail: {
+      type: 'string',
+      required: false,
+      maxLength: 320,
+      pattern: EMAIL_REGEX,
+      message: 'Gateway notification address must be a valid email address.',
+    },
     sharedBuyerAccountIds: { type: 'array', required: false },
     sharedBuyerEmails: { type: 'array', required: false },
+    assignedVendors: { type: 'array', required: false },
   },
 
   // Edit of an existing RFQ (PUT /api/rfqs/:id).
@@ -291,7 +539,9 @@ const VALIDATION_SCHEMAS = {
   //
   // Ownership fields are absent on purpose. rfqNumber, rfqId, buyer identity and
   // createdAt are not editable, and the query layer whitelists columns as well, so
-  // sending them here changes nothing.
+  // sending them here changes nothing. The closing time and extension fields
+  // (closingDeadline, isExtended, extensionHours, extendedAt) are absent too: only
+  // the extension endpoint writes them.
   updateRFQ: {
     title: { type: 'string', required: false, minLength: 3, maxLength: 200 },
     category: { type: 'string', required: false, minLength: 2 },
@@ -314,22 +564,18 @@ const VALIDATION_SCHEMAS = {
     },
     targetDeliveryDate: { type: 'string', required: false },
     deadline: { type: 'string', required: false },
-    closingDeadline: { type: 'string', required: false },
-    isExtended: { type: 'boolean', required: false },
-    extensionHours: { type: 'number', required: false },
-    extendedAt: { type: 'string', required: false },
     extractedEntities: { type: 'array', required: false },
     attachments: { type: 'array', required: false },
     assignedVendors: { type: 'array', required: false },
   },
 
-  // Schema for extending an RFQ closing deadline (strictly one-time, 24h or 48h)
+  // Schema for extending an RFQ closing deadline (strictly one-time, whole days within the range above)
   extendRFQ: {
-    hours: {
+    days: {
       type: 'number',
       required: true,
-      custom: (val) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
-      message: 'Extension hours must be 24 or 48.',
+      custom: (val) => (isWholeExtensionDays(val) ? null : EXTENSION_DAYS_MESSAGE),
+      message: EXTENSION_DAYS_MESSAGE,
     },
   },
 
@@ -411,6 +657,51 @@ const VALIDATION_SCHEMAS = {
     products: { type: 'string', required: false, maxLength: 500 },
   },
 
+  vendorBulkImportRequest: {
+    sessionId: {
+      type: 'string',
+      required: false,
+      minLength: 1,
+      maxLength: 64,
+      pattern: BULK_IMPORT_SESSION_ID_REGEX,
+      message: 'Import session ID must be a valid session identifier.',
+    },
+  },
+
+  vendorBulkImportSessionParams: {
+    sessionId: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 64,
+      pattern: BULK_IMPORT_SESSION_ID_REGEX,
+      message: 'Import session ID must be a valid session identifier.',
+    },
+  },
+
+  vendorBulkImportInvitations: {
+    vendorIds: {
+      type: 'array',
+      required: true,
+      custom: (value) => {
+        if (!Array.isArray(value) || value.length === 0) {
+          return 'Select at least one imported vendor to invite.';
+        }
+        if (value.length > VENDOR_BULK_INVITATION_MAX_IDS) {
+          return `Invite no more than ${VENDOR_BULK_INVITATION_MAX_IDS} vendors in one request.`;
+        }
+        const normalizedIds = value.map((id) => (typeof id === 'string' ? id.trim() : ''));
+        if (normalizedIds.some((id) => !/^[a-z\d._:@-]{1,128}$/i.test(id))) {
+          return 'Every vendor ID must be a valid identifier.';
+        }
+        if (new Set(normalizedIds.map((id) => id.toLowerCase())).size !== normalizedIds.length) {
+          return 'Vendor IDs must be unique.';
+        }
+        return null;
+      },
+    },
+  },
+
   submitQuote: {
     rfqId: { type: 'string', required: true },
     vendorId: { type: 'string', required: true },
@@ -439,6 +730,15 @@ const VALIDATION_SCHEMAS = {
     email: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'Valid corporate email required' },
     role: { type: 'string', required: true },
     department: { type: 'string', required: false },
+  },
+
+  addBuyerCredit: {
+    amount: {
+      type: 'number', required: true, min: 1, max: 100000,
+      custom: (value) => Number.isInteger(Number(value)) ? null : 'amount must be a whole number of credits.',
+    },
+    reason: { type: 'string', required: false, maxLength: 500 },
+    source: { type: 'string', required: false, maxLength: 100 },
   },
 
   encryptPayload: {
@@ -621,10 +921,12 @@ const VALIDATION_SCHEMAS = {
   // leaves the stored value untouched — so almost everything here is optional and
   // only the legal entity name, which identifies the organisation, is required.
   //
-  // `email` and `organizationPhonenumber` are deliberately absent: they are owned
-  // by the `user` row established at sign-in and were read-only on the old screen
-  // too, so the service ignores them rather than letting a profile save
-  // reassign the account's login identity.
+  // `email` and `contactPhone` are deliberately absent: they are owned by the
+  // `user` row established at sign-in. The phone is also an authentication
+  // factor, so it can only change through the verified phone-update flow.
+  // `organizationPhonenumber` is an organization contact alias, not a profile
+  // field; the service ignores all of these rather than letting profile saves
+  // reassign login identity or authentication data.
   buyerProfile: {
     companyName: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Legal entity name is required.' },
     brandName: { type: 'string', required: false, maxLength: 255 },
@@ -649,6 +951,54 @@ const VALIDATION_SCHEMAS = {
     // they become. Cardinality limits are enforced in the service, which can
     // report which cap was exceeded.
     categories: { type: 'array', required: false },
+  },
+  // Category-manager/admin lookup fields for GET /api/buyer-profile/details.
+  // Cross-field "at least one identifier" validation is applied at the route
+  // boundary after each supplied value has been normalized and checked here.
+  buyerProfileDetailsQuery: {
+    email: {
+      type: 'string', required: false, maxLength: 320, pattern: EMAIL_REGEX,
+      message: 'Enter a valid buyer email address.',
+    },
+    name: {
+      type: 'string', required: false, minLength: 1, maxLength: 255,
+      message: 'Organization name must be between 1 and 255 characters.',
+    },
+    accountId: {
+      type: 'string', required: false, minLength: 1, maxLength: 128,
+      message: 'Account ID must be between 1 and 128 characters.',
+    },
+  },
+  // The API-key-protected WhatsApp bot bridge accepts only these request fields.
+  botBridgeSession: {
+    id: { type: 'string', required: false, minLength: 1, maxLength: 128 },
+    email: { type: 'string', required: false, maxLength: 320, pattern: EMAIL_REGEX, message: 'Enter a valid account email address.' },
+    phone: { type: 'string', required: false, minLength: 8, maxLength: 32, pattern: PHONE_REGEX, message: 'Enter a valid account phone number.' },
+  },
+  botBridgePhoneQuery: {
+    phone: { type: 'string', required: true, minLength: 8, maxLength: 32, pattern: PHONE_REGEX, message: 'Enter a valid account phone number.' },
+  },
+  botBridgeIdParams: {
+    id: { type: 'string', required: true, minLength: 1, maxLength: 128 },
+  },
+  botBridgeWhatsAppStatus: {
+    registeredViaWhatsApp: { type: 'boolean', required: true },
+    verificationStatus: {
+      type: 'string', required: false, enum: BOT_BRIDGE_CONFIG.VERIFICATION_STATES,
+      message: 'Choose a supported WhatsApp verification status.',
+    },
+  },
+  botBridgeOptOut: {
+    optedOut: { type: 'boolean', required: true },
+  },
+  botBridgeEmail: {
+    to: { type: 'any', required: true, custom: (value) => validateBotEmailAddressList(value, true) },
+    cc: { type: 'any', required: false, custom: (value) => validateBotEmailAddressList(value) },
+    bcc: { type: 'any', required: false, custom: (value) => validateBotEmailAddressList(value) },
+    subject: { type: 'string', required: false, maxLength: 998 },
+    text: { type: 'string', required: false, maxLength: BOT_EMAIL_BODY_MAX_LENGTH },
+    html: { type: 'string', required: false, maxLength: BOT_EMAIL_BODY_MAX_LENGTH },
+    attachments: { type: 'any', required: false, custom: validateBotEmailAttachments },
   },
 
   // ----------------------------------------------------------------------------
@@ -691,29 +1041,33 @@ const VALIDATION_SCHEMAS = {
     rating: { type: 'number', required: false, min: 0, max: 100 },
   },
 
-  // One historical PO line item. The description is the single most important
-  // field in the whole module — it is the evidence the categoriser reads — so a
-  // line with no description is invalid rather than merely unhelpful.
+  // One historical PO line item. Two fields are required: the vendor (Vendor/Supplier Name
+  // or Vendor Code, checked by the service) and the Item Description/Short Text/Material Description.
+  // Specifications and all other PO columns are optional.
   poLineItemRow: {
-    poNumber: { type: 'string', required: true, minLength: 1, maxLength: 120, message: 'PO Number is required.' },
-    poDate: { type: 'string', required: true, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
+    poNumber: { type: 'string', required: false, minLength: 1, maxLength: 120 },
+    poDate: { type: 'string', required: false, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
     itemDescription: {
       type: 'string',
       required: true,
       minLength: 2,
       maxLength: 4000,
-      message: 'Line Item Description is required — it is the evidence the categoriser reads.',
+      message: 'Item Description / Short Text / Material Description is required — it is the evidence the categoriser reads.',
     },
-    quantity: { type: 'number', required: true, min: 0, message: 'Quantity is required.' },
-    uom: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'UOM is required.' },
-    spend: { type: 'number', required: true, min: 0, message: 'Spend / Amount is required.' },
-    department: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Department is required.' },
+    quantity: { type: 'number', required: false, min: 0 },
+    uom: { type: 'string', required: false, minLength: 1, maxLength: 64 },
+    spend: { type: 'number', required: false, min: 0 },
+    department: { type: 'string', required: false, minLength: 1, maxLength: 255 },
     // Either identifier is enough to join to the vendor master; the service
     // rejects a row that supplies neither, because it cannot be attributed.
     vendorCode: { type: 'string', required: false, maxLength: 120 },
     vendorName: { type: 'string', required: false, maxLength: 512 },
     vendorGstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
-    specification: { type: 'string', required: false, maxLength: 4000 },
+    specification: {
+      type: 'string',
+      required: false,
+      maxLength: 4000,
+    },
     materialCode: { type: 'string', required: false, maxLength: 120 },
     existingCategory: { type: 'string', required: false, maxLength: 255 },
     existingSubcategory: { type: 'string', required: false, maxLength: 255 },
@@ -759,6 +1113,43 @@ const VALIDATION_SCHEMAS = {
     identifiers: { type: 'string', required: false, maxLength: 2000 },
   },
 
+  createAIFeedItem: {
+    title: { type: 'string', required: true, minLength: 1, maxLength: 250 },
+    message: { type: 'string', required: true, minLength: 1, maxLength: 5000 },
+    type: {
+      type: 'string', required: false,
+      enum: ['call', 'whatsapp', 'sms', 'email', 'scoring', 'ingestion', 'escalation', 'approval', 'system', 'invitation', 'reminder'],
+    },
+    channel: {
+      type: 'string', required: false,
+      enum: ['call', 'whatsapp', 'sms', 'email', 'system', 'invitation', 'reminder'],
+    },
+    recipient: { type: 'string', required: false, maxLength: 255 },
+    rfqNumber: { type: 'string', required: false, maxLength: 100 },
+    buyerAccountId: { type: 'string', required: false, maxLength: 255 },
+    channelDetails: {
+      type: 'object',
+      required: false,
+      custom: (value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          return 'channelDetails must be a JSON object.';
+        }
+        const allowedFields = ['duration', 'transcriptSummary', 'deliveryTimestamp', 'actionOutcome'];
+        const unknownField = Object.keys(value).find((field) => !allowedFields.includes(field));
+        if (unknownField) return `channelDetails.${unknownField} is not supported.`;
+        const invalidField = Object.entries(value).find(([field, detail]) =>
+          typeof detail !== 'string' || detail.length > (field === 'transcriptSummary' ? 2000 : 255)
+        );
+        return invalidField ? `channelDetails.${invalidField[0]} must be a string within its allowed length.` : null;
+      },
+    },
+  },
+
+  auditLogEntry: {
+    action: { type: 'string', required: true, minLength: 1, maxLength: 5000 },
+    rfqNumber: { type: 'string', required: false, maxLength: 100 },
+  },
+
   // Public vendor directory — unauthenticated search/filter parameters
   vendorPublicSearch: {
     page: { type: 'number', required: false, min: 1 },
@@ -768,6 +1159,24 @@ const VALIDATION_SCHEMAS = {
     state: { type: 'string', required: false, maxLength: 100 },
     minRating: { type: 'number', required: false, min: 0, max: 5 },
     verifiedOnly: { type: 'boolean', required: false },
+  },
+  // Authenticated vendor directory — search, pagination, and indexed public category filters
+  vendorDirectoryQuery: {
+    buyerId: { type: 'string', required: false, maxLength: 128 },
+    search: { type: 'string', required: false, maxLength: 200 },
+    email: { type: 'string', required: false, maxLength: 200 },
+    category: { type: 'string', required: false, maxLength: 200 },
+    majors: { type: 'string', required: false, maxLength: 1000 },
+    minors: { type: 'string', required: false, maxLength: 1000 },
+    minor: { type: 'string', required: false, maxLength: 200 },
+    state: { type: 'string', required: false, maxLength: 100 },
+    city: { type: 'string', required: false, maxLength: 100 },
+    publicOnly: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'publicOnly must be true, false, 1, or 0.',
+    },
   },
 
   transactionalEmailPreview: {
@@ -793,10 +1202,22 @@ const VALIDATION_SCHEMAS = {
     status: { type: 'string', required: false, enum: ['Pending', 'In Progress', 'Escalated', 'Completed'] },
     category: { type: 'string', required: false, maxLength: 100 },
     project: { type: 'string', required: false, maxLength: 255 },
-    customerName: { type: 'string', required: false, maxLength: 255 },
-    customerEmail: { type: 'string', required: false, maxLength: 255 },
-    customerPhone: { type: 'string', required: false, maxLength: 64 },
-    assignedToName: { type: 'string', required: false, maxLength: 255 },
+    customerName: {
+      type: 'string', required: true, minLength: 2, maxLength: 255,
+      message: 'Customer name is required (2 to 255 characters).',
+    },
+    customerEmail: {
+      type: 'string', required: true, maxLength: 320, pattern: EMAIL_REGEX,
+      message: 'Customer email is required and must be a valid email address.',
+    },
+    customerPhone: {
+      type: 'string', required: true, minLength: 8, maxLength: 32, pattern: PHONE_REGEX,
+      message: 'Customer phone is required and must be a valid phone number (8 to 32 characters).',
+    },
+    assignedToName: {
+      type: 'string', required: true, minLength: 2, maxLength: 255,
+      message: 'Assigned to name is required (2 to 255 characters).',
+    },
     assignedTeam: { type: 'string', required: false, maxLength: 100 },
     dueDate: { type: 'string', required: false, maxLength: 64 },
   },
@@ -823,9 +1244,62 @@ const VALIDATION_SCHEMAS = {
     comment: { type: 'string', required: true, minLength: 1, maxLength: 5000, message: 'Comment text cannot be empty.' },
   },
 
+  // Channels for POST /api/rfqs/:id/batch-chaser. The request must name at least one channel,
+  // each channel at most once, and no more channels than BATCH_CHASER_CHANNELS holds.
+  batchChaserChannels: {
+    channels: {
+      type: 'array',
+      required: true,
+      message: 'Choose at least one chaser channel: call, whatsapp or sms.',
+      custom: (value) => {
+        const allowed = getBatchChaserChannels();
+        if (!Array.isArray(value) || value.length === 0) {
+          return `Choose at least one chaser channel: ${allowed.join(', ')}.`;
+        }
+        if (value.length > allowed.length) {
+          return `Choose no more than ${allowed.length} chaser channels.`;
+        }
+        const unsupported = value.filter((channel) => !allowed.includes(channel));
+        if (unsupported.length > 0) {
+          return `Chaser channel "${String(unsupported[0])}" is not supported. Use ${allowed.join(', ')}.`;
+        }
+        if (new Set(value).size !== value.length) {
+          return 'Each chaser channel can be chosen only once.';
+        }
+        return null;
+      },
+    },
+  },
+
   approvalAction: {
     action: { type: 'string', required: true, enum: ['APPROVE', 'REJECT', 'Approve', 'Reject', 'approved', 'rejected'], message: 'Action must be APPROVE or REJECT.' },
     remarks: { type: 'string', required: false, maxLength: 1000 },
+    password: { type: 'string', required: true, minLength: 1, message: 'Approver password confirmation is required.' },
+    approverName: {
+      type: 'string',
+      required: true,
+      get enum() {
+        return getCreditApproverNames();
+      },
+      message: 'Select the approver whose password you are confirming.',
+    },
+  },
+
+  registrationList: {
+    search: { type: 'string', required: false, maxLength: 200 },
+    clientType: { type: 'string', required: false, enum: ['all', 'buyer', 'seller'] },
+    sourceType: {
+      type: 'string',
+      required: false,
+      enum: ['all', 'All', 'web app', 'Web App', 'WhatsApp', 'whatsapp', 'Email', 'email'],
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: ['all', 'All', 'new', 'New', 'accepted', 'Accepted', 'rejected', 'Rejected'],
+    },
+    limit: { type: 'number', required: false, min: 1, max: 200 },
+    offset: { type: 'number', required: false, min: 0, max: 1000000 },
   },
 
   registrationAction: {
@@ -1155,6 +1629,12 @@ function validatePayload(schema, data = {}) {
           continue;
         }
         sanitized[field] = value;
+      } else if (rules.type === 'boolean') {
+        if (typeof value !== 'boolean') {
+          errors[field] = `${field} must be true or false.`;
+          continue;
+        }
+        sanitized[field] = value;
       } else {
         sanitized[field] = value;
       }
@@ -1175,7 +1655,51 @@ function validatePayload(schema, data = {}) {
   };
 }
 
+/** The major category that means "not narrowed". A row under it needs no minor category. */
+const RFQ_ALL_CATEGORIES = 'All Categories';
+
+/**
+ * Validates the line items of an RFQ being created.
+ *
+ * Returns field errors keyed `lineItems` when there is no row, and `lineItems[n].field` for
+ * row n (zero-based). These keys match the category errors the RFQ controller already returns.
+ *
+ * @param {Array<object>} lineItems The rows as submitted (extractedEntities or lineItems).
+ * @returns {{ isValid: boolean, errors: Record<string, string> }}
+ */
+function validateRFQLineItemsForCreate(lineItems) {
+  const rows = Array.isArray(lineItems) ? lineItems : [];
+  if (rows.length === 0) {
+    return {
+      isValid: false,
+      errors: { lineItems: 'Add at least one line item so vendors have something to quote against.' },
+    };
+  }
+
+  const errors = {};
+  rows.forEach((row, index) => {
+    const rowResult = validatePayload(VALIDATION_SCHEMAS.createRFQLineItem, row || {});
+    Object.entries(rowResult.errors).forEach(([field, message]) => {
+      errors[`lineItems[${index}].${field}`] = message;
+    });
+
+    const major = String((row && row.majorCategory) || '').trim();
+    // The controller reads a row's minor category from minorCategory, falling back to category.
+    const minor = String((row && (row.minorCategory || row.category)) || '').trim();
+    if (major === RFQ_ALL_CATEGORIES) {
+      if (minor) {
+        errors[`lineItems[${index}].minorCategory`] = 'A minor category does not apply to All Categories. Clear the minor category to continue.';
+      }
+    } else if (major && !minor) {
+      errors[`lineItems[${index}].minorCategory`] = 'Each line item needs a minor category under its major category.';
+    }
+  });
+
+  return { isValid: Object.keys(errors).length === 0, errors };
+}
+
 module.exports = {
+  validateRFQLineItemsForCreate,
   EMAIL_REGEX,
   PROCUCEV_EMAIL_REGEX,
   PROCUCEV_EMAIL_MESSAGE,
@@ -1185,13 +1709,24 @@ module.exports = {
   GSTIN_REGEX,
   GSTIN_MESSAGE,
   PHONE_REGEX,
+  UUID_REGEX,
   INDIAN_MOBILE_REGEX,
   INDIAN_MOBILE_MESSAGE,
   OTP_CODE_REGEX,
   OTP_CODE_MESSAGE,
   PASSWORD_MIN_LENGTH,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  EXTENSION_DAYS_MESSAGE,
+  isWholeExtensionDays,
+  CLIENT_LOG_LIMITS,
   PAN_REGEX,
   PAN_MESSAGE,
+  DUMMY_PANS,
+  DUMMY_PAN_MESSAGE,
+  isDummyPan,
+  usablePan,
+  clearDummyPanFields,
   CIN_REGEX,
   CIN_MESSAGE,
   WEBSITE_REGEX,
@@ -1206,4 +1741,5 @@ module.exports = {
   DISPATCH_TEMPLATES,
   VALIDATION_SCHEMAS,
   validatePayload,
+  VENDOR_BULK_INVITATION_MAX_IDS,
 };

@@ -6,10 +6,16 @@ import AccountDocumentsTab, {
   getFileIcon,
 } from '@/app/category-manager/components/AccountDocumentsTab';
 import * as accountDocsClient from '@/lib/accountDocumentsClient';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import type { AccountDocument } from '@/lib/types';
 
 jest.mock('@/lib/accountDocumentsClient');
 
-const mockDocs = [
+const DOCUMENT_STRINGS = UI_STRINGS.buyerDirectory.dossier.documents;
+const LOAD_FAILURE =
+  'Could not load account documents (HTTP 500). Try again in a moment.';
+
+const mockDocs: AccountDocument[] = [
   {
     id: 'doc-1',
     accountType: 'buyer' as const,
@@ -81,7 +87,10 @@ describe('AccountDocumentsTab', () => {
   describe('formatFileSize & detectDocumentType helpers', () => {
     it('formats file sizes accurately across boundaries', () => {
       expect(formatFileSize(0)).toBe('0 B');
-      expect(formatFileSize(-10)).toBe('0 B');
+      expect(formatFileSize(-10)).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatFileSize(undefined)).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatFileSize(null)).toBe(UI_STRINGS.dataLoad.emptyCell);
+      expect(formatFileSize(Number.NaN)).toBe(UI_STRINGS.dataLoad.emptyCell);
       expect(formatFileSize(500)).toBe('500 B');
       expect(formatFileSize(1024)).toBe('1.0 KB');
       expect(formatFileSize(1536)).toBe('1.5 KB');
@@ -118,7 +127,7 @@ describe('AccountDocumentsTab', () => {
 
   describe('Component Rendering & Interactions', () => {
     it('renders loading state and then documents list table', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
       const onCountChange = jest.fn();
 
       render(
@@ -130,7 +139,7 @@ describe('AccountDocumentsTab', () => {
         />
       );
 
-      expect(screen.getByText(/Loading associated documents/i)).toBeInTheDocument();
+      expect(screen.getByText(DOCUMENT_STRINGS.loadingDocuments)).toBeInTheDocument();
 
       await waitFor(() => {
         expect(screen.getByText('GST Registration Certificate')).toBeInTheDocument();
@@ -140,10 +149,17 @@ describe('AccountDocumentsTab', () => {
       expect(screen.getByText('Commercial Specs Spreadsheet')).toBeInTheDocument();
       expect(screen.getByText('Legal Memorandum')).toBeInTheDocument();
       expect(onCountChange).toHaveBeenCalledWith(4);
+
+      // A record without a file link shows no download action, and no uploader or category is invented.
+      const legalRow = screen.getByText('Legal Memorandum').closest('tr') as HTMLElement;
+      expect(within(legalRow).queryByTitle(DOCUMENT_STRINGS.actionDownload)).not.toBeInTheDocument();
+      expect(within(legalRow).queryByText('Category Manager')).not.toBeInTheDocument();
+      expect(within(legalRow).getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
+      expect(within(legalRow).getByText('0 B')).toBeInTheDocument();
     });
 
     it('renders empty state when no documents exist and opens upload modal', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue([]);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: [] });
 
       render(
         <AccountDocumentsTab
@@ -154,8 +170,11 @@ describe('AccountDocumentsTab', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('No documents available for this account.')).toBeInTheDocument();
+        expect(screen.getByText(DOCUMENT_STRINGS.noDocuments)).toBeInTheDocument();
       });
+      expect(
+        screen.getByText(formatString(DOCUMENT_STRINGS.noAccountDocuments, { accountType: 'seller' }))
+      ).toBeInTheDocument();
 
       // Click Upload from empty state
       const uploadButtons = screen.getAllByRole('button', { name: /Upload Document/i });
@@ -163,10 +182,41 @@ describe('AccountDocumentsTab', () => {
       expect(screen.getByText('Upload Associated Document')).toBeInTheDocument();
     });
 
-    it('renders error state and handles retry button', async () => {
+    it('shows the client error instead of an empty list, reports no count, and retries on demand', async () => {
+      const onCountChange = jest.fn();
       const fetchSpy = jest.spyOn(accountDocsClient, 'fetchAccountDocuments')
-        .mockRejectedValueOnce(new Error('Fetch failed'))
-        .mockResolvedValueOnce(mockDocs);
+        .mockResolvedValueOnce({ documents: [], error: LOAD_FAILURE })
+        .mockResolvedValueOnce({ documents: mockDocs });
+
+      render(
+        <AccountDocumentsTab
+          accountType="buyer"
+          accountId="buyer-1"
+          accountName="Veera Babu Buyer Org"
+          onDocumentCountChange={onCountChange}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(LOAD_FAILURE)).toBeInTheDocument();
+      });
+      expect(screen.queryByText(DOCUMENT_STRINGS.noDocuments)).not.toBeInTheDocument();
+      expect(screen.queryByText('GST Registration Certificate')).not.toBeInTheDocument();
+      // The total is a dash while the list is unavailable, never a zero.
+      expect(screen.getByText(UI_STRINGS.dataLoad.emptyCell)).toBeInTheDocument();
+      expect(onCountChange).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: DOCUMENT_STRINGS.retryBtn }));
+
+      await waitFor(() => {
+        expect(screen.getByText('GST Registration Certificate')).toBeInTheDocument();
+      });
+      expect(onCountChange).toHaveBeenCalledWith(4);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows a network message when the client call itself throws', async () => {
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockRejectedValueOnce(new Error('Fetch failed'));
 
       render(
         <AccountDocumentsTab
@@ -177,19 +227,18 @@ describe('AccountDocumentsTab', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Retry')).toBeInTheDocument();
+        expect(
+          screen.getByText(
+            formatString(UI_STRINGS.dataLoad.networkFailed, {
+              resource: UI_STRINGS.dataLoad.resources.accountDocuments,
+            })
+          )
+        ).toBeInTheDocument();
       });
-
-      fireEvent.click(screen.getByText('Retry'));
-
-      await waitFor(() => {
-        expect(screen.getByText('GST Registration Certificate')).toBeInTheDocument();
-      });
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
     it('handles search input, clear button, filters, and sort order toggle', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
 
       render(
         <AccountDocumentsTab
@@ -232,7 +281,7 @@ describe('AccountDocumentsTab', () => {
     });
 
     it('handles document upload workflow with validation and submission', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
       const uploadSpy = jest.spyOn(accountDocsClient, 'uploadAccountDocument').mockResolvedValue({
         success: true,
         document: {
@@ -303,7 +352,7 @@ describe('AccountDocumentsTab', () => {
     });
 
     it('handles upload validation errors (empty name or file size limits >25MB)', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
 
       render(
         <AccountDocumentsTab
@@ -326,12 +375,12 @@ describe('AccountDocumentsTab', () => {
       fireEvent.change(nameInput, { target: { value: '' } });
       const form = modal.querySelector('form') as HTMLFormElement;
       fireEvent.submit(form);
-      expect(within(modal).getByText('Please provide a document name.')).toBeInTheDocument();
+      expect(within(modal).getByText(DOCUMENT_STRINGS.uploadNameRequired)).toBeInTheDocument();
 
       // Name provided but no file selected
       fireEvent.change(nameInput, { target: { value: 'Valid Name' } });
       fireEvent.submit(form);
-      expect(within(modal).getByText('Please select a file to upload.')).toBeInTheDocument();
+      expect(within(modal).getByText(DOCUMENT_STRINGS.uploadFileRequired)).toBeInTheDocument();
 
       // Empty target.files test
       const fileInput = document.getElementById('doc-file-upload') as HTMLInputElement;
@@ -347,7 +396,7 @@ describe('AccountDocumentsTab', () => {
       Object.defineProperty(bigFile, 'size', { value: 30 * 1024 * 1024 });
 
       fireEvent.change(fileInput, { target: { files: [bigFile] } });
-      expect(within(modal).getByText('File exceeds maximum size limit of 25MB.')).toBeInTheDocument();
+      expect(within(modal).getByText(DOCUMENT_STRINGS.fileTooLarge)).toBeInTheDocument();
 
       // Cancel button inside modal
       fireEvent.click(within(modal).getByRole('button', { name: /Cancel/i }));
@@ -355,7 +404,7 @@ describe('AccountDocumentsTab', () => {
     });
 
     it('handles upload rejection from server and network throw', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
       jest.spyOn(accountDocsClient, 'uploadAccountDocument')
         .mockResolvedValueOnce({
           success: false,
@@ -376,7 +425,7 @@ describe('AccountDocumentsTab', () => {
       });
 
       fireEvent.click(screen.getAllByText('Upload Document')[0]);
-      let modal = screen.getByRole('dialog');
+      const modal = screen.getByRole('dialog');
 
       const fileInput = document.getElementById('doc-file-upload') as HTMLInputElement;
       const file = new File(['data'], 'dup.pdf', { type: 'application/pdf' });
@@ -392,12 +441,12 @@ describe('AccountDocumentsTab', () => {
       // Trigger second submit to hit network throw catch block
       fireEvent.click(submitBtn);
       await waitFor(() => {
-        expect(within(modal).getByText('Failed to upload document.')).toBeInTheDocument();
+        expect(within(modal).getByText(DOCUMENT_STRINGS.toastUploadError)).toBeInTheDocument();
       });
     });
 
     it('opens and closes in-app document preview for PDF, Image, and Word/Excel', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
 
       render(
         <AccountDocumentsTab
@@ -436,7 +485,7 @@ describe('AccountDocumentsTab', () => {
     });
 
     it('handles delete confirmation modal, cancellation, and execution', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
       const deleteSpy = jest.spyOn(accountDocsClient, 'deleteAccountDocument').mockResolvedValue({
         success: true,
       });
@@ -476,7 +525,7 @@ describe('AccountDocumentsTab', () => {
     });
 
     it('handles delete rejection and network throw from server', async () => {
-      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue(mockDocs);
+      jest.spyOn(accountDocsClient, 'fetchAccountDocuments').mockResolvedValue({ documents: mockDocs });
       jest.spyOn(accountDocsClient, 'deleteAccountDocument')
         .mockResolvedValueOnce({
           success: false,
@@ -512,7 +561,7 @@ describe('AccountDocumentsTab', () => {
       fireEvent.click(within(modal).getByRole('button', { name: 'Delete Document' }));
 
       await waitFor(() => {
-        expect(screen.getByText('Failed to delete document.')).toBeInTheDocument();
+        expect(screen.getByText(DOCUMENT_STRINGS.toastDeleteError)).toBeInTheDocument();
       });
     });
   });

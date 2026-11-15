@@ -3,6 +3,7 @@ const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const identityQueries = require('../src/db/identityQueries');
 const domainQueries = require('../src/db/domainQueries');
+const pool = require('../src/db/pool');
 const vendorController = require('../src/controllers/vendorController');
 const authService = require('../src/services/authService');
 const { authHeader, TEST_USERS } = require('./testHelpers');
@@ -31,8 +32,9 @@ describe('storeService.ensureVendorProfileForUser', () => {
   });
 
   test('returns a profile found only through the DB fallback', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({ id: 'v-db', email: 'db@migrated.test' });
-    const addSpy = jest.spyOn(storeService, 'addVendor');
+    const addSpy = jest.spyOn(storeService, 'addVendorDurably');
     const vendor = await storeService.ensureVendorProfileForUser({ role: 'vendor', email: 'db@migrated.test' });
     expect(vendor.id).toBe('v-db');
     expect(addSpy).not.toHaveBeenCalled();
@@ -81,7 +83,7 @@ describe('storeService.ensureVendorProfileForUser', () => {
 
   test('concurrent calls share a single creation', async () => {
     jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
-    const addSpy = jest.spyOn(storeService, 'addVendor');
+    const addSpy = jest.spyOn(storeService, 'addVendorDurably');
     const user = { role: 'vendor', email: 'race@migrated.test' };
     const [a, b] = await Promise.all([
       storeService.ensureVendorProfileForUser(user),
@@ -94,7 +96,7 @@ describe('storeService.ensureVendorProfileForUser', () => {
 
   test('returns the winning row when another isolate created it first (409)', async () => {
     jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
-    jest.spyOn(storeService, 'confirmVendorPersisted').mockRejectedValueOnce(Object.assign(new Error('dup'), { statusCode: 409 }));
+    jest.spyOn(storeService, 'addVendorDurably').mockRejectedValueOnce(Object.assign(new Error('dup'), { statusCode: 409 }));
     jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue({ id: 'v-winner', email: 'conflict@migrated.test' });
     const vendor = await storeService.ensureVendorProfileForUser({ role: 'vendor', email: 'conflict@migrated.test' });
     expect(vendor.id).toBe('v-winner');
@@ -102,7 +104,7 @@ describe('storeService.ensureVendorProfileForUser', () => {
 
   test('returns null when the 409 winner cannot be re-read', async () => {
     jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
-    jest.spyOn(storeService, 'confirmVendorPersisted').mockRejectedValueOnce(Object.assign(new Error('dup'), { statusCode: 409 }));
+    jest.spyOn(storeService, 'addVendorDurably').mockRejectedValueOnce(Object.assign(new Error('dup'), { statusCode: 409 }));
     jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
     await expect(
       storeService.ensureVendorProfileForUser({ role: 'vendor', email: 'gone@migrated.test' })
@@ -111,7 +113,7 @@ describe('storeService.ensureVendorProfileForUser', () => {
 
   test('returns null when persisting fails for any other reason', async () => {
     jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
-    jest.spyOn(storeService, 'confirmVendorPersisted').mockRejectedValueOnce(Object.assign(new Error('boom'), { statusCode: 500 }));
+    jest.spyOn(storeService, 'addVendorDurably').mockRejectedValueOnce(Object.assign(new Error('boom'), { statusCode: 503 }));
     await expect(
       storeService.ensureVendorProfileForUser({ role: 'vendor', email: 'fail@migrated.test' })
     ).resolves.toBeNull();
@@ -217,7 +219,14 @@ describe('claiming an auto-created migrated profile', () => {
   }
 
   beforeEach(() => {
-    jest.spyOn(storeService, 'confirmVendorPersisted').mockResolvedValue({ persisted: true });
+    jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updates) => {
+      const existing = storeService.vendors.find((vendor) => vendor.id === id);
+      if (!existing) return null;
+      const saved = { ...existing, ...updates };
+      const index = storeService.vendors.findIndex((vendor) => vendor.id === id);
+      storeService.vendors[index] = saved;
+      return saved;
+    });
   });
 
   afterEach(() => {
@@ -275,7 +284,7 @@ describe('claiming an auto-created migrated profile', () => {
       rfqDownloadsUsed: 2,
       subscriptionPlan: 'select',
     });
-    expect(storeService.confirmVendorPersisted).toHaveBeenCalledWith(claimed);
+    expect(storeService.updateVendorDurably).toHaveBeenCalledWith(claimed.id, expect.objectContaining({ buyerId: 'buyer-1' }));
   });
 
   test('derives the source when none is given and keeps an explicit one', async () => {
@@ -327,13 +336,17 @@ describe('claiming an auto-created migrated profile', () => {
     jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockResolvedValue([]);
     jest.spyOn(identityQueries, 'findExistingUsernames').mockResolvedValue(new Set());
     jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
-    seedMigrated('mem@migrated.test');
-    seedMigrated('boom@migrated.test');
-    jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockImplementation(async (email) =>
-      (email === 'dbonly@migrated.test'
-        ? { id: 'v-dbonly', email: 'dbonly@migrated.test', name: 'Db Only', source: 'migrated_identity' }
-        : null)
-    );
+    const memVendor = seedMigrated('mem@migrated.test');
+    const boomVendor = seedMigrated('boom@migrated.test');
+    const dbVendor = { id: 'v-dbonly', email: 'dbonly@migrated.test', name: 'Db Only', source: 'migrated_identity' };
+    const dbVendorsByEmail = new Map([
+      [memVendor.email, memVendor],
+      [boomVendor.email, boomVendor],
+      [dbVendor.email, dbVendor],
+    ]);
+    const dbVendorsById = new Map([...dbVendorsByEmail.values()].map((vendor) => [vendor.id, vendor]));
+    jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockImplementation(async (email) => dbVendorsByEmail.get(email) || null);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockImplementation(async (id) => dbVendorsById.get(id) || null);
     const realClaim = storeService.claimMigratedVendorProfile.bind(storeService);
     jest.spyOn(storeService, 'claimMigratedVendorProfile').mockImplementation(async (email, ...rest) => {
       if (email === 'boom@migrated.test') throw new Error('claim failed');

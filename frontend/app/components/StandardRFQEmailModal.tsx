@@ -67,7 +67,7 @@ ${portalOnly
     : `- Submit your quotation by replying to this invitation with your itemized commercial quote, unit rates, and supporting documents, or use the Procucev Vendor Portal.
 - DO NOT MODIFY OR CHANGE THE EMAIL SUBJECT LINE ("${email.subject}"). The exact subject line is required for automated AI parsing and ingestion into the comparative evaluation matrix.`}
 
-SHA-256 DIGITAL AUDIT SEAL: ${email.shaSignature}
+${email.shaSignature ? `SHA-256 DIGITAL AUDIT SEAL: ${email.shaSignature}` : ''}
 `;
     navigator.clipboard.writeText(rawEmailText.trim());
     setCopied(true);
@@ -292,10 +292,12 @@ SHA-256 DIGITAL AUDIT SEAL: ${email.shaSignature}
                 <span className="font-bold text-slate-800 dark:text-gray-200">{email.buyerContactName}</span> · {email.buyerCompany}
                 <div className="text-slate-400">Procucev Autonomous Sourcing Orchestration Engine</div>
               </div>
-              <div className="flex items-center gap-1.5 font-mono text-[9px] text-slate-400 dark:text-gray-400 bg-slate-50 dark:bg-gray-950 px-2 py-1 rounded border border-slate-200 dark:border-gray-800">
-                <Hash size={11} className="text-indigo-600 dark:text-indigo-400" />
-                <span>SHA-256: {email.shaSignature.slice(0, 24)}...</span>
-              </div>
+              {email.shaSignature ? (
+                <div className="flex items-center gap-1.5 font-mono text-[9px] text-slate-400 dark:text-gray-400 bg-slate-50 dark:bg-gray-950 px-2 py-1 rounded border border-slate-200 dark:border-gray-800">
+                  <Hash size={11} className="text-indigo-600 dark:text-indigo-400" />
+                  <span>SHA-256: {email.shaSignature.slice(0, 24)}...</span>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

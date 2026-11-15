@@ -1,6 +1,9 @@
 /**
  * Unit Test Suite for Qua AI Transactional Email Templates (13 Templates)
  * Enforces >= 90% benchmark on Statements, Branches, Functions, and Lines.
+ *
+ * Data rules under test: required identifiers and counts throw when missing;
+ * optional descriptive fields render as "Not specified"; no template invents a value.
  */
 
 const {
@@ -28,11 +31,26 @@ const {
   getPublicFrontendUrl,
   getLogoUrl,
   TEMPLATE_REGISTRY,
-  TEMPLATE_ALIASES,
 } = require('../src/services/transactionalEmailTemplates');
 
 const { QUA_AI_EMAIL_TEMPLATES, QUA_AI_EMAIL_SUPPORT } = require('../src/config/constants');
 const mailerService = require('../src/services/mailerService');
+
+const NOT_SPECIFIED = 'Not specified';
+
+// Parameters that satisfy every required identifier and count for a given template.
+const FULL = {
+  first_name: 'TestUser',
+  rfq_id: 'RFQ-ALL-1',
+  email: 'buyer.login@example.test',
+  temp_password: 'Temp#Example1',
+  item_count: 1,
+  suppliers_invited: 2,
+  quote_count: 1,
+  credit_balance: 0,
+  matched_rfq_count: 0,
+  missing_fields: ['Quantity for the first line item'],
+};
 
 describe('Qua AI Transactional Email Templates Suite', () => {
   describe('Helper Utilities', () => {
@@ -46,7 +64,7 @@ describe('Qua AI Transactional Email Templates Suite', () => {
     });
 
     test('resolveSalutation prioritizes firstName and falls back gracefully', () => {
-      expect(resolveSalutation('Rajesh')).toBe('Rajesh');
+      expect(resolveSalutation('Meera')).toBe('Meera');
       expect(resolveSalutation('   Priya   ')).toBe('Priya');
       expect(resolveSalutation('', 'there')).toBe('there');
       expect(resolveSalutation(null)).toBe('there');
@@ -99,6 +117,7 @@ describe('Qua AI Transactional Email Templates Suite', () => {
         rfq_id: 'RFQ-9901',
         rfq_title: 'Centrifugal Water Pumps',
         email: 'ananya@acme.com',
+        mobile_number: '9000012345',
         temp_password: 'TempPassword123!',
         login_url: 'https://equa.procucev.com/login',
         review_url: 'https://equa.procucev.com/buyer/rfq/9901',
@@ -111,8 +130,8 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.text).toContain('Hi Ananya,');
       expect(result.text).toContain('RFQ-9901 : Centrifugal Water Pumps');
       expect(result.text).toContain('Login ID: ananya@acme.com');
-      expect(result.text).toContain('Registered Mobile: 9999999999');
-      expect(result.text).toContain('Temporary password: TempPassword123!');
+      expect(result.text).toContain('Registered Mobile: 9000012345');
+      expect(result.text).toContain('Temporary password: TempPassword123! (valid for 48 hours)');
       expect(result.text).toContain('Three quick steps to finish');
       expect(result.text).toContain('Log in & review my RFQ');
       expect(result.html).toContain('Ananya');
@@ -120,14 +139,36 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('Centrifugal Water Pumps');
       expect(result.html).toContain('TempPassword123!');
       expect(result.html).toContain('Registered Mobile:');
-      expect(result.html).toContain('9999999999');
+      expect(result.html).toContain('9000012345');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail1_RfqCreatedAccountAutoCreated({});
-      expect(result.subject).toContain('RFQ-2026');
+    test('shows "Not specified" for an omitted title and mobile number', () => {
+      const result = buildEmail1_RfqCreatedAccountAutoCreated({
+        rfq_id: 'RFQ-2026-EMPTY',
+        email: 'nobody@acme.test',
+        temp_password: 'Temp#Only1',
+      });
+      expect(result.subject).toContain('RFQ-2026-EMPTY');
       expect(result.text).toContain('Hi there,');
-      expect(result.html).toContain('buyer@example.com');
+      expect(result.text).toContain('Registered Mobile: Not specified');
+      expect(result.text).toContain('RFQ-2026-EMPTY : Not specified');
+      expect(result.html).toContain('nobody@acme.test');
+    });
+
+    test('throws when the temporary password is missing, and never ships a hardcoded credential', () => {
+      expect(() => buildEmail1_RfqCreatedAccountAutoCreated({ rfq_id: 'RFQ-PW-1', email: 'x@y.test' })).toThrow(
+        "Email template EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED requires 'temp_password'"
+      );
+      const result = buildEmail1_RfqCreatedAccountAutoCreated({ rfq_id: 'RFQ-PW-2', email: 'x@y.test', temp_password: 'Supplied#1' });
+      expect(result.html + result.text).not.toContain('QuaAI#2026Auto');
+      expect(result.html + result.text).not.toContain('9999999999');
+      expect(result.html + result.text).not.toContain('buyer@example.com');
+    });
+
+    test('throws a descriptive error when the RFQ identifier is missing', () => {
+      expect(() => buildEmail1_RfqCreatedAccountAutoCreated({})).toThrow(
+        "Email template EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED requires 'rfq_id'"
+      );
     });
   });
 
@@ -163,11 +204,21 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('Sets');
     });
 
-    test('falls back safely when items are not provided', () => {
-      const result = buildEmail2_RfqCreated({});
-      expect(result.subject).toContain('RFQ-2026');
+    test('shows "Not specified" for omitted descriptive fields and invents no line item when none are provided', () => {
+      const result = buildEmail2_RfqCreated({ rfq_id: 'RFQ-EMPTY-2', suppliers_invited: 0, item_count: 0 });
+      expect(result.subject).toContain('RFQ-EMPTY-2');
       expect(result.text).toContain('Hi there,');
-      expect(result.html).toContain('Standard Specification');
+      expect(result.text).toContain('Delivery location: Not specified');
+      expect(result.html).toContain(`colspan="5"`);
+      expect(result.html).not.toContain('Standard Specification');
+      expect(result.html).not.toContain('Standard Spec');
+      expect(result.text).not.toContain('Lot');
+    });
+
+    test('throws when the supplier count is missing', () => {
+      expect(() => buildEmail2_RfqCreated({ rfq_id: 'RFQ-NO-SUPPLIERS', item_count: 0 })).toThrow(
+        "Email template EMAIL_2_RFQ_CREATED requires 'suppliers_invited'"
+      );
     });
   });
 
@@ -196,11 +247,18 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('Rourkela Plant Site');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail3_NewRfqIntimation({});
-      expect(result.subject).toContain('Industrial Supplies');
+    test('describes an unknown buyer and category as "Not specified" without invented industry or city', () => {
+      const result = buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-E3-EMPTY', item_count: 0 });
+      expect(result.subject).toBe('New buyer enquiry');
       expect(result.text).toContain('Hi there,');
-      expect(result.html).toContain('Heavy Industrial company, India');
+      expect(result.html).toContain('Not specified');
+      expect(result.text).not.toContain('Heavy Industrial');
+    });
+
+    test('throws when the line-item count is missing', () => {
+      expect(() => buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-E3-NOCOUNT' })).toThrow(
+        "Email template EMAIL_3_NEW_RFQ_INTIMATION requires 'item_count'"
+      );
     });
   });
 
@@ -229,11 +287,17 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('12 credits');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail4_NewRfqToQuote({});
-      expect(result.subject).toContain('RFQ-2026');
+    test('shows "Not specified" for omitted optional fields and keeps the identifier and counts required', () => {
+      const result = buildEmail4_NewRfqToQuote({ rfq_id: 'RFQ-4-EMPTY', item_count: 0, credit_balance: 0 });
+      expect(result.subject).toBe('New RFQ RFQ-4-EMPTY');
       expect(result.text).toContain('Hi there,');
-      expect(result.html).toContain('5 credits');
+      expect(result.html).toContain('0 credits');
+      expect(() => buildEmail4_NewRfqToQuote({ item_count: 0, credit_balance: 0 })).toThrow(
+        "Email template EMAIL_4_NEW_RFQ_TO_QUOTE requires 'rfq_id'"
+      );
+      expect(() => buildEmail4_NewRfqToQuote({ rfq_id: 'RFQ-4-NOCREDIT', item_count: 0 })).toThrow(
+        "Email template EMAIL_4_NEW_RFQ_TO_QUOTE requires 'credit_balance'"
+      );
     });
   });
 
@@ -259,11 +323,22 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('10 days');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail5_QuotationsReadyToCompare({});
-      expect(result.subject).toContain('3 quotes in');
+    test('shows "Not specified" for an omitted price and delivery, and never invents them', () => {
+      const result = buildEmail5_QuotationsReadyToCompare({ quote_count: 0, rfq_id: 'RFQ-E5-EMPTY' });
+      expect(result.subject).toBe('0 quotes in for RFQ RFQ-E5-EMPTY: compare now');
       expect(result.text).toContain('Hi there,');
-      expect(result.html).toContain('₹1,25,000');
+      expect(result.text).toContain('suppliers have quoted on RFQ RFQ-E5-EMPTY');
+      expect(result.text).toContain('lowest landed price is Not specified');
+      expect(result.html).not.toContain('₹1,25,000');
+      expect(result.html).not.toContain('4 days');
+    });
+
+    test('throws when the quote count is missing, non-integer or negative', () => {
+      expect(() => buildEmail5_QuotationsReadyToCompare({ rfq_id: 'RFQ-E5-A' })).toThrow(
+        "Email template EMAIL_5_QUOTATIONS_READY_TO_COMPARE requires 'quote_count'"
+      );
+      expect(() => buildEmail5_QuotationsReadyToCompare({ rfq_id: 'RFQ-E5-B', quote_count: 1.5 })).toThrow(/quote_count/);
+      expect(() => buildEmail5_QuotationsReadyToCompare({ rfq_id: 'RFQ-E5-C', quote_count: -1 })).toThrow(/quote_count/);
     });
   });
 
@@ -279,15 +354,13 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.templateId).toBe('EMAIL_6_ACTIVATE_YOUR_ACCOUNT');
       expect(result.subject).toBe('Suppliers are waiting on RFQ RFQ-1102');
       expect(result.text).toContain('Hi Karan,');
-      expect(result.text).toContain('profile still has placeholder details');
+      expect(result.text).toContain('your profile is still incomplete');
       expect(result.text).toContain('It takes 2 minutes: log in, complete your profile');
-      expect(result.html).toContain('Overhead EOT Cranes 10 Ton');
+      expect(result.html).toContain('RFQ-1102');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail6_ActivateYourAccount({});
-      expect(result.subject).toContain('RFQ-2026');
-      expect(result.text).toContain('Hi there,');
+    test('throws when the RFQ identifier is missing', () => {
+      expect(() => buildEmail6_ActivateYourAccount({})).toThrow("Email template EMAIL_6_ACTIVATE_YOUR_ACCOUNT requires 'rfq_id'");
     });
   });
 
@@ -323,10 +396,14 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.text).toContain('Required delivery timeframe');
     });
 
-    test('falls back safely with completely empty params', () => {
-      const result = buildEmail7_RfqNeedsMoreInformation({});
-      expect(result.subject).toContain('RFQ-2026');
-      expect(result.text).toContain('Line item quantity specification');
+    test('never invents a missing field and refuses to render an empty list', () => {
+      expect(() => buildEmail7_RfqNeedsMoreInformation({ rfq_id: 'RFQ-6625' })).toThrow(
+        "Email template EMAIL_7_RFQ_NEEDS_MORE_INFORMATION requires 'missing_fields'"
+      );
+      expect(() => buildEmail7_RfqNeedsMoreInformation({ rfq_id: 'RFQ-6626', missing_fields: [] })).toThrow(/missing_fields/);
+      const result = buildEmail7_RfqNeedsMoreInformation({ rfq_id: 'RFQ-6627', missing_fields: ['Delivery pin code'] });
+      expect(result.text).not.toContain('Line item quantity specification');
+      expect(result.text).not.toContain('Delivery pincode or site location');
     });
   });
 
@@ -342,15 +419,13 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.templateId).toBe('EMAIL_8_NO_QUOTES_YET');
       expect(result.subject).toBe("RFQ RFQ-9912: let's get you more quotes");
       expect(result.text).toContain('Hi Sunita,');
-      expect(result.text).toContain('Suppliers are still reviewing Explosion-Proof Motors 75kW');
+      expect(result.text).toContain('Suppliers are still reviewing RFQ RFQ-9912');
       expect(result.text).toContain('Extend deadline / invite more suppliers');
-      expect(result.html).toContain('Explosion-Proof Motors 75kW');
+      expect(result.html).toContain('RFQ-9912');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail8_NoQuotesYet({});
-      expect(result.subject).toContain('RFQ-2026');
-      expect(result.text).toContain('Hi there,');
+    test('throws when the RFQ identifier is missing', () => {
+      expect(() => buildEmail8_NoQuotesYet({})).toThrow("Email template EMAIL_8_NO_QUOTES_YET requires 'rfq_id'");
     });
   });
 
@@ -373,15 +448,23 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('Submit my quote');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail9_QuoteDeadlineReminder({});
-      expect(result.subject).toContain('Procurement Requirement');
+    test('uses the RFQ identifier in the subject and "Not specified" for an omitted deadline', () => {
+      const result = buildEmail9_QuoteDeadlineReminder({ rfq_id: 'RFQ-9-EMPTY', quote_count: 0 });
+      expect(result.subject).toBe('24 hours left to quote on RFQ-9-EMPTY');
       expect(result.text).toContain('Hi there,');
+      expect(result.text).toContain('RFQ RFQ-9-EMPTY closes on Not specified.');
+      expect(result.text).not.toContain('Tomorrow at 18:00 IST');
+    });
+
+    test('throws when the quote count is missing', () => {
+      expect(() => buildEmail9_QuoteDeadlineReminder({ rfq_id: 'RFQ-9-NOCOUNT' })).toThrow(
+        "Email template EMAIL_9_QUOTE_DEADLINE_REMINDER requires 'quote_count'"
+      );
     });
   });
 
   describe('Email 10 : Low or zero credits', () => {
-    test('renders low credits warning and purchase CTA', () => {
+    test('renders low credits warning and purchase CTA without a hardcoded price', () => {
       const result = buildEmail10_LowOrZeroCredits({
         first_name: 'Kavita',
         credit_balance: 1,
@@ -394,15 +477,22 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.text).toContain('Hi Kavita,');
       expect(result.text).toContain('credit balance is down to 1.');
       expect(result.text).toContain('In the last 30 days, 22 RFQs matched your categories.');
-      expect(result.text).toContain('Buy 50 credits');
-      expect(result.html).toContain('50 Credits · ₹7,500');
-      expect(result.html).toContain('Only ₹150 per RFQ bid');
+      expect(result.text).toContain('[ Buy credits ]');
+      expect(result.html).toContain('Buy credits');
+      expect(result.html + result.text).not.toContain('₹7,500');
+      expect(result.html + result.text).not.toContain('₹150');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail10_LowOrZeroCredits({});
-      expect(result.subject).toContain('0 credits left');
-      expect(result.text).toContain('Hi there,');
+    test('throws when the credit balance or matched RFQ count is missing', () => {
+      expect(() => buildEmail10_LowOrZeroCredits({ matched_rfq_count: 3 })).toThrow(
+        "Email template EMAIL_10_LOW_OR_ZERO_CREDITS requires 'credit_balance'"
+      );
+      expect(() => buildEmail10_LowOrZeroCredits({ credit_balance: 0 })).toThrow(
+        "Email template EMAIL_10_LOW_OR_ZERO_CREDITS requires 'matched_rfq_count'"
+      );
+      const zero = buildEmail10_LowOrZeroCredits({ credit_balance: 0, matched_rfq_count: 0, first_name: '' });
+      expect(zero.subject).toBe("You have 0 credits left: don't miss the next RFQ");
+      expect(zero.text).toContain('Hi there,');
     });
   });
 
@@ -426,10 +516,18 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('2026-11-12 18:00 IST');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail11_QuoteSubmitted({});
-      expect(result.subject).toContain('RFQ-2026');
+    test('omits an unknown price and deadline rather than inventing them', () => {
+      const result = buildEmail11_QuoteSubmitted({ rfq_id: 'RFQ-11-BARE' });
+      expect(result.subject).toBe('Your quote for RFQ RFQ-11-BARE has been received');
       expect(result.text).toContain('Hi there,');
+      expect(result.text).toContain('Your quote for RFQ RFQ-11-BARE has reached the buyer.');
+      expect(result.text).toContain('The buyer will review all quotes once the RFQ closes.');
+      expect(result.html).not.toContain('₹1,50,000');
+      expect(result.html).not.toContain('2026-11-15');
+    });
+
+    test('throws when the RFQ identifier is missing', () => {
+      expect(() => buildEmail11_QuoteSubmitted({})).toThrow("Email template EMAIL_11_QUOTE_SUBMITTED requires 'rfq_id'");
     });
   });
 
@@ -452,10 +550,17 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('2026-11-18 18:00 IST');
     });
 
-    test('falls back safely with empty params', () => {
-      const result = buildEmail12_RfqRevisedBuyerQuestion({});
-      expect(result.subject).toContain('RFQ-2026');
-      expect(result.text).toContain('Hi there,');
+    test('shows "Not specified" for an omitted change summary and invents no change', () => {
+      const result = buildEmail12_RfqRevisedBuyerQuestion({ rfq_id: 'RFQ-12-BARE' });
+      expect(result.text).toContain('The buyer has updated RFQ RFQ-12-BARE:');
+      expect(result.text).toContain('Not specified');
+      expect(result.text).not.toContain('150 units');
+      expect(result.text).not.toContain('The deadline is now');
+      expect(result.html).not.toContain('The deadline is now');
+    });
+
+    test('throws when the RFQ identifier is missing', () => {
+      expect(() => buildEmail12_RfqRevisedBuyerQuestion({})).toThrow("Email template EMAIL_12_RFQ_REVISED_BUYER_QUESTION requires 'rfq_id'");
     });
   });
 
@@ -473,15 +578,17 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.templateId).toBe('EMAIL_13_COMPLETE_YOUR_PROFILE');
       expect(result.subject).toBe('Your RFQ for Centrifugal Pumps closes Tomorrow at 18:00 IST');
       expect(result.text).toContain('Hi Divya,');
-      expect(result.text).toContain('buyer in Ahmedabad is still waiting for quotes on High-Head Slurry Pumps');
+      expect(result.text).toContain('A buyer in Ahmedabad is still waiting for quotes on High-Head Slurry Pumps');
       expect(result.text).toContain('Complete profile & quote');
       expect(result.html).toContain('Ahmedabad');
     });
 
-    test('falls back safely with empty params', () => {
+    test('omits unknown category, city and title rather than inventing them', () => {
       const result = buildEmail13_CompleteYourProfile({});
-      expect(result.subject).toContain('Industrial Supplies');
+      expect(result.subject).toBe('Your RFQ is still open');
       expect(result.text).toContain('Hi there,');
+      expect(result.text).toContain('A buyer is still waiting for quotes on an open RFQ');
+      expect(result.text).not.toContain('Industrial Supplies');
     });
   });
 
@@ -501,14 +608,14 @@ describe('Qua AI Transactional Email Templates Suite', () => {
 
     test('renderTransactionalEmail renders all 13 templates by index and key', () => {
       for (let i = 1; i <= 13; i++) {
-        const renderedNum = renderTransactionalEmail(i, { first_name: 'TestUser' });
+        const renderedNum = renderTransactionalEmail(i, FULL);
         expect(renderedNum.templateNumber).toBe(i);
         expect(renderedNum.subject).toBeTruthy();
         expect(renderedNum.text).toContain('TestUser');
         expect(renderedNum.html).toContain('TestUser');
 
         const key = Object.keys(TEMPLATE_REGISTRY)[i - 1];
-        const renderedKey = renderTransactionalEmail(key, { first_name: 'TestUser' });
+        const renderedKey = renderTransactionalEmail(key, FULL);
         expect(renderedKey.templateId).toBe(key);
       }
     });
@@ -523,12 +630,12 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       const deliverVendorSpy = jest.spyOn(mailerService, 'deliverVendor').mockResolvedValue({ sent: true, messageId: 'm2' });
 
       // Buyer email (Email 1)
-      const resBuyer = await sendTransactionalEmail('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED', 'buyer@test.com', { first_name: 'Buyer' });
+      const resBuyer = await sendTransactionalEmail('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED', 'buyer@test.com', FULL);
       expect(resBuyer.sent).toBe(true);
       expect(deliverSpy).toHaveBeenCalled();
 
       // Vendor email (Email 4)
-      const resVendor = await sendTransactionalEmail('EMAIL_4_NEW_RFQ_TO_QUOTE', 'vendor@test.com', { first_name: 'Vendor' });
+      const resVendor = await sendTransactionalEmail('EMAIL_4_NEW_RFQ_TO_QUOTE', 'vendor@test.com', FULL);
       expect(resVendor.sent).toBe(true);
       expect(deliverVendorSpy).toHaveBeenCalled();
 
@@ -555,20 +662,17 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(getLogoUrl()).toContain('procucev-logo.png');
     });
 
-    test('getPublicFrontendUrl respects production equa domain when srinivas-mukku is configured', () => {
-      process.env.PUBLIC_FRONTEND_URL = 'https://srinivas-mukku.workers.dev/';
+    test('getPublicFrontendUrl returns the configured URL unchanged, with no domain-specific rewrite', () => {
+      process.env.PUBLIC_FRONTEND_URL = 'https://configured-frontend.example.test/';
       process.env.NODE_ENV = 'production';
-      expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+      expect(getPublicFrontendUrl()).toBe('https://configured-frontend.example.test');
 
       process.env.NODE_ENV = 'development';
       globalThis.__CF_ENV__ = { ENVIRONMENT: 'production' };
-      expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+      expect(getPublicFrontendUrl()).toBe('https://configured-frontend.example.test');
 
       globalThis.__CF_ENV__ = { ENVIRONMENT: 'prod' };
-      expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
-
-      globalThis.__CF_ENV__ = { NODE_ENV: 'production' };
-      expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+      expect(getPublicFrontendUrl()).toBe('https://configured-frontend.example.test');
     });
 
     test('getPublicFrontendUrl trims slashes and returns custom domain', () => {
@@ -595,28 +699,26 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(getLogoUrl()).toContain('procucev-enterprise-frontend.procucev-enterprise.workers.dev');
     });
 
-    test('covers all 13 email builders and wrapQuaAiEmail when called with zero arguments / defaults', () => {
+    test('builders run their default-argument branches with the minimum required values', () => {
       expect(wrapQuaAiEmail({})).toBeDefined();
       expect(wrapQuaAiEmail({ title: undefined, subtitle: undefined, innerHtml: 'content', supportPhone: undefined, supportEmail: undefined })).toBeDefined();
 
-      expect(buildEmail1_RfqCreatedAccountAutoCreated()).toBeDefined();
-      expect(buildEmail2_RfqCreated()).toBeDefined();
-      expect(buildEmail2_RfqCreated({ items: [{ item_name: 'Tool', item_spec: 'Steel', qty: 2, uom: 'Nos' }] })).toBeDefined();
-      expect(buildEmail2_RfqCreated({ item_count: undefined, items: [] })).toBeDefined();
-      expect(buildEmail3_NewRfqIntimation()).toBeDefined();
-      expect(buildEmail4_NewRfqToQuote()).toBeDefined();
-      expect(buildEmail5_QuotationsReadyToCompare()).toBeDefined();
-      expect(buildEmail6_ActivateYourAccount()).toBeDefined();
-      expect(buildEmail7_RfqNeedsMoreInformation()).toBeDefined();
-      expect(buildEmail7_RfqNeedsMoreInformation({ missing_fields: [] })).toBeDefined();
-      expect(buildEmail8_NoQuotesYet()).toBeDefined();
-      expect(buildEmail9_QuoteDeadlineReminder()).toBeDefined();
-      expect(buildEmail10_LowOrZeroCredits()).toBeDefined();
-      expect(buildEmail11_QuoteSubmitted()).toBeDefined();
-      expect(buildEmail12_RfqRevisedBuyerQuestion()).toBeDefined();
+      expect(() => buildEmail1_RfqCreatedAccountAutoCreated()).toThrow(/requires 'rfq_id'/);
+      expect(buildEmail2_RfqCreated({ rfq_id: 'RFQ-D2', suppliers_invited: 0, items: [] })).toBeDefined();
+      expect(buildEmail2_RfqCreated({ rfq_id: 'RFQ-D2B', suppliers_invited: 1, item_count: undefined, items: [{ item_name: 'Tool', item_spec: 'Steel', qty: 2, uom: 'Nos' }] })).toBeDefined();
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3', item_count: 0 })).toBeDefined();
+      expect(buildEmail4_NewRfqToQuote({ rfq_id: 'RFQ-D4', item_count: 0, credit_balance: 0 })).toBeDefined();
+      expect(buildEmail5_QuotationsReadyToCompare({ rfq_id: 'RFQ-D5', quote_count: 0 })).toBeDefined();
+      expect(buildEmail6_ActivateYourAccount({ rfq_id: 'RFQ-D6' })).toBeDefined();
+      expect(buildEmail7_RfqNeedsMoreInformation({ rfq_id: 'RFQ-D7', missing_fields: ['Quantity'] })).toBeDefined();
+      expect(buildEmail8_NoQuotesYet({ rfq_id: 'RFQ-D8' })).toBeDefined();
+      expect(buildEmail9_QuoteDeadlineReminder({ rfq_id: 'RFQ-D9', quote_count: 0 })).toBeDefined();
+      expect(buildEmail10_LowOrZeroCredits({ credit_balance: 0, matched_rfq_count: 0 })).toBeDefined();
+      expect(buildEmail11_QuoteSubmitted({ rfq_id: 'RFQ-D11' })).toBeDefined();
+      expect(buildEmail12_RfqRevisedBuyerQuestion({ rfq_id: 'RFQ-D12' })).toBeDefined();
       expect(buildEmail13_CompleteYourProfile()).toBeDefined();
 
-      // Test alias resolution directly with exact case matching TEMPLATE_ALIASES keys
+      // Alias resolution with exact-case keys
       expect(resolveTemplateKey('email_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');
       expect(resolveTemplateKey('EMAIL_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');
     });
@@ -639,5 +741,3 @@ describe('Qua AI Transactional Email Templates Suite', () => {
     });
   });
 });
-
-

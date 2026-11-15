@@ -21,8 +21,9 @@ import {
   ArrowUp,
   ArrowDown,
   GripVertical,
+  X,
 } from 'lucide-react';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
 import type { DocumentVaultItem, DocumentVaultSummary } from '@/lib/types';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
@@ -50,12 +51,10 @@ export default function DocumentVaultDashboard() {
   const strings = UI_STRINGS.actionCenter.documentVault;
 
   const [documents, setDocuments] = useState<DocumentVaultItem[]>([]);
-  const [summary, setSummary] = useState<DocumentVaultSummary>({
-    totalDocuments: 0,
-    activeDocuments: 0,
-    totalSizeBytes: 0,
-    categoriesCount: 0,
-  });
+  // Null until the summary loads, and when it fails. The cards show a dash, never a zero.
+  const [summary, setSummary] = useState<DocumentVaultSummary | null>(null);
+  // Set when the document list or its summary could not be loaded. The table shows it instead of "no documents".
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -104,6 +103,7 @@ export default function DocumentVaultDashboard() {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const [docsData, summaryData] = await Promise.all([
         fetchDocuments({
@@ -116,12 +116,18 @@ export default function DocumentVaultDashboard() {
       setDocuments(docsData);
       setSummary(summaryData);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to load document vault';
-      showToast(msg, 'error');
+      // The list and the counts are unavailable. Results from an earlier load are not kept on screen.
+      setDocuments([]);
+      setSummary(null);
+      setLoadError(
+        err instanceof Error && err.message
+          ? err.message
+          : formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.documentVault })
+      );
     } finally {
       setIsLoading(false);
     }
-  }, [selectedCategory, selectedSource, searchQuery, showToast]);
+  }, [selectedCategory, selectedSource, searchQuery]);
 
   useEffect(() => {
     loadData();
@@ -326,7 +332,7 @@ export default function DocumentVaultDashboard() {
   void GripVertical;
 
   return (
-    <div className="space-y-6" data-testid="document-vault-dashboard">
+    <div className="space-y-3.5 w-full min-w-0 max-w-full overflow-x-hidden" data-testid="document-vault-dashboard">
       {/* Toast Notification */}
       {toastMessage && (
         <div
@@ -351,7 +357,7 @@ export default function DocumentVaultDashboard() {
             <FileText size={14} className="text-indigo-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-documents">
-            {summary.totalDocuments}
+            {summary ? summary.totalDocuments : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
 
@@ -361,7 +367,7 @@ export default function DocumentVaultDashboard() {
             <FileCheck size={14} className="text-emerald-500" />
           </div>
           <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="stat-active-documents">
-            {summary.activeDocuments}
+            {summary ? summary.activeDocuments : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
 
@@ -371,7 +377,7 @@ export default function DocumentVaultDashboard() {
             <HardDrive size={14} className="text-amber-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-storage">
-            {formatFileSize(summary.totalSizeBytes)}
+            {summary ? formatFileSize(summary.totalSizeBytes) : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
 
@@ -381,24 +387,34 @@ export default function DocumentVaultDashboard() {
             <Layers size={14} className="text-sky-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-categories-count">
-            {summary.categoriesCount}
+            {summary ? summary.categoriesCount : UI_STRINGS.dataLoad.emptyCell}
           </div>
         </div>
       </div>
 
       {/* Filters & Search Toolbar — single row */}
-      <div className="flex flex-row items-center gap-2 overflow-x-auto no-scrollbar bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-1.5 shadow-xs flex flex-row items-center gap-1.5 xl:gap-2 w-full min-w-0 max-w-full box-border">
         {/* Search */}
         <div className="flex-1 min-w-[140px] relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={strings.actions.searchPlaceholder}
             data-testid="vault-search-input"
-            className="w-full pl-9 pr-4 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full has-leading-icon has-trailing-icon pr-8 py-1.5 h-8 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              aria-label="Clear search"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* Source Dropdown */}
@@ -407,7 +423,7 @@ export default function DocumentVaultDashboard() {
           onChange={(e) => setSelectedSource(e.target.value)}
           data-testid="vault-source-filter"
           aria-label={strings.actions.filterSource}
-          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="shrink-0 h-8 w-[115px] xl:w-[125px] px-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer truncate"
         >
           {DOCUMENT_VAULT_SOURCES.map((src) => (
             <option key={src.id} value={src.id}>
@@ -422,7 +438,7 @@ export default function DocumentVaultDashboard() {
           onChange={(e) => setSelectedCategory(e.target.value)}
           data-testid="vault-category-filter"
           aria-label={strings.actions.filterCategory}
-          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="shrink-0 h-8 w-[140px] xl:w-[155px] px-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer truncate"
         >
           {DOCUMENT_VAULT_CATEGORIES.map((cat) => (
             <option key={cat.id} value={cat.id}>
@@ -436,7 +452,8 @@ export default function DocumentVaultDashboard() {
           value={activeFilter}
           onChange={(e) => setActiveFilter(e.target.value as 'all' | 'active' | 'inactive')}
           data-testid="vault-status-filter"
-          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          aria-label="Filter by status"
+          className="shrink-0 h-8 w-[100px] xl:w-[110px] px-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer truncate"
         >
           <option value="all">All Status</option>
           <option value="active">Active Only</option>
@@ -448,7 +465,7 @@ export default function DocumentVaultDashboard() {
           type="button"
           onClick={handleOpenUploadModal}
           data-testid="upload-document-btn"
-          className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+          className="shrink-0 h-8 inline-flex items-center gap-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer whitespace-nowrap"
         >
           <Upload size={13} />
           <span>{strings.actions.uploadDocument}</span>
@@ -458,7 +475,7 @@ export default function DocumentVaultDashboard() {
         <button
           type="button"
           onClick={loadData}
-          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors cursor-pointer"
+          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors cursor-pointer"
           title="Refresh"
         >
           <RefreshCw size={14} />
@@ -468,7 +485,7 @@ export default function DocumentVaultDashboard() {
         <button
           type="button"
           onClick={() => setShowDocColumnSettings(true)}
-          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
           title="Column Settings"
         >
           <Settings size={14} />
@@ -480,6 +497,10 @@ export default function DocumentVaultDashboard() {
         {isLoading ? (
           <div className="py-16 text-center text-xs text-slate-500" data-testid="vault-loading">
             Loading collateral documents...
+          </div>
+        ) : loadError ? (
+          <div role="alert" className="py-16 px-4 text-center text-xs font-medium text-rose-700 dark:text-rose-300" data-testid="vault-load-error">
+            {loadError}
           </div>
         ) : filteredDocuments.length === 0 ? (
           <div className="py-16 text-center" data-testid="vault-empty">

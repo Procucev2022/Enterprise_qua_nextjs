@@ -7,15 +7,18 @@
  *   - Ingestion Channel classification (Web Portal, Email Gateway, Manual Entry, etc.)
  *   - Itemized RFQ numbers, requirements, categories, buyer accounts, and timestamps
  *
- * Dispatches automatically at 06:00 AM IST daily to configured recipients
- * (default: veerababu.v@procucev.com) and supports on-demand dispatches.
+ * Dispatches automatically at 06:00 AM IST daily to the recipients in DAILY_RFQ_REPORT_EMAILS.
+ * Nothing is sent when no recipient is configured.
  */
 
 const storeService = require('./storeService');
 const mailerService = require('./mailerService');
+const eventOutboxService = require('./eventOutboxService');
+const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   DAILY_RFQ_REPORT_CONFIG,
+  EVENT_OUTBOX_TYPES,
   RFQ_MODE_LABELS,
   RFQ_MODES,
 } = require('../config/constants');
@@ -24,13 +27,19 @@ const LOG_CATEGORY = 'DAILY_RFQ_REPORT';
 
 const runtimeState = {
   timer: null,
-  lastSentDateStr: null,
+  lastHandledDateStr: null,
 };
 
 /**
  * Returns date and time components in the target timezone.
  * Uses en-CA locale for ISO-style YYYY-MM-DD formatting.
  */
+// Messages and labels stay in this module until they move to backend/src/config/constants.js.
+const DAILY_REPORT_MESSAGES = Object.freeze({
+  NOT_SPECIFIED: 'Not specified',
+  NO_RECIPIENTS: 'No recipients are configured. Set DAILY_RFQ_REPORT_EMAILS to a comma-separated list of addresses, then retry.',
+});
+
 function getTzDateParts(date = new Date(), timezone = DAILY_RFQ_REPORT_CONFIG.DEFAULT_TIMEZONE) {
   const safeDate = date instanceof Date && !isNaN(date.getTime()) ? date : new Date();
   const safeTz = timezone || DAILY_RFQ_REPORT_CONFIG.DEFAULT_TIMEZONE;
@@ -120,7 +129,8 @@ function formatDateLabel(dateStr) {
 }
 
 /**
- * Resolves the recipient list from options, environment, or default constants.
+ * Resolves the recipient list from the explicit override or DAILY_RFQ_REPORT_EMAILS only.
+ * Returns an empty list when neither provides an address, so no report is sent.
  */
 function resolveRecipients(overrideRecipients) {
   if (Array.isArray(overrideRecipients) && overrideRecipients.length > 0) {
@@ -132,15 +142,11 @@ function resolveRecipients(overrideRecipients) {
     if (list.length > 0) return list;
   }
 
-  const envCandidates = [process.env.DAILY_RFQ_REPORT_EMAILS, process.env.CATEGORY_MANAGER_DAILY_REPORT_EMAILS];
-  for (const envVal of envCandidates) {
-    if (envVal && typeof envVal === 'string' && envVal.trim()) {
-      const list = envVal.split(',').map((e) => e.trim()).filter(Boolean);
-      if (list.length > 0) return list;
-    }
-  }
-
-  return [...DAILY_RFQ_REPORT_CONFIG.DEFAULT_RECIPIENTS];
+  // An unset or blank DAILY_RFQ_REPORT_EMAILS yields [], so the report is not sent.
+  return (process.env.DAILY_RFQ_REPORT_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -207,7 +213,7 @@ async function getDailyRfqReportData({
     const sourceKey = bySource[rawSource] !== undefined ? rawSource : 'web_portal';
     bySource[sourceKey] = (bySource[sourceKey] || 0) + 1;
 
-    const category = rfq.category || 'General Procurement';
+    const category = rfq.category || DAILY_REPORT_MESSAGES.NOT_SPECIFIED;
     byCategory[category] = (byCategory[category] || 0) + 1;
 
     const quotes = Array.isArray(rfq.quotes) ? rfq.quotes : [];
@@ -215,16 +221,16 @@ async function getDailyRfqReportData({
     return {
       index: idx + 1,
       id: rfq.id || '',
-      rfqNumber: rfq.rfqNumber || rfq.id || `RFQ-PENDING-${idx + 1}`,
-      title: rfq.title || 'General Procurement Requirement',
+      rfqNumber: rfq.rfqNumber || rfq.id || DAILY_REPORT_MESSAGES.NOT_SPECIFIED,
+      title: rfq.title || DAILY_REPORT_MESSAGES.NOT_SPECIFIED,
       sourcingMode: rawMode,
       sourcingModeLabel: RFQ_MODE_LABELS[rawMode] || rawMode,
       source: rawSource,
       sourceLabel: DAILY_RFQ_REPORT_CONFIG.INGESTION_CHANNEL_LABELS[rawSource] || rawSource,
       category,
-      buyerAccountName: rfq.buyerAccountName || rfq.buyerName || 'Enterprise Buyer',
-      deliveryLocation: rfq.deliveryLocation || 'All India',
-      status: rfq.status || 'Quotes Pending',
+      buyerAccountName: rfq.buyerAccountName || rfq.buyerName || DAILY_REPORT_MESSAGES.NOT_SPECIFIED,
+      deliveryLocation: rfq.deliveryLocation || DAILY_REPORT_MESSAGES.NOT_SPECIFIED,
+      status: rfq.status || DAILY_REPORT_MESSAGES.NOT_SPECIFIED,
       budget: rfq.budget ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : 'Unstated',
       quotesCount: quotes.length || rfq.quotesCount || 0,
       createdAt: rfq.createdAt,
@@ -475,7 +481,7 @@ function buildDailyRfqEmailText({ reportDateFormatted, reportDate, summary, rfqs
   ];
 
   if (rfqs.length === 0) {
-    lines.push(`No RFQs were ingested yesterday (${reportDate}). System status normal.`);
+    lines.push(`No RFQs were ingested yesterday (${reportDate}).`);
   } else {
     rfqs.forEach((r) => {
       lines.push(
@@ -500,6 +506,10 @@ async function sendDailyRfqReport(options = {}) {
   } = options;
 
   const resolvedRecipients = resolveRecipients(recipients);
+  if (!dryRun && resolvedRecipients.length === 0) {
+    logger.warn('Daily RFQ report not sent: no recipients configured', {}, LOG_CATEGORY);
+    return { sent: false, success: false, status: 'not_configured', reason: DAILY_REPORT_MESSAGES.NO_RECIPIENTS };
+  }
   const data = await getDailyRfqReportData({ targetDate: date, timezone });
 
   const subject = `[Procucev Daily Report] RFQ Summary for Yesterday (${data.reportDate}) - ${data.summary.totalRFQs} RFQ${data.summary.totalRFQs === 1 ? '' : 's'}`;
@@ -555,9 +565,18 @@ async function sendDailyRfqReport(options = {}) {
   }, LOG_CATEGORY);
 
   const deliverResult = await mailerService.deliver(message, `Daily RFQ Report (${data.reportDate})`);
+  const deliveryConfirmed = deliverResult?.sent === true;
+
+  if (!deliveryConfirmed) {
+    logger.warn('Daily RFQ report delivery was not confirmed', {
+      reportDate: data.reportDate,
+      totalRFQs: data.summary.totalRFQs,
+      reason: deliverResult?.reason || 'Mailer returned no successful delivery result',
+    }, LOG_CATEGORY);
+  }
 
   return {
-    success: deliverResult ? deliverResult.success !== false : true,
+    success: deliveryConfirmed,
     reportDate: data.reportDate,
     totalRFQs: data.summary.totalRFQs,
     summary: data.summary,
@@ -578,19 +597,58 @@ async function checkAndTriggerScheduledReport(
   targetMinute = DAILY_RFQ_REPORT_CONFIG.DEFAULT_SCHEDULE_MINUTE
 ) {
   const parts = getTzDateParts(currentTime, timezone);
-  const todayStr = parts.dateStr;
 
-  const isScheduledTime = parts.hour === targetHour && parts.minute === targetMinute;
-  if (!isScheduledTime) {
+  const currentMinuteOfDay = parts.hour * 60 + parts.minute;
+  const scheduledMinuteOfDay = targetHour * 60 + targetMinute;
+  const isWithinScheduleWindow = currentMinuteOfDay >= scheduledMinuteOfDay
+    && currentMinuteOfDay < scheduledMinuteOfDay + DAILY_RFQ_REPORT_CONFIG.SCHEDULE_GRACE_MINUTES;
+  if (!isWithinScheduleWindow) {
     return { triggered: false, reason: `Not scheduled time (Current: ${parts.hour}:${parts.minute}, Target: ${targetHour}:${targetMinute})` };
   }
 
-  if (runtimeState.lastSentDateStr === todayStr) {
-    return { triggered: false, reason: `Report already dispatched today (${todayStr})` };
+  return runScheduledDailyRfqReport(currentTime, timezone);
+}
+
+async function runScheduledDailyRfqReport(
+  scheduledTime = new Date(),
+  timezone = DAILY_RFQ_REPORT_CONFIG.DEFAULT_TIMEZONE
+) {
+  const scheduledDate = getTzDateParts(scheduledTime, timezone).dateStr;
+  if (runtimeState.lastHandledDateStr === scheduledDate) {
+    return { triggered: false, reason: `Report already scheduled or dispatched today (${scheduledDate})` };
   }
 
-  runtimeState.lastSentDateStr = todayStr;
-  const dispatchResult = await sendDailyRfqReport({ timezone });
+  if (pool.hasStorage()) {
+    const reportDate = getYesterdayDateStr(scheduledTime, timezone);
+    const queued = await eventOutboxService.enqueueEventOutbox(
+      EVENT_OUTBOX_TYPES.DAILY_RFQ_REPORT_EMAIL,
+      `scheduled:${scheduledDate}`,
+      { reportDate, timezone, recipients: resolveRecipients() }
+    );
+    if (!queued?.id) {
+      throw new Error('Daily RFQ report was not confirmed in the durable event outbox.');
+    }
+    runtimeState.lastHandledDateStr = scheduledDate;
+    logger.info('Daily RFQ report durably queued for delivery', {
+      scheduledDate,
+      reportDate,
+      outboxId: queued.id,
+    }, LOG_CATEGORY);
+    return {
+      triggered: true,
+      dispatchResult: { success: true, queued: true, reportDate, outboxId: queued.id },
+    };
+  }
+
+  const dispatchResult = await sendDailyRfqReport({ date: getYesterdayDateStr(scheduledTime, timezone), timezone });
+  if (dispatchResult.success) {
+    runtimeState.lastHandledDateStr = scheduledDate;
+  } else {
+    logger.warn('Daily RFQ report remains eligible for a later delivery attempt', {
+      scheduledDate,
+      reportDate: dispatchResult.reportDate,
+    }, LOG_CATEGORY);
+  }
   return { triggered: true, dispatchResult };
 }
 
@@ -657,7 +715,7 @@ function isSchedulerRunning() {
  */
 function resetRuntimeState() {
   stopDailyReportScheduler();
-  runtimeState.lastSentDateStr = null;
+  runtimeState.lastHandledDateStr = null;
 }
 
 module.exports = {
@@ -672,6 +730,7 @@ module.exports = {
   buildDailyRfqEmailText,
   sendDailyRfqReport,
   checkAndTriggerScheduledReport,
+  runScheduledDailyRfqReport,
   startDailyReportScheduler,
   stopDailyReportScheduler,
   isSchedulerRunning,

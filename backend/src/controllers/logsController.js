@@ -1,6 +1,7 @@
 const { logger } = require('../services/loggerService');
 const { logErrorResolver } = require('../services/logErrorResolver');
 const { performanceOptimizer } = require('../services/performanceOptimizer');
+const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 
 function getLogs(req, res, next) {
   try {
@@ -25,12 +26,27 @@ function getLogs(req, res, next) {
 function createLog(req, res, next) {
   try {
     const body = req.body || {};
-    if (!body.message) {
-      return res.status(400).json({ success: false, error: 'message is required for log entry.' });
+    const validation = validatePayload(VALIDATION_SCHEMAS.clientLogEntry, {
+      ...body,
+      ...(body.level ? { level: String(body.level).toUpperCase() } : {}),
+    });
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'The log entry contains invalid fields.',
+        details: validation.errors,
+      });
     }
 
-    const level = (body.level || 'INFO').toUpperCase();
-    const logEntry = logger.log(level, body.message, body.metadata || {}, body.category || 'FRONTEND');
+    const { level, message, category, metadata, stackTrace } = validation.sanitizedData;
+    const logMetadata = {
+      ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+      ...(stackTrace ? { stackTrace } : {}),
+      // The actor comes from the verified session token, never from the request body. The
+      // frontend strips userEmail from the body, so audit lines would otherwise lose it.
+      ...(req.user && req.user.email ? { actorEmail: req.user.email } : {}),
+    };
+    const logEntry = logger.log(level || 'INFO', message, logMetadata, category || 'FRONTEND');
     res.status(201).json({ success: true, data: logEntry });
   } catch (err) {
     next(err);
@@ -71,6 +87,12 @@ async function autoResolveLogErrors(req, res, next) {
     const body = req.body || {};
     if (body.action) {
       const result = await logErrorResolver.executeRemediation(body.action);
+      if (!result.success) {
+        // 400 for an action the resolver does not support. 503 when a supported
+        // action ran but did not succeed.
+        const statusCode = result.status === 'not_supported' ? 400 : 503;
+        return res.status(statusCode).json({ success: false, remediation: result });
+      }
       return res.json({ success: true, remediation: result });
     }
     const report = await logErrorResolver.autoResolveAll();

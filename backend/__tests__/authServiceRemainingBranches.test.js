@@ -5,6 +5,7 @@ const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const storeService = require('../src/services/storeService');
 const pool = require('../src/db/pool');
 const { AUTH_MESSAGES } = require('../src/config/constants');
+const { logger } = require('../src/services/loggerService');
 
 describe('authService remaining branch tests', () => {
   beforeEach(() => {
@@ -146,8 +147,7 @@ describe('authService remaining branch tests', () => {
         },
       });
       jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
-      const addVendorSpy = jest.spyOn(storeService, 'addVendor').mockReturnValue({ id: 'v-new-1', name: 'Acme Supplies Ltd' });
-      const confirmSpy = jest.spyOn(storeService, 'confirmVendorPersisted').mockResolvedValue({});
+      const addVendorSpy = jest.spyOn(storeService, 'addVendorDurably').mockResolvedValue({ id: 'v-new-1', name: 'Acme Supplies Ltd' });
 
       const res = await authService.registerUser(payload, '127.0.0.1');
       expect(res.user.email).toBe('newvendor@supplier.com');
@@ -156,10 +156,11 @@ describe('authService remaining branch tests', () => {
           name: 'Acme Supplies Ltd',
           gstin: '27AAAAA0000A1Z5',
           city: 'Mumbai',
+          status: 'PENDING EVALUATION',
         }),
-        'newvendor@supplier.com'
+        'newvendor@supplier.com',
+        null
       );
-      expect(confirmSpy).toHaveBeenCalled();
     });
 
     test('updates existing vendor in storeService when vendor already exists during registration', async () => {
@@ -187,7 +188,7 @@ describe('authService remaining branch tests', () => {
         },
       });
       jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue({ id: 'v-exist-1', name: 'Old Org' });
-      const updateVendorSpy = jest.spyOn(storeService, 'updateVendor').mockReturnValue({});
+      const updateVendorSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: 'v-exist-1' });
 
       const res = await authService.registerUser(payload, '127.0.0.1');
       expect(res.user.email).toBe('existing.vendor@supplier.com');
@@ -195,9 +196,10 @@ describe('authService remaining branch tests', () => {
         city: 'Pune',
         name: 'Updated Org',
       }));
+      expect(storeService.getVendorByIdWithDBFallback).toHaveBeenCalledWith('existing.vendor@supplier.com', 'all', { fresh: true });
     });
 
-    test('logs warning when storeService.addBuyerAccount throws during buyer registration', async () => {
+    test('logs a repairable mirror failure when durable buyer sync fails during registration', async () => {
       const payload = {
         email: 'buyer.fail.sync@example.com',
         mobile: '9876543210',
@@ -216,13 +218,17 @@ describe('authService remaining branch tests', () => {
           status: 'active',
         },
       });
-      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
-      jest.spyOn(storeService, 'addBuyerAccount').mockImplementation(() => {
-        throw new Error('Memory store corruption');
-      });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue(null);
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValue(new Error('D1 unavailable'));
+      const errorLog = jest.spyOn(logger, 'error');
 
       const res = await authService.registerUser(payload, '127.0.0.1');
       expect(res.user.email).toBe('buyer.fail.sync@example.com');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Identity registration succeeded but buyer profile mirror persistence failed',
+        expect.objectContaining({ email: 'buyer.fail.sync@example.com', repairRequired: true }),
+        'AUTH_SERVICE'
+      );
     });
   });
 
@@ -419,6 +425,43 @@ describe('authService remaining branch tests', () => {
       ).rejects.toThrow('Failed to update buyer onboarding credentials in identity database.');
     });
 
+    test('fails closed and logs when any consumed OTP cannot be deleted', async () => {
+      const dbUser = {
+        id: 'u-ob-otp-cleanup',
+        email: 'buyer.cleanup@test.com',
+        password: 'CorrectOldPass!',
+      };
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(dbUser);
+      jest.spyOn(authSessionQueries, 'findOtp')
+        .mockResolvedValueOnce({ code: '111222', expiresAt: Date.now() + 60000 })
+        .mockResolvedValueOnce({ code: '333444', expiresAt: Date.now() + 60000 });
+      jest.spyOn(authSessionQueries, 'deleteOtp')
+        .mockRejectedValueOnce(new Error('D1 delete unavailable'))
+        .mockResolvedValue({});
+      const updateIdentitySpy = jest.spyOn(identityQueries, 'updateBuyerOnboardingStatus');
+      const logErrorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(authService.completeBuyerOnboarding(
+        { role: 'buyer', email: dbUser.email },
+        {
+          mobile: '9876543210',
+          currentPassword: 'CorrectOldPass!',
+          newPassword: 'BrandNewSecurePass1!',
+          emailOtp: '111222',
+          mobileOtp: '333444',
+        },
+        '127.0.0.1'
+      )).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+
+      expect(authSessionQueries.deleteOtp).toHaveBeenCalledTimes(3);
+      expect(updateIdentitySpy).not.toHaveBeenCalled();
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        'Failed to consume buyer onboarding OTP records; refusing to verify the account',
+        expect.objectContaining({ userId: dbUser.id }),
+        'AUTH_SERVICE'
+      );
+    });
+
     test('completes onboarding successfully, updates profile, dispatches pending quotes', async () => {
       const dbUser = {
         id: 'u-ob-success',
@@ -435,7 +478,7 @@ describe('authService remaining branch tests', () => {
         .mockResolvedValueOnce({ code: '333444', expiresAt: Date.now() + 60000 });
       jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValue({});
       jest.spyOn(identityQueries, 'updateBuyerOnboardingStatus').mockResolvedValue(true);
-      const updateBuyerSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({ id: 'buyer-1' });
+      const updateBuyerSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'buyer-1' });
       const updateProfileSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({});
       const dispatchQuotesSpy = jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([{ id: 'q-1' }]);
       jest.spyOn(storeService, 'addAuditLog').mockReturnValue({});
@@ -470,12 +513,14 @@ describe('authService remaining branch tests', () => {
         phone: '9876543210',
       }));
       expect(updateProfileSpy).toHaveBeenCalledWith(
-        'org-profile-10',
         expect.objectContaining({
-          companyName: 'Final Enterprise Corp',
-        }),
-        'buyer.success@test.com',
-        'u-ob-success'
+          organizationId: 'org-profile-10',
+          userId: 'u-ob-success',
+          actor: 'buyer.success@test.com',
+          patch: expect.objectContaining({
+            companyName: 'Final Enterprise Corp',
+          }),
+        })
       );
       expect(dispatchQuotesSpy).toHaveBeenCalledWith('buyer.success@test.com');
     });
@@ -494,7 +539,7 @@ describe('authService remaining branch tests', () => {
         .mockResolvedValueOnce({ code: '333444', expiresAt: Date.now() + 60000 });
       jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValue({});
       jest.spyOn(identityQueries, 'updateBuyerOnboardingStatus').mockResolvedValue(true);
-      jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({ id: 'buyer-warn' });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockRejectedValue(new Error('Buyer mirror write failure'));
       // updateProfile throws
       jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValue(new Error('Profile update failure'));
       // dispatchPendingQuoteNotifications throws
@@ -558,6 +603,30 @@ describe('authService remaining branch tests', () => {
       expect(verified.user.sub).toBe('uuid-cm-456');
       expect(verified.user.sessionId).toBe('sess-uuid-789');
       expect(verified.user.scope).toBe('vendor_directory');
+    });
+  });
+
+  describe('assertSessionActive D1 overload resilience', () => {
+    test('returns valid when authSessionQueries.isTokenRevoked throws retryable D1 overload error', async () => {
+      const user = { id: 'u-123', email: 'buyer@procucev.com', role: 'buyer' };
+      const token = authService.generateSessionToken(user);
+      jest.spyOn(authSessionQueries, 'isTokenRevoked').mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+
+      const result = await authService.assertSessionActive(token);
+      expect(result.valid).toBe(true);
+      expect(result.user.email).toBe('buyer@procucev.com');
+    });
+
+    test('returns valid when d1Bridge.isD1Overloaded is true during session verification error', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const user = { id: 'u-123', email: 'buyer@procucev.com', role: 'buyer' };
+      const token = authService.generateSessionToken(user);
+      jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+      jest.spyOn(authSessionQueries, 'isTokenRevoked').mockRejectedValue(new Error('Transient error'));
+
+      const result = await authService.assertSessionActive(token);
+      expect(result.valid).toBe(true);
+      expect(result.user.email).toBe('buyer@procucev.com');
     });
   });
 });

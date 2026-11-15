@@ -1,13 +1,15 @@
 import type { Metadata } from 'next';
 
+// Page metadata. It names no supplier count and makes no claim about verification, because
+// the directory only opens after a Procucev email sign-in.
 export const metadata: Metadata = {
   title: 'Enterprise Vendor Directory | Procucev',
   description:
-    'Browse and discover verified industrial manufacturers, suppliers, and distributors across India. No login required — public access to the Procucev Enterprise Vendor Network.',
+    'Browse industrial manufacturers, suppliers, and distributors across India. Access requires a Procucev sign-in.',
   openGraph: {
     title: 'Enterprise Vendor Directory | Procucev',
     description:
-      'Search and filter 80,000+ verified B2B industrial vendors by category, state, and rating.',
+      'Search and filter industrial suppliers by category, state, and rating. Access requires a Procucev sign-in.',
     type: 'website',
   },
 };

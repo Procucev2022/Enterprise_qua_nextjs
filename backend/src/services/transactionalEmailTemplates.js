@@ -2,10 +2,76 @@
  * Qua AI: Transactional Email Templates Engine
  * Implements 13 standardized transactional email templates with rich HTML and plain-text fallbacks,
  * metadata cataloging, and dispatch integration for buyers and suppliers.
+ *
+ * Data rules: required identifiers and counts throw when missing (see requireText / requireCount).
+ * Optional descriptive fields render as "Not specified" (see optionalText). No template invents a value.
  */
 
 const { QUA_AI_EMAIL_TEMPLATES, QUA_AI_EMAIL_SUPPORT } = require('../config/constants');
 const { logger } = require('./loggerService');
+
+// Labels stay in this module until they move to backend/src/config/constants.js.
+const TEMPLATE_MESSAGES = Object.freeze({
+  NOT_SPECIFIED: 'Not specified',
+});
+
+/**
+ * Error for a required template parameter the caller did not supply. It carries HTTP 400,
+ * so the API tells the caller which field is missing instead of returning a generic 500.
+ * @param {string} message
+ * @returns {Error & { statusCode: number, code: string }}
+ */
+function missingTemplateData(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  error.code = 'TEMPLATE_DATA_REQUIRED';
+  return error;
+}
+
+/**
+ * Returns the trimmed text value, or throws a descriptive error when a required value is missing.
+ * @param {unknown} value
+ * @param {string} fieldName Template parameter name, e.g. 'rfq_id'
+ * @param {string} templateId Template identifier used in the error message
+ * @returns {string}
+ */
+function requireText(value, fieldName, templateId) {
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  if (!text) {
+    throw missingTemplateData(
+      `Email template ${templateId} requires '${fieldName}'. Supply it from the source record before rendering.`
+    );
+  }
+  return text;
+}
+
+/**
+ * Returns a whole, non-negative count as text, or throws when the count is missing or invalid.
+ * @param {unknown} value
+ * @param {string} fieldName Template parameter name, e.g. 'quote_count'
+ * @param {string} templateId Template identifier used in the error message
+ * @returns {string}
+ */
+function requireCount(value, fieldName, templateId) {
+  const isNumberCount = typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  const isTextCount = typeof value === 'string' && /^\d+$/.test(value.trim());
+  if (!isNumberCount && !isTextCount) {
+    throw missingTemplateData(
+      `Email template ${templateId} requires '${fieldName}' as a whole number of 0 or more. Count the matching records before rendering.`
+    );
+  }
+  return typeof value === 'string' ? value.trim() : String(value);
+}
+
+/**
+ * Returns the trimmed text value for an optional descriptive field, or "Not specified".
+ * @param {unknown} value
+ * @returns {string}
+ */
+function optionalText(value) {
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  return text || TEMPLATE_MESSAGES.NOT_SPECIFIED;
+}
 
 /**
  * Resolves the public frontend URL across all deployment environments.
@@ -17,16 +83,7 @@ function getPublicFrontendUrl() {
     process.env.FRONTEND_URL ||
     (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.PUBLIC_FRONTEND_URL);
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
-    const trimmed = envVal.trim().replace(/\/+$/, '');
-    if (trimmed.includes('srinivas-mukku.workers.dev')) {
-      const isProd =
-        process.env.NODE_ENV === 'production' ||
-        (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && (globalThis.__CF_ENV__.NODE_ENV === 'production' || globalThis.__CF_ENV__.ENVIRONMENT === 'prod' || globalThis.__CF_ENV__.ENVIRONMENT === 'production'));
-      if (isProd) {
-        return 'https://equa.procucev.com';
-      }
-    }
-    return trimmed;
+    return envVal.trim().replace(/\/+$/, '');
   }
   if (process.env.NODE_ENV === 'production' || (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.NODE_ENV === 'production')) {
     return 'https://equa.procucev.com';
@@ -231,6 +288,31 @@ function renderCtaButton(label, url) {
   `;
 }
 
+/**
+ * True when the vendor/params describe a supplier uploaded by a buyer (so the buyer name may be shown).
+ */
+function isBuyerUploadedVendor(params) {
+  return Boolean(
+    params.is_buyer_uploaded ||
+    params.isBuyerUploaded ||
+    (params.vendor && (params.vendor.isBuyerUploaded || params.vendor.addedByBuyerCompany || params.vendor.buyerAccountId || params.vendor.buyerId)) ||
+    (params.vendor_source && String(params.vendor_source).toLowerCase().includes('buyer'))
+  );
+}
+
+/**
+ * Anonymised buyer description for suppliers who are not buyer-uploaded:
+ * industry and city, each shown only when the caller provides it.
+ */
+function resolveBuyerDisplay(params) {
+  const isBuyerVendor = isBuyerUploadedVendor(params);
+  const buyerCompany = (params.buyer_company || params.buyer_account_name || params.buyer_name || '').trim();
+  if (isBuyerVendor && buyerCompany) return buyerCompany;
+  const industry = params.buyer_industry ? `${String(params.buyer_industry).trim()} company` : '';
+  const city = params.buyer_city ? String(params.buyer_city).trim() : '';
+  return [industry, city].filter(Boolean).join(', ') || TEMPLATE_MESSAGES.NOT_SPECIFIED;
+}
+
 // ==============================================================================
 // 13 INDIVIDUAL EMAIL BUILDERS
 // ==============================================================================
@@ -242,12 +324,13 @@ function renderCtaButton(label, url) {
  */
 function buildEmail1_RfqCreatedAccountAutoCreated(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const email = params.email || 'buyer@example.com';
-  const mobileNumber = params.mobile_number || params.mobileNumber || '9999999999';
-  const tempPassword = params.temp_password || 'QuaAI#2026Auto';
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const rfqTitle = optionalText(params.rfq_title);
+  const email = requireText(params.email, 'email', templateId);
+  const mobileNumber = optionalText(params.mobile_number || params.mobileNumber);
+  const tempPassword = requireText(params.temp_password, 'temp_password', templateId);
   const loginUrl = params.login_url || `${getPublicFrontendUrl()}/login`;
   const reviewUrl = params.review_url || `${loginUrl}?redirect=/buyer/rfq-summary`;
 
@@ -267,7 +350,7 @@ Login page: ${loginUrl}
 
 Three quick steps to finish
 1. Log in and set your own password.
-2. Complete your profile: company name, GSTIN, delivery address and phone number. We've used placeholder details for now; suppliers quote more accurately once these are real.
+2. Complete your profile: company name, GSTIN, delivery address and phone number. Suppliers quote more accurately when these details are correct.
 3. Go to RFQ Summary to review ${rfqId}.
 
 [ Log in & review my RFQ ]: ${reviewUrl}
@@ -320,7 +403,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       <h3 style="margin: 0 0 12px 0; font-size: 15px; color: #0f172a;">Three quick steps to finish</h3>
       <ol style="margin: 0; padding-left: 20px; font-size: 14px; color: #334155;">
         <li style="margin-bottom: 8px;">Log in and set your own password.</li>
-        <li style="margin-bottom: 8px;">Complete your profile: company name, GSTIN, delivery address and phone number. We've used placeholder details for now; suppliers quote more accurately once these are real.</li>
+        <li style="margin-bottom: 8px;">Complete your profile: company name, GSTIN, delivery address and phone number. Suppliers quote more accurately when these details are correct.</li>
         <li style="margin-bottom: 8px;">Go to RFQ Summary to review <strong>${escapeHtml(rfqId)}</strong>.</li>
       </ol>
     </div>
@@ -354,23 +437,28 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail2_RfqCreated(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_2_RFQ_CREATED;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const category = params.category || 'Industrial Supplies';
-  const itemCount = params.item_count !== undefined ? params.item_count : (params.items ? params.items.length : 1);
-  const deliveryLocation = params.delivery_location || 'As per RFQ Specification';
-  const requiredBy = params.required_by || 'To be scheduled';
-  const quoteDeadline = params.quote_deadline || 'Within 72 hours';
-  const suppliersInvited = params.suppliers_invited !== undefined ? params.suppliers_invited : 5;
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const rfqTitle = optionalText(params.rfq_title);
+  const category = optionalText(params.category);
   const items = Array.isArray(params.items) ? params.items : [];
+  const itemCount = requireCount(
+    params.item_count !== undefined ? params.item_count : (Array.isArray(params.items) ? params.items.length : undefined),
+    'item_count',
+    templateId
+  );
+  const deliveryLocation = optionalText(params.delivery_location);
+  const requiredBy = optionalText(params.required_by);
+  const quoteDeadline = optionalText(params.quote_deadline);
+  const suppliersInvited = requireCount(params.suppliers_invited, 'suppliers_invited', templateId);
   const rfqSummaryUrl = params.rfq_summary_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `Congratulations, RFQ ${rfqId} is live. Qua AI is on it`;
 
   const itemsText = items.length > 0
-    ? items.map((it, idx) => `${idx + 1}. ${it.item_name || 'Item'} | ${it.item_spec || '-'} | Qty: ${it.qty || 1} ${it.uom || 'Nos'}`).join('\n')
-    : `1. ${rfqTitle} | Standard Spec | Qty: 1 Lot`;
+    ? items.map((it, idx) => `${idx + 1}. ${optionalText(it.item_name)} | ${optionalText(it.item_spec)} | Qty: ${optionalText(it.qty)} | Unit: ${optionalText(it.uom)}`).join('\n')
+    : TEMPLATE_MESSAGES.NOT_SPECIFIED;
 
   const text = `Hi ${firstName},
 
@@ -405,19 +493,15 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
     ? items.map((it, idx) => `
         <tr>
           <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${idx + 1}</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 600;">${escapeHtml(it.item_name || 'Item')}</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-size: 13px;">${escapeHtml(it.item_spec || '-')}</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${escapeHtml(it.qty || 1)}</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${escapeHtml(it.uom || 'Nos')}</td>
+          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 600;">${escapeHtml(optionalText(it.item_name))}</td>
+          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-size: 13px;">${escapeHtml(optionalText(it.item_spec))}</td>
+          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${escapeHtml(optionalText(it.qty))}</td>
+          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${escapeHtml(optionalText(it.uom))}</td>
         </tr>
       `).join('')
     : `
         <tr>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">1</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 600;">${escapeHtml(rfqTitle)}</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-size: 13px;">Standard Specification</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">1</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">Lot</td>
+          <td colspan="5" style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #64748b;">${TEMPLATE_MESSAGES.NOT_SPECIFIED}</td>
         </tr>
       `;
 
@@ -512,30 +596,20 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail3_NewRfqIntimation(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_3_NEW_RFQ_INTIMATION;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const category = params.category || 'Industrial Supplies';
-  const quoteDeadline = params.quote_deadline || 'within 48 hours';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const buyerIndustry = params.buyer_industry || 'Heavy Industrial';
-  const buyerCity = params.buyer_city || 'India';
-  const itemCount = params.item_count !== undefined ? params.item_count : 1;
-  const deliveryLocation = params.delivery_location || 'As specified in RFQ';
-  const requiredBy = params.required_by || 'To be scheduled';
-  const rfqId = params.rfq_id || 'RFQ-2026';
+  const category = optionalText(params.category);
+  const quoteDeadline = optionalText(params.quote_deadline);
+  const rfqTitle = optionalText(params.rfq_title);
+  const itemCount = requireCount(params.item_count, 'item_count', templateId);
+  const deliveryLocation = optionalText(params.delivery_location);
+  const requiredBy = optionalText(params.required_by);
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
   const ctaUrl = params.cta_url || `${getPublicFrontendUrl()}/vendor/register?rfq=${encodeURIComponent(rfqId)}`;
+  const buyerDisplay = resolveBuyerDisplay(params);
 
-  const isBuyerVendor = Boolean(
-    params.is_buyer_uploaded ||
-    params.isBuyerUploaded ||
-    (params.vendor && (params.vendor.isBuyerUploaded || params.vendor.addedByBuyerCompany || params.vendor.buyerAccountId || params.vendor.buyerId)) ||
-    (params.vendor_source && String(params.vendor_source).toLowerCase().includes('buyer'))
-  );
-  const buyerCompany = (params.buyer_company || params.buyer_account_name || params.buyer_name || '').trim();
-  const buyerDisplay = isBuyerVendor && buyerCompany
-    ? buyerCompany
-    : `${buyerIndustry} company, ${buyerCity}`;
-
-  const subject = `New buyer enquiry for ${category}: quote by ${quoteDeadline}`;
+  const subjectCategory = params.category ? ` for ${String(params.category).trim()}` : '';
+  const subject = `New buyer enquiry${subjectCategory}${params.quote_deadline ? `: quote by ${quoteDeadline}` : ''}`;
 
   const text = `Hi ${firstName},
 
@@ -629,30 +703,20 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail4_NewRfqToQuote(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_4_NEW_RFQ_TO_QUOTE;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const quoteDeadline = params.quote_deadline || 'within 48 hours';
-  const buyerIndustry = params.buyer_industry || 'Enterprise Buyer';
-  const buyerCity = params.buyer_city || 'India';
-  const itemCount = params.item_count !== undefined ? params.item_count : 1;
-  const deliveryLocation = params.delivery_location || 'As specified in RFQ';
-  const requiredBy = params.required_by || 'To be scheduled';
-  const creditBalance = params.credit_balance !== undefined ? params.credit_balance : 5;
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const rfqTitle = optionalText(params.rfq_title);
+  const quoteDeadline = optionalText(params.quote_deadline);
+  const itemCount = requireCount(params.item_count, 'item_count', templateId);
+  const deliveryLocation = optionalText(params.delivery_location);
+  const requiredBy = optionalText(params.required_by);
+  const creditBalance = requireCount(params.credit_balance, 'credit_balance', templateId);
   const quoteUrl = params.quote_url || `${getPublicFrontendUrl()}/vendor/rfqs/${encodeURIComponent(rfqId)}`;
+  const buyerDisplay = resolveBuyerDisplay(params);
 
-  const isBuyerVendor = Boolean(
-    params.is_buyer_uploaded ||
-    params.isBuyerUploaded ||
-    (params.vendor && (params.vendor.isBuyerUploaded || params.vendor.addedByBuyerCompany || params.vendor.buyerAccountId || params.vendor.buyerId)) ||
-    (params.vendor_source && String(params.vendor_source).toLowerCase().includes('buyer'))
-  );
-  const buyerCompany = (params.buyer_company || params.buyer_account_name || params.buyer_name || '').trim();
-  const buyerDisplay = isBuyerVendor && buyerCompany
-    ? buyerCompany
-    : `${buyerIndustry} company, ${buyerCity}`;
-
-  const subject = `New RFQ ${rfqId}: ${rfqTitle}, quotes close ${quoteDeadline}`;
+  const subjectTitle = params.rfq_title ? `: ${String(params.rfq_title).trim()}` : '';
+  const subject = `New RFQ ${rfqId}${subjectTitle}${params.quote_deadline ? `, quotes close ${quoteDeadline}` : ''}`;
 
   const text = `Hi ${firstName},
 
@@ -743,12 +807,13 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail5_QuotationsReadyToCompare(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_5_QUOTATIONS_READY_TO_COMPARE;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const quoteCount = params.quote_count !== undefined ? params.quote_count : 3;
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const lowestPrice = params.lowest_price || '₹1,25,000';
-  const fastestDelivery = params.fastest_delivery || '4 days';
+  const quoteCount = requireCount(params.quote_count, 'quote_count', templateId);
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const rfqTitle = params.rfq_title ? String(params.rfq_title).trim() : `RFQ ${rfqId}`;
+  const lowestPrice = optionalText(params.lowest_price);
+  const fastestDelivery = optionalText(params.fastest_delivery);
   const compareUrl = params.compare_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `${quoteCount} quotes in for RFQ ${rfqId}: compare now`;
@@ -816,16 +881,16 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail6_ActivateYourAccount(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_6_ACTIVATE_YOUR_ACCOUNT;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'your requirement';
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
   const reviewUrl = params.review_url || `${getPublicFrontendUrl()}/login?redirect=/buyer/rfq-summary`;
 
   const subject = `Suppliers are waiting on RFQ ${rfqId}`;
 
   const text = `Hi ${firstName},
 
-Your RFQ ${rfqTitle} is live, but your profile still has placeholder details. Suppliers quote faster and more accurately when they see the right company details.
+Your RFQ ${rfqId} is live, but your profile is still incomplete. Suppliers quote faster and more accurately when they see the right company details.
 
 It takes 2 minutes: log in, complete your profile, then check RFQ Summary.
 
@@ -841,7 +906,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       Hi <strong>${escapeHtml(firstName)}</strong>,
     </p>
     <p style="font-size: 15px; margin: 0 0 16px 0; color: #334155;">
-      Your RFQ <strong>${escapeHtml(rfqTitle)}</strong> is live, but your profile still has placeholder details. Suppliers quote faster and more accurately when they see the right company details.
+      Your RFQ <strong>${escapeHtml(rfqId)}</strong> is live, but your profile is still incomplete. Suppliers quote faster and more accurately when they see the right company details.
     </p>
 
     <div style="background-color: #fffbeb; border-left: 4px solid #f59e0b; padding: 14px 18px; margin: 20px 0; border-radius: 4px;">
@@ -872,11 +937,22 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail7_RfqNeedsMoreInformation(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_7_RFQ_NEEDS_MORE_INFORMATION;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const missingFields = Array.isArray(params.missing_fields) && params.missing_fields.length > 0
-    ? params.missing_fields
-    : [params.missing_field_1 || 'Line item quantity specification', params.missing_field_2 || 'Delivery pincode or site location'].filter(Boolean);
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const listedFields = Array.isArray(params.missing_fields)
+    ? params.missing_fields.map((field) => String(field).trim()).filter(Boolean)
+    : [];
+  const missingFields = listedFields.length > 0
+    ? listedFields
+    : [params.missing_field_1, params.missing_field_2]
+      .map((field) => (field ? String(field).trim() : ''))
+      .filter(Boolean);
+  if (missingFields.length === 0) {
+    throw new Error(
+      `Email template ${templateId} requires 'missing_fields' with at least one field name. List the fields the buyer must supply.`
+    );
+  }
   const addDetailsUrl = params.add_details_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `One detail needed to send RFQ ${rfqId} to suppliers`;
@@ -940,16 +1016,16 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail8_NoQuotesYet(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_8_NO_QUOTES_YET;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'your RFQ';
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
   const extendUrl = params.extend_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `RFQ ${rfqId}: let's get you more quotes`;
 
   const text = `Hi ${firstName},
 
-Suppliers are still reviewing ${rfqTitle}, but no quotes have come in yet. Qua AI is following up with them now.
+Suppliers are still reviewing RFQ ${rfqId}, but no quotes have come in yet. Qua AI is following up with them now.
 
 To widen the response, you can extend the deadline or let us invite more suppliers from the Procucev network.
 
@@ -965,7 +1041,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       Hi <strong>${escapeHtml(firstName)}</strong>,
     </p>
     <p style="font-size: 15px; margin: 0 0 16px 0; color: #334155;">
-      Suppliers are still reviewing <strong>${escapeHtml(rfqTitle)}</strong>, but no quotes have come in yet. Qua AI is following up with them now.
+      Suppliers are still reviewing RFQ <strong>${escapeHtml(rfqId)}</strong>, but no quotes have come in yet. Qua AI is following up with them now.
     </p>
     <p style="font-size: 14px; margin: 0 0 20px 0; color: #475569;">
       To widen the response, you can extend the deadline or let us invite more suppliers from the Procucev network.
@@ -993,11 +1069,12 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail9_QuoteDeadlineReminder(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_9_QUOTE_DEADLINE_REMINDER;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const quoteDeadline = params.quote_deadline || 'Tomorrow at 18:00 IST';
-  const quoteCount = params.quote_count !== undefined ? params.quote_count : 2;
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const rfqTitle = params.rfq_title ? String(params.rfq_title).trim() : rfqId;
+  const quoteDeadline = optionalText(params.quote_deadline);
+  const quoteCount = requireCount(params.quote_count, 'quote_count', templateId);
   const quoteUrl = params.quote_url || `${getPublicFrontendUrl()}/vendor/rfqs/${encodeURIComponent(rfqId)}`;
 
   const subject = `24 hours left to quote on ${rfqTitle}`;
@@ -1043,9 +1120,10 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail10_LowOrZeroCredits(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_10_LOW_OR_ZERO_CREDITS;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const creditBalance = params.credit_balance !== undefined ? params.credit_balance : 0;
-  const matchedRfqCount = params.matched_rfq_count !== undefined ? params.matched_rfq_count : 14;
+  const creditBalance = requireCount(params.credit_balance, 'credit_balance', templateId);
+  const matchedRfqCount = requireCount(params.matched_rfq_count, 'matched_rfq_count', templateId);
   const buyCreditsUrl = params.buy_credits_url || `${getPublicFrontendUrl()}/vendor/subscription`;
 
   const subject = `You have ${creditBalance} credits left: don't miss the next RFQ`;
@@ -1054,9 +1132,7 @@ function buildEmail10_LowOrZeroCredits(params = {}) {
 
 Your Qua AI credit balance is down to ${creditBalance}. In the last 30 days, ${matchedRfqCount} RFQs matched your categories. Without credits, you can't open new RFQs or quote on them.
 
-A package of 50 credits costs ₹7,500 (₹150 per RFQ).
-
-[ Buy 50 credits ] → ${buyCreditsUrl}
+[ Buy credits ] → ${buyCreditsUrl}
 
 For any further questions or clarifications, please reach out to ${QUA_AI_EMAIL_SUPPORT.PHONE}/email to ${QUA_AI_EMAIL_SUPPORT.EMAIL}
 
@@ -1071,14 +1147,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       Your Qua AI credit balance is down to <strong><span style="color: #e11d48;">${escapeHtml(creditBalance)}</span></strong>. In the last 30 days, <strong>${escapeHtml(matchedRfqCount)} RFQs</strong> matched your categories. Without credits, you can't open new RFQs or quote on them.
     </p>
 
-    <!-- Pricing Box -->
-    <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 18px; margin: 20px 0; text-align: center;">
-      <div style="font-size: 13px; color: #64748b; font-weight: 600; text-transform: uppercase;">Standard Credit Pack</div>
-      <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin: 6px 0;">50 Credits · ₹7,500</div>
-      <div style="font-size: 12px; color: #16a34a; font-weight: 600;">(Only ₹150 per RFQ bid)</div>
-    </div>
-
-    ${renderCtaButton('Buy 50 credits', buyCreditsUrl)}
+    ${renderCtaButton('Buy credits', buyCreditsUrl)}
   `;
 
   return {
@@ -1100,20 +1169,23 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail11_QuoteSubmitted(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_11_QUOTE_SUBMITTED;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const quoteValue = params.quote_value || '₹1,50,000';
-  const quoteDeadline = params.quote_deadline || '2026-11-15 18:00 IST';
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const rfqLabel = params.rfq_title ? String(params.rfq_title).trim() : `RFQ ${rfqId}`;
+  const quoteValue = params.quote_value ? String(params.quote_value).trim() : '';
+  const quoteDeadline = params.quote_deadline ? String(params.quote_deadline).trim() : '';
   const viewQuoteUrl = params.view_quote_url || `${getPublicFrontendUrl()}/vendor/rfqs/${encodeURIComponent(rfqId)}`;
 
   const subject = `Your quote for RFQ ${rfqId} has been received`;
+  const quoteValuePhrase = quoteValue ? ` of ${quoteValue}` : '';
+  const reviewPhrase = quoteDeadline ? `after ${quoteDeadline}` : 'once the RFQ closes';
 
   const text = `Hi ${firstName},
 
-Thank you. Your quote of ${quoteValue} for ${rfqTitle} has reached the buyer.
+Thank you. Your quote${quoteValuePhrase} for ${rfqLabel} has reached the buyer.
 
-The buyer will review all quotes after ${quoteDeadline}. You can revise your quote any time before then.
+The buyer will review all quotes ${reviewPhrase}. You can revise your quote any time before then.
 
 [ View my quote ]: ${viewQuoteUrl}
 
@@ -1127,10 +1199,10 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       Hi <strong>${escapeHtml(firstName)}</strong>,
     </p>
     <p style="font-size: 15px; margin: 0 0 16px 0; color: #334155;">
-      Thank you. Your quote of <strong><span style="color: #16a34a;">${escapeHtml(quoteValue)}</span></strong> for <strong>${escapeHtml(rfqTitle)}</strong> has reached the buyer.
+      Thank you. Your quote${quoteValue ? ` of <strong><span style="color: #16a34a;">${escapeHtml(quoteValue)}</span></strong>` : ''} for <strong>${escapeHtml(rfqLabel)}</strong> has reached the buyer.
     </p>
     <p style="font-size: 14px; margin: 0 0 20px 0; color: #475569;">
-      The buyer will review all quotes after <strong>${escapeHtml(quoteDeadline)}</strong>. You can revise your quote any time before then.
+      The buyer will review all quotes ${quoteDeadline ? `after <strong>${escapeHtml(quoteDeadline)}</strong>` : 'once the RFQ closes'}. You can revise your quote any time before then.
     </p>
 
     ${renderCtaButton('View my quote', viewQuoteUrl)}
@@ -1155,22 +1227,19 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
  */
 function buildEmail12_RfqRevisedBuyerQuestion(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_12_RFQ_REVISED_BUYER_QUESTION;
+  const templateId = meta.id;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const rfqId = params.rfq_id || 'RFQ-2026';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
-  const changeSummary = params.change_summary || 'Quantity updated from 100 to 150 units, and technical specification sheet v2 attached.';
-  const quoteDeadline = params.quote_deadline || '2026-11-20 18:00 IST';
+  const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
+  const rfqTitle = params.rfq_title ? String(params.rfq_title).trim() : `RFQ ${rfqId}`;
+  const changeSummary = optionalText(params.change_summary);
+  const quoteDeadline = params.quote_deadline ? String(params.quote_deadline).trim() : '';
   const reviewChangesUrl = params.review_changes_url || `${getPublicFrontendUrl()}/vendor/rfqs/${encodeURIComponent(rfqId)}`;
 
-  const isBuyerVendor = Boolean(
-    params.is_buyer_uploaded ||
-    params.isBuyerUploaded ||
-    (params.vendor && (params.vendor.isBuyerUploaded || params.vendor.addedByBuyerCompany || params.vendor.buyerAccountId || params.vendor.buyerId)) ||
-    (params.vendor_source && String(params.vendor_source).toLowerCase().includes('buyer'))
-  );
+  const isBuyerVendor = isBuyerUploadedVendor(params);
   const buyerCompany = (params.buyer_company || params.buyer_account_name || params.buyer_name || '').trim();
   const buyerIntroText = isBuyerVendor && buyerCompany ? buyerCompany : 'The buyer';
   const buyerIntroHtml = isBuyerVendor && buyerCompany ? `<strong>${escapeHtml(buyerCompany)}</strong>` : 'The buyer';
+  const deadlineSentence = quoteDeadline ? ` The deadline is now ${quoteDeadline}.` : '';
 
   const subject = `Update on RFQ ${rfqId}: please review`;
 
@@ -1179,7 +1248,7 @@ function buildEmail12_RfqRevisedBuyerQuestion(params = {}) {
 ${buyerIntroText} has updated ${rfqTitle}:
 ${changeSummary}
 
-If you've already quoted, please check whether your quote still applies and revise it if needed. The deadline is now ${quoteDeadline}.
+If you've already quoted, please check whether your quote still applies and revise it if needed.${deadlineSentence}
 
 [ Review changes ]: ${reviewChangesUrl}
 
@@ -1204,7 +1273,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
     </div>
 
     <p style="font-size: 14px; margin: 16px 0; color: #475569;">
-      If you've already quoted, please check whether your quote still applies and revise it if needed. The deadline is now <strong><span style="color: #e11d48;">${escapeHtml(quoteDeadline)}</span></strong>.
+      If you've already quoted, please check whether your quote still applies and revise it if needed.${quoteDeadline ? ` The deadline is now <strong><span style="color: #e11d48;">${escapeHtml(quoteDeadline)}</span></strong>.` : ''}
     </p>
 
     ${renderCtaButton('Review changes', reviewChangesUrl)}
@@ -1230,17 +1299,21 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
 function buildEmail13_CompleteYourProfile(params = {}) {
   const meta = QUA_AI_EMAIL_TEMPLATES.EMAIL_13_COMPLETE_YOUR_PROFILE;
   const firstName = resolveSalutation(params.first_name, 'there');
-  const category = params.category || 'Industrial Supplies';
-  const quoteDeadline = params.quote_deadline || 'within 24 hours';
-  const buyerCity = params.buyer_city || 'India';
-  const rfqTitle = params.rfq_title || 'Procurement Requirement';
+  const quoteDeadline = params.quote_deadline ? String(params.quote_deadline).trim() : '';
+  const buyerCity = params.buyer_city ? String(params.buyer_city).trim() : '';
+  const rfqTitle = params.rfq_title ? String(params.rfq_title).trim() : '';
+  const categoryPhrase = params.category ? ` for ${String(params.category).trim()}` : '';
   const completeProfileUrl = params.complete_profile_url || `${getPublicFrontendUrl()}/vendor/profile`;
 
-  const subject = `Your RFQ for ${category} closes ${quoteDeadline}`;
+  const subject = quoteDeadline
+    ? `Your RFQ${categoryPhrase} closes ${quoteDeadline}`
+    : `Your RFQ${categoryPhrase} is still open`;
+  const buyerPhrase = buyerCity ? `A buyer in ${buyerCity}` : 'A buyer';
+  const requirementPhrase = rfqTitle ? `on ${rfqTitle}` : 'on an open RFQ';
 
   const text = `Hi ${firstName},
 
-A buyer in ${buyerCity} is still waiting for quotes on ${rfqTitle}. Finish your profile in 3 minutes to see the full specifications and submit your quote.
+${buyerPhrase} is still waiting for quotes ${requirementPhrase}. Finish your profile in 3 minutes to see the full specifications and submit your quote.
 
 [ Complete profile & quote ]: ${completeProfileUrl}
 
@@ -1254,7 +1327,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       Hi <strong>${escapeHtml(firstName)}</strong>,
     </p>
     <p style="font-size: 15px; margin: 0 0 16px 0; color: #334155;">
-      A buyer in <strong>${escapeHtml(buyerCity)}</strong> is still waiting for quotes on <strong>${escapeHtml(rfqTitle)}</strong>. Finish your profile in 3 minutes to see the full specifications and submit your quote.
+      ${buyerCity ? `A buyer in <strong>${escapeHtml(buyerCity)}</strong>` : 'A buyer'} is still waiting for quotes ${rfqTitle ? `on <strong>${escapeHtml(rfqTitle)}</strong>` : 'on an open RFQ'}. Finish your profile in 3 minutes to see the full specifications and submit your quote.
     </p>
 
     ${renderCtaButton('Complete profile & quote', completeProfileUrl)}
@@ -1374,6 +1447,7 @@ function resolveTemplateKey(identifier) {
 
 /**
  * Main dispatcher to render any of the 13 Transactional Email Templates.
+ * Throws when a required parameter is missing; see the builders for the list.
  */
 function renderTransactionalEmail(identifier, params = {}) {
   const canonicalKey = resolveTemplateKey(identifier);
@@ -1385,7 +1459,7 @@ function renderTransactionalEmail(identifier, params = {}) {
 }
 
 /**
- * Returns metadata and sample parameters for all 13 Qua AI Transactional Email Templates.
+ * Returns metadata for all 13 Qua AI Transactional Email Templates. Renders nothing.
  */
 function getAllTransactionalEmailTemplates() {
   return Object.keys(QUA_AI_EMAIL_TEMPLATES).map((key) => {
@@ -1453,4 +1527,3 @@ module.exports = {
   TEMPLATE_REGISTRY,
   TEMPLATE_ALIASES,
 };
-

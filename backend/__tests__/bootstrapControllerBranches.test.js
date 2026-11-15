@@ -29,7 +29,8 @@ describe('bootstrapController 100% Branch Coverage', () => {
       organizationId: 'org-full-1',
     };
     jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(buyerAccount);
-    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
+    const evaluation = { id: 'eval-buyer-view', email: 'vendor@company.test' };
+    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [], evaluations: [evaluation] });
 
     const req = {
       user: {
@@ -47,6 +48,7 @@ describe('bootstrapController 100% Branch Coverage', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.success).toBe(true);
+    expect(res.data.data.evaluations).toEqual([evaluation]);
     expect(getBootSpy).toHaveBeenCalledWith(
       ['acc-full-1', 'buyer@full.com', 'org-full-1', 'sub-1', 'user-id-1', 'buyer@full.com', 'org-full-1'],
       'buyer@full.com'
@@ -88,7 +90,12 @@ describe('bootstrapController 100% Branch Coverage', () => {
 
   test('non-buyer user with query buyerId and refresh = true with persisted source', async () => {
     const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue(undefined);
-    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
+    const ownEvaluation = { id: 'eval-own', email: 'v@corp.com' };
+    const otherEvaluation = { id: 'eval-other', email: 'other@corp.com' };
+    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      rfqs: [],
+      evaluations: [ownEvaluation, otherEvaluation, { id: 'eval-no-email' }],
+    });
     storeService.isHydratedFromDB = true;
 
     const req = {
@@ -101,12 +108,29 @@ describe('bootstrapController 100% Branch Coverage', () => {
     expect(res.statusCode).toBe(200);
     expect(hydrateSpy).toHaveBeenCalled();
     expect(res.data.source).toBe('persisted');
+    expect(res.data.data.evaluations).toEqual([ownEvaluation]);
     expect(getBootSpy).toHaveBeenCalledWith(['query-buyer-1'], 'v@corp.com');
 
     storeService.isHydratedFromDB = false;
   });
 
-  test('non-buyer user with query refresh = true handles hydration failure gracefully without crashing', async () => {
+  test('admin bootstrap includes all evaluations while a vendor without email gets none', async () => {
+    const evaluations = [
+      { id: 'eval-1', email: 'vendor-one@corp.test' },
+      { id: 'eval-2', email: 'vendor-two@corp.test' },
+    ];
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ evaluations });
+
+    const adminRes = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'admin' } }, adminRes, jest.fn());
+    expect(adminRes.data.data.evaluations).toEqual(evaluations);
+
+    const vendorRes = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'vendor' } }, vendorRes, jest.fn());
+    expect(vendorRes.data.data.evaluations).toEqual([]);
+  });
+
+test('non-buyer user with query refresh = true handles hydration failure gracefully without crashing', async () => {
     jest.spyOn(storeService, 'hydrateFromDB').mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
     const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
     storeService.isHydratedFromDB = true;
@@ -135,6 +159,7 @@ describe('bootstrapController 100% Branch Coverage', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.source).toBe('in_memory');
+    expect(res.data.data.evaluations).toEqual([]);
     expect(getBootSpy).toHaveBeenCalledWith(null, undefined);
   });
 
@@ -145,5 +170,174 @@ describe('bootstrapController 100% Branch Coverage', () => {
     await bootstrapController.getBootstrap({}, mockRes(), next);
 
     expect(next).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  test('gracefully handles D1 overload error during getBootstrapData by serving degraded payload', async () => {
+    jest.spyOn(storeService, 'getBootstrapData').mockRejectedValue(new Error('D1 DB is overloaded. Too many resources consumed within a 10 second window'));
+    const next = jest.fn();
+    const res = mockRes();
+
+    await bootstrapController.getBootstrap({}, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.data.success).toBe(true);
+    expect(res.data.data.vendors).toBeDefined();
+    expect(res.data.data.buyerAccounts).toBeDefined();
+  });
+
+  test('gracefully handles failure in ensureBuyerAccountForUser without crashing', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockRejectedValue(new Error('DB failure in buyer account'));
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
+    const next = jest.fn();
+    const res = mockRes();
+
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', email: 'test@buyer.com' } }, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+  });
+
+  test('gracefully handles D1 overload error when storeService has null collection fields', async () => {
+    jest.spyOn(storeService, 'getBootstrapData').mockRejectedValue(new Error('D1 DB is overloaded'));
+    const origAccounts = storeService.buyerAccounts;
+    const origVendors = storeService.vendors;
+    const origEvals = storeService.evaluations;
+    const origLogs = storeService.auditLogs;
+    storeService.buyerAccounts = null;
+    storeService.vendors = null;
+    storeService.evaluations = null;
+    storeService.auditLogs = null;
+
+    try {
+      const res = mockRes();
+      await bootstrapController.getBootstrap({}, res, jest.fn());
+      expect(res.statusCode).toBe(200);
+      expect(res.data.data.buyerAccounts).toEqual([]);
+      expect(res.data.data.vendors).toEqual([]);
+      expect(res.data.data.evaluations).toEqual([]);
+      expect(res.data.data.auditLogs).toEqual([]);
+    } finally {
+      storeService.buyerAccounts = origAccounts;
+      storeService.vendors = origVendors;
+      storeService.evaluations = origEvals;
+      storeService.auditLogs = origLogs;
+    }
+  });
+
+  test('covers user.orgId branch for buyer', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(null);
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({});
+    const res = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-123' } }, res, jest.fn());
+    expect(res.statusCode).toBe(200);
+  });
+
+  test('buyer evaluation and vendor scoping filters unassociated vendors and evaluations', async () => {
+    const buyerAccount = {
+      id: 'buyer-acc-123',
+      corporateEmail: 'buyer@enterprise.com',
+    };
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(buyerAccount);
+
+    const ownedVendor1 = {
+      id: 'v-owned-1',
+      buyerAccountId: 'buyer-acc-123',
+      email: 'vendor1@owned.com',
+      name: 'Owned Vendor 1',
+    };
+    const ownedVendor2 = {
+      id: 'v-owned-2',
+      buyerEmail: 'buyer@enterprise.com',
+      email: 'vendor2@owned.com',
+      name: 'Owned Vendor 2',
+    };
+    const foreignVendor = {
+      id: 'v-foreign-99',
+      buyerAccountId: 'buyer-acc-other',
+      email: 'foreign@other.com',
+      name: 'Foreign Vendor',
+    };
+
+    const evalOwnedByBuyerId = {
+      id: 'eval-1',
+      buyerAccountId: 'buyer-acc-123',
+      vendorId: 'v-unknown',
+      vendorName: 'Direct Buyer Eval',
+    };
+    const evalOwnedByVendorId = {
+      id: 'eval-2',
+      vendorId: 'v-owned-1',
+      vendorName: 'Owned Vendor 1 Eval',
+    };
+    const evalOwnedByVendorEmail = {
+      id: 'eval-3',
+      vendorId: 'v-diff',
+      email: 'vendor2@owned.com',
+      vendorName: 'Owned Vendor 2 Eval',
+    };
+    const evalForeign = {
+      id: 'eval-foreign',
+      vendorId: 'v-foreign-99',
+      email: 'foreign@other.com',
+      vendorName: 'Veera Solutions Pvt LTD',
+    };
+
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      vendors: [ownedVendor1, ownedVendor2, foreignVendor],
+      evaluations: [evalOwnedByBuyerId, evalOwnedByVendorId, evalOwnedByVendorEmail, evalForeign],
+    });
+
+    const req = {
+      user: {
+        role: 'buyer',
+        email: 'buyer@enterprise.com',
+        id: 'user-buyer-1',
+      },
+    };
+    const res = mockRes();
+    await bootstrapController.getBootstrap(req, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    // Foreign evaluation must be filtered out for the buyer!
+    expect(res.data.data.evaluations).toHaveLength(3);
+    expect(res.data.data.evaluations.map((e) => e.id)).toEqual(['eval-1', 'eval-2', 'eval-3']);
+    expect(res.data.data.evaluations.find((e) => e.vendorName === 'Veera Solutions Pvt LTD')).toBeUndefined();
+
+    // Foreign vendor must be sanitized
+    const returnedForeignVendor = res.data.data.vendors.find((v) => v.id === 'v-foreign-99');
+    expect(returnedForeignVendor).toBeDefined();
+    expect(returnedForeignVendor.contactEmail).toBeUndefined();
+  });
+
+  test('vendor role scopes vendors and recognizes isOwnVendor', async () => {
+    const ownVendor = {
+      id: 'v-vendor-own',
+      email: 'supplier@own.com',
+      name: 'My Own Vendor Profile',
+    };
+    const otherVendor = {
+      id: 'v-other',
+      email: 'other@vendor.com',
+      name: 'Other Vendor',
+    };
+
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      vendors: [ownVendor, otherVendor],
+      evaluations: [],
+    });
+
+    const req = {
+      user: {
+        role: 'vendor',
+        email: 'supplier@own.com',
+      },
+    };
+    const res = mockRes();
+    await bootstrapController.getBootstrap(req, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    const returnedOwn = res.data.data.vendors.find((v) => v.id === 'v-vendor-own');
+    expect(returnedOwn.email).toBe('supplier@own.com');
   });
 });

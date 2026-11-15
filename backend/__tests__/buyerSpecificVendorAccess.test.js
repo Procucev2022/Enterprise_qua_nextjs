@@ -602,6 +602,60 @@ Lead Time: 25 days
       expect(quoteRes2.status).toBe(403);
       expect(quoteRes2.body.upgradeRequired).toBe(true);
     });
+
+    test('vendor mapped via fuzzy company name and peer vendor email can view buyer V1 RFQ', async () => {
+      const buyerFuzzyId = 'buyer-fuzzy-123';
+      const rfqV1Fuzzy = {
+        id: 'rfq-v1-fuzzy',
+        rfqNumber: 'RFQ-V1-FUZZY',
+        title: 'Industrial Valves V1',
+        category: 'Valves & Actuators',
+        sourcingMode: 'mode_1',
+        status: 'Quotes Pending',
+        buyerAccountId: buyerFuzzyId,
+        buyerAccountName: 'Veerababu Enterprises Pvt Ltd',
+        assignedVendors: [],
+        quotes: [],
+        extractedEntities: [{ itemName: 'Gate Valves', quantity: 10, majorCategory: 'Valves & Actuators' }],
+      };
+
+      const vendorFuzzy = {
+        id: 'v-fuzzy-1',
+        name: 'Veera Solutions Pvt LTD',
+        email: 'veera.fuzzy@solutions.com',
+        majorCategory: 'Industrial Machinery',
+        source: 'buyer_uploaded',
+        addedByBuyerCompany: 'Veerababu Enterprises',
+        buyerId: buyerFuzzyId,
+        freeQuotationCredits: 5,
+        subscriptionPlan: 'free',
+      };
+
+      storeService.vendors.push(vendorFuzzy);
+      storeService.rfqs.push(rfqV1Fuzzy);
+
+      const res = await request(app)
+        .get('/api/rfqs')
+        .set(vendorAuthHeader(vendorFuzzy));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      const numbers = res.body.data.map((r) => r.rfqNumber);
+      expect(numbers).toContain('RFQ-V1-FUZZY');
+
+      // Test peer email fallback
+      const vendorPeer = {
+        id: 'v-peer-new-identity',
+        name: 'Veera Solutions (Identity)',
+        email: 'veera.fuzzy@solutions.com',
+        majorCategory: '',
+        source: 'migrated_identity',
+        addedByBuyerCompany: null,
+        buyerId: null,
+      };
+
+      expect(storeService.isVendorMappedToRfqBuyer(vendorPeer, rfqV1Fuzzy)).toBe(true);
+    });
   });
 });
 

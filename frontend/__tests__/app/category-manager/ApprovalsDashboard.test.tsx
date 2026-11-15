@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ApprovalsDashboard from '@/app/category-manager/components/ApprovalsDashboard';
 import * as approvalClient from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/approvalClient', () => {
   const actual = jest.requireActual('@/lib/approvalClient');
@@ -118,7 +118,7 @@ describe('ApprovalsDashboard', () => {
       orgId: 'org-1',
       orgName: 'Procucev',
     });
-    (approvalClient.fetchApprovalSummary as jest.Mock).mockResolvedValue(mockSummary);
+    (approvalClient.fetchApprovalSummary as jest.Mock).mockResolvedValue({ summary: mockSummary });
     (approvalClient.fetchApprovals as jest.Mock).mockResolvedValue({
       data: mockApprovalsList,
       total: 3,
@@ -145,7 +145,7 @@ describe('ApprovalsDashboard', () => {
 
     // Toolbar controls rendered in single row
     expect(screen.getByPlaceholderText(strings.searchPlaceholder)).toBeInTheDocument();
-    expect(screen.getByLabelText(strings.allProjects)).toBeInTheDocument();
+    expect(screen.getByLabelText(strings.projectFilterPlaceholder)).toBeInTheDocument();
     expect(screen.getByLabelText(strings.allRequestTypes)).toBeInTheDocument();
     expect(screen.getByLabelText(strings.allStatuses)).toBeInTheDocument();
     expect(screen.getByTestId('toggle-my-approvals')).toBeInTheDocument();
@@ -282,10 +282,11 @@ describe('ApprovalsDashboard', () => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
 
+    // The project filter is typed text. The request type and status dropdowns are the first two comboboxes.
+    fireEvent.change(screen.getByLabelText(strings.projectFilterPlaceholder), { target: { value: 'Tata' } });
     const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[0], { target: { value: 'Tata' } });
-    fireEvent.change(selects[1], { target: { value: 'Buyer Credit Addition' } });
-    fireEvent.change(selects[2], { target: { value: 'Pending' } });
+    fireEvent.change(selects[0], { target: { value: 'Buyer Credit Addition' } });
+    fireEvent.change(selects[1], { target: { value: 'Pending' } });
 
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
@@ -448,6 +449,9 @@ describe('ApprovalsDashboard', () => {
     const remarksInput = screen.getByPlaceholderText(strings.executiveRemarksPlaceholder);
     fireEvent.change(remarksInput, { target: { value: 'Approved by Director' } });
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'test-approver-password' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
     fireEvent.click(confirmBtn);
 
@@ -455,7 +459,39 @@ describe('ApprovalsDashboard', () => {
       expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
         'appr-101',
         'APPROVE',
-        'Approved by Director'
+        'Approved by Director',
+        'test-approver-password',
+        'Srinu Sir'
+      );
+    });
+  });
+
+  it('requires a typed approver name before a decision and sends the name that was entered', async () => {
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+    const approverInput = screen.getByLabelText(strings.approverLabel);
+    fireEvent.change(approverInput, { target: { value: '   ' } });
+    fireEvent.change(screen.getByPlaceholderText(strings.passwordPlaceholder), { target: { value: 'secret-pass' } });
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+
+    expect(screen.getByText(strings.approverRequired)).toBeInTheDocument();
+    expect(approvalClient.processApprovalAction).not.toHaveBeenCalled();
+
+    fireEvent.change(approverInput, { target: { value: 'Sudheer Sir' } });
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+
+    await waitFor(() => {
+      expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
+        'appr-101',
+        'APPROVE',
+        '',
+        'secret-pass',
+        'Sudheer Sir'
       );
     });
   });
@@ -472,6 +508,9 @@ describe('ApprovalsDashboard', () => {
 
     expect(screen.getByRole('heading', { name: strings.confirmRejectionTitle })).toBeInTheDocument();
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'test-approver-password' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmRejectBtn });
     fireEvent.click(confirmBtn);
 
@@ -479,7 +518,9 @@ describe('ApprovalsDashboard', () => {
       expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
         'appr-101',
         'REJECT',
-        ''
+        '',
+        'test-approver-password',
+        'Srinu Sir'
       );
     });
   });
@@ -517,11 +558,14 @@ describe('ApprovalsDashboard', () => {
     const approveButtons = screen.getAllByRole('button', { name: strings.approveBtn });
     fireEvent.click(approveButtons[0]);
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'test-approver-password' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
     fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('Authority limit exceeded for this level.')).toBeInTheDocument();
+      expect(screen.getAllByText('Authority limit exceeded for this level.').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -596,15 +640,49 @@ describe('ApprovalsDashboard', () => {
     expect(screen.getAllByText(strings.noApprovalsFound).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('handles loadSummary and loadApprovals errors gracefully', async () => {
+  it('shows the summary and list errors from the client result, with dashes instead of zero counts', async () => {
+    const summaryError = formatString(UI_STRINGS.dataLoad.failedWithStatus, {
+      resource: UI_STRINGS.dataLoad.resources.approvalSummary,
+      status: 500,
+    });
+    const listError = formatString(UI_STRINGS.dataLoad.failedWithStatus, {
+      resource: UI_STRINGS.dataLoad.resources.approvals,
+      status: 500,
+    });
+    (approvalClient.fetchApprovalSummary as jest.Mock).mockResolvedValue({ summary: null, error: summaryError });
+    (approvalClient.fetchApprovals as jest.Mock).mockResolvedValue({ data: [], total: 0, error: listError });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText(summaryError)).toBeInTheDocument();
+      expect(screen.getByText(listError)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(strings.noApprovalsFound)).not.toBeInTheDocument();
+    for (const cardId of ['card-total-requests', 'card-pending-approvals', 'card-approved', 'card-rejected']) {
+      expect(screen.getByTestId(cardId)).toHaveTextContent(UI_STRINGS.dataLoad.emptyCell);
+    }
+    // Four summary cards and the pagination footer each show a dash.
+    expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('reports a thrown client error as a network failure in both the summary and the list', async () => {
     (approvalClient.fetchApprovalSummary as jest.Mock).mockRejectedValue(new Error('Network drop'));
     (approvalClient.fetchApprovals as jest.Mock).mockRejectedValue(new Error('500 server error'));
 
     render(<ApprovalsDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText(strings.noApprovalsFound)).toBeInTheDocument();
-      expect(screen.getByText('Failed to load approval requests.')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvalSummary })
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvals })
+        )
+      ).toBeInTheDocument();
     });
   });
 
@@ -683,7 +761,8 @@ describe('ApprovalsDashboard', () => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
 
-    const statusSelect = screen.getAllByRole('combobox')[2];
+    // Comboboxes in DOM order: request type, status, rows per page. The project filter is a text input.
+    const statusSelect = screen.getAllByRole('combobox')[1];
 
     fireEvent.change(statusSelect, { target: { value: 'Approved' } });
     await waitFor(() => {
@@ -822,12 +901,35 @@ describe('ApprovalsDashboard', () => {
     const approveButtons = screen.getAllByRole('button', { name: strings.approveBtn });
     fireEvent.click(approveButtons[0]);
 
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'test-approver-password' } });
+
     const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
     fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to process approval.')).toBeInTheDocument();
+      expect(screen.getByText(strings.invalidPasswordError)).toBeInTheDocument();
+      expect(screen.getByText(strings.databaseSyncError)).toBeInTheDocument();
     });
+  });
+
+  it('validates required password before submitting approval action', async () => {
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    const approveButtons = screen.getAllByRole('button', { name: strings.approveBtn });
+    fireEvent.click(approveButtons[0]);
+
+    const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(strings.passwordRequiredError)).toBeInTheDocument();
+    });
+    expect(approvalClient.processApprovalAction).not.toHaveBeenCalled();
   });
 
   it('handles summary card click when fetchApprovals fails', async () => {
@@ -843,6 +945,14 @@ describe('ApprovalsDashboard', () => {
     await act(async () => {
       fireEvent.click(pendingCard);
     });
+
+    // The popup does not open with a guessed count. The failure is shown as a message.
+    expect(
+      await screen.findByText(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvals })
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('handles user session and localStorage variations (null user, email only, invalid JSON)', async () => {

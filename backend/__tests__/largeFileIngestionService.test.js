@@ -7,7 +7,9 @@ const largeFileIngestionService = require('../src/services/largeFileIngestionSer
 const queries = require('../src/db/vendorIngestionQueries');
 const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const r2Client = require('../src/services/r2Client');
+const { logger } = require('../src/services/loggerService');
 const { VENDOR_INGESTION_SESSION_STATUS, VENDOR_INGESTION_STEP } = require('../src/config/constants');
+const { VALIDATION_SCHEMAS } = require('../src/config/validationSchemas');
 
 /**
  * Stands in for r2Client.getClient() — the real R2 upload/download/delete
@@ -92,12 +94,35 @@ describe('largeFileIngestionService unit tests', () => {
 
     it('handles error in buyerProfileQueries gracefully and falls back to sessionId', async () => {
       jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('DB connection failed'));
+      const warningSpy = jest.spyOn(logger, 'warn');
       jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce({
         id: 'sess-1',
         organizationId: 'org-from-session',
       });
       const orgId = await largeFileIngestionService.resolveOrganizationId({ sub: 'usr-err' }, 'sess-1');
       expect(orgId).toBe('org-from-session');
+      expect(warningSpy).toHaveBeenCalledWith(
+        'Could not resolve ingestion organization from the subject identity; checking alternate identity claims',
+        expect.objectContaining({ lookupSource: 'subject', hasSessionId: true }),
+        'LARGE_FILE_INGESTION'
+      );
+    });
+
+    it('logs user ID lookup errors before falling back to the session record', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('DB connection failed'));
+      const warningSpy = jest.spyOn(logger, 'warn');
+      jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce({
+        id: 'sess-user-id',
+        organizationId: 'org-from-session',
+      });
+
+      const orgId = await largeFileIngestionService.resolveOrganizationId({ userId: 'usr-err' }, 'sess-user-id');
+      expect(orgId).toBe('org-from-session');
+      expect(warningSpy).toHaveBeenCalledWith(
+        'Could not resolve ingestion organization from user identity claims; checking the session record',
+        expect.objectContaining({ lookupSource: 'user_id', hasSessionId: true }),
+        'LARGE_FILE_INGESTION'
+      );
     });
 
     it('falls back to sessionId lookup if user has no org and no sub', async () => {
@@ -110,9 +135,15 @@ describe('largeFileIngestionService unit tests', () => {
     });
 
     it('returns null if no organizationId can be found', async () => {
+      const errorSpy = jest.spyOn(logger, 'error');
       jest.spyOn(queries, 'findSessionById').mockRejectedValueOnce(new Error('not found'));
       const orgId = await largeFileIngestionService.resolveOrganizationId(null, 'sess-invalid');
       expect(orgId).toBeNull();
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Could not resolve ingestion organization from the session record',
+        expect.objectContaining({ lookupSource: 'session_id', hasSessionId: true }),
+        'LARGE_FILE_INGESTION'
+      );
     });
   });
 
@@ -199,7 +230,7 @@ describe('largeFileIngestionService unit tests', () => {
       expect(mapped.department).toBe('Piping');
     });
 
-    it('calculates spend from unit price when spend is 0, and leaves it 0 (not invented) when both are 0', () => {
+    it('calculates spend from unit price when spend is 0, and leaves spend and quantity null when the row gives neither', () => {
       const headers = ['PO Number', 'PO Date', 'Vendor Name', 'Item Description', 'Quantity', 'Unit Price', 'Total Spend'];
       const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
 
@@ -207,9 +238,14 @@ describe('largeFileIngestionService unit tests', () => {
       const mapped1 = largeFileIngestionService.mapRowValues(['PO-1', '2025-01-01', 'Supplier A', 'Bolts', '5', '100', '0'], headerMap, 'PO_DUMP', 0);
       expect(mapped1.spend).toBe(500);
 
-      // Neither spend nor unit price supplied — left at 0, not a guessed default.
+      // Neither spend nor unit price supplied: spend stays null, not a guessed zero.
       const mapped2 = largeFileIngestionService.mapRowValues(['PO-2', '2025-01-01', 'Supplier B', 'Nuts', '4', '0', '0'], headerMap, 'PO_DUMP', 1);
-      expect(mapped2.spend).toBe(0);
+      expect(mapped2.spend).toBeNull();
+
+      // A row that gives no quantity keeps it null rather than being set to 1.
+      const mapped3 = largeFileIngestionService.mapRowValues(['PO-3', '2025-01-01', 'Supplier C', 'Clips', '', '100', '0'], headerMap, 'PO_DUMP', 2);
+      expect(mapped3.quantity).toBeNull();
+      expect(mapped3.spend).toBeNull();
     });
 
     it('normalizes the PO number and date to one standard shape', () => {
@@ -229,6 +265,31 @@ describe('largeFileIngestionService unit tests', () => {
       const blank = largeFileIngestionService.mapRowValues(['', '', 'Vendor D', 'Clips'], headerMap, 'PO_DUMP', 3);
       expect(blank.poNumber).toBeNull();
       expect(blank.poDate).toBeNull();
+    });
+
+    it('maps PO headers including Short Text, Material Description, Vendor Name / Code, and ignores blank trailing headers', () => {
+      const headers = ['PO Number', 'PO Date', 'Vendor Name / Code', 'Item Name & Description', 'Quantity', 'Unit', ''];
+      const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
+      expect(headerMap.vendorIdentifier).toBe(2);
+      expect(headerMap.itemName).toBe(3);
+
+      const mapped = largeFileIngestionService.mapRowValues(
+        ['PO-001', '2025-06-01', 'Acme Supply', 'Hydraulic Cylinder', '4', 'Nos', ''],
+        headerMap,
+        'PO_DUMP',
+        0
+      );
+      expect(mapped.vendorName).toBe('Acme Supply');
+      expect(mapped.itemDescription).toBe('Hydraulic Cylinder');
+      expect(mapped.specification).toBeNull();
+
+      const sapMap = largeFileIngestionService.extractHeaderIndices(['', 'Vendor/Supplier Name', 'Short Text'], 'PO_DUMP');
+      expect(sapMap.vendorIdentifier).toBe(1);
+      expect(sapMap.itemName).toBe(2);
+
+      const matMap = largeFileIngestionService.extractHeaderIndices(['Supplier Name', 'Material Description'], 'PO_DUMP');
+      expect(matMap.vendorIdentifier).toBe(0);
+      expect(matMap.itemName).toBe(1);
     });
 
     it('normalizes Excel date serial decimals and various date formats in PO dump rows', () => {
@@ -261,6 +322,31 @@ describe('largeFileIngestionService unit tests', () => {
       expect(res.failed).toBe(1);
     });
 
+    it('validates mobile numbers in vendor master batches and rejects alphanumeric or non-10-digit phones', async () => {
+      const upsertSpy = jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValueOnce([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }]);
+      const res = await largeFileIngestionService.processVendorMasterBatch('s1', 'o1', [
+        { companyName: 'Valid Mobile Co', phone: '+91 9811223344', vendorCode: '1' },
+        { companyName: 'Valid 0-Prefixed Co', phone: '09811223344' },
+        { companyName: 'Valid Without Plus Co', phone: '9811223344' },
+        { companyName: 'Valid 12-Digit Co', phone: '919811223344' },
+        { companyName: 'Valid Duplicated +91 Co', phone: '+91+91 9811223344' },
+        { companyName: 'Alpha Mobile Co', phone: '98765abcde' },
+        { companyName: 'Short Mobile Co', phone: '12345' },
+        { companyName: 'Long Mobile Co', phone: '+91 981122334455' },
+      ]);
+      expect(res.imported).toBe(5);
+      expect(res.skipped).toBe(3);
+      expect(res.failed).toBe(3);
+      const passedRows = upsertSpy.mock.calls[0][2];
+      expect(passedRows[0].phone).toBe('+919811223344');
+      expect(passedRows[1].phone).toBe('+919811223344');
+      expect(passedRows[2].phone).toBe('+919811223344');
+      expect(passedRows[3].phone).toBe('+919811223344');
+      expect(passedRows[4].phone).toBe('+919811223344');
+      // Second row generated code 2 because 1 was already taken
+      expect(passedRows[1].vendorCode).toBe('2');
+    });
+
     it('handles bulkUpsertVendorMasterRecords failure', async () => {
       jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockRejectedValueOnce(new Error('DB err'));
       const res = await largeFileIngestionService.processVendorMasterBatch('s1', 'o1', [{ companyName: 'Valid' }]);
@@ -271,23 +357,73 @@ describe('largeFileIngestionService unit tests', () => {
     it('processes valid and invalid po dump batches', async () => {
       jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }]);
       const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
-        { vendorName: 'Apex', poDate: '2025-01-01', itemDescription: 'Valves', department: 'Piping' },
-        { itemDescription: 'No Vendor', department: 'Piping' },
+        { vendorName: 'Apex', poDate: '2025-01-01', itemDescription: 'Valves', specification: 'DN50, flanged', department: 'Piping' },
+        { itemDescription: 'No Vendor', specification: 'DN50', department: 'Piping' },
       ], { horizonStart: '2025-01-01', horizonEnd: '2025-12-31' });
       expect(res.imported).toBe(1);
       expect(res.skipped).toBe(1);
       expect(res.failed).toBe(1);
     });
 
-    it('rejects a po dump row missing item details or category even when vendor identity is present', async () => {
+    it('rejects a po dump row missing its item description even when vendor identity is present, and accepts rows without specification', async () => {
+      jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }, { id: 2 }, { id: 3 }]);
       const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
-        { vendorName: 'Apex', department: 'Piping' }, // no item details
-        { vendorName: 'Apex', itemDescription: 'Valves' }, // no category
+        { vendorName: 'Apex', department: 'Piping', specification: 'DN50' }, // no item description
+        { vendorName: 'Apex', itemDescription: 'Valves' }, // no specification (optional)
+        { supplierName: 'Delta Supply', shortText: 'Ball Valve' }, // alias: Short Text
+        { vendorCode: 'V-44', materialDescription: 'Copper Wire' }, // alias: Material Description
       ], null);
-      expect(res.imported).toBe(0);
-      expect(res.failed).toBe(2);
-      expect(res.errors[0].reason).toBe('Item Details are required');
-      expect(res.errors[1].reason).toBe('Category is required');
+      expect(res.imported).toBe(3);
+      expect(res.failed).toBe(1);
+      expect(res.errors[0].reason).toBe(VALIDATION_SCHEMAS.poLineItemRow.itemDescription.message);
+    });
+
+    it('accepts a po dump row that gives only vendor name and item description, and keeps specification and the rest null', async () => {
+      const bulkSpy = jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }]);
+      const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
+        { vendorName: 'Apex', itemDescription: 'Valves' },
+      ], { horizonStart: '2025-01-01', horizonEnd: '2025-12-31' });
+      expect(res).toMatchObject({ imported: 1, failed: 0, skipped: 0 });
+      expect(bulkSpy.mock.calls[0][2][0]).toMatchObject({
+        poDate: null,
+        specification: null,
+        quantity: null,
+        spend: null,
+        department: null,
+        // A line without a date is kept inside the period, so it is still used.
+        inHorizon: true,
+      });
+    });
+
+    it('keeps PO session status unchanged when finalizeSessionAfterUpload counts zero stored PO rows', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({
+        id: 'sess-zero-po',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED,
+        currentStep: VENDOR_INGESTION_STEP.PO_DUMP,
+      });
+      jest.spyOn(queries, 'countPoLineItems').mockResolvedValue({ total: 0, inHorizon: 0, outsideHorizon: 0 });
+      const updateSessionSpy = jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-zero-po',
+        sessionId: 'sess-zero-po',
+        organizationId: 'org-1',
+        rows: [{ vendorName: 'Apex', itemDescription: '' }],
+        fileName: 'bad-po.xlsx',
+        jobType: 'PO_DUMP',
+      });
+
+      expect(updateSessionSpy).toHaveBeenCalledWith(
+        'sess-zero-po',
+        'org-1',
+        expect.objectContaining({
+          poRowCount: 0,
+          status: VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED,
+          currentStep: VENDOR_INGESTION_STEP.PO_DUMP,
+        })
+      );
     });
 
     it('handles bulkInsertPoLineItems failure', async () => {
@@ -295,7 +431,7 @@ describe('largeFileIngestionService unit tests', () => {
       const res = await largeFileIngestionService.processPoDumpBatch(
         's1',
         'o1',
-        [{ vendorName: 'Apex', itemDescription: 'Valves', department: 'Piping' }],
+        [{ vendorName: 'Apex', itemDescription: 'Valves', specification: 'DN50', department: 'Piping' }],
         null
       );
       expect(res.imported).toBe(0);
@@ -491,7 +627,7 @@ describe('largeFileIngestionService unit tests', () => {
         sessionId: 'sess-arr-po',
         organizationId: 'org-1',
         rows: [
-          { vendorName: 'Apex', poDate: '2025-06-01', itemDescription: 'Valves', department: 'Piping' },
+          { vendorName: 'Apex', poDate: '2025-06-01', itemDescription: 'Valves', specification: 'DN50', department: 'Piping' },
           { itemDescription: 'No vendor' },
         ], // 1 valid, 1 invalid
         fileName: 'po.xlsx',

@@ -2,7 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
-import { VendorEvaluationRecord, QuestionEvaluationItem } from '@/lib/types';
+import { authClient } from '@/lib/authClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import type { QuestionEvaluationItem, VendorEntry, VendorEvaluationRecord } from '@/lib/types';
 import {
   FileCheck,
   Award,
@@ -29,6 +31,9 @@ import {
   Paperclip,
   Check,
   Layers,
+  Eye,
+  Star,
+  Pencil,
 } from 'lucide-react';
 
 interface VendorQualificationFormProps {
@@ -49,6 +54,12 @@ interface QuestionFormState {
   options: { label: string; value: number }[];
 }
 
+/**
+ * Stored with each self-assessment in place of an automated action. Saving the record
+ * does not dispatch RFQs or change any roster, so the record must not say that it did.
+ */
+const SELF_ASSESSMENT_SYSTEM_ACTION = 'Self-assessment recorded. No RFQ dispatch was triggered by this submission.';
+
 const MODULE_TABS = [
   { id: 'M1', code: 'Module 1', name: 'Commercial Terms', weight: 25, activeColor: 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30' },
   { id: 'M2', code: 'Module 2', name: 'Technical Capabilities', weight: 15, activeColor: 'bg-sky-600 text-white shadow-md shadow-sky-600/30' },
@@ -64,24 +75,24 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     addAuditLog,
     addFeedItem,
     showToast,
-    vendorSubscription,
-    isVendorEvaluationFeeWaived,
     setVendorSelfEvaluationCompleted,
     setVendorSelfEvaluationScore,
     currentUserSession,
   } = useApp();
 
-  // This evaluation record was always attributed to a hardcoded 'v-1' / 'Apex
-  // Supplies Ltd.' regardless of who actually took the survey. Load the real
-  // logged-in vendor's own record so the evaluation is attributed correctly.
-  const [myVendorRecord, setMyVendorRecord] = useState<any>(null);
+  // The evaluation is attributed to the logged-in vendor. This loads that vendor's own
+  // record, so the saved identity is the real one and not a fixed placeholder.
+  const [myVendorRecord, setMyVendorRecord] = useState<VendorEntry | null>(null);
   useEffect(() => {
     let cancelled = false;
     async function loadMyVendorRecord() {
       const email = currentUserSession?.email;
       if (!email) return;
       try {
-        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        const token = authClient.getToken();
+        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled && data.success && data.data) setMyVendorRecord(data.data);
@@ -96,8 +107,10 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
   }, [currentUserSession?.email]);
 
   const [activeTab, setActiveTab] = useState<'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'M6'>('M1');
+  const [viewAllModules, setViewAllModules] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [evaluationResult, setEvaluationResult] = useState<VendorEvaluationRecord | null>(null);
+  const [showDetailedReportModal, setShowDetailedReportModal] = useState(false);
 
   // 24 Detailed Question States with their specific descriptive options
   const [qState, setQState] = useState<Record<string, QuestionFormState>>({
@@ -374,401 +387,367 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
   const isFirstTab = currentTabIndex === 0;
   const isLastTab = currentTabIndex === MODULE_TABS.length - 1;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Was previously possible to submit a full 24-question evaluation with
-    // zero evidence attached (see BUGS.md #50) — now require every question
-    // to actually have a file attached before the survey can be submitted.
-    const missingEvidence = Object.values(qState).filter((q) => !q.attachmentName);
-    if (missingEvidence.length > 0) {
+    // Issue 3: Make all document attachments optional.
+    // Accept even 0 or a single attachment instead of requiring all 24 documents.
+    // Do not block submission because of missing documents or unanswered optional fields.
+    setSubmitting(true);
+
+    const questionItems: QuestionEvaluationItem[] = Object.values(qState).map((q) => ({
+      refId: q.refId,
+      pillarId: q.pillarId,
+      pillarName: q.pillarName,
+      criteria: q.criteria,
+      attachmentName: q.attachmentName || '',
+      attachmentVerified: false,
+      score: q.score,
+      weightedScore: q.weightedScore,
+      remarks: q.remarks || '',
+    }));
+
+    const record: VendorEvaluationRecord = {
+      id: `eval-${Date.now()}`,
+      vendorId: myVendorRecord?.id || '',
+      vendorName: myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor',
+      contactPerson: myVendorRecord?.contactPerson || currentUserSession?.name || '',
+      email: currentUserSession?.email || myVendorRecord?.email || '',
+      phone: myVendorRecord?.phone || '',
+      category: myVendorRecord?.majorCategory || '',
+      submissionDate: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
+      status: currentStatus,
+      overallScore: totalScorePercent,
+      systemAction: SELF_ASSESSMENT_SYSTEM_ACTION,
+      moduleScores: {
+        commercial: { score: getPillarTotal('M1').avg, maxScore: 5, weight: 25, weightedScore: getPillarTotal('M1').weighted, remarks: qState['M1-Q1']?.remarks || '' },
+        technical: { score: getPillarTotal('M2').avg, maxScore: 5, weight: 15, weightedScore: getPillarTotal('M2').weighted, remarks: qState['M2-Q1']?.remarks || '' },
+        quality: { score: getPillarTotal('M3').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M3').weighted, remarks: qState['M3-Q1']?.remarks || '' },
+        delivery: { score: getPillarTotal('M4').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M4').weighted, remarks: qState['M4-Q1']?.remarks || '' },
+        financial: { score: getPillarTotal('M5').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M5').weighted, remarks: qState['M5-Q1']?.remarks || '' },
+        governance: { score: getPillarTotal('M6').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M6').weighted, remarks: qState['M6-Q1']?.remarks || '' },
+      },
+      documents: Object.values(qState).map((q) => ({
+        id: `doc-${q.refId}`,
+        name: q.attachmentName || 'Not Provided (Optional)',
+        type: q.criteria,
+        uploadDate: new Date().toISOString().substring(0, 10),
+        verified: false,
+        status: (q.attachmentName ? 'Pending Review' : 'Missing') as 'Verified' | 'Pending Review' | 'Missing',
+      })),
+      questionBreakdown: questionItems,
+    };
+
+    // The evaluation is saved through the real endpoint. Success is shown only when
+    // that call confirms the save. The server stores the record as sent and does not
+    // dispatch RFQs, so no dispatch is reported here.
+    const saved = await addVendorEvaluation(record);
+    setSubmitting(false);
+    if (!saved) {
       showToast(
-        'Evidence Required',
-        `Attach supporting evidence for all 24 questions before submitting (${missingEvidence.length} missing).`,
+        'Submission Failed',
+        'Could not save your qualification evaluation. Please try again.',
         'warning'
       );
       return;
     }
 
-    setSubmitting(true);
+    addAuditLog(
+      `Mode 3 Vendor Qualification Survey submitted by ${record.vendorName}. Score: ${totalScorePercent}% (${currentStatus})`
+    );
 
-    setTimeout(async () => {
-      const questionItems: QuestionEvaluationItem[] = Object.values(qState).map(q => ({
-        refId: q.refId,
-        pillarId: q.pillarId,
-        pillarName: q.pillarName,
-        criteria: q.criteria,
-        attachmentName: q.attachmentName,
-        // Never actually verified — see the honest "Not OCR-Verified" badge
-        // rendered for each question below.
-        attachmentVerified: false,
-        score: q.score,
-        weightedScore: q.weightedScore,
-        remarks: q.remarks
-      }));
+    void addFeedItem(
+      `Mode 3 Qualification Score: ${totalScorePercent}%`,
+      `${record.vendorName} scored ${totalScorePercent}% in Mode 3 AI Evaluation. Status: ${currentStatus}.`,
+      'scoring',
+      undefined,
+      record.vendorName
+    );
 
-      const record: VendorEvaluationRecord = {
-        id: `eval-${Date.now()}`,
-        vendorId: myVendorRecord?.id || '',
-        vendorName: myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor',
-        contactPerson: myVendorRecord?.contactPerson || currentUserSession?.name || '',
-        email: currentUserSession?.email || myVendorRecord?.email || '',
-        phone: myVendorRecord?.phone || '',
-        category: myVendorRecord?.majorCategory || 'Uncategorized',
-        submissionDate: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
-        status: currentStatus,
-        overallScore: totalScorePercent,
-        systemAction:
-          totalScorePercent >= 80
-            // "Verified via AI OCR engine" was a false claim — this app has no
-            // OCR/document-verification backend (see the honest disclosure
-            // badge on each attachment below); a file being attached is not
-            // the same as its contents being checked.
-            ? 'AUTOMATIC DIRECT RFQ DISPATCH TO VENDOR INBOX. 24/24 mandatory attachments received (not independently verified). Vendor added to Mode 3 active bidding roster.'
-            : totalScorePercent >= 65
-            ? 'RFQ DISPATCH HELD. System triggered Corrective Action Plan (CAPA) or requested document clarification.'
-            : 'EXCLUDED FROM ACTIVE RFQ DISPATCH. Re-audit option unlocked after 90 days.',
-        moduleScores: {
-          commercial: { score: getPillarTotal('M1').avg, maxScore: 5, weight: 25, weightedScore: getPillarTotal('M1').weighted, remarks: qState['M1-Q1'].remarks },
-          technical: { score: getPillarTotal('M2').avg, maxScore: 5, weight: 15, weightedScore: getPillarTotal('M2').weighted, remarks: qState['M2-Q1'].remarks },
-          quality: { score: getPillarTotal('M3').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M3').weighted, remarks: qState['M3-Q1'].remarks },
-          delivery: { score: getPillarTotal('M4').avg, maxScore: 5, weight: 20, weightedScore: getPillarTotal('M4').weighted, remarks: qState['M4-Q1'].remarks },
-          financial: { score: getPillarTotal('M5').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M5').weighted, remarks: qState['M5-Q1'].remarks },
-          governance: { score: getPillarTotal('M6').avg, maxScore: 5, weight: 10, weightedScore: getPillarTotal('M6').weighted, remarks: qState['M6-Q1'].remarks },
-        },
-        documents: Object.values(qState).map((q, idx) => ({
-          id: `doc-${q.refId}`,
-          name: q.attachmentName,
-          type: q.criteria,
-          uploadDate: new Date().toISOString().substring(0, 10),
-          // A filename being attached was previously labeled "Verified" —
-          // this app has no real document-verification backend, so an
-          // attached file is only ever "Pending Review", never confirmed.
-          verified: false,
-          status: q.attachmentName ? 'Pending Review' : 'Missing'
-        })),
-        questionBreakdown: questionItems
-      };
+    setVendorSelfEvaluationCompleted(true);
+    setVendorSelfEvaluationScore(totalScorePercent);
+    setEvaluationResult(record);
+    onSuccess(record);
 
-      // Was fire-and-forget: this screen showed "success", marked the vendor
-      // as evaluated, and navigated away regardless of whether the backend
-      // actually accepted the submission. Now the whole success path is
-      // gated on a real, confirmed response.
-      const saved = await addVendorEvaluation(record);
-      if (!saved) {
-        setSubmitting(false);
-        showToast(
-          'Submission Failed',
-          'Could not save your qualification evaluation. Please try again.',
-          'warning'
-        );
-        return;
-      }
-
-      addAuditLog(
-        `Mode 3 Vendor Qualification Survey submitted by ${record.vendorName}. Score: ${totalScorePercent}% (${currentStatus})`,
-        undefined,
-        record.email
-      );
-
-      addFeedItem(
-        `Mode 3 Qualification Score: ${totalScorePercent}%`,
-        `${record.vendorName} scored ${totalScorePercent}% in Mode 3 AI Evaluation. Status: ${currentStatus}. ${record.systemAction}`,
-        'scoring',
-        undefined,
-        record.vendorName
-      );
-
-      setSubmitting(false);
-      setVendorSelfEvaluationCompleted(true);
-      setVendorSelfEvaluationScore(totalScorePercent);
-      setEvaluationResult(record);
-      onSuccess(record);
-
-      showToast(
-        `AI Evaluation Complete (${totalScorePercent}%)`,
-        currentStatus === 'PREFERRED ENTERPRISE SUPPLIER'
-          ? 'Congratulations! You are unlocked as a Preferred Enterprise Supplier. Active RFQs dispatched to your inbox.'
-          : 'Evaluation submitted. Review detailed score breakdown below.',
-        totalScorePercent >= 80 ? 'success' : 'warning'
-      );
-    }, 1200);
+    showToast(
+      `AI Evaluation Complete (${totalScorePercent}%)`,
+      `Your evaluation was saved. Status: ${currentStatus}.`,
+      totalScorePercent >= 80 ? 'success' : 'warning'
+    );
   };
 
-  const activeQuestions = Object.values(qState).filter(q => q.pillarId === activeTab);
+  const activeQuestions = Object.values(qState).filter((q) => q.pillarId === activeTab);
+  const vendorName = myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
+  const vendorInitials = vendorName.split(' ').map((n) => n[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'VE';
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
+    <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-              ⭐ Premium Vendor: 360-Degree AI Self-Evaluation
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="text-xl">⭐</span>
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+              Premium Vendor: 360-Degree AI Self-Evaluation
             </h1>
-            <span className="badge badge-emerald">Multi-Buyer Certified</span>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wide bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+              Multi-Section Assessment
+            </span>
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Complete your 360° AI Self-Evaluation (Commercial, Technical, Quality, Delivery, Financial & ESG) to get certified and receive RFQs from all enterprise buyers.
+            Complete your 360° AI Self-Evaluation (Commercial, Technical, Quality, Delivery, Financial & ESG). {UI_STRINGS.vendorWorkspace.evaluationSavedNotice}
           </p>
         </div>
-        <button onClick={onBack} className="btn btn-secondary btn-sm">
+        <button onClick={onBack} className="btn btn-secondary btn-sm self-start sm:self-auto cursor-pointer">
           ← Back to Workspace
         </button>
       </div>
 
-      {/* Floating Executive Score Bar */}
-      <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs text-indigo-300 font-bold uppercase tracking-wider">
-            <Sparkles size={14} className="text-emerald-400" /> {myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor'} — Live AI Capability Rating
-          </div>
-          <div className="text-xs text-indigo-200/80">
-            Step {currentTabIndex + 1} of {MODULE_TABS.length}: <strong className="text-white">{activeModuleMeta.name}</strong> ({activeModuleMeta.weight}% weight)
-          </div>
-        </div>
-
-        <div className="flex items-center gap-4 shrink-0">
-          <div className="text-right">
-            <div className="text-[10px] text-indigo-300 uppercase font-bold">Live Computed Score</div>
-            <div className="text-2xl font-black mono text-emerald-400">{totalScorePercent}%</div>
-          </div>
-          <span
-            className={`px-3 py-1 rounded-md text-[10px] font-extrabold uppercase tracking-wide ${
-              totalScorePercent >= 80
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                : totalScorePercent >= 65
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-            }`}
-          >
-            {currentStatus}
-          </span>
-        </div>
-      </div>
-
-      {/* Infra & AI Evaluation Fee Banner ($5 or $0 with Connect/Select) */}
-      <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between gap-3 text-xs flex-wrap">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 flex items-center justify-center font-black">
-            💳
+      {/* Floating Executive Score Bar matching Image 1 */}
+      <div className="p-4 rounded-2xl bg-slate-900 dark:bg-gray-950 text-white shadow-xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-blue-600/30 border border-blue-400/40 text-blue-300 font-black text-xs flex items-center justify-center shrink-0 shadow-inner">
+            {vendorInitials}
           </div>
           <div>
-            <span className="font-bold text-slate-900 dark:text-white">
-              360° AI Self-Evaluation Infrastructure Fee:
-            </span>{' '}
-            {isVendorEvaluationFeeWaived ? (
-              <span className="text-emerald-700 dark:text-emerald-300 font-bold">
-                $0 FREE (100% Waived under your active {vendorSubscription === 'connect' ? 'Connect' : 'Select'} Tier)
-              </span>
-            ) : (
-              <span className="text-amber-800 dark:text-amber-300 font-bold">
-                $5 Nominal Fee (Towards Cloud Infrastructure & AI Compute Costs) • Fee is $0 if you take any subscription (Connect or Select)
-              </span>
-            )}
+            <div className="text-xs font-bold text-slate-100 uppercase tracking-wider flex items-center gap-2">
+              <Sparkles size={14} className="text-emerald-400 shrink-0" />
+              <span>{vendorName} — Live AI Capability Rating</span>
+              <span className="text-slate-400 font-normal">•</span>
+              <span className="text-blue-400">LEVEL 4 (COMPREHENSIVE RATING)</span>
+            </div>
+            <div className="text-[11px] text-slate-400 mt-0.5">
+              Current Module: <strong className="text-slate-200">{activeModuleMeta.name}</strong> ({activeModuleMeta.weight}% weighting)
+            </div>
           </div>
         </div>
 
-        {!isVendorEvaluationFeeWaived && (
-          <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 bg-white dark:bg-gray-800 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800">
-            Cost = $0 with Connect / Select Plan
-          </span>
-        )}
+        <div className="flex items-center gap-5 shrink-0 self-end md:self-auto">
+          <div className="text-right">
+            <div className="text-[10px] text-slate-400 uppercase font-extrabold tracking-wider">Latest Completion Score</div>
+            <div className="text-2xl font-black mono text-emerald-400">{totalScorePercent}%</div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowDetailedReportModal(true)}
+            className="btn btn-sm bg-rose-950/90 hover:bg-rose-900 text-rose-200 border border-rose-850 rounded-xl px-3.5 py-2 flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider cursor-pointer shadow-sm transition-all"
+          >
+            <Eye size={13} className="text-rose-400" />
+            <span>View Detailed Report</span>
+          </button>
+        </div>
       </div>
 
       {/* ── MODULE TABS BAR ── */}
-      <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-sm overflow-x-auto">
+      <div className="flex items-center gap-2 overflow-x-auto p-1.5 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-xs">
+        <button
+          type="button"
+          onClick={() => setViewAllModules(!viewAllModules)}
+          className="sr-only"
+        >
+          <span>{viewAllModules ? '✓ All 6 Modules (Single Window)' : 'View All 6 Modules (Single Window)'}</span>
+        </button>
+
         {MODULE_TABS.map((tab, idx) => {
-          const isSelected = activeTab === tab.id;
+          const isSelected = !viewAllModules && activeTab === tab.id;
           const pTotal = getPillarTotal(tab.id);
+          const scorePercent = Math.round((pTotal.weighted / tab.weight) * 100);
           return (
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              aria-label={`${idx + 1} ${tab.name}`}
+              onClick={() => {
+                setViewAllModules(false);
+                setActiveTab(tab.id);
+              }}
+              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer shrink-0 ${
                 isSelected
-                  ? tab.activeColor
-                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/60'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-slate-50 dark:bg-gray-850/60 text-slate-700 dark:text-gray-300 border border-slate-200/80 dark:border-gray-800 hover:bg-slate-100 dark:hover:bg-gray-800'
               }`}
             >
-              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-gray-800 text-slate-500'}`}>
-                {idx + 1}
-              </span>
-              <span>{tab.name}</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${isSelected ? 'bg-black/20 text-white' : 'bg-slate-100 dark:bg-gray-800 text-slate-500'}`}>
-                {pTotal.weighted}/{tab.weight} pts
+              <span>{idx + 1}. {tab.name}</span>
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
+                isSelected
+                  ? 'bg-blue-700/80 text-white'
+                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+              }`}>
+                {scorePercent}%
               </span>
             </button>
           );
         })}
       </div>
 
-      {/* Visual Helper: Next tab indicator */}
-      {!isLastTab && (
-        <div className="px-4 py-2 bg-indigo-50/50 dark:bg-indigo-950/20 text-indigo-600 dark:text-indigo-400 border border-indigo-100/50 dark:border-indigo-900/30 rounded-xl text-xs font-bold flex items-center justify-between animate-pulse">
-          <span>Complete this module to proceed.</span>
-          <span>Next Tab Available: {MODULE_TABS[currentTabIndex + 1].name} →</span>
-        </div>
-      )}
-
-      {/* ── ACTIVE MODULE CARD VIEW ── */}
+      {/* ── TABULAR MODULE EVALUATION VIEW ── */}
       <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="glass-panel p-6 rounded-2xl space-y-5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-md">
-          {/* Active Module Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-slate-100 dark:border-gray-800">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
-                  {activeTab}
-                </span>
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  {activeModuleMeta.code}: {activeModuleMeta.name}
-                </h2>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-                Evaluation Weight: <strong>{activeModuleMeta.weight}%</strong> of overall score • Select your descriptive compliance rating, upload file attachments, and write justification remarks for each parameter.
-              </p>
-            </div>
+        {MODULE_TABS.map((tabMeta) => {
+          if (!viewAllModules && activeTab !== tabMeta.id) return null;
+          const questions = Object.values(qState).filter((q) => q.pillarId === tabMeta.id);
+          const pTotal = getPillarTotal(tabMeta.id);
+          const sectionPercent = Math.round((pTotal.weighted / tabMeta.weight) * 100);
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800">
-                Pillar Score: {activeTotal.weighted} / {activeModuleMeta.weight} pts
-              </span>
-            </div>
-          </div>
-
-          {/* 4 Questions Grid for Active Module */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            {activeQuestions.map((q) => (
-              <div key={q.refId} className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-3 flex flex-col justify-between">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
-                      {q.refId}
+          return (
+            <div
+              key={tabMeta.id}
+              id={`module-${tabMeta.id}`}
+              className="p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-xs"
+            >
+              {/* Module Header Card matching Image 1 */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-gray-800">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-mono font-bold text-xs flex items-center justify-center border border-blue-200 dark:border-blue-800">
+                    {tabMeta.id}
+                  </span>
+                  <div>
+                    <h2 className="text-base font-extrabold text-slate-900 dark:text-white">
+                      {tabMeta.code}: {tabMeta.name}
+                    </h2>
+                    <span className="text-[11px] text-slate-400">
+                      Module Weight: {tabMeta.weight}% of comprehensive score
                     </span>
-                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                      +{q.weightedScore} pts ({q.score}/5.0)
-                    </span>
-                  </div>
-
-                  <div>
-                    <label className="font-bold text-slate-800 dark:text-gray-200 block text-xs leading-relaxed">
-                      {q.criteria}
-                    </label>
-                  </div>
-
-                  {/* Rating Selector */}
-                  <div>
-                    <label className="text-[10px] text-slate-400 dark:text-gray-500 uppercase font-bold block mb-1">
-                      Choose Compliance Options:
-                    </label>
-                    <select
-                      value={q.score}
-                      onChange={(e) => updateQuestionScore(q.refId, Number(e.target.value))}
-                      className="text-xs font-semibold w-full bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800"
-                    >
-                      {q.options.map((opt, oIdx) => (
-                        <option key={oIdx} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Attachment Option against each question */}
-                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800/80 space-y-2">
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className="font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1">
-                        <Paperclip size={11} className="text-indigo-600" /> Attached Evidence File:
-                      </span>
-                      {q.attachmentName ? (
-                        <span
-                          className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
-                          title="This app has no real OCR/document-verification backend — a filename being attached is not the same as its contents being checked."
-                        >
-                          📎 File Attached (Not OCR-Verified)
-                        </span>
-                      ) : (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
-                          No File Attached
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] font-mono font-semibold text-slate-700 dark:text-gray-300 truncate">
-                      {q.attachmentName || 'No file selected'}
-                    </div>
-                    <div className="flex gap-2">
-                      <label className="btn btn-secondary btn-xs cursor-pointer flex items-center gap-1 text-[9px]">
-                        <UploadCloud size={10} /> {q.attachmentName ? 'Change File' : 'Attach File'}
-                        <input
-                          type="file"
-                          className="hidden"
-                          onChange={(e) => {
-                            if (e.target.files && e.target.files[0]) {
-                              handleFileUpload(q.refId, e.target.files[0].name);
-                            }
-                          }}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        disabled={!q.attachmentName}
-                        onClick={() => showToast('Not Available', 'This is a demo evidence-attachment step — there is no real document verification behind it.', 'info')}
-                        className="btn btn-ghost btn-xs text-[9px] text-indigo-600 dark:text-indigo-400 font-bold disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Re-scan Document
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Remarks input field against each question */}
-                  <div>
-                    <label className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold block mb-1">
-                      💬 Justification Remarks / Compliance Clarification:
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={q.remarks}
-                      onChange={(e) => updateQuestionRemarks(q.refId, e.target.value)}
-                      className="text-xs font-medium w-full p-2 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800/80"
-                      placeholder="Write compliance remarks or audit justification notes..."
-                    />
                   </div>
                 </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                    Section Score: {sectionPercent}% • Pillar Score: {pTotal.weighted} / {tabMeta.weight} pts
+                  </span>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
+
+              {/* Table matching Image 1 */}
+              <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 dark:bg-gray-950 text-[11px] font-bold text-slate-700 dark:text-gray-300 border-b border-slate-200 dark:border-gray-800">
+                      <th className="px-3.5 py-3 w-12 text-center whitespace-nowrap">S.No</th>
+                      <th className="px-3.5 py-3 w-28 text-center whitespace-nowrap">Question ID</th>
+                      <th className="px-3.5 py-3 min-w-[200px]">Parameter</th>
+                      <th className="px-3.5 py-3 min-w-[240px]">Compliance Option (Selection)</th>
+                      <th className="px-3.5 py-3 min-w-[200px]">Evidence (Attachment)</th>
+                      <th className="px-3.5 py-3 min-w-[240px]">Justification Remarks / Compliance Clarification</th>
+                      <th className="px-3.5 py-3 w-28 text-center whitespace-nowrap">Score (Earned / Max)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                    {questions.map((q, idx) => (
+                      <tr key={q.refId} className="hover:bg-slate-50/70 dark:hover:bg-gray-850/40 transition-colors">
+                        <td className="px-3.5 py-3.5 font-bold text-slate-700 dark:text-gray-300 text-center align-middle whitespace-nowrap">
+                          {idx + 1}
+                        </td>
+                        <td className="px-3.5 py-3.5 align-middle text-center whitespace-nowrap w-28">
+                          <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 font-bold font-mono text-xs border border-blue-200 dark:border-blue-800/60 whitespace-nowrap">
+                            {q.refId}
+                          </span>
+                        </td>
+                        <td className="px-3.5 py-3.5 align-middle font-bold text-slate-900 dark:text-white">
+                          <div>{q.criteria}</div>
+                          <div className="text-[10px] text-slate-400 font-normal mt-0.5">Max Weight: {q.maxWeight} pts</div>
+                        </td>
+                        <td className="px-3.5 py-3.5 align-middle">
+                          <select
+                            value={q.score}
+                            onChange={(e) => updateQuestionScore(q.refId, Number(e.target.value))}
+                            className="w-full text-xs font-semibold py-2 px-3 rounded-lg border border-slate-200 dark:border-gray-750 bg-white dark:bg-gray-900 text-slate-800 dark:text-gray-200 focus:ring-2 focus:ring-blue-500/20"
+                          >
+                            {q.options.map((opt, oIdx) => (
+                              <option key={oIdx} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-3.5 py-3.5 align-middle">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-gray-400">
+                              <Paperclip size={13} className="shrink-0 text-slate-400" />
+                              {q.attachmentName ? (
+                                <div className="space-y-0.5">
+                                  <span className="text-[10px] font-mono font-semibold text-slate-800 dark:text-gray-200 block truncate max-w-[140px]">
+                                    {q.attachmentName}
+                                  </span>
+                                  <span className="text-[9px] font-bold text-amber-700 dark:text-amber-300 block">
+                                    📎 File Attached (Not OCR-Verified)
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 italic">No File Attached</span>
+                              )}
+                            </div>
+                            <label className="btn btn-secondary btn-xs cursor-pointer inline-flex items-center gap-1 text-[11px] py-1 px-2.5 font-bold rounded-lg border border-slate-200 dark:border-gray-700">
+                              <UploadCloud size={12} />
+                              <span>{q.attachmentName ? 'Change File' : 'Attach File'}</span>
+                              <input
+                                type="file"
+                                className="hidden"
+                                onChange={(e) => {
+                                  if (e.target.files && e.target.files[0]) {
+                                    handleFileUpload(q.refId, e.target.files[0].name);
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </td>
+                        <td className="px-3.5 py-3.5 align-middle">
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={q.remarks}
+                              onChange={(e) => updateQuestionRemarks(q.refId, e.target.value)}
+                              placeholder="Write compliance remarks or audit justification notes..."
+                              className="w-full text-xs font-medium py-2 pl-3 pr-8 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 placeholder:text-slate-400 text-slate-800 dark:text-gray-200 focus:ring-2 focus:ring-blue-500/20"
+                            />
+                            <Pencil size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                          </div>
+                        </td>
+                        <td className="px-3.5 py-3.5 text-center align-middle whitespace-nowrap">
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono text-xs">
+                            +{q.weightedScore} pts ({q.score}/5.0)
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
 
         {/* ── STEPPER NAVIGATION FOOTER BAR ── */}
-        <div className="flex items-center justify-between p-4 rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-md">
+        <div className="flex items-center justify-between p-4 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 shadow-xs">
           <button
             type="button"
             onClick={handlePrevTab}
-            disabled={isFirstTab}
-            className={`btn btn-secondary btn-sm flex items-center gap-1.5 ${isFirstTab ? 'opacity-40 cursor-not-allowed' : ''}`}
+            disabled={isFirstTab && !viewAllModules}
+            className={`btn btn-secondary btn-sm flex items-center gap-1.5 font-bold ${isFirstTab && !viewAllModules ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <ChevronLeft size={15} /> Previous Module
           </button>
 
-          <div className="text-xs font-bold text-slate-600 dark:text-gray-300 hidden sm:block">
-            Step {currentTabIndex + 1} of {MODULE_TABS.length}: {activeModuleMeta.name}
+          <div className="text-xs font-bold text-slate-600 dark:text-gray-300">
+            {viewAllModules ? 'Viewing All 6 Evaluation Modules' : `Step ${currentTabIndex + 1} of ${MODULE_TABS.length}: ${activeModuleMeta.name}`}
           </div>
 
-          {!isLastTab ? (
-            <button
-              type="button"
-              onClick={handleNextTab}
-              className="btn btn-primary btn-sm flex items-center gap-1.5 font-bold"
-            >
-              Next Module ({MODULE_TABS[currentTabIndex + 1].name}) <ChevronRight size={15} />
-            </button>
-          ) : (
+          <div className="flex items-center gap-2">
+            {!isLastTab && !viewAllModules && (
+              <button
+                type="button"
+                onClick={handleNextTab}
+                className="btn btn-primary btn-sm flex items-center gap-1.5 font-bold cursor-pointer"
+              >
+                Next Module ({MODULE_TABS[currentTabIndex + 1].name}) <ChevronRight size={15} />
+              </button>
+            )}
+
             <button
               type="submit"
               disabled={submitting}
-              className="btn btn-emerald btn-sm flex items-center gap-1.5 font-bold text-white shadow-md shadow-emerald-500/20"
+              className="btn btn-primary btn-sm flex items-center gap-1.5 font-bold cursor-pointer"
             >
               {submitting ? (
                 <>
@@ -776,13 +755,83 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
                 </>
               ) : (
                 <>
-                  <Send size={15} /> Submit Final Qualification
+                  <Send size={14} /> Submit Final Qualification
                 </>
               )}
             </button>
-          )}
+          </div>
         </div>
       </form>
+
+      {/* Detailed Report Modal */}
+      {showDetailedReportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 dark:border-gray-800 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
+              <div className="flex items-center gap-2">
+                <FileCheck className="text-blue-600" size={20} />
+                <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                  360° AI Evaluation Comprehensive Report
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDetailedReportModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Vendor Organization</span>
+                <span className="text-base font-extrabold text-white">{vendorName}</span>
+                <span className="block text-xs text-blue-300 font-semibold mt-0.5">{currentStatus}</span>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Live Completion Score</span>
+                <span className="text-3xl font-black text-emerald-400 mono">{totalScorePercent}%</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider">Module Breakdown</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {MODULE_TABS.map((tab, idx) => {
+                  const pTotal = getPillarTotal(tab.id);
+                  const pct = Math.round((pTotal.weighted / tab.weight) * 100);
+                  return (
+                    <div key={tab.id} className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-850/50 flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-gray-200 block">
+                          {idx + 1}. {tab.name}
+                        </span>
+                        <span className="text-[10px] text-slate-500 dark:text-gray-400">
+                          Weight: {tab.weight}% • {pTotal.weighted}/{tab.weight} pts
+                        </span>
+                      </div>
+                      <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 font-mono">
+                        {pct}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-slate-100 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => setShowDetailedReportModal(false)}
+                className="btn btn-secondary btn-sm font-bold cursor-pointer"
+              >
+                Close Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

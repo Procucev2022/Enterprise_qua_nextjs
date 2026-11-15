@@ -1,10 +1,23 @@
-const { QueryAuditor, queryAuditor } = require('../src/db/queryAuditor');
+const { QueryAuditor, queryAuditor, resolveSlowQueryThreshold } = require('../src/db/queryAuditor');
+const { logger } = require('../src/services/loggerService');
 
 describe('Database QueryAuditor Unit Tests', () => {
   let auditor;
 
   beforeEach(() => {
     auditor = new QueryAuditor({ slowQueryThresholdMs: 50 });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('uses the configured slow-query threshold and falls back on invalid values', () => {
+    expect(resolveSlowQueryThreshold({})).toBe(200);
+    expect(resolveSlowQueryThreshold({ SLOW_QUERY_THRESHOLD_MS: '' })).toBe(200);
+    expect(resolveSlowQueryThreshold({ SLOW_QUERY_THRESHOLD_MS: '75' })).toBe(75);
+    expect(resolveSlowQueryThreshold({ SLOW_QUERY_THRESHOLD_MS: 'invalid' })).toBe(200);
+    expect(resolveSlowQueryThreshold({ SLOW_QUERY_THRESHOLD_MS: '0' })).toBe(200);
   });
 
   test('detectTable extracts table names from diverse SQL queries and handles empty/default args', () => {
@@ -51,6 +64,29 @@ describe('Database QueryAuditor Unit Tests', () => {
       auditor.auditQuery(`SELECT * FROM test_${i}`, [], 100, false);
     }
     expect(auditor.slowQueries.length).toBe(50);
+  });
+
+  test('records safe SQL fingerprints instead of raw query values', () => {
+    const privateValue = 'private@example.com';
+    const warning = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    const query = `SELECT * FROM users WHERE email = '${privateValue}'`;
+
+    auditor.auditQuery(query, [], 100, false);
+
+    const report = auditor.getAuditReport();
+    expect(report.recentSlowQueries[0]).toMatchObject({
+      queryId: expect.any(String),
+      operation: 'SELECT',
+      table: 'users',
+    });
+    expect(report.recentSlowQueries[0]).not.toHaveProperty('query');
+    expect(JSON.stringify(report)).not.toContain(privateValue);
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(privateValue);
+  });
+
+  test('uses UNKNOWN when slow SQL begins with a comment', () => {
+    auditor.auditQuery('/* trace marker */ SELECT 1', [], 100, false);
+    expect(auditor.getAuditReport().recentSlowQueries[0].operation).toBe('UNKNOWN');
   });
 
   test('reset clears all accumulated metrics and handles 0 query report', () => {

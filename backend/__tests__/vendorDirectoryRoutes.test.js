@@ -14,7 +14,10 @@ describe('Protected Vendor Directory Routes (/api/vendors/public*)', () => {
   let validDirectoryToken;
 
   beforeEach(async () => {
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    // This route suite intentionally uses the no-database test mode and the
+    // session module's in-memory adapter. Configured-database failures are
+    // covered by vendorDirectorySessionQueries/auth middleware tests.
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     vendorDirectorySessionQueries.clearMemoryStoreForTesting();
     jest.spyOn(authSessionQueries, 'isTokenRevoked').mockResolvedValue(false);
 
@@ -203,7 +206,7 @@ describe('Protected Vendor Directory Routes (/api/vendors/public*)', () => {
     test('returns 404 since /directory-auth is retired', async () => {
       const res = await request(app)
         .post('/api/vendors/directory-auth')
-        .send({ passcode: 'Procucev@Vendors2026' });
+        .send({ passcode: 'retired-passkey-probe' });
 
       expect(res.status).toBe(404);
     });

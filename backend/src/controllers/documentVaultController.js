@@ -7,6 +7,27 @@
 
 const documentVaultQueries = require('../db/documentVaultQueries');
 const { logger } = require('../services/loggerService');
+const { AUTH_MESSAGES, DOCUMENT_VAULT_MESSAGES } = require('../config/constants');
+
+function sendControllerError(res, err, fallbackMessage) {
+  if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
+    return res.status(503).json({
+      success: false,
+      error: DOCUMENT_VAULT_MESSAGES.STORAGE_UNAVAILABLE,
+      retryable: true,
+    });
+  }
+
+  if (err?.code === 'VALIDATION_FAILED') {
+    return res.status(400).json({ success: false, error: err.message });
+  }
+
+  if (err?.code === 'ACTOR_REQUIRED') {
+    return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+  }
+
+  return res.status(500).json({ success: false, error: fallbackMessage });
+}
 
 /**
  * List documents with optional category, search, and active status filters.
@@ -28,11 +49,8 @@ async function listDocuments(req, res) {
       documents,
     });
   } catch (err) {
-    logger.error('documentVaultController: listDocuments failed', { error: err.message });
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to retrieve documents from vault',
-    });
+    logger.error('documentVaultController: listDocuments failed', { error: err });
+    return sendControllerError(res, err, 'Failed to retrieve documents from vault');
   }
 }
 
@@ -47,11 +65,8 @@ async function getSummary(req, res) {
       summary,
     });
   } catch (err) {
-    logger.error('documentVaultController: getSummary failed', { error: err.message });
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to retrieve vault summary',
-    });
+    logger.error('documentVaultController: getSummary failed', { error: err });
+    return sendControllerError(res, err, 'Failed to retrieve vault summary');
   }
 }
 
@@ -75,11 +90,8 @@ async function getDocumentById(req, res) {
       document,
     });
   } catch (err) {
-    logger.error('documentVaultController: getDocumentById failed', { error: err.message, id: req.params?.id });
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to retrieve document',
-    });
+    logger.error('documentVaultController: getDocumentById failed', { error: err, id: req.params?.id });
+    return sendControllerError(res, err, 'Failed to retrieve document');
   }
 }
 
@@ -88,6 +100,10 @@ async function getDocumentById(req, res) {
  */
 async function createDocument(req, res) {
   try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
+
     const { documentName, fileName, category } = req.body || {};
 
     if (!documentName || !documentName.trim()) {
@@ -118,11 +134,8 @@ async function createDocument(req, res) {
       document,
     });
   } catch (err) {
-    logger.error('documentVaultController: createDocument failed', { error: err.message });
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to create document in vault',
-    });
+    logger.error('documentVaultController: createDocument failed', { error: err });
+    return sendControllerError(res, err, 'Failed to create document in vault');
   }
 }
 
@@ -146,11 +159,8 @@ async function updateDocument(req, res) {
       document,
     });
   } catch (err) {
-    logger.error('documentVaultController: updateDocument failed', { error: err.message, id: req.params?.id });
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to update document',
-    });
+    logger.error('documentVaultController: updateDocument failed', { error: err, id: req.params?.id });
+    return sendControllerError(res, err, 'Failed to update document');
   }
 }
 
@@ -174,11 +184,8 @@ async function deleteDocument(req, res) {
       message: 'Document deleted successfully',
     });
   } catch (err) {
-    logger.error('documentVaultController: deleteDocument failed', { error: err.message, id: req.params?.id });
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to delete document',
-    });
+    logger.error('documentVaultController: deleteDocument failed', { error: err, id: req.params?.id });
+    return sendControllerError(res, err, 'Failed to delete document');
   }
 }
 

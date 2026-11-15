@@ -8,6 +8,52 @@
 import { httpServerHandler } from 'cloudflare:node';
 import { env, waitUntil } from 'cloudflare:workers';
 
+const WORKER_ENV_LOG_CATEGORY = 'WORKER_ENV';
+const WORKER_ENV_LOG_MESSAGE = 'Failed to synchronize Cloudflare Worker bindings into process.env';
+const WORKER_ENV_OPERATIONS = Object.freeze({
+  MODULE_INITIALIZATION: 'worker_module_initialization',
+  FETCH: 'worker_fetch',
+  SCHEDULED: 'worker_scheduled',
+});
+
+async function logWorkerEnvironmentSyncFailure(operation, error) {
+  try {
+    const loggerModule = await import('./services/loggerService.js');
+    const logger = loggerModule.logger || loggerModule.default?.logger;
+    if (typeof logger?.error === 'function') {
+      const normalizedError = error instanceof Error
+        ? error
+        : new Error('Worker binding synchronization failed with a non-Error value');
+      logger.error(WORKER_ENV_LOG_MESSAGE, {
+        operation,
+        error: normalizedError,
+        ...(error instanceof Error ? {} : { errorType: typeof error }),
+      }, WORKER_ENV_LOG_CATEGORY);
+      return;
+    }
+  } catch (loggingError) {
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'ERROR',
+      category: WORKER_ENV_LOG_CATEGORY,
+      message: WORKER_ENV_LOG_MESSAGE,
+      operation,
+      errorName: error instanceof Error ? error.name : typeof error,
+      loggerErrorName: loggingError instanceof Error ? loggingError.name : typeof loggingError,
+    }));
+    return;
+  }
+
+  console.error(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'ERROR',
+    category: WORKER_ENV_LOG_CATEGORY,
+    message: WORKER_ENV_LOG_MESSAGE,
+    operation,
+    errorName: error instanceof Error ? error.name : typeof error,
+  }));
+}
+
 // d1Bridge.js (required by the CommonJS backend, deep under app.js) cannot
 // reach `env` itself: `require('cloudflare:workers')` at call time throws
 // "Dynamic require of 'cloudflare:workers' is not supported" — the bundler
@@ -25,7 +71,9 @@ if (env && typeof env === 'object') {
         process.env[k] = String(v);
       }
     }
-  } catch {}
+  } catch (error) {
+    await logWorkerEnvironmentSyncFailure(WORKER_ENV_OPERATIONS.MODULE_INITIALIZATION, error);
+  }
 }
 
 // storeService.js's persistence writes are all fire-and-forget: `promise
@@ -49,17 +97,37 @@ const appModule = await import('./app.js');
 const emailGatewayModule = await import('./services/emailGatewayService.js');
 const zohoReconciliationModule = await import('./services/zohoReconciliationService.js');
 const rfqChaserSchedulerModule = await import('./services/rfqChaserScheduler.js');
+const eventOutboxModule = await import('./services/eventOutboxService.js');
 const dailyRfqReportModule = await import('./services/dailyRfqReportService.js');
 const app = appModule.default || appModule;
 const emailGatewayService = emailGatewayModule.default || emailGatewayModule;
 const zohoReconciliationService = zohoReconciliationModule.default || zohoReconciliationModule;
 const rfqChaserScheduler = rfqChaserSchedulerModule.default || rfqChaserSchedulerModule;
+const eventOutboxService = eventOutboxModule.default || eventOutboxModule;
 const dailyRfqReportService = dailyRfqReportModule.default || dailyRfqReportModule;
 
 const PORT = 4000;
 app.listen(PORT);
 
 const httpHandler = httpServerHandler({ port: PORT });
+
+/**
+ * Runs cron jobs one after another. Starting them together put all of their D1 queries into the same
+ * ten-second window, and D1 rejected the burst as overloaded, which failed the jobs that most needed the
+ * database. Each job still runs when an earlier one fails. The first failure is rethrown at the end, so the
+ * invocation is still reported.
+ */
+async function runCronJobsInTurn(jobs) {
+  let failure = null;
+  for (const job of jobs) {
+    try {
+      await job();
+    } catch (error) {
+      if (failure === null) failure = { error };
+    }
+  }
+  if (failure !== null) throw failure.error;
+}
 
 // server.js's bootstrapServer() (Node/Render only) starts both of these via
 // setInterval — emailGatewayService.startPolling() (IMAP -> auto-RFQ
@@ -71,7 +139,7 @@ const httpHandler = httpServerHandler({ port: PORT });
 // `scheduled` export) are the platform's actual mechanism for periodic
 // background work: each trigger fire is its own short-lived invocation that
 // calls the same single-shot polling functions (pollBothInboxesOnce /
-// reconcileOnce) and dispatches due D1-backed chaser jobs.
+// reconcileOnce) and dispatches due D1-backed notification jobs.
 async function scheduled(controller, workerEnv, ctx) {
   if (workerEnv && typeof workerEnv === 'object') {
     globalThis.__CF_ENV__ = workerEnv;
@@ -81,40 +149,65 @@ async function scheduled(controller, workerEnv, ctx) {
           process.env[k] = v;
         }
       }
-    } catch {}
+    } catch (error) {
+      await logWorkerEnvironmentSyncFailure(WORKER_ENV_OPERATIONS.SCHEDULED, error);
+    }
   }
   const cron = controller.cron;
   const isEmailGateway = cron === EMAIL_GATEWAY_CRON || cron === '* * * * *' || cron === '*/5 * * * *';
   const { default: storeService } = await import('./services/storeService.js');
-  if (!storeService.isHydratedFromDB) {
-    await storeService.hydrateFromDB().catch((err) => console.error('[CRON] hydration failed', err));
-  }
+  const loggerModule = await import('./services/loggerService.js');
+  const logger = loggerModule.logger || loggerModule.default?.logger;
+  // Hydration reads the working set from the database, so it runs only for the jobs that work from the
+  // in-memory store. The reconciliation trigger works from the database directly and does not hydrate.
+  const hydrate = async () => {
+    if (storeService.isHydratedFromDB) return;
+    await storeService.hydrateFromDB().catch((err) => {
+      if (logger?.error) {
+        logger.error('Scheduled Worker state hydration failed', err, 'WORKER_CRON');
+      } else {
+        console.error('[CRON] hydration failed', err);
+      }
+    });
+  };
   if (isEmailGateway) {
-    const results = await Promise.allSettled([
-      emailGatewayService.pollBothInboxesOnce(),
-      rfqChaserScheduler.dispatchDueChaserJobs(),
+    await hydrate();
+    await runCronJobsInTurn([
+      () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
+      () => rfqChaserScheduler.dispatchDueChaserJobs(),
+      () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+      () => storeService.closeExpiredRFQsDurably(),
+      () => emailGatewayService.pollBothInboxesOnce(),
     ]);
-    const rejected = results.find((r) => r.status === 'rejected');
-    if (rejected) throw rejected.reason;
     return;
   }
   if (cron === DAILY_RFQ_REPORT_CRON) {
-    await dailyRfqReportService.sendDailyRfqReport();
+    await hydrate();
+    const scheduledTime = controller?.scheduledTime == null
+      ? new Date()
+      : new Date(controller.scheduledTime);
+    await dailyRfqReportService.runScheduledDailyRfqReport(scheduledTime);
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {
-    await zohoReconciliationService.reconcileOnce();
+    await runCronJobsInTurn([
+      () => zohoReconciliationService.reconcileOnce(),
+      () => eventOutboxService.purgeExpiredEventOutboxRows(),
+    ]);
     return;
   }
   // Unrecognised cron pattern: run all rather than silently doing nothing,
   // so a wrangler.jsonc edit that adds/renames a trigger doesn't go quiet.
-  const results = await Promise.allSettled([
-    emailGatewayService.pollBothInboxesOnce(),
-    zohoReconciliationService.reconcileOnce(),
-    rfqChaserScheduler.dispatchDueChaserJobs(),
+  await hydrate();
+  await runCronJobsInTurn([
+    () => emailGatewayService.pollBothInboxesOnce(),
+    () => zohoReconciliationService.reconcileOnce(),
+    () => rfqChaserScheduler.dispatchDueChaserJobs(),
+    () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+    () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
+    () => eventOutboxService.purgeExpiredEventOutboxRows(),
+    () => storeService.closeExpiredRFQsDurably(),
   ]);
-  const rejected = results.find((r) => r.status === 'rejected');
-  if (rejected) throw rejected.reason;
 }
 
 // Must match the `crons` entries in wrangler.jsonc exactly — Cloudflare
@@ -124,7 +217,7 @@ const ZOHO_RECONCILIATION_CRON = '*/10 * * * *';
 const DAILY_RFQ_REPORT_CRON = '30 0 * * *';
 
 const originalFetch = httpHandler.fetch;
-httpHandler.fetch = function (request, workerEnv, ctx) {
+httpHandler.fetch = async function (request, workerEnv, ctx) {
   if (workerEnv && typeof workerEnv === 'object') {
     globalThis.__CF_ENV__ = workerEnv;
     try {
@@ -133,7 +226,9 @@ httpHandler.fetch = function (request, workerEnv, ctx) {
           process.env[k] = v;
         }
       }
-    } catch {}
+    } catch (error) {
+      await logWorkerEnvironmentSyncFailure(WORKER_ENV_OPERATIONS.FETCH, error);
+    }
   }
   return originalFetch.call(this, request, workerEnv, ctx);
 };

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import PaymentDuesDashboard from '@/app/category-manager/components/PaymentDuesDashboard';
 import * as paymentDuesClient from '@/lib/paymentDuesClient';
 import type { PaymentDuesAccount, PaymentDuesSummary } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/paymentDuesClient', () => {
   const actual = jest.requireActual('@/lib/paymentDuesClient');
@@ -182,6 +183,7 @@ describe('PaymentDuesDashboard', () => {
     (paymentDuesClient.sendPaymentDuesEmail as jest.Mock).mockResolvedValue({ success: true });
     (paymentDuesClient.sendPaymentDuesMessage as jest.Mock).mockResolvedValue({ success: true });
     (paymentDuesClient.sendPaymentDuesWhatsApp as jest.Mock).mockResolvedValue({ success: true });
+    (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValue({ history: [] });
   });
 
   it('renders summary KPI cards and table rows', async () => {
@@ -198,6 +200,20 @@ describe('PaymentDuesDashboard', () => {
     expect(screen.getAllByText('0 Credits · Critical')[0]).toBeInTheDocument();
     expect(screen.getAllByText('1 Credit · Attention')[0]).toBeInTheDocument();
     expect(screen.getAllByText('2 Credits · Low')[0]).toBeInTheDocument();
+  });
+
+  it('shows a link-only WhatsApp notification as delivery pending', async () => {
+    (paymentDuesClient.fetchPaymentDues as jest.Mock).mockResolvedValueOnce({
+      accounts: [{ ...mockAccounts[0], acknowledgementStatus: 'Delivery Pending' }],
+      total: 1,
+      summary: mockSummary,
+      page: 1,
+      limit: 25,
+    });
+
+    render(<PaymentDuesDashboard />);
+
+    expect(await screen.findAllByText('Delivery Pending')).not.toHaveLength(0);
   });
 
   it('handles search input change and calls fetchPaymentDues', async () => {
@@ -469,7 +485,9 @@ describe('PaymentDuesDashboard', () => {
 
   it('opens WhatsApp modal and sends notification', async () => {
     (paymentDuesClient.sendPaymentDuesWhatsApp as jest.Mock).mockResolvedValue({
-      success: true,
+      success: false,
+      status: 'link_only',
+      error: 'WhatsApp was not sent by a provider. Open the link to send the message from your own WhatsApp.',
       directLink: 'https://wa.me/9876543210',
     });
     window.open = jest.fn();
@@ -494,8 +512,11 @@ describe('PaymentDuesDashboard', () => {
           accountId: 'acc-buyer-1',
         })
       );
-      expect(window.open).toHaveBeenCalledWith('https://wa.me/9876543210', '_blank', expect.any(String));
+      expect(window.open).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i })).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i }));
+    expect(window.open).toHaveBeenCalledWith('https://wa.me/9876543210', '_blank', 'noopener,noreferrer');
   });
 
   it('opens Acknowledgement modal and updates status', async () => {
@@ -528,7 +549,7 @@ describe('PaymentDuesDashboard', () => {
   });
 
   it('opens History modal and fetches audit records', async () => {
-    (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValue([
+    (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValue({ history: [
       {
         id: 'h-1',
         accountId: 'acc-buyer-1',
@@ -545,7 +566,7 @@ describe('PaymentDuesDashboard', () => {
         createdAt: '2026-02-01T00:00:00Z',
         updatedAt: '2026-02-01T00:00:00Z',
       },
-    ]);
+    ] });
 
     render(<PaymentDuesDashboard />);
 
@@ -767,39 +788,47 @@ describe('PaymentDuesDashboard', () => {
 
     // Email error
     fireEvent.click(screen.getAllByTitle('Send Email')[0]);
+    await waitFor(() => expect(screen.getByText('Send Low-Credit Email Notification')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Send Email'));
     await waitFor(() => {
       expect(screen.getByText('SMTP Timeout')).toBeInTheDocument();
     });
-
-    // Dismiss toast
-    const toastClose = screen.getByText('SMTP Timeout').closest('div')?.querySelector('button');
-    if (toastClose) fireEvent.click(toastClose);
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Send Low-Credit Email Notification')).not.toBeInTheDocument());
 
     // Message error
     fireEvent.click(screen.getAllByTitle('Send Message')[0]);
+    await waitFor(() => expect(screen.getByText('Send In-App Notification')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Send Notification'));
     await waitFor(() => {
       expect(screen.getByText('Queue Full')).toBeInTheDocument();
     });
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Send In-App Notification')).not.toBeInTheDocument());
 
     // WhatsApp error
     fireEvent.click(screen.getAllByTitle('WhatsApp Notification')[0]);
+    await waitFor(() => expect(screen.getByText('Send WhatsApp Notification')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Send via WhatsApp'));
     await waitFor(() => {
       expect(screen.getByText('WA Error')).toBeInTheDocument();
     });
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Send WhatsApp Notification')).not.toBeInTheDocument());
 
     // Ack error
     fireEvent.click(screen.getAllByTitle('Update Acknowledgement')[0]);
+    await waitFor(() => expect(screen.getByText('Update Acknowledgement Status')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Save Status'));
     await waitFor(() => {
       expect(screen.getByText('DB Error')).toBeInTheDocument();
     });
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Update Acknowledgement Status')).not.toBeInTheDocument());
   });
 
   it('renders empty history audit state when no records exist', async () => {
-    (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValue([]);
+    (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValue({ history: [] });
     render(<PaymentDuesDashboard />);
     await waitFor(() => {
       expect(screen.getByText('Apex Industries')).toBeInTheDocument();
@@ -846,9 +875,15 @@ describe('PaymentDuesDashboard', () => {
     });
 
     fireEvent.click(screen.getAllByTitle('Communication History')[0]);
+    // A failed history load is an error, not an empty history.
     await waitFor(() => {
-      expect(screen.getByText('No communication attempts recorded for this account yet.')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.paymentDuesHistory })
+        )
+      ).toBeInTheDocument();
     });
+    expect(screen.queryByText(UI_STRINGS.actionCenter.paymentDues.modals.noHistoryFound)).not.toBeInTheDocument();
   });
 
   it('handles modal close (X) buttons and form textarea/note modifications', async () => {
@@ -979,7 +1014,9 @@ describe('PaymentDuesDashboard', () => {
   it('handles WhatsApp directLink and accounts with fallback/dash values', async () => {
     const windowOpenSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
     (paymentDuesClient.sendPaymentDuesWhatsApp as jest.Mock).mockResolvedValueOnce({
-      success: true,
+      success: false,
+      status: 'link_only',
+      error: 'WhatsApp was not sent by a provider. Open the link to send the message from your own WhatsApp.',
       directLink: 'https://wa.me/919999999999?text=Hello',
     });
 
@@ -1010,7 +1047,7 @@ describe('PaymentDuesDashboard', () => {
       limit: 25,
     });
 
-    (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValueOnce([
+    (paymentDuesClient.fetchPaymentDuesHistory as jest.Mock).mockResolvedValueOnce({ history: [
       {
         id: 'hist-dash',
         accountId: 'ACC-DASH',
@@ -1025,7 +1062,7 @@ describe('PaymentDuesDashboard', () => {
         sentAt: '',
         notes: '',
       },
-    ]);
+    ] });
 
     render(<PaymentDuesDashboard />);
     await waitFor(() => {
@@ -1036,10 +1073,10 @@ describe('PaymentDuesDashboard', () => {
     const dashes = screen.getAllByText('–');
     expect(dashes.length).toBeGreaterThan(0);
 
-    // Open email modal for fallbackAccount to test 'Valued Partner' and empty recipient
+    // Open email modal for fallbackAccount. A missing contact name falls back to the generic salutation.
     fireEvent.click(screen.getByTitle('Send Email'));
     await waitFor(() => expect(screen.getByText('Send Low-Credit Email Notification')).toBeInTheDocument());
-    expect(screen.getByDisplayValue(/Dear Valued Partner/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue(/Dear Sir\/Madam/i)).toBeInTheDocument();
     fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
     await waitFor(() => expect(screen.queryByText('Send Low-Credit Email Notification')).not.toBeInTheDocument());
 
@@ -1056,8 +1093,12 @@ describe('PaymentDuesDashboard', () => {
     fireEvent.submit(waForm);
 
     await waitFor(() => {
-      expect(windowOpenSpy).toHaveBeenCalledWith('https://wa.me/919999999999?text=Hello', '_blank', 'noopener,noreferrer');
+      expect(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i })).toBeInTheDocument();
     });
+    // The link never opens by itself. It opens only when the user presses the button.
+    expect(windowOpenSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i }));
+    expect(windowOpenSpy).toHaveBeenCalledWith('https://wa.me/919999999999?text=Hello', '_blank', 'noopener,noreferrer');
 
     // Open history to test fallback hist values
     fireEvent.click(screen.getAllByTitle('Communication History')[0]);
@@ -1215,7 +1256,8 @@ describe('PaymentDuesDashboard', () => {
     window.removeEventListener('qua_payment_dues_updated', mockEventHandler);
   });
 
-    describe('Summary Cards Click and Modal Popup', () => {
+
+describe('Summary Cards Click and Modal Popup', () => {
     it('opens modal on clicking Low-Credit Accounts summary card and shows accounts', async () => {
       render(<PaymentDuesDashboard />);
       await waitFor(() => {

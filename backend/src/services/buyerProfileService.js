@@ -137,8 +137,8 @@ async function getProfile(sessionUser) {
         patch.gstNumber = profile.gstNumber;
         needsDbUpdate = true;
       }
-      if (!profile.panNumber && (buyerAcc.pan || buyerAcc.panNumber || (profile.gstNumber && profile.gstNumber.length === 15))) {
-        profile.panNumber = (buyerAcc.pan || buyerAcc.panNumber || (profile.gstNumber && profile.gstNumber.length === 15 ? profile.gstNumber.slice(2, 12) : '')).toUpperCase();
+      if (!profile.panNumber && (buyerAcc.pan || buyerAcc.panNumber)) {
+        profile.panNumber = (buyerAcc.pan || buyerAcc.panNumber).toUpperCase();
         if (profile.panNumber) {
           patch.panNumber = profile.panNumber;
           needsDbUpdate = true;
@@ -159,21 +159,6 @@ async function getProfile(sessionUser) {
           });
         } catch (err) {
           logger.warn('Failed to auto-heal buyer profile address in DB', { error: err.message }, LOG_CATEGORY);
-        }
-      }
-    } else if (!profile.panNumber && profile.gstNumber && profile.gstNumber.length === 15) {
-      profile.panNumber = profile.gstNumber.slice(2, 12).toUpperCase();
-      if (profile.organizationId) {
-        try {
-          await buyerProfileQueries.updateProfile({
-            organizationId: profile.organizationId,
-            userId,
-            patch: { panNumber: profile.panNumber },
-            categories: profile.categories,
-            actor: email,
-          });
-        } catch (err) {
-          logger.warn('Failed to auto-heal buyer profile PAN in DB', { error: err.message }, LOG_CATEGORY);
         }
       }
     }
@@ -419,32 +404,46 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
 
   if (email) {
     try {
-      const phoneToSync = body.contactPhone || patch.contactPhone;
-      const isRealPhone = Boolean(
-        phoneToSync &&
-        !String(phoneToSync).includes('9999999999') &&
-        !String(phoneToSync).includes('0000000000')
-      );
-      storeService.updateBuyerAccount(email, {
+      const syncedAccount = await storeService.updateBuyerAccountDurably(email, {
         organizationName: patch.companyName,
         contactPerson: patch.contactName,
-        ...(phoneToSync ? { phone: phoneToSync, mobileNumber: phoneToSync } : {}),
         city: patch.city,
         state: patch.state,
         pincode: patch.pincode,
         gstin: patch.gstNumber,
         pan: patch.panNumber,
         profileVerified: true,
-        ...(isRealPhone ? { phoneVerified: true } : {}),
         status: 'ACTIVE_VERIFIED',
         verificationStatus: 'verified',
         onboardingRequired: false,
         isAutoRegistered: false,
         tempPasswordRequired: false,
       });
-      await storeService.dispatchPendingQuoteNotifications(email);
+      if (!syncedAccount) {
+        logger.warn('Buyer organization profile saved but no buyer-account mirror was found to synchronize', {
+          email,
+          organizationId,
+          userId,
+        }, LOG_CATEGORY);
+      }
     } catch (syncErr) {
-      logger.warn('Failed to sync storeService buyerAccount in saveProfile', { error: syncErr.message, email }, LOG_CATEGORY);
+      logger.warn('Failed to durably sync storeService buyerAccount in saveProfile', {
+        error: syncErr,
+        email,
+        organizationId,
+        userId,
+      }, LOG_CATEGORY);
+    }
+
+    try {
+      await storeService.dispatchPendingQuoteNotifications(email);
+    } catch (dispatchErr) {
+      logger.warn('Failed to dispatch pending quote notifications after buyer profile save', {
+        error: dispatchErr,
+        email,
+        organizationId,
+        userId,
+      }, LOG_CATEGORY);
     }
   }
 

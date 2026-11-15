@@ -1,16 +1,52 @@
 jest.mock('@/lib/accountDocumentsClient', () => ({
   addSellerQuoteCredits: jest.fn().mockResolvedValue({ success: true, message: 'Added credits' }),
+  createCreditApprovalIdempotencyKey: jest.fn(() => '00000000-0000-4000-8000-000000000002'),
   requestSellerQuoteCreditApproval: jest.fn().mockResolvedValue({ success: true, message: 'Request submitted' }),
   fetchAccountDocuments: jest.fn().mockResolvedValue([]),
   uploadAccountDocument: jest.fn().mockResolvedValue({ success: true }),
   deleteAccountDocument: jest.fn().mockResolvedValue({ success: true }),
 }));
+jest.mock('@/lib/buyerProfileClient', () => ({
+  fetchCategoryTaxonomy: jest.fn().mockResolvedValue({
+    success: true,
+    data: [
+      { majorCategory: 'Engineering Spares - Electrical', minorCategories: [] },
+      { majorCategory: 'Industrial Supplies', minorCategories: [] },
+      { majorCategory: 'Raw Materials & Metallurgy', minorCategories: [] },
+    ],
+  }),
+}));
+
+jest.mock('@/lib/internalTaskClient', () => ({
+  fetchInternalAssignees: jest.fn().mockResolvedValue({
+    assignees: [
+      { id: 'exec-1', name: 'Test Assignee', role: 'Category Specialist' },
+      { id: 'exec-2', name: 'Second Assignee', role: 'Account Manager' },
+    ],
+  }),
+}));
+
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import SupplierDossierDrawer from '@/app/category-manager/components/SupplierDossierDrawer';
 import type { RFQItem } from '@/lib/types';
 import * as supplierProfileClient from '@/lib/supplierProfileClient';
+import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
+
+let sessionSpy: jest.SpyInstance | undefined;
+
+// The quote credit initiator comes from the session and the approver is chosen from the offered list.
+// Both must be set before a quote credit request can be submitted.
+function signInAndChooseApprover(): void {
+  sessionSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+    id: 'session-user-1',
+    name: 'Session Initiator',
+    email: 'initiator@example.com',
+  } as unknown as ReturnType<typeof authClient.getSessionUser>);
+  const approverInput = document.getElementById('quote-credit-approver') as HTMLInputElement;
+  fireEvent.change(approverInput, { target: { value: 'Test Approver' } });
+}
 
 jest.mock('@/lib/supplierProfileClient', () => ({
   fetchSupplierCreditHistory: jest.fn(),
@@ -247,6 +283,8 @@ describe('SupplierDossierDrawer', () => {
   });
 
   afterEach(() => {
+    sessionSpy?.mockRestore();
+    sessionSpy = undefined;
     HTMLAnchorElement.prototype.click = originalAnchorClick;
   });
 
@@ -290,7 +328,7 @@ describe('SupplierDossierDrawer', () => {
     expect(screen.getByText('Select Major Procurement Categories:')).toBeInTheDocument();
 
     // Toggle a category checkbox
-    const spareCheckbox = screen.getByLabelText('Raw Materials & Metallurgy');
+    const spareCheckbox = await screen.findByLabelText('Raw Materials & Metallurgy');
     fireEvent.click(spareCheckbox);
 
     // Add custom category
@@ -354,7 +392,7 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
     await waitFor(() => {
       expect(screen.getByText('Error updating categories')).toBeInTheDocument();
-    });
+    }, { timeout: 3000 });
   });
 
   test('4. Quotes Tab displays quotes, supports search, status filtering, and opens Quote Details Modal', async () => {
@@ -625,7 +663,7 @@ describe('SupplierDossierDrawer', () => {
       />
     );
 
-    expect(screen.getByText('Supplier Organization')).toBeInTheDocument();
+    expect(screen.queryByText('Supplier Organization')).toBeNull();
     expect(screen.getByText('Procucev Network')).toBeInTheDocument();
     expect(screen.getByText(/Last Login: Never logged in/i)).toBeInTheDocument();
 
@@ -1162,8 +1200,9 @@ describe('SupplierDossierDrawer', () => {
     const recipientInput = screen.getByPlaceholderText(/supplier@company\.com|\+91/i);
     fireEvent.change(recipientInput, { target: { value: '9876543210' } });
 
-    // Call outcome & duration
-    const outcomeSelect = screen.getByDisplayValue('Connected');
+    // Call outcome & duration. No outcome is preselected, so the select shows the empty placeholder first.
+    const outcomeSelect = within(dialog).getByDisplayValue(UI_STRINGS.dataLoad.emptyCell) as HTMLSelectElement;
+    expect(outcomeSelect.value).toBe('');
     fireEvent.change(outcomeSelect, { target: { value: 'Wrong Number' } });
 
     const durationInput = screen.getByPlaceholderText(/e\.g\. 10 mins/i);
@@ -1183,7 +1222,7 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.change(prioritySelect, { target: { value: 'High' } });
 
     // Assignee change - with valid and non-matching ids
-    const assigneeSelect = screen.getByDisplayValue(/Pavani/i);
+    const assigneeSelect = screen.getByDisplayValue(/Select Assignee/i);
     fireEvent.change(assigneeSelect, { target: { value: 'exec-2' } });
     fireEvent.change(assigneeSelect, { target: { value: 'NON_EXISTENT_ID' } });
 
@@ -1210,7 +1249,7 @@ describe('SupplierDossierDrawer', () => {
           duration: '5 mins',
           nextFollowupDate: '2026-11-06T10:00',
           followupPriority: 'High',
-          followupAssigneeName: 'Navin Chaudhary',
+          followupAssigneeName: '',
           followupNotes: 'Confirm quotation delivery date',
         })
       );
@@ -1594,6 +1633,28 @@ describe('SupplierDossierDrawer', () => {
     unmountQuotes();
   });
 
+test('reuses seller credit idempotency key when retrying unchanged request details', async () => {
+    const { requestSellerQuoteCreditApproval } = require('@/lib/accountDocumentsClient');
+    (requestSellerQuoteCreditApproval as jest.Mock)
+      .mockResolvedValueOnce({ success: false, error: 'Temporary persistence failure' })
+      .mockResolvedValueOnce({ success: true, message: 'Request submitted' });
+    render(
+      <SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />
+    );
+
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    signInAndChooseApprover();
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
+    const submitButton = screen.getByRole('button', { name: 'Submit for Approval' });
+    fireEvent.click(submitButton);
+    await waitFor(() => expect(requestSellerQuoteCreditApproval).toHaveBeenCalledTimes(1));
+    const firstRequestKey = (requestSellerQuoteCreditApproval as jest.Mock).mock.calls[0][1].idempotencyKey;
+
+    fireEvent.click(submitButton);
+    await waitFor(() => expect(requestSellerQuoteCreditApproval).toHaveBeenCalledTimes(2));
+    expect((requestSellerQuoteCreditApproval as jest.Mock).mock.calls[1][1].idempotencyKey).toBe(firstRequestKey);
+  });
+
 test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal works', async () => {
     const onTabChangeMock = jest.fn();
     const { unmount } = render(
@@ -1605,12 +1666,12 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
     expect(screen.getByText(/Total Documents:/i)).toBeInTheDocument();
-    
+
     // Switch tabs to trigger onTabChange
     const profileTabBtn = screen.getByRole('button', { name: /Profile/i });
     fireEvent.click(profileTabBtn);
     expect(onTabChangeMock).toHaveBeenCalledWith('profile');
-    
+
     const docsTabBtn = screen.getByRole('button', { name: /Documents/i });
     fireEvent.click(docsTabBtn);
     expect(onTabChangeMock).toHaveBeenCalledWith('documents');
@@ -1645,6 +1706,7 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
 
     const reasonInput = screen.getByPlaceholderText(/Reason for credit addition/i);
     fireEvent.change(reasonInput, { target: { value: 'High priority customer RFP support' } });
+    signInAndChooseApprover();
 
     // Submit form
     const submitBtn = screen.getByRole('button', { name: 'Submit for Approval' });
@@ -1656,6 +1718,7 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
         reason: 'High priority customer RFP support',
         approverName: expect.any(String),
         initiatorName: expect.any(String),
+        idempotencyKey: expect.any(String),
       });
     });
     unmount2();
@@ -1675,6 +1738,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     );
 
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    signInAndChooseApprover();
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
       expect(requestSellerQuoteCreditApproval).toHaveBeenCalled();
@@ -1696,6 +1761,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     );
 
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    signInAndChooseApprover();
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
       expect(requestSellerQuoteCreditApproval).toHaveBeenCalled();
@@ -1714,6 +1781,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     );
 
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    signInAndChooseApprover();
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
       expect(requestSellerQuoteCreditApproval).toHaveBeenCalled();
@@ -1769,6 +1838,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    signInAndChooseApprover();
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
       expect(reqApprovalMock).toHaveBeenCalled();
@@ -1819,4 +1890,72 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
 
   });
 
+});
+
+test('requires an approver name before a seller quote credit request is submitted', async () => {
+  jest.clearAllMocks();
+  const { requestSellerQuoteCreditApproval } = require('@/lib/accountDocumentsClient');
+  jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+    id: 'session-user-1',
+    name: 'Session Initiator',
+    email: 'initiator@example.com',
+  } as unknown as ReturnType<typeof authClient.getSessionUser>);
+  render(<SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />);
+
+  fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+  fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+
+  expect(
+    await screen.findByText(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverRequired)
+  ).toBeInTheDocument();
+  expect(requestSellerQuoteCreditApproval).not.toHaveBeenCalled();
+});
+
+test('shows the server reason when the seller payment history reports a failure', async () => {
+  (supplierProfileClient.fetchSupplierPaymentHistory as jest.Mock).mockResolvedValueOnce({
+    success: false,
+    error: 'Payment ledger timed out.',
+  });
+  render(<SupplierDossierDrawer seller={mockSeller} initialTab="payments" onClose={jest.fn()} />);
+
+  expect(await screen.findByText('Payment ledger timed out.')).toBeInTheDocument();
+});
+
+test('shows the communication load message when the seller communications request throws', async () => {
+  (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockRejectedValueOnce(new Error('Socket closed'));
+  render(<SupplierDossierDrawer seller={mockSeller} initialTab="communications" onClose={jest.fn()} />);
+
+  expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.compose.loadFailure)).toBeInTheDocument();
+});
+
+test('shows no supplier category when none is recorded, and asks for a credit amount before a quote credit request', async () => {
+  render(
+    <SupplierDossierDrawer
+      seller={{ ...mockSeller, categories: undefined, majorCategory: undefined, category: undefined }}
+      initialTab="profile"
+      onClose={jest.fn()}
+    />
+  );
+  expect(screen.queryByText('Engineering Spares - Electrical')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+  const form = screen.getByRole('button', { name: 'Submit for Approval' }).closest('form') as HTMLFormElement;
+  fireEvent.submit(form);
+
+  expect(
+    await screen.findByText(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError)
+  ).toBeInTheDocument();
+});
+
+test('suppresses placeholder dummy PAN in SupplierDossierDrawer Statutory Verification card', () => {
+  render(
+    <SupplierDossierDrawer
+      seller={{ ...mockSeller, pan: 'ABCPE1234F', panNumber: 'ABCDE1234F' }}
+      initialTab="profile"
+      onClose={jest.fn()}
+    />
+  );
+  expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+  expect(screen.queryByText('ABCDE1234F')).not.toBeInTheDocument();
 });

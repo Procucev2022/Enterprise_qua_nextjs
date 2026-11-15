@@ -1,11 +1,18 @@
 const buyerProfileService = require('../services/buyerProfileService');
 const { logger } = require('../services/loggerService');
-const { BUYER_PROFILE_MESSAGES } = require('../config/constants');
+const { BUYER_PROFILE_MESSAGES, DEFAULT_CATEGORY_TAXONOMY } = require('../config/constants');
 
 const LOG_CATEGORY = 'BUYER_PROFILE_CONTROLLER';
 
 function getClientIp(req) {
-  return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
+  return req.ip || (req.headers && req.headers['x-forwarded-for']) || null;
+}
+
+/** A stored count or amount as a number, or null when nothing is on record. */
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**
@@ -82,10 +89,52 @@ async function updateMyProfile(req, res, next) {
 /**
  * GET /api/buyer-profile/categories
  * The shared major/minor procurement taxonomy the profile screen selects from.
+ * Supports optional ?q= query param to search matching minor categories across 305+ categories.
  */
 async function getCategoryTaxonomy(req, res, next) {
   try {
-    const taxonomy = await buyerProfileService.getCategoryTaxonomy();
+    let taxonomy = await buyerProfileService.getCategoryTaxonomy();
+    if ((!taxonomy || taxonomy.length === 0) && Array.isArray(DEFAULT_CATEGORY_TAXONOMY) && DEFAULT_CATEGORY_TAXONOMY.length > 0) {
+      taxonomy = DEFAULT_CATEGORY_TAXONOMY;
+    }
+    const q = req.query && typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : null;
+
+    if (q !== null) {
+      const allMinors = Array.from(
+        new Set(
+          (taxonomy || []).flatMap((t) => t.minorCategories || [])
+        )
+      ).filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+      const filteredMinors = q.length >= 3
+        ? allMinors.filter((m) => m.toLowerCase().includes(q))
+        : [];
+
+      return res.json({
+        success: true,
+        count: taxonomy.length,
+        totalMinors: allMinors.length,
+        data: taxonomy,
+        minorCategories: filteredMinors,
+      });
+    }
+
+    if (req.query && (req.query.includeMinors === 'true' || req.query.format === 'flat')) {
+      const allMinors = Array.from(
+        new Set(
+          (taxonomy || []).flatMap((t) => t.minorCategories || [])
+        )
+      ).filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+      return res.json({
+        success: true,
+        count: taxonomy.length,
+        totalMinors: allMinors.length,
+        data: taxonomy,
+        minorCategories: allMinors,
+      });
+    }
+
     return res.json({ success: true, count: taxonomy.length, data: taxonomy });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error reading category taxonomy');
@@ -138,11 +187,19 @@ async function getBuyerProfileDetails(req, res, next) {
     const storeService = require('../services/storeService');
     const buyerProfileQueries = require('../db/buyerProfileQueries');
 
-    const email = req.query.email ? String(req.query.email).trim() : null;
-    const name = req.query.name ? String(req.query.name).trim() : null;
-    const accountId = req.query.accountId ? String(req.query.accountId).trim() : null;
+    const query = req.validatedBuyerProfileDetailsQuery || req.query || {};
+    const email = query.email ? String(query.email).trim() : null;
+    const name = query.name ? String(query.name).trim() : null;
+    const accountId = query.accountId ? String(query.accountId).trim() : null;
 
     logger.info('Buyer profile details requested', { email, name, accountId }, LOG_CATEGORY);
+
+    if (!email && !name && !accountId) {
+      return res.status(400).json({
+        success: false,
+        error: BUYER_PROFILE_MESSAGES.DETAILS_IDENTIFIER_REQUIRED,
+      });
+    }
 
     // 1. Check in-memory storeService first
     let account = null;
@@ -160,6 +217,7 @@ async function getBuyerProfileDetails(req, res, next) {
 
     // 2. Query Postgres identity tables
     let dbProfile = null;
+    let lookupFailure = null;
     try {
       const lookup = await buyerProfileQueries.findProfileByIdentifier({
         email: email || account?.corporateEmail,
@@ -169,17 +227,44 @@ async function getBuyerProfileDetails(req, res, next) {
       });
       if (lookup && lookup.found) {
         dbProfile = lookup.profile;
+      } else if (lookup && lookup.reason === 'DB_ERROR') {
+        lookupFailure = lookup.error || BUYER_PROFILE_MESSAGES.DETAILS_LOAD_FAILED;
       }
     } catch (dbErr) {
-      logger.warn('Failed querying buyer profile by identifier', { error: dbErr.message }, LOG_CATEGORY);
+      lookupFailure = dbErr.message || BUYER_PROFILE_MESSAGES.DETAILS_LOAD_FAILED;
     }
 
+    if (lookupFailure) {
+      logger.warn(
+        'Buyer profile identity lookup failed',
+        { error: lookupFailure, hasLocalAccount: Boolean(account) },
+        LOG_CATEGORY
+      );
+      if (!account) {
+        return res.status(503).json({
+          success: false,
+          error: BUYER_PROFILE_MESSAGES.DETAILS_LOAD_FAILED,
+          retryable: true,
+        });
+      }
+    }
+
+    if (!dbProfile && !account) {
+      logger.info('Buyer profile identity lookup found no matching record', { email, name, accountId }, LOG_CATEGORY);
+      return res.status(404).json({
+        success: false,
+        error: BUYER_PROFILE_MESSAGES.DETAILS_NOT_FOUND,
+      });
+    }
+
+    // Only stored values are returned. A field with nothing on record is an empty
+    // string or null, never a placeholder company, person, plan, or amount.
     const merged = {
-      organizationName: dbProfile?.companyName || account?.organizationName || name || 'Buyer Organization',
+      organizationName: dbProfile?.companyName || account?.organizationName || name || '',
       brandName: dbProfile?.brandName || account?.brandName || '',
-      organizationType: dbProfile?.organizationType || account?.organizationType || 'Public Limited',
-      contactPerson: dbProfile?.contactName || account?.contactPerson || 'Procurement Officer',
-      contactDesignation: dbProfile?.contactDesignation || account?.contactDesignation || 'Procurement Specialist',
+      organizationType: dbProfile?.organizationType || account?.organizationType || '',
+      contactPerson: dbProfile?.contactName || account?.contactPerson || '',
+      contactDesignation: dbProfile?.contactDesignation || account?.contactDesignation || '',
       corporateEmail: dbProfile?.contactEmail || account?.corporateEmail || email || '',
       mobileNumber: dbProfile?.contactPhone || account?.mobileNumber || account?.phone || '',
       gstin: dbProfile?.gstNumber || account?.gstin || '',
@@ -191,15 +276,24 @@ async function getBuyerProfileDetails(req, res, next) {
       city: dbProfile?.city || account?.city || '',
       state: dbProfile?.state || account?.state || '',
       pincode: dbProfile?.pincode || account?.pincode || account?.zip_code || '',
-      country: dbProfile?.country || account?.country || 'India',
+      country: dbProfile?.country || account?.country || '',
       categories: dbProfile?.categories || account?.categories || [],
-      sourcingMode: account?.sourcingMode || 'mode_1',
-      subscriptionPlan: account?.subscriptionPlan || 'free_trial',
-      totalRFQsCreated: account?.totalRFQsCreated || 0,
-      totalSpend: account?.totalSpend ? String(account.totalSpend).replace('$', '₹') : '₹0',
+      sourcingMode: account?.sourcingMode || null,
+      subscriptionPlan: account?.subscriptionPlan || null,
+      totalRFQsCreated: numberOrNull(account?.totalRFQsCreated),
+      totalSpend: account?.totalSpend !== undefined && account?.totalSpend !== null && account?.totalSpend !== ''
+        ? String(account.totalSpend).replace('$', '₹')
+        : null,
     };
 
-    return res.json({ success: true, data: merged });
+    return res.json({
+      success: true,
+      data: merged,
+      meta: {
+        source: dbProfile ? 'identity_database' : 'local_account_cache',
+        degraded: !dbProfile,
+      },
+    });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error fetching buyer profile details');
   }

@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
 const storeService = require('../src/services/storeService');
+const vendorController = require('../src/controllers/vendorController');
 const { authHeader, TEST_USERS } = require('./testHelpers');
 
 function customAuthHeader(user) {
@@ -15,6 +16,16 @@ function customAuthHeader(user) {
 // started failing the moment the sandbox's clock rolled into 2026-10-01.
 // Computed once per test run instead, always valid.
 const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+// One line item with every field the RFQ form requires. Spread into payloads so each test
+// starts from a valid row and only the field under test is changed.
+const COMPLETE_LINE_ITEM = {
+  itemName: 'Centrifugal pump bearing',
+  technicalSpecs: 'Deep groove ball bearing, 6205 2RS',
+  quantity: 2,
+  unit: 'Nos',
+  majorCategory: 'Engineering Spares - Mechanical',
+  minorCategory: 'Bearings & Accessories',
+};
 
 describe('API Route Endpoints', () => {
   // 1. Bootstrap
@@ -33,6 +44,10 @@ describe('API Route Endpoints', () => {
       expect(res.body.data).toHaveProperty('auditLogs');
       expect(res.body.data).toHaveProperty('aiFeed');
       expect(res.body.data).toHaveProperty('systemConfig');
+      expect(res.body.data.buyerAccounts).toEqual([]);
+      expect(res.body.data.auditLogs).toEqual([]);
+      expect(res.body.data.systemConfig).toBeNull();
+      expect(res.body.data.azureHealth).toEqual([]);
     });
   });
 
@@ -44,22 +59,49 @@ describe('API Route Endpoints', () => {
     // the signed-in buyer's own account comes from the identity schema via
     // GET /api/buyer-accounts/active, and this list only holds accounts created
     // at runtime.
-    test('GET /api/buyer-accounts returns an array', async () => {
-      const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
-      expect(res.statusCode).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(Array.isArray(res.body.data)).toBe(true);
-    });
-
     test('GET /api/buyer-accounts requires authentication', async () => {
       const res = await request(app).get('/api/buyer-accounts');
       expect(res.statusCode).toBe(401);
     });
 
+    test('GET /api/buyer-accounts returns only the signed-in buyer account', async () => {
+      const pool = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
+      const ownAccountSpy = jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB')
+        .mockResolvedValueOnce({ id: 'buyer-own', corporateEmail: TEST_USERS.buyer.email });
+      try {
+        const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
+        expect(res.statusCode).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.source).toBe('persisted');
+        expect(Array.isArray(res.body.data)).toBe(true);
+        expect(res.body.data.every((account) => account.corporateEmail === TEST_USERS.buyer.email)).toBe(true);
+      } finally {
+        pool.pool = originalPool;
+        ownAccountSpy.mockRestore();
+      }
+    });
+
+    test('GET /api/buyer-accounts refuses with 503 PERSISTENCE_UNAVAILABLE when no database is configured', async () => {
+      const pool = require('../src/db/pool');
+      const originalPool = pool.pool;
+      pool.pool = null;
+      try {
+        const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
+        expect(res.statusCode).toBe(503);
+        expect(res.body).toMatchObject({ success: false, code: 'PERSISTENCE_UNAVAILABLE' });
+        expect(res.body.source).toBeUndefined();
+      } finally {
+        pool.pool = originalPool;
+      }
+    });
+
     test('POST /api/buyer-accounts creates new buyer account', async () => {
       const newAcc = {
         organizationName: 'Adani Heavy Engineering Ltd.',
-        corporateEmail: 'procurement@adani.com',
+        corporateEmail: TEST_USERS.buyer.email,
         contactPerson: 'Karan Adani',
         mobileNumber: '+91 98000 12345',
         industrySector: 'Infrastructure & Port Logistics',
@@ -81,6 +123,25 @@ describe('API Route Endpoints', () => {
       const res = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({});
       expect(res.statusCode).toBe(400);
       expect(res.body.success).toBe(false);
+    });
+
+    test('a buyer cannot update, delete, or activate another buyer account', async () => {
+      const otherAccount = storeService.addBuyerAccount({
+        organizationName: 'Other Buyer Organisation',
+        corporateEmail: 'other-buyer@buyer.test',
+      });
+
+      const update = await request(app)
+        .put(`/api/buyer-accounts/${otherAccount.id}`)
+        .set(authHeader('buyer'))
+        .send({ totalSpend: '$1' });
+      const remove = await request(app).delete(`/api/buyer-accounts/${otherAccount.id}`).set(authHeader('buyer'));
+      const activate = await request(app).post(`/api/buyer-accounts/${otherAccount.id}/activate`).set(authHeader('buyer'));
+
+      expect(update.statusCode).toBe(403);
+      expect(remove.statusCode).toBe(403);
+      expect(activate.statusCode).toBe(403);
+      storeService.deleteBuyerAccount(otherAccount.id);
     });
 
     test('PUT /api/buyer-accounts/:id updates existing account', async () => {
@@ -181,12 +242,9 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(200);
     });
 
-    // The two read-only endpoints stay open to any role: the identical
-    // buyerAccounts payload is already served by the unauthenticated
-    // GET /api/bootstrap, which is what the frontend actually reads.
-    test('GET /api/buyer-accounts stays readable by a non-buyer role', async () => {
+    test('GET /api/buyer-accounts rejects a non-buyer role', async () => {
       const res = await request(app).get('/api/buyer-accounts').set(authHeader('vendor'));
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(403);
     });
   });
 
@@ -195,10 +253,18 @@ describe('API Route Endpoints', () => {
     let testVendorId;
 
     test('GET /api/vendors returns list of vendors', async () => {
-      const res = await request(app).get('/api/vendors');
+      const res = await request(app).get('/api/vendors').set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(Array.isArray(res.body.data)).toBe(true);
+    });
+
+    test('GET /api/vendors rejects anonymous and vendor-list enumeration', async () => {
+      const anonymous = await request(app).get('/api/vendors');
+      expect(anonymous.statusCode).toBe(401);
+
+      const vendor = await request(app).get('/api/vendors').set(authHeader('vendor'));
+      expect(vendor.statusCode).toBe(403);
     });
 
     test('POST /api/vendors creates new vendor', async () => {
@@ -314,14 +380,30 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/vendors/:id returns vendor details', async () => {
-      const res = await request(app).get(`/api/vendors/${testVendorId}`);
+      const res = await request(app).get(`/api/vendors/${testVendorId}`).set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data.id).toBe(testVendorId);
     });
 
     test('GET /api/vendors/:id returns 404 when not found', async () => {
-      const res = await request(app).get('/api/vendors/invalid-vendor');
+      const res = await request(app).get('/api/vendors/invalid-vendor').set(authHeader('buyer'));
       expect(res.statusCode).toBe(404);
+    });
+
+    test('GET /api/vendors/:id restricts vendors to their own profile', async () => {
+      const ownVendor = await request(app)
+        .get(`/api/vendors/${testVendorId}`)
+        .set(customAuthHeader({
+          id: 'usr-vendor-self',
+          email: TEST_USERS.vendor.email,
+          role: 'vendor',
+        }));
+      expect(ownVendor.statusCode).toBe(200);
+
+      const otherVendor = await request(app)
+        .get(`/api/vendors/${testVendorId}`)
+        .set(customAuthHeader({ id: 'usr-vendor-other', email: 'other@vendor.test', role: 'vendor' }));
+      expect(otherVendor.statusCode).toBe(404);
     });
 
     test('POST /api/vendors/:id/rating-revision revises score & rating', async () => {
@@ -341,8 +423,72 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    test('POST /api/vendors/:id/request-evaluation sends evaluation request and returns 200', async () => {
+      const res = await request(app).post(`/api/vendors/${testVendorId}/request-evaluation`).set(authHeader('buyer')).send({
+        notes: 'Please submit latest ISO certs and performance scorecard',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toHaveProperty('evaluationRequested', true);
+      expect(res.body.data).toHaveProperty('vendorEmail');
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 403 for vendor role', async () => {
+      const res = await request(app).post(`/api/vendors/${testVendorId}/request-evaluation`).set(authHeader('vendor')).send({});
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 401 when unauthenticated', async () => {
+      const res = await request(app).post(`/api/vendors/${testVendorId}/request-evaluation`).send({});
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 404 for invalid vendor', async () => {
+      const res = await request(app).post('/api/vendors/invalid-vendor-999/request-evaluation').set(authHeader('buyer')).send({});
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('POST /api/vendors/:id/request-evaluation returns 400 when vendor has no email', async () => {
+      const vendorNoEmail = storeService.addVendor({
+        name: 'Vendor Without Email',
+        majorCategory: 'Mechanical',
+        source: 'buyer_manual',
+      });
+      const res = await request(app).post(`/api/vendors/${vendorNoEmail.id}/request-evaluation`).set(authHeader('admin')).send({});
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toContain('Vendor does not have a registered email address');
+    });
+
+    test('POST /api/vendors/:id/request-evaluation works for buyer without linked buyerAccount and handles errors', async () => {
+      const customBuyerHeader = customAuthHeader({
+        id: 'buyer-unlinked-id',
+        email: 'unlinked-buyer@example.com',
+        role: 'buyer',
+        name: 'Unlinked Buyer',
+      });
+      const res = await request(app)
+        .post(`/api/vendors/${testVendorId}/request-evaluation`)
+        .set(customBuyerHeader)
+        .send({});
+      expect(res.statusCode).toBe(200);
+
+      // Error handler branch
+      const req = { params: { id: testVendorId }, user: { role: 'admin' }, body: {} };
+      const resMock = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const nextMock = jest.fn();
+      const origReq = storeService.requestVendorEvaluationDurably;
+      storeService.requestVendorEvaluationDurably = jest.fn().mockRejectedValueOnce(new Error('Durable request failure'));
+      await vendorController.requestEvaluation(req, resMock, nextMock);
+      expect(nextMock).toHaveBeenCalledWith(expect.any(Error));
+      storeService.requestVendorEvaluationDurably = origReq;
+
+      // Missing user branch
+      await vendorController.requestEvaluation({ params: { id: testVendorId } }, resMock, nextMock);
+      expect(resMock.status).toHaveBeenCalledWith(401);
+    });
+
     test('GET /api/vendors/:id/onboarding-email returns email preview payload', async () => {
-      // Carries the vendor's real tempPassword, so it's now restricted to the
+      // Preview content contains no credentials and is available only to
       // buyer-side roles that actually onboard vendors (or an admin).
       const nonOwnerRes = await request(app)
         .get(`/api/vendors/${testVendorId}/onboarding-email`)
@@ -353,6 +499,7 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
       expect(res.body.data).toHaveProperty('to');
+      expect(res.body.data).not.toHaveProperty('tempPassword');
     });
 
     test('PUT /api/vendors/:id updates the profile as the owning vendor, ignoring smuggled fields', async () => {
@@ -484,6 +631,7 @@ describe('API Route Endpoints', () => {
         deliveryPincode: '411001',
         targetDeliveryDate: '2026-12-01',
         sourcingMode: 'mode_1',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
       });
       expect(rfqRes.statusCode).toBe(201);
       expect(rfqRes.body.data.buyerAccountName).toBe('Test Buyer Org');
@@ -520,6 +668,7 @@ describe('API Route Endpoints', () => {
         sourcingMode: 'mode_1',
         deliveryLocation: 'Plant A',
         deliveryPincode: '400001',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         ...overrides,
       });
 
@@ -683,7 +832,7 @@ describe('API Route Endpoints', () => {
 
         const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({
           targetDeliveryDate: new Date().toISOString().slice(0, 10),
-          extractedEntities: [{ itemName: 'Item 1', quantity: 1, unit: 'Nos', targetDate: '2020-01-01' }],
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM, targetDate: '2020-01-01' }],
         }));
         expect(res.statusCode).toBe(400);
         expect(res.body.error).toBe('Target date cannot be earlier than today.');
@@ -735,6 +884,7 @@ describe('API Route Endpoints', () => {
         sourcingMode: 'mode_2',
         deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         deliveryPincode: '400701',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
       };
       const res = await request(app).post('/api/rfqs').set(authHeader('buyer')).send(rfq);
       expect(res.statusCode).toBe(201);
@@ -757,6 +907,7 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);
@@ -789,6 +940,7 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
           attachments: [attachment],
           source: 'web_portal',
           sourceFileName: 'BOQ-pumps.xlsx',
@@ -825,10 +977,11 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Pune Facility, Dock 2',
           deliveryPincode: '411057',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);
-      expect(res.body.data.budget).toBe(0);
+      expect(res.body.data.budget).toBeNull();
       expect(res.body.data.deliveryLocation).toBe('Pune Facility, Dock 2');
     });
 
@@ -848,6 +1001,96 @@ describe('API Route Endpoints', () => {
 
       expect(res.statusCode).toBe(400);
       expect(res.body.fieldErrors.deliveryLocation).toMatch(/delivery location is required/i);
+    });
+
+    // Every line item must be complete. The form asks for the same fields, and a vendor cannot
+    // quote against a row that leaves any of them out.
+    const RFQ_WITH_ITEMS = {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: A_FUTURE_DATE,
+      sourcingMode: 'mode_1',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
+    };
+
+    test('POST /api/rfqs rejects a line item with no specification', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, technicalSpecs: '   ' }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].technicalSpecs']).toMatch(/specification/i);
+    });
+
+    test('POST /api/rfqs rejects an RFQ with no line items', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.lineItems).toMatch(/at least one line item/i);
+    });
+
+    test('POST /api/rfqs rejects a line item with no major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, majorCategory: '', minorCategory: '' }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].majorCategory']).toMatch(/major category/i);
+    });
+
+    test('POST /api/rfqs requires a minor category under a real major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, minorCategory: '' }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].minorCategory']).toMatch(/minor category/i);
+    });
+
+    test('POST /api/rfqs rejects a line item quantity of zero', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({ ...RFQ_WITH_ITEMS, extractedEntities: [{ ...COMPLETE_LINE_ITEM, quantity: 0 }] });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].quantity']).toMatch(/quantity above zero/i);
+    });
+
+    // All Categories is a complete choice that needs no minor category. It is stored blank, as
+    // every uncategorised row always was, so matching behaves the same as before.
+    test('POST /api/rfqs accepts an All Categories line item without a minor category and stores it blank', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          ...RFQ_WITH_ITEMS,
+          category: undefined,
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM, majorCategory: 'All Categories', minorCategory: '' }],
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.data.extractedEntities[0].majorCategory).toBe('');
+    });
+
+    test('POST /api/rfqs rejects an All Categories line item that also names a minor category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          ...RFQ_WITH_ITEMS,
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM, majorCategory: 'All Categories' }],
+        });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors['lineItems[0].minorCategory']).toMatch(/does not apply to All Categories/i);
     });
 
     test('POST /api/rfqs rejects a delivery location shorter than three characters', async () => {
@@ -913,6 +1156,7 @@ describe('API Route Endpoints', () => {
           sourcingMode: 'mode_1',
           deliveryLocation: 'Tilbury Docks, Berth 4',
           deliveryPincode: 'SW1A 1AA',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
 
       expect(res.statusCode).toBe(201);
@@ -939,6 +1183,7 @@ describe('API Route Endpoints', () => {
           deliveryPincode: '400701',
           targetDeliveryDate: '2026-12-01',
           category: 'Nonexistent Major Category 12345',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
       expect(res.statusCode).toBe(400);
       expect(res.body.error).toMatch(/Invalid major category/i);
@@ -955,6 +1200,7 @@ describe('API Route Endpoints', () => {
           targetDeliveryDate: '2026-12-01',
           category: 'Engineering Spares - Electrical',
           minorCategory: 'Food & Beverages',
+          extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         });
       expect(res.statusCode).toBe(400);
       expect(res.body.error).toMatch(/Invalid category combination/i);
@@ -974,6 +1220,9 @@ describe('API Route Endpoints', () => {
             {
               id: 'li-1',
               itemName: 'Stethoscope',
+              technicalSpecs: 'Dual head, adult size',
+              quantity: 5,
+              unit: 'Nos',
               majorCategory: 'Raw Material',
               minorCategory: 'Health Equipments', // Health Equipments does NOT belong to Raw Material!
             },
@@ -1152,6 +1401,12 @@ describe('API Route Endpoints', () => {
   // 5. Evaluations & Audit
   describe('Evaluations & Audit API', () => {
     test('GET /api/evaluations and POST /api/evaluations', async () => {
+      const anonymousGet = await request(app).get('/api/evaluations');
+      expect(anonymousGet.statusCode).toBe(401);
+
+      const vendorGet = await request(app).get('/api/evaluations').set(authHeader('vendor'));
+      expect(vendorGet.statusCode).toBe(403);
+
       const getRes = await request(app).get('/api/evaluations').set(authHeader('category_manager'));
       expect(getRes.statusCode).toBe(200);
 
@@ -1185,18 +1440,26 @@ describe('API Route Endpoints', () => {
       const getRes = await request(app).get('/api/audit').set(authHeader('admin'));
       expect(getRes.statusCode).toBe(200);
 
+      const buyerRead = await request(app).get('/api/audit').set(authHeader('buyer'));
+      expect(buyerRead.statusCode).toBe(403);
+
       const verifyRes = await request(app).get('/api/audit/verify').set(authHeader('admin'));
       expect(verifyRes.statusCode).toBe(200);
-      expect(verifyRes.body.report.valid).toBe(true);
+      expect(verifyRes.body.report).toMatchObject({
+        valid: null,
+        complete: false,
+        source: 'in_memory',
+      });
+
+      const buyerVerify = await request(app).get('/api/audit/verify').set(authHeader('buyer'));
+      expect(buyerVerify.statusCode).toBe(403);
     });
 
-    test('POST /api/audit creates new log entry', async () => {
+    test('POST /api/audit is not served, so browsers cannot write audit events', async () => {
       const res = await request(app).post('/api/audit').set(authHeader('buyer')).send({
-        userEmail: 'auditor@enterprise.com',
         action: 'Manual compliance check performed',
       });
-      expect(res.statusCode).toBe(201);
-      expect(res.body.data).toHaveProperty('shaSignature');
+      expect([404, 405]).toContain(res.statusCode);
     });
   });
 
@@ -1211,12 +1474,15 @@ describe('API Route Endpoints', () => {
 
       const getRes = await request(app).get('/api/system-config').set(authHeader('admin'));
       expect(getRes.statusCode).toBe(200);
+      expect(getRes.body.data.systemConfig).toEqual({ aiModel: expect.any(String), aiTemperature: expect.any(Number) });
 
+      // No setting is persisted, so a write is refused instead of echoed back as saved.
       const postRes = await request(app).post('/api/system-config').set(authHeader('admin')).send({
         ocrExtractionThreshold: 90,
       });
-      expect(postRes.statusCode).toBe(200);
-      expect(postRes.body.data.ocrExtractionThreshold).toBe(90);
+      expect(postRes.statusCode).toBe(501);
+      expect(postRes.body.success).toBe(false);
+      expect(postRes.body.error).toMatch(/cannot be changed/i);
     });
 
     test('GET /api/db/status returns health status', async () => {
@@ -1225,29 +1491,29 @@ describe('API Route Endpoints', () => {
       expect(res.body).toHaveProperty('provider');
     });
 
-    test('GET & POST /api/ai-feed', async () => {
-      const getRes = await request(app).get('/api/ai-feed');
+    test('GET /api/ai-feed is role-scoped, and browsers cannot create feed items over HTTP', async () => {
+      const anonymousGet = await request(app).get('/api/ai-feed');
+      expect(anonymousGet.statusCode).toBe(401);
+
+      const vendorGet = await request(app).get('/api/ai-feed').set(authHeader('vendor'));
+      expect(vendorGet.statusCode).toBe(403);
+
+      const getRes = await request(app).get('/api/ai-feed').set(authHeader('buyer'));
       expect(getRes.statusCode).toBe(200);
+      expect(Array.isArray(getRes.body.data)).toBe(true);
+
+      // A query parameter cannot switch a buyer session into another account scope.
+      const otherBuyerRes = await request(app)
+        .get('/api/ai-feed?buyerAccountId=other-nonexistent-buyer')
+        .set(authHeader('buyer'));
+      expect(otherBuyerRes.statusCode).toBe(200);
+      expect(otherBuyerRes.body.data.every((item) => item.buyerAccountId !== 'other-nonexistent-buyer')).toBe(true);
 
       const postRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({
         title: 'SMS Alert Sent',
         message: 'Notification pushed to supplier.',
       });
-      expect(postRes.statusCode).toBe(201);
-      expect(postRes.body.data).toHaveProperty('buyerAccountId');
-
-      const failRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({});
-      expect(failRes.statusCode).toBe(400);
-
-      // Scoped query by buyerAccountId
-      const scopedRes = await request(app).get(`/api/ai-feed?buyerAccountId=${postRes.body.data.buyerAccountId}`);
-      expect(scopedRes.statusCode).toBe(200);
-      expect(scopedRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(true);
-
-      // Other buyer query does not see this buyer's feed item
-      const otherBuyerRes = await request(app).get('/api/ai-feed?buyerAccountId=other-nonexistent-buyer');
-      expect(otherBuyerRes.statusCode).toBe(200);
-      expect(otherBuyerRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(false);
+      expect([404, 405]).toContain(postRes.statusCode);
     });
 
     test('GET /api/db/metrics is admin-only', async () => {
@@ -1392,11 +1658,6 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    test('POST /api/audit returns 400 when missing action', async () => {
-      const res = await request(app).post('/api/audit').set(authHeader('buyer')).send({});
-      expect(res.statusCode).toBe(400);
-    });
-
     test('GET /api/vendors/:id/onboarding-email and rating revision 404 on invalid vendor', async () => {
       const emailRes = await request(app).get('/api/vendors/invalid-id/onboarding-email').set(authHeader('buyer'));
       expect(emailRes.statusCode).toBe(404);
@@ -1454,6 +1715,7 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
         targetDeliveryDate: A_FUTURE_DATE,
         deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         deliveryPincode: '400701',
+        extractedEntities: [{ ...COMPLETE_LINE_ITEM }],
         ...overrides,
       });
     return res.body.data;
@@ -1531,6 +1793,12 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
 
     test('rejects vendor requests to close or update an RFQ with 403', async () => {
       const rfq = await createOwnRFQ();
+      // The vendor must be able to see the RFQ for a write to be refused with 403 rather than 404.
+      // The RFQ names the minor 'Bearings & Accessories', so the vendor carries that minor.
+      storeService.updateVendor('vendor@apexsupplies.com', {
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Bearings & Accessories'],
+      });
 
       const res = await request(app)
         .put(`/api/rfqs/${rfq.id}`)

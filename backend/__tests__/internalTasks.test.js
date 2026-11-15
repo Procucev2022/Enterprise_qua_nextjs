@@ -1,7 +1,17 @@
-const request = require('supertest');
+const supertest = require('supertest');
 const app = require('../src/app');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
 const authService = require('../src/services/authService');
+const registrationQueries = require('../src/db/registrationQueries');
+const { authHeader } = require('./testHelpers');
+function request(target) {
+  const testRequest = supertest(target);
+  ['get', 'post', 'put', 'patch', 'delete', 'head'].forEach((method) => {
+    const original = testRequest[method].bind(testRequest);
+    testRequest[method] = (route) => original(route).set(authHeader('category_manager'));
+  });
+  return testRequest;
+}
 
 describe('Internal Tasks API & Controller', () => {
   test('GET /api/internal-tasks/assignees returns team members and handles failure', async () => {
@@ -43,6 +53,56 @@ describe('Internal Tasks API & Controller', () => {
 
   beforeEach(() => {
     jest.restoreAllMocks();
+  });
+
+  test('registration endpoints require an authenticated management role', async () => {
+    const anonymousList = await supertest(app).get('/api/internal-tasks/registrations');
+    expect(anonymousList.status).toBe(401);
+
+    const anonymousAction = await supertest(app)
+      .post('/api/internal-tasks/registrations/reg-client-102/action')
+      .send({ action: 'accept' });
+    expect(anonymousAction.status).toBe(401);
+
+    const buyerList = await supertest(app).get('/api/internal-tasks/registrations').set(authHeader('buyer'));
+    expect(buyerList.status).toBe(403);
+
+    const vendorAction = await supertest(app)
+      .post('/api/internal-tasks/registrations/reg-client-102/action')
+      .set(authHeader('vendor'))
+      .send({ action: 'accept' });
+    expect(vendorAction.status).toBe(403);
+  });
+
+  test('category managers can read registrations and submit an authenticated decision', async () => {
+    jest.spyOn(registrationQueries, 'getRegisteredClients').mockResolvedValue({
+      total: 0,
+      clients: [],
+      limit: 100,
+      offset: 0,
+    });
+    const updateSpy = jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue({
+      id: 'reg-client-102',
+      status: 'Accepted',
+      isApproved: true,
+    });
+
+    const listResponse = await request(app)
+      .get('/api/internal-tasks/registrations')
+      .set(authHeader('category_manager'));
+    expect(listResponse.status).toBe(200);
+
+    const actionResponse = await request(app)
+      .post('/api/internal-tasks/registrations/reg-client-102/action')
+      .set(authHeader('category_manager'))
+      .send({ action: 'accept', remarks: 'Verified' });
+    expect(actionResponse.status).toBe(200);
+    expect(updateSpy).toHaveBeenCalledWith(
+      'reg-client-102',
+      'accept',
+      'Verified',
+      expect.objectContaining({ sub: 'usr-catman-001', email: 'catmanager@procucev.com' })
+    );
   });
 
   test('GET /api/internal-tasks/task-types returns active task types', async () => {
@@ -320,11 +380,19 @@ describe('Internal Tasks API & Controller', () => {
       expect(sumRes.status).toBe(500);
     });
 
-    test('GET /api/internal-tasks/task-types falls back to default types on DB failure', async () => {
+    test('GET /api/internal-tasks/task-types returns an error, not a default list, when the lookup fails', async () => {
       jest.spyOn(internalTaskQueries, 'getTaskTypes').mockRejectedValue(new Error('DB failure'));
       const ttRes = await request(app).get('/api/internal-tasks/task-types');
-      expect(ttRes.status).toBe(200);
-      expect(ttRes.body.taskTypes).toEqual(internalTaskQueries.DEFAULT_TASK_TYPES);
+      expect(ttRes.status).toBe(500);
+      expect(ttRes.body.success).toBe(false);
+      expect(ttRes.body.taskTypes).toBeUndefined();
+    });
+
+    test('GET /api/internal-tasks/task-types returns 503 when task storage is unavailable', async () => {
+      jest.spyOn(internalTaskQueries, 'getTaskTypes').mockRejectedValue(Object.assign(new Error('down'), { code: 'PERSISTENCE_UNAVAILABLE' }));
+      const ttRes = await request(app).get('/api/internal-tasks/task-types');
+      expect(ttRes.status).toBe(503);
+      expect(ttRes.body.retryable).toBe(true);
     });
 
     test('POST /api/internal-tasks/task-types returns 500 on DB failure', async () => {
@@ -372,7 +440,7 @@ describe('Internal Tasks API & Controller', () => {
 
   test('POST /api/internal-tasks/:id/approve rejects unauthenticated and unauthorized users', async () => {
     // Unauthenticated (no token → authenticate returns 401)
-    const noAuthRes = await request(app)
+    const noAuthRes = await supertest(app)
       .post('/api/internal-tasks/tsk_cred_1/approve')
       .send({ remarks: 'Attempted approval' });
     expect(noAuthRes.status).toBe(401);
@@ -479,7 +547,7 @@ describe('Internal Tasks API & Controller', () => {
 
   test('POST /api/internal-tasks/:id/reject rejects unauthenticated and unauthorized users', async () => {
     // Unauthenticated (no token → authenticate returns 401)
-    const noAuthRes = await request(app)
+    const noAuthRes = await supertest(app)
       .post('/api/internal-tasks/tsk_cred_2/reject')
       .send({ remarks: 'Attempted rejection' });
     expect(noAuthRes.status).toBe(401);
@@ -646,12 +714,19 @@ describe('Internal Tasks API & Controller', () => {
         task_number: 'TASK-7704',
         title: 'Unknown member task',
         assigned_to_name: 'Ghost Employee',
+        assigned_to_user_id: 'exec-2',
       },
       {
         id: 'tsk_overdue_5',
         task_number: 'TASK-7705',
         title: 'No email member task',
         assigned_to_name: 'NoEmail Person',
+      },
+      {
+        id: 'tsk_overdue_6',
+        task_number: 'TASK-7706',
+        title: 'Unknown member without ID',
+        assigned_to_name: 'Another Ghost Employee',
       },
     ]);
     jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
@@ -662,7 +737,7 @@ describe('Internal Tasks API & Controller', () => {
     const res = await request(app).post('/api/internal-tasks/check-reminders').send({});
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.count).toBe(5);
+    expect(res.body.count).toBe(6);
 
     // Error branch
     jest.spyOn(internalTaskQueries, 'getOverdueAndUpcomingTasks').mockRejectedValue(new Error('Reminders error'));
@@ -727,6 +802,9 @@ describe('Internal Tasks API & Controller', () => {
   });
 
   test('POST /api/internal-tasks dispatches notifications for assigned employee and credit approver', async () => {
+    const previousApproverEmail = process.env.CREDIT_APPROVER_EMAIL;
+    process.env.CREDIT_APPROVER_EMAIL = 'approver@test.local';
+    try {
     const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
     const notifySpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication').mockResolvedValue({ success: true });
     jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
@@ -755,6 +833,11 @@ describe('Internal Tasks API & Controller', () => {
 
     expect(res.status).toBe(201);
     expect(notifySpy).toHaveBeenCalledTimes(2);
+    expect(notifySpy.mock.calls[1][0].recipientEmail).toBe('approver@test.local');
+    } finally {
+      if (previousApproverEmail === undefined) delete process.env.CREDIT_APPROVER_EMAIL;
+      else process.env.CREDIT_APPROVER_EMAIL = previousApproverEmail;
+    }
   });
 
   test('PUT /api/internal-tasks/:id returns 400 when schema validation fails', async () => {

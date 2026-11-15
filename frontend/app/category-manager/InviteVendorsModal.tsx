@@ -31,6 +31,7 @@ import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
 import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
+import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 
 // "All Vendors" can legitimately span tens of thousands of rows (the real
 // directory is 80k+ vendors) — fetched and rendered a page at a time rather
@@ -61,8 +62,30 @@ function rfqCategorySignals(rfq: RFQItem): string[] {
   return signals;
 }
 
-/** Mirrors storeService.vendorCoversCategory's case-insensitive exact match. */
-function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[]): boolean {
+/** The minor categories the RFQ names, from its header and its line items. */
+function rfqMinorCategories(rfq: RFQItem): string[] {
+  const names = [rfq.minorCategory];
+  for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
+    names.push(ent.minorCategory);
+  }
+  return Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)));
+}
+
+/**
+ * Whether the vendor carries one of the RFQ's categories. When the RFQ names minor
+ * categories only a minor match counts, mirroring storeService.vendorCoversMinorCategory.
+ * Otherwise the vendor matches on its major or minor category, case-insensitively.
+ */
+function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[], minors: string[]): boolean {
+  if (minors.length > 0) {
+    const pools = [vendor.majorCategory, ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])]
+      .map((c) => normalizeCategory(c))
+      .filter(Boolean);
+    return minors.some((minor) => {
+      const key = normalizeCategory(minor);
+      return pools.some((pool) => minorNamesMatch(pool, key));
+    });
+  }
   const pools = [vendor.majorCategory, ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])].map(
     (c) => String(c || '').trim().toLowerCase()
   );
@@ -87,6 +110,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [stateFilter, setStateFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
   const [categoryOptions, setCategoryOptions] = useState<string[]>(() => getMajorCategories());
+  const [categoryLoadError, setCategoryLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
 
@@ -122,6 +146,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     setAllVendors(null);
     setAllVendorsError(null);
     setAllVendorsPagination(null);
+    setCategoryLoadError(null);
     knownVendorsRef.current.clear();
 
     void fetchVendorCandidates(rfq.id).then((result) => {
@@ -136,17 +161,21 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       setLoading(false);
     });
 
+    // A failed category load keeps the options already known and says so, instead of hiding the failure.
     void fetchCategoryTaxonomy()
       .then((result) => {
-        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
-          const fetched = result.data.map((c) => c.majorCategory).filter(Boolean);
-          if (fetched.length > 0) {
-            setCategoryOptions(fetched);
-          }
+        const fetched = result.success && Array.isArray(result.data)
+          ? result.data.map((c) => c.majorCategory).filter(Boolean)
+          : [];
+        if (fetched.length > 0) {
+          setCategoryOptions(fetched);
+          setCategoryLoadError(null);
+        } else {
+          setCategoryLoadError(UI_STRINGS.inviteVendors.categoryOptionsLoadFailed);
         }
       })
       .catch(() => {
-        // Fall back gracefully to standard major categories
+        setCategoryLoadError(UI_STRINGS.inviteVendors.categoryOptionsLoadFailed);
       });
   }, [isOpen, rfq]);
 
@@ -243,6 +272,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   };
 
   const categorySignals = useMemo(() => (rfq ? rfqCategorySignals(rfq) : []), [rfq]);
+  const categoryMinors = useMemo(() => (rfq ? rfqMinorCategories(rfq) : []), [rfq]);
 
   const effectiveCategoryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -475,7 +505,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     const contactPerson = newVendorContactPerson.trim();
     const email = newVendorEmail.trim().toLowerCase();
     const phone = newVendorPhone.trim();
-    const majorCategory = newVendorMajorCategory.trim() || rfq?.category || 'General';
+    const majorCategory = newVendorMajorCategory.trim() || rfq?.category || '';
 
     if (!name || !contactPerson || !email || !phone || !majorCategory) {
       setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Major Category).');
@@ -506,7 +536,6 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
           city: newVendorCity.trim() || undefined,
           state: newVendorState.trim() || undefined,
           pincode: newVendorPincode.trim() || undefined,
-          source: 'procucev_network',
         }),
       });
 
@@ -527,7 +556,13 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       }
 
       const created = data.vendor || data.data;
-      const candidateId = created?.id || String(created?._id) || `cand-created-${Date.now()}`;
+      const candidateId: string = created?.id || (created?._id ? String(created._id) : '');
+      if (!candidateId) {
+        // The vendor exists on the server, but without its id it cannot be invited safely. Nothing is added here.
+        setAddVendorError(UI_STRINGS.inviteVendors.createdVendorIdMissing);
+        showToast('Vendor Creation Failed', UI_STRINGS.inviteVendors.createdVendorIdMissing, 'warning');
+        return;
+      }
       const newCandidate: RFQVendorCandidate = {
         id: candidateId,
         name: created?.name || name,
@@ -539,9 +574,10 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         city: newVendorCity.trim() || undefined,
         state: newVendorState.trim() || undefined,
         pincode: newVendorPincode.trim() || undefined,
-        location: [newVendorCity.trim(), newVendorState.trim()].filter(Boolean).join(', ') || 'India',
-        rating: 4.8,
-        source: 'procucev_network',
+        // Taken from the saved record only. A value the record does not hold stays empty and renders as a dash.
+        location: created?.location ?? '',
+        rating: created?.rating,
+        source: created?.source,
         alreadyInvited: false,
       };
 
@@ -560,8 +596,8 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       });
 
       showToast(
-        'Vendor Registered',
-        `${name} has been added as a Procucev Vendor and credentials emailed. Selected for invitation.`,
+        UI_STRINGS.vendorOnboarding.addedTitle,
+        formatString(UI_STRINGS.vendorOnboarding.registeredAndSelectedMessage, { name }),
         'success'
       );
       setShowAddVendorModal(false);
@@ -661,7 +697,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 setNewVendorContactPerson('');
                 setNewVendorEmail('');
                 setNewVendorPhone('');
-                setNewVendorMajorCategory(rfq?.category || effectiveCategoryOptions[0] || 'Mechanical & Fluid Equipment');
+                setNewVendorMajorCategory(rfq?.category || '');
                 setNewVendorMinorCategory(rfq?.extractedEntities?.[0]?.minorCategory || '');
                 setNewVendorCity('');
                 setNewVendorState('');
@@ -718,6 +754,11 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                   </option>
                 ))}
               </select>
+              {categoryLoadError && (
+                <p role="alert" className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+                  {categoryLoadError}
+                </p>
+              )}
             </div>
 
             {/* State Filter */}
@@ -895,7 +936,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
                 <div className="space-y-2">
                   {visibleVendors.map((c) => {
-                    const outsideCategory = tab === 'all' && !vendorCoversAnySignal(c, categorySignals);
+                    const outsideCategory = tab === 'all' && !vendorCoversAnySignal(c, categorySignals, categoryMinors);
                     const missingEmail = !c.email;
                     return (
                       <label
@@ -1076,7 +1117,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                   required
                   value={newVendorName}
                   onChange={(e) => setNewVendorName(e.target.value)}
-                  placeholder="e.g. Apex Industrial Supplies Pvt Ltd"
+                  placeholder={UI_STRINGS.inviteVendors.companyNamePlaceholder}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
@@ -1091,7 +1132,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     required
                     value={newVendorContactPerson}
                     onChange={(e) => setNewVendorContactPerson(e.target.value)}
-                    placeholder="e.g. Rajesh Kumar"
+                    placeholder={UI_STRINGS.inviteVendors.contactPersonPlaceholder}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
@@ -1104,7 +1145,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     required
                     value={newVendorPhone}
                     onChange={(e) => setNewVendorPhone(e.target.value)}
-                    placeholder="e.g. +91 98765 43210"
+                    placeholder={UI_STRINGS.inviteVendors.contactNumberPlaceholder}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
@@ -1119,7 +1160,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                   required
                   value={newVendorEmail}
                   onChange={(e) => setNewVendorEmail(e.target.value)}
-                  placeholder="e.g. sales@apexindustrial.com"
+                  placeholder={UI_STRINGS.inviteVendors.emailPlaceholder}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
@@ -1149,7 +1190,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorMinorCategory}
                     onChange={(e) => setNewVendorMinorCategory(e.target.value)}
-                    placeholder="e.g. Valves & Pipes"
+                    placeholder={UI_STRINGS.inviteVendors.minorCategoryPlaceholder}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
@@ -1162,7 +1203,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorCity}
                     onChange={(e) => setNewVendorCity(e.target.value)}
-                    placeholder="e.g. Mumbai"
+                    placeholder={UI_STRINGS.inviteVendors.cityPlaceholder}
                     className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white"
                   />
                 </div>
@@ -1172,7 +1213,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorState}
                     onChange={(e) => setNewVendorState(e.target.value)}
-                    placeholder="e.g. Maharashtra"
+                    placeholder={UI_STRINGS.inviteVendors.statePlaceholder}
                     className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white"
                   />
                 </div>
@@ -1182,7 +1223,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     type="text"
                     value={newVendorPincode}
                     onChange={(e) => setNewVendorPincode(e.target.value)}
-                    placeholder="e.g. 400001"
+                    placeholder={UI_STRINGS.inviteVendors.pincodePlaceholder}
                     className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white"
                   />
                 </div>

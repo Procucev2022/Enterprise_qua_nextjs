@@ -5,7 +5,6 @@ import {
   maskPublicEmail,
   maskPublicPhone,
   DEFAULT_FILTER,
-  MAJOR_CATEGORIES,
   AVATAR_PALETTE,
 } from '@/app/vendors/vendorUtils';
 
@@ -148,18 +147,13 @@ describe('vendorUtils', () => {
   });
 
   describe('constants', () => {
-    it('exports DEFAULT_FILTER and MAJOR_CATEGORIES properly', () => {
+    it('exports the initial filter state with no directory data', () => {
       expect(DEFAULT_FILTER.page).toBe(1);
       expect(DEFAULT_FILTER.pageSize).toBe(24);
       expect(DEFAULT_FILTER.category).toBe('all');
       expect(DEFAULT_FILTER.state).toBe('all');
       expect(DEFAULT_FILTER.minRating).toBe(0);
       expect(DEFAULT_FILTER.verifiedOnly).toBe(false);
-
-      expect(MAJOR_CATEGORIES.length).toBeGreaterThan(15);
-      expect(MAJOR_CATEGORIES).toContain('All Categories');
-      expect(MAJOR_CATEGORIES).toContain('Mechanical');
-      expect(MAJOR_CATEGORIES).toContain('General Industrial');
     });
   });
 });

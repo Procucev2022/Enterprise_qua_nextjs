@@ -1,8 +1,9 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import VendorProfilePage from '@/app/vendor/vendor-profile';
 import { AppProvider, useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
 // vendor-profile.tsx now loads the logged-in vendor's real record from the
@@ -133,19 +134,21 @@ describe('VendorProfilePage Comprehensive Suite', () => {
 
     // PAN validation
     const panInput = screen.getByDisplayValue('AAACA9876K');
-    expect(screen.getByText('✓ Valid PAN')).toBeInTheDocument();
+    const panBlock = screen.getByText('PAN Number *').parentElement as HTMLElement;
+    expect(within(panBlock).getByText('✓ Valid format')).toBeInTheDocument();
     fireEvent.change(panInput, { target: { value: 'INVALIDPAN' } });
-    expect(screen.getByText('Invalid Format')).toBeInTheDocument();
-    fireEvent.change(panInput, { target: { value: 'ABCDE1234F' } });
-    expect(screen.getByText('✓ Valid PAN')).toBeInTheDocument();
+    expect(within(panBlock).getByText(UI_STRINGS.vendorProfile.panInvalidBadge)).toBeInTheDocument();
+    fireEvent.change(panInput, { target: { value: 'BGLPK1234M' } });
+    expect(within(panBlock).getByText(UI_STRINGS.vendorProfile.panValidFormat)).toBeInTheDocument();
 
     // GSTIN validation
     const gstInput = screen.getByDisplayValue('27AAACA9876K1Z9');
-    expect(screen.getByText('✓ State 27 Verified')).toBeInTheDocument();
+    const gstBlock = screen.getByText('GSTIN / GST Number *').parentElement as HTMLElement;
+    expect(within(gstBlock).getByText('✓ Valid format')).toBeInTheDocument();
     fireEvent.change(gstInput, { target: { value: 'INVALIDGSTIN' } });
-    expect(screen.getByText('Invalid GSTIN')).toBeInTheDocument();
+    expect(within(gstBlock).getByText('Invalid GSTIN')).toBeInTheDocument();
     fireEvent.change(gstInput, { target: { value: '27ABCDE1234F1Z5' } });
-    expect(screen.getByText('✓ State 27 Verified')).toBeInTheDocument();
+    expect(within(gstBlock).getByText('✓ Valid format')).toBeInTheDocument();
 
     const msmeInput = screen.getByDisplayValue('UDYAM-MH-03-0048291');
     fireEvent.change(msmeInput, { target: { value: 'UDYAM-MH-03-9999999' } });
@@ -503,8 +506,9 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     );
 
     await waitFor(() => expect(screen.getByDisplayValue('Sparse Vendor Co')).toBeInTheDocument());
-    // Org type falls back to the component's own default since v.orgType is absent
-    expect(screen.getByDisplayValue('Private Limited Company')).toBeInTheDocument();
+    // No constitution is pre-selected when v.orgType is absent, so the select stays on its blank placeholder.
+    const orgTypeSelect = screen.getByText('Business Constitution *').parentElement?.querySelector('select');
+    expect(orgTypeSelect).toHaveValue('');
   });
 
   test('allows vendor to add custom category, remove category via chip, and rejects duplicates/empty', async () => {
@@ -585,6 +589,55 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     await waitFor(() => {
       expect(screen.getByText(/Section 4: Security/i)).toBeInTheDocument();
     });
+  });
+
+  test('strips placeholder PAN like ABCPE1234F on load and blocks saving a placeholder PAN', async () => {
+    const putCalls: any[] = [];
+    global.fetch = jest.fn((url: string, options: any = {}) => {
+      const method = options.method || 'GET';
+      if (/\/api\/vendors\/[^/]+$/.test(url) && method === 'GET') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              ...MOCK_VENDOR,
+              name: 'Veera Solutions Pvt LTD',
+              gst: '29AAMCP4349L1Z0',
+              pan: 'ABCPE1234F',
+            },
+          }),
+        });
+      }
+      if (/\/api\/vendors\/[^/]+$/.test(url) && method === 'PUT') {
+        putCalls.push(options);
+      }
+      return mockFetchImpl(url, options);
+    }) as any;
+
+    render(
+      <AppProvider>
+        <VendorProfileWithSession />
+      </AppProvider>
+    );
+
+    await waitFor(() => expect(screen.getByDisplayValue('Veera Solutions Pvt LTD')).toBeInTheDocument());
+    expect(screen.queryByDisplayValue('ABCPE1234F')).not.toBeInTheDocument();
+
+    const panBlock = screen.getByText('PAN Number *').parentElement?.parentElement as HTMLElement;
+    const panInput = within(panBlock).getByRole('textbox') as HTMLInputElement;
+    expect(panInput.value).toBe('');
+    expect(within(panBlock).queryByText(UI_STRINGS.vendorProfile.panValidFormat)).not.toBeInTheDocument();
+    expect(within(panBlock).queryByText(UI_STRINGS.vendorProfile.panInvalidBadge)).not.toBeInTheDocument();
+
+    // Typing a known sample/placeholder PAN must surface placeholder warning and block save
+    fireEvent.change(panInput, { target: { value: 'ABCPE1234F' } });
+    expect(within(panBlock).getByText(UI_STRINGS.vendorProfile.panPlaceholderBadge)).toBeInTheDocument();
+    expect(within(panBlock).getByText(UI_STRINGS.vendorProfile.panDummyRejectedMessage)).toBeInTheDocument();
+
+    const topSaveBtn = screen.getByRole('button', { name: /Save Supplier Profile/i });
+    fireEvent.click(topSaveBtn);
+    expect(putCalls).toHaveLength(0);
   });
 });
 

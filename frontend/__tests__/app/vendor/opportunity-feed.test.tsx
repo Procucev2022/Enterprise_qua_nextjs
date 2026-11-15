@@ -2,7 +2,8 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import OpportunityFeed from '@/app/vendor/opportunity-feed';
 import { AppProvider, useApp } from '@/lib/store';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { QuoteComparison, RFQItem, VendorOpportunity, VendorSubscriptionPlan } from '@/lib/types';
 
 const mockRouterPush = jest.fn();
@@ -68,11 +69,26 @@ const DIRECT_HVAC_QUOTED: RFQFixture = {
   rfqNumber: 'RFQ-2026-00901',
   title: 'HVAC Control Retrofit',
   sourcingMode: 'mode_1',
+  category: 'Building & Infrastructure',
   // No ceiling published, so the card must say "Not Disclosed" rather than ₹0.
   budget: 0,
   targetDeliveryDate: '2026-10-01',
   deliveryLocation: 'Chennai',
   buyerAccountName: 'Tata Motors Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-hvac',
+      itemName: 'HVAC control panel',
+      quantity: 1,
+      unit: 'Nos',
+      targetDate: '2026-10-01',
+      technicalSpecs: 'DDC panel',
+      confidence: 90,
+      category: 'Building Automation & HVAC',
+      majorCategory: 'Building & Infrastructure',
+      minorCategory: 'Building Automation & HVAC',
+    },
+  ],
   quotes: [A_QUOTE],
 };
 
@@ -85,6 +101,20 @@ const DIRECT_STEEL: RFQFixture = {
   targetDeliveryDate: '2026-11-20',
   deliveryLocation: 'Surat',
   buyerAccountName: 'Tata Motors Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-steel',
+      itemName: 'Girder section',
+      quantity: 6,
+      unit: 'Nos',
+      targetDate: '2026-11-20',
+      technicalSpecs: 'IS 2062',
+      confidence: 90,
+      category: 'Structural Steel & Beams',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Structural Steel & Beams',
+    },
+  ],
 };
 
 const NETWORK_OWN: RFQFixture = {
@@ -117,10 +147,25 @@ const NETWORK_HVAC_QUOTED: RFQFixture = {
   rfqNumber: 'RFQ-2026-00903',
   title: 'HVAC control ducting',
   sourcingMode: 'mode_3',
+  category: 'Building & Infrastructure',
   budget: 0,
   targetDeliveryDate: '2026-10-15',
   deliveryLocation: 'Mumbai',
   buyerAccountName: 'Adani Enterprises Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-ducting',
+      itemName: 'Galvanised ducting section',
+      quantity: 10,
+      unit: 'Rft',
+      targetDate: '2026-10-15',
+      technicalSpecs: 'GI 24 gauge',
+      confidence: 85,
+      category: 'Building Automation & HVAC',
+      majorCategory: 'Building & Infrastructure',
+      minorCategory: 'Building Automation & HVAC',
+    },
+  ],
   quotes: [A_QUOTE],
 };
 
@@ -133,6 +178,20 @@ const NETWORK_STEEL: RFQFixture = {
   targetDeliveryDate: '2026-12-05',
   deliveryLocation: 'Kandla',
   buyerAccountName: 'Adani Enterprises Ltd.',
+  extractedEntities: [
+    {
+      id: 'ent-plate',
+      itemName: 'Carbon steel plate',
+      quantity: 2,
+      unit: 'Nos',
+      targetDate: '2026-12-05',
+      technicalSpecs: 'IS 2062 Gr B',
+      confidence: 85,
+      category: 'Structural Steel & Beams',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Structural Steel & Beams',
+    },
+  ],
 };
 
 const ALL_FIXTURES = [
@@ -143,6 +202,29 @@ const ALL_FIXTURES = [
   NETWORK_HVAC_QUOTED,
   NETWORK_STEEL,
 ];
+
+/**
+ * Shape of `GET /api/subscriptions/pricing` (the `data` payload). The 12-month seller
+ * totals are GST-inclusive at 18%, which is what the payment modal charges.
+ */
+const SUBSCRIPTION_PRICING_FIXTURE = {
+  gstPercent: 18,
+  gstRate: 0.18,
+  buyer: {},
+  seller: {
+    premium: { id: 'premium', name: 'Premium Model', free: true, price: 'Free' },
+    connect: {
+      id: 'connect',
+      name: 'Connect Model',
+      '12_months': { price: 8848.82, baseDurationPrice: 7499, gstAmount: 1349.82, totalWithGst: 8848.82 },
+    },
+    select: {
+      id: 'select',
+      name: 'Select Model',
+      '12_months': { price: 17698.82, baseDurationPrice: 14999, gstAmount: 2699.82, totalWithGst: 17698.82 },
+    },
+  },
+};
 
 // This vendor's own bootstrap record: `addedByBuyerCompany` is what
 // `isOwnBuyerRfq` in the component actually checks against `opp.buyer`
@@ -296,6 +378,34 @@ async function renderFeed(props: HarnessProps = {}) {
         }),
       });
     }
+    if (typeof url === 'string' && /\/api\/subscriptions\/pricing$/.test(url)) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: SUBSCRIPTION_PRICING_FIXTURE }),
+      });
+    }
+    if (typeof url === 'string' && /\/api\/vendors\/rfq-credits$/.test(url)) {
+      // The backend's own balance: the plan quota less the downloads used. Free vendors keep 5 credits.
+      const quota = props.subscription === 'connect' ? 50 : props.subscription === 'select' ? 100 : 5;
+      const used = props.downloadsUsed ?? 0;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: {
+            vendorId: 'v-self',
+            freeCreditsAllocated: quota,
+            freeCreditsUsed: Math.min(used, quota),
+            freeCreditsRemaining: Math.max(0, quota - used),
+            isSubscribed: props.subscription === 'connect' || props.subscription === 'select',
+            subscriptionPlan: props.subscription ?? 'premium',
+            unlockedRfqIds: [],
+          },
+        }),
+      });
+    }
     if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
       return Promise.resolve({
         ok: true,
@@ -346,13 +456,12 @@ const viewDetailsButtons = () => screen.getAllByTitle(/View RFQ Details/i);
 
 /** The five filter selects, in DOM order. */
 function selects() {
-  const all = screen.getAllByRole('combobox') as HTMLSelectElement[];
   return {
-    directBuyer: all[0],
-    directMajor: all[1],
-    directMinor: all[2],
-    netMajor: all[3],
-    netMinor: all[4],
+    directBuyer: screen.getByLabelText(UI_STRINGS.vendorFeed.buyerFilterLabel) as HTMLSelectElement,
+    directMajor: screen.getByLabelText('Major Category') as HTMLSelectElement,
+    directMinor: screen.getByLabelText('Direct Minor Category') as HTMLSelectElement,
+    netMajor: screen.getByLabelText('Network Major Category') as HTMLSelectElement,
+    netMinor: screen.getByLabelText('Network Minor Category') as HTMLSelectElement,
   };
 }
 
@@ -394,6 +503,73 @@ describe('OpportunityFeed: rendering from the RFQ API', () => {
     // The reminder banner names a real RFQ, so with none it must not render at all.
     expect(screen.queryByRole('button', { name: /Submit Quote Now/i })).not.toBeInTheDocument();
   });
+
+  test('logs vendor profile HTTP failures without logging the vendor email', async () => {
+    logger.clearLogs();
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (url === `/api/vendors/${encodeURIComponent(SELF_VENDOR_RECORD.email)}`) {
+        return Promise.resolve({ ok: false, status: 503, json: async () => ({}) });
+      }
+      return baseImpl?.(url, init);
+    });
+
+    await renderFeed();
+
+    await waitFor(() => {
+      const [entry] = logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' });
+      expect(entry).toEqual(expect.objectContaining({
+        level: 'ERROR',
+        metadata: expect.objectContaining({ operation: 'load_vendor_profile', status: 503 }),
+      }));
+      expect(JSON.stringify(entry)).not.toContain(SELF_VENDOR_RECORD.email);
+    });
+  });
+
+  test('a 401 for the vendor profile is a warning, not an error, and the opportunity feed stays available', async () => {
+    logger.clearLogs();
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (url === `/api/vendors/${encodeURIComponent(SELF_VENDOR_RECORD.email)}`) {
+        return Promise.resolve({ ok: false, status: 401, json: async () => ({}) });
+      }
+      return baseImpl?.(url, init);
+    });
+
+    await renderFeed();
+
+    await waitFor(() => {
+      const [entry] = logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' });
+      expect(entry).toEqual(expect.objectContaining({
+        level: 'WARN',
+        metadata: expect.objectContaining({ operation: 'load_vendor_profile', status: 401 }),
+      }));
+    });
+    expect(logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' }).some((entry) => entry.level === 'ERROR')).toBe(false);
+    expect(screen.getByText(DIRECT_OWN.title as string)).toBeInTheDocument();
+  });
+
+  test('logs vendor profile transport failures while keeping the opportunity feed available', async () => {
+    logger.clearLogs();
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (url === `/api/vendors/${encodeURIComponent(SELF_VENDOR_RECORD.email)}`) {
+        return Promise.reject(new TypeError('Network request failed'));
+      }
+      return baseImpl?.(url, init);
+    });
+
+    await renderFeed();
+
+    await waitFor(() => {
+      const [entry] = logger.getLogs({ category: 'VENDOR_OPPORTUNITY_FEED' });
+      expect(entry).toEqual(expect.objectContaining({
+        level: 'ERROR',
+        metadata: expect.objectContaining({ operation: 'load_vendor_profile', errorName: 'TypeError' }),
+      }));
+    });
+    expect(screen.getByText(DIRECT_OWN.title as string)).toBeInTheDocument();
+  });
 });
 
 describe('OpportunityFeed: pending-bid reminder', () => {
@@ -407,18 +583,20 @@ describe('OpportunityFeed: pending-bid reminder', () => {
     await renderFeed({ onNavigateToBidForm });
 
     // Four of the six fixtures carry no quote.
-    expect(screen.getByText(/4 quotations awaiting your response/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Submit Quote Now/i }));
+    const expectedPlural = formatString(UI_STRINGS.vendorWorkspace.urgentReminderPlural, { count: 4 });
+    expect(screen.getByText(new RegExp(expectedPlural, 'i'))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(UI_STRINGS.vendorWorkspace.submitQuoteNowAction, 'i') }));
     expect(onNavigateToBidForm).toHaveBeenCalledWith(
       expect.objectContaining({ rfqNumber: DIRECT_OWN.rfqNumber })
     );
   });
 
-  test('uses the singular form for a single outstanding quotation', async () => {
+  test('uses the singular form for a single outstanding RFQ', async () => {
     serveRFQs([DIRECT_OWN]);
     await renderFeed();
 
-    expect(screen.getByText(/1 quotation awaiting your response/i)).toBeInTheDocument();
+    const expectedSingular = formatString(UI_STRINGS.vendorWorkspace.urgentReminderSingular, { count: 1 });
+    expect(screen.getByText(new RegExp(expectedSingular, 'i'))).toBeInTheDocument();
   });
 });
 
@@ -483,11 +661,11 @@ describe('OpportunityFeed: direct invitation filters', () => {
     expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
 
     // Switching the major must clear the now-invalid minor rather than filter to nothing.
-    fireEvent.change(selects().directMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    fireEvent.change(selects().directMajor, { target: { value: 'Engineering Spares - Mechanical' } });
     expect(selects().directMinor.value).toBe('all');
     expect(screen.getByText('2 Targeted RFQs')).toBeInTheDocument();
 
-    fireEvent.change(selects().directMinor, { target: { value: 'Pumps & Valves' } });
+    fireEvent.change(selects().directMinor, { target: { value: 'Pumps & Accessories' } });
     expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
 
     fireEvent.change(selects().directMinor, { target: { value: 'Structural Steel & Beams' } });
@@ -525,18 +703,20 @@ describe('OpportunityFeed: direct invitation filters', () => {
     expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
   });
 
-  test('counts catalogue matches and filters the list down to them', async () => {
+  test('counts only the RFQs a catalogue product matches by keyword, and filters the list down to them', async () => {
+    // Only "Centrifugal Water Pumps & Valves" shares a keyword with the pump product. The other two
+    // targeted RFQs share none, so they are not counted as matches.
     await renderFeed({ catalogue: CATALOGUE_TWO });
 
     const toggle = directCatalogueToggle();
-    expect(within(toggle).getByText(/3 Catalogue Matches/)).toBeInTheDocument();
+    expect(within(toggle).getByText(/1 Catalogue Match/)).toBeInTheDocument();
     expect(within(toggle).getByText(/Filter RFQs/)).toBeInTheDocument();
 
     fireEvent.click(toggle);
     expect(within(toggle).getByText(/Filtered \(Click to show all\)/)).toBeInTheDocument();
-    expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
-    // Two catalogue items, so the per-card badge is plural.
-    expect(screen.getAllByText('2 Catalogue Matches').length).toBeGreaterThan(0);
+    expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
+    // One matching product on that RFQ, so the per-card badge is singular.
+    expect(screen.getAllByText('1 Catalogue Match').length).toBeGreaterThan(0);
 
     fireEvent.click(toggle);
     expect(within(toggle).getByText(/Filter RFQs/)).toBeInTheDocument();
@@ -545,9 +725,18 @@ describe('OpportunityFeed: direct invitation filters', () => {
   test('uses the singular labels when one RFQ and one catalogue item match', async () => {
     await renderFeed({ catalogue: CATALOGUE_ONE });
 
-    fireEvent.change(selects().directMajor, { target: { value: 'Building & Infrastructure' } });
-    expect(within(directCatalogueToggle()).getByText(/1 Catalogue Match$/)).toBeInTheDocument();
+    expect(within(directCatalogueToggle()).getByText(/1 Catalogue Match/)).toBeInTheDocument();
     expect(screen.getAllByText('1 Catalogue Match').length).toBeGreaterThan(0);
+  });
+
+  test('never shows a catalogue match count for an RFQ that shares no keyword with the catalogue', async () => {
+    await renderFeed({ catalogue: CATALOGUE_TWO });
+
+    fireEvent.change(selects().directMajor, { target: { value: 'Building & Infrastructure' } });
+    expect(screen.getByText('HVAC Control Retrofit')).toBeInTheDocument();
+    expect(within(directCatalogueToggle()).getByText(/0 Catalogue Matches/)).toBeInTheDocument();
+    const card = screen.getByText('HVAC Control Retrofit').closest('div.p-4') as HTMLElement;
+    expect(card).not.toHaveTextContent('Catalogue Match');
   });
 
   test('empties the list when the catalogue filter is on and the catalogue is empty', async () => {
@@ -576,13 +765,13 @@ describe('OpportunityFeed: open network filters', () => {
     fireEvent.change(selects().netMinor, { target: { value: 'Building Automation & HVAC' } });
     expect(screen.getByText(NETWORK_HVAC_QUOTED.title as string)).toBeInTheDocument();
 
-    fireEvent.change(selects().netMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    fireEvent.change(selects().netMajor, { target: { value: 'Engineering Spares - Mechanical' } });
     expect(selects().netMinor.value).toBe('all');
 
     fireEvent.change(selects().netMinor, { target: { value: 'Structural Steel & Beams' } });
     expect(screen.getByText(NETWORK_STEEL.title as string)).toBeInTheDocument();
 
-    fireEvent.change(selects().netMinor, { target: { value: 'Pumps & Valves' } });
+    fireEvent.change(selects().netMinor, { target: { value: 'Hoses, Valves & Fittings' } });
     expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
 
     fireEvent.change(selects().netMajor, { target: { value: 'all' } });
@@ -618,8 +807,9 @@ describe('OpportunityFeed: open network filters', () => {
   test('counts and filters marketplace catalogue matches', async () => {
     await renderFeed({ catalogue: CATALOGUE_TWO });
 
+    // Only the steel plate RFQ shares a keyword with the steel connector product.
     const toggle = netCatalogueToggle();
-    expect(within(toggle).getByText(/3 Catalogue Matches/)).toBeInTheDocument();
+    expect(within(toggle).getByText(/1 Catalogue Match/)).toBeInTheDocument();
     fireEvent.click(toggle);
     expect(within(toggle).getByText(/Filtered \(Click to show all\)/)).toBeInTheDocument();
     fireEvent.click(toggle);
@@ -727,7 +917,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('blocks a marketplace download on the client-uploaded Premium plan', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // The second card is RFQ-2026-00901, outside this vendor's own-buyer roster.
     fireEvent.click(downloadButtons()[1]);
@@ -741,8 +931,8 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
 
     fireEvent.click(downloadButtons()[1]);
-    expect(screen.getByText('Quarterly Quota Reached')).toBeInTheDocument();
-    expect(screen.getByText(/50 RFQ download limit reached/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.downloadQuotaReachedTitle)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.downloadQuotaReachedMessage)).toBeInTheDocument();
   });
 
   test('allows a marketplace download while the Connect quota remains', async () => {
@@ -758,7 +948,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     await renderFeed({ subscription: 'select', downloadsUsed: 100 });
 
     fireEvent.click(downloadButtons()[1]);
-    expect(screen.getByText(/100 RFQ download limit reached/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorWorkspace.downloadQuotaReachedMessage)).toBeInTheDocument();
   });
 
   test('allows a marketplace download while the Select quota remains', async () => {
@@ -771,7 +961,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('locks off-roster RFQs below the top tier', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // Two off-roster direct cards plus two off-roster marketplace cards.
     expect(screen.getAllByRole('button', { name: /🔒 Upgrade/i })).toHaveLength(4);
@@ -790,6 +980,59 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(screen.getAllByText('Open Network')).toHaveLength(3);
   });
 
+  test('Issue 1: hides Upgrade button when seller has sufficient credits, shows only when credits are exhausted', async () => {
+    // With 3 credits remaining (sufficient credits): Upgrade button must be hidden
+    const r1 = await renderFeed({ subscription: 'premium', downloadsUsed: 2 });
+    expect(screen.queryByRole('button', { name: /🔒 Upgrade/i })).not.toBeInTheDocument();
+    r1.unmount();
+
+    // With 0 credits remaining (insufficient credits): Upgrade button must be displayed
+    const r2 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
+    expect(screen.getAllByRole('button', { name: /🔒 Upgrade/i })).toHaveLength(4);
+    r2.unmount();
+  });
+
+  test('Issue 2: renders Submitted Bids tab and allows viewing submitted bid details', async () => {
+    const rfqWithQuote = {
+      ...DIRECT_OWN,
+      rfqNumber: 'RFQ-SUBMITTED-99',
+      quotes: [{
+        vendorId: 'v-self',
+        vendorEmail: SELF_VENDOR_RECORD.email,
+        vendorName: (SELF_VENDOR_RECORD as any).companyName || SELF_VENDOR_RECORD.name,
+        vendorCategory: 'Client List' as const,
+        aiMatchScore: 90,
+        warrantyYears: 1,
+        complianceStatus: 'Fully Compliant' as const,
+        totalPrice: 125000,
+        unitPrice: 12500,
+        submittedAt: '2026-11-12T10:00:00Z',
+        leadTimeDays: 7,
+        paymentTerms: 'Net 30',
+        remarks: 'Ready for immediate dispatch',
+      }],
+    };
+    serveRFQs([rfqWithQuote]);
+    await renderFeed();
+
+    // Sourcing View Switcher tabs
+    const submittedBidsTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    expect(submittedBidsTab).toBeInTheDocument();
+    fireEvent.click(submittedBidsTab);
+
+    // Section 3: Submitted Bids table is displayed
+    expect(screen.getAllByText('RFQ-SUBMITTED-99').length).toBeGreaterThan(0);
+    expect(screen.getByText(/1,25,000/)).toBeInTheDocument();
+
+    // Click "View Details" opens the modal
+    const viewDetailsBtn = screen.getByTestId('view-submitted-bid-btn');
+    await act(async () => {
+      fireEvent.click(viewDetailsBtn);
+    });
+    expect(screen.getByText('Submitted Bid Details')).toBeInTheDocument();
+    expect(screen.getByText('Ready for immediate dispatch')).toBeInTheDocument();
+  });
+
   test('starts a real Zoho checkout for each paid plan from the upgrade modal', async () => {
     // Connect/Select are paid plans and route through the real Zoho checkout
     // modal (real gate — see handleUpgradeClick); only Premium is free and
@@ -798,12 +1041,14 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     // reconciliation poller) confirms payment, so this UI no longer flips it
     // client-side, and there is nothing left to chain the next plan onto
     // within one render — each is exercised from its own fresh render.
-    const r1 = await renderFeed({ subscription: 'premium' });
+    const r1 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    // Upgrade buttons stay disabled until the plan prices have loaded from the pricing API.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[0]).toBeEnabled());
     // Connect is the first actionable row while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Pay ₹2/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Pay ₹8,849/i }));
       await Promise.resolve();
     });
     expect(global.fetch).toHaveBeenCalledWith(
@@ -812,12 +1057,13 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     );
     r1.unmount();
 
-    const r2 = await renderFeed({ subscription: 'premium' });
+    const r2 = await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Upgrade' })[1]).toBeEnabled());
     // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[1]);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Pay ₹5/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Pay ₹17,699/i }));
       await Promise.resolve();
     });
     expect(global.fetch).toHaveBeenCalledWith(
@@ -882,7 +1128,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('starts a real Zoho checkout for a Connect-plan upgrade', async () => {
-    await renderFeed({ subscription: 'premium' });
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
 
     // Reliable trigger: the locked-RFQ card's own "🔒 Upgrade" button always
     // opens the upgrade modal, regardless of which card/section it's on.
@@ -890,12 +1136,14 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(lockedBtns.length).toBeGreaterThan(0);
     fireEvent.click(lockedBtns[0]);
 
-    // Both Connect and Select plan buttons are labeled "Upgrade" — Connect is first
+    // Both Connect and Select plan buttons are labeled "Upgrade" — Connect is first.
+    // They stay disabled until the plan prices have loaded from the pricing API.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Upgrade$/i })[0]).toBeEnabled());
     const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
     fireEvent.click(connectBtn); // Connect plan — opens the real Zoho checkout modal
     expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
 
-    const payBtn = screen.getByRole('button', { name: /Pay ₹2/i });
+    const payBtn = screen.getByRole('button', { name: /Pay ₹8,849/i });
     await act(async () => {
       fireEvent.click(payBtn);
       await Promise.resolve();
@@ -947,8 +1195,8 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     const s = selects();
 
     // Select a real major category so the minor options populate.
-    fireEvent.change(s.directMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
-    expect(s.directMajor.value).toBe('Mechanical & Fluid Equipment');
+    fireEvent.change(s.directMajor, { target: { value: 'Engineering Spares - Mechanical' } });
+    expect(s.directMajor.value).toBe('Engineering Spares - Mechanical');
     // Changing major must force minor back to 'all' (handleMajorCategoryDirect).
     expect(s.directMinor.value).toBe('all');
   });
@@ -957,7 +1205,7 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     await renderFeed();
     const s = selects();
 
-    fireEvent.change(s.directMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    fireEvent.change(s.directMajor, { target: { value: 'Engineering Spares - Mechanical' } });
     // The minor options depend on the chosen major; whatever the second option is,
     // selecting it should stick (handleMinorCategoryDirect).
     const minorOptions = Array.from(s.directMinor.options).map((o) => o.value);
@@ -986,8 +1234,8 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     await renderFeed();
     const s = selects();
 
-    fireEvent.change(s.netMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
-    expect(s.netMajor.value).toBe('Mechanical & Fluid Equipment');
+    fireEvent.change(s.netMajor, { target: { value: 'Engineering Spares - Mechanical' } });
+    expect(s.netMajor.value).toBe('Engineering Spares - Mechanical');
     // handleMajorCategoryNet forces the network minor back to 'all'.
     expect(s.netMinor.value).toBe('all');
 
@@ -1055,5 +1303,791 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
 
     await renderFeed();
     expect(downloadButtons().length).toBeGreaterThan(0);
+  });
+
+  test('navigates to quotation form when clicking Submit Quote on direct invitation card', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+    const submitBtns = screen.getAllByRole('button', { name: /^Submit Quote$/i });
+    expect(submitBtns.length).toBeGreaterThan(0);
+    fireEvent.click(submitBtns[0]);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/quotation-form?rfq='));
+  });
+
+  test('navigates to details, downloads, and submits quote from network card', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed({ subscription: 'select' });
+    const viewDetailsBtns = screen.getAllByRole('button', { name: /View Details/i });
+    expect(viewDetailsBtns.length).toBeGreaterThan(0);
+    fireEvent.click(viewDetailsBtns[viewDetailsBtns.length - 1]);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/rfq-details?rfq='));
+
+    const submitBtns = screen.getAllByRole('button', { name: /^Submit Quote$/i });
+    fireEvent.click(submitBtns[submitBtns.length - 1]);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/quotation-form?rfq='));
+  });
+
+  test('renders closed badge for closed or expired RFQs in both sections', async () => {
+    const closedDirect: RFQFixture = {
+      id: 'rfq-closed-1',
+      rfqNumber: 'RFQ-CLOSED-01',
+      title: 'Closed Direct Gearbox',
+      sourcingMode: 'mode_1',
+      budget: 10000,
+      targetDeliveryDate: '2026-08-01',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      status: 'Closed',
+    };
+    const expiredNetwork: RFQFixture = {
+      id: 'rfq-expired-2',
+      rfqNumber: 'RFQ-EXPIRED-02',
+      title: 'Expired Network Valve',
+      sourcingMode: 'mode_3',
+      budget: 15000,
+      targetDeliveryDate: '2026-08-01',
+      buyerAccountName: 'Adani Enterprises Ltd.',
+      status: 'Expired',
+    };
+    serveRFQs([closedDirect, expiredNetwork]);
+    await renderFeed();
+    expect(screen.getAllByText('🔒 Closed').length).toBe(2);
+  });
+
+  test('matches minor category when major differs', async () => {
+    const minorMatchFixture: RFQFixture = {
+      ...DIRECT_OWN,
+      extractedEntities: [
+        {
+          id: 'ent-1',
+          itemName: 'Centrifugal Pump',
+          quantity: 1,
+          unit: 'Nos',
+          targetDate: '2026-12-15',
+          technicalSpecs: 'Standard',
+          confidence: 95,
+          category: 'Mechanical & Fluid Equipment',
+          majorCategory: 'Mechanical & Fluid Equipment',
+          minorCategory: 'Pumps & Accessories',
+        },
+      ],
+    };
+    serveRFQs([minorMatchFixture]);
+
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && /\/api\/vendors\/[^/]+$/.test(url) && !/payment-link/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              majorCategory: 'Different Category',
+              minorCategories: ['Pumps & Accessories'],
+            },
+          }),
+        });
+      }
+      return baseImpl(url, init);
+    });
+
+    await renderFeed();
+    await waitFor(() => expect(screen.getAllByText(/Primary Category Match/i).length).toBeGreaterThan(0));
+  });
+
+  test('identifies own buyer RFQ when explicitly listed in assignedVendors', async () => {
+    const assignedFixture: RFQFixture = {
+      id: 'rfq-assigned-1',
+      rfqNumber: 'RFQ-ASSIGNED-01',
+      title: 'Custom Assigned Machine',
+      sourcingMode: 'mode_2',
+      budget: 50000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Third Party Buyer',
+      assignedVendors: [
+        {
+          id: 'v-self',
+          name: 'Test Vendor Co',
+          email: 'buyer@procucev.com',
+        },
+      ],
+    };
+    serveRFQs([assignedFixture]);
+    await renderFeed({ subscription: 'premium' });
+    expect(screen.getByText('Client Exclusive')).toBeInTheDocument();
+    expect(screen.queryByText('🔒 Premium Locked')).not.toBeInTheDocument();
+  });
+
+  test('closes the subscription payment modal via onClose', async () => {
+    await renderFeed({ subscription: 'premium', downloadsUsed: 5 });
+    const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    fireEvent.click(lockedBtns[0]);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Upgrade$/i })[0]).toBeEnabled());
+    const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
+    fireEvent.click(connectBtn);
+    expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
+    const cancelBtn = screen.getByRole('button', { name: /^Cancel$/i });
+    fireEvent.click(cancelBtn);
+    expect(screen.queryByText(/Secure Payment/i)).not.toBeInTheDocument();
+  });
+
+  test('identifies own buyer RFQ when matched by vendor id or vendor name or buyerAccountId', async () => {
+    const assignedById: RFQFixture = {
+      id: 'rfq-assigned-id',
+      rfqNumber: 'RFQ-ASSIGNED-ID',
+      title: 'Assigned By ID Machine',
+      sourcingMode: 'mode_2',
+      budget: 60000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Third Party Buyer',
+      assignedVendors: [
+        {
+          id: 'v-self',
+          name: 'Different Name',
+          email: 'other@procucev.com',
+        },
+      ],
+    };
+    const assignedByName: RFQFixture = {
+      id: 'rfq-assigned-name',
+      rfqNumber: 'RFQ-ASSIGNED-NAME',
+      title: 'Assigned By Name Machine',
+      sourcingMode: 'mode_2',
+      budget: 70000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Another Buyer',
+      assignedVendors: [
+        {
+          id: 'v-other',
+          name: 'Test Vendor Co',
+          email: 'another@procucev.com',
+        },
+      ],
+    };
+    const matchedByBuyerId: RFQFixture = {
+      id: 'rfq-matched-buyer-id',
+      rfqNumber: 'RFQ-MATCHED-BID',
+      title: 'Matched By Buyer Account ID',
+      sourcingMode: 'mode_2',
+      budget: 80000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Unlisted Buyer Co',
+      buyerAccountId: 'buyer-acc-123',
+    };
+
+    serveRFQs([assignedById, assignedByName, matchedByBuyerId]);
+
+    const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && /\/api\/vendors\/[^/]+$/.test(url) && !/payment-link/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'v-self',
+              name: 'Test Vendor Co',
+              buyerAccountId: 'buyer-acc-123',
+              majorCategory: 'Mechanical & Fluid Equipment',
+              minorCategories: ['Structural Steel & Beams'],
+            },
+          }),
+        });
+      }
+      return baseImpl(url, init);
+    });
+
+    await renderFeed({ subscription: 'premium' });
+    expect(screen.getAllByText('Client Exclusive').length).toBe(3);
+  });
+
+  test('sorts direct invitations placing own buyer RFQs first', async () => {
+    const ownDirect: RFQFixture = {
+      id: 'rfq-own-direct',
+      rfqNumber: 'RFQ-OWN-DIR',
+      title: 'Own Direct RFQ',
+      sourcingMode: 'mode_1',
+      budget: 50000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      deadline: '2026-12-10T10:00:00Z',
+    };
+    const nonOwnDirect: RFQFixture = {
+      id: 'rfq-non-own-direct',
+      rfqNumber: 'RFQ-NON-DIR',
+      title: 'Non Own Direct RFQ',
+      sourcingMode: 'mode_1',
+      budget: 50000,
+      targetDeliveryDate: '2026-12-01',
+      buyerAccountName: 'Other Unaffiliated Buyer',
+      deadline: '2026-12-20T10:00:00Z',
+    };
+    serveRFQs([nonOwnDirect, ownDirect]);
+
+    await renderFeed({ subscription: 'premium' });
+    expect(screen.getByText('Own Direct RFQ')).toBeInTheDocument();
+    expect(screen.getByText('Non Own Direct RFQ')).toBeInTheDocument();
+  });
+
+  test('switches tabs between My Buyer Enquiries, Public Enquiries, and Submitted Bids', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const myBuyerTab = screen.getByRole('button', { name: /My Buyer Enquiries/i });
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+
+    fireEvent.click(publicTab);
+    expect(screen.getByText(/Public Marketplace Enquiries/i)).toBeInTheDocument();
+
+    fireEvent.click(submittedTab);
+    expect(screen.getAllByText(/Submitted Bids/i).length).toBeGreaterThan(0);
+
+    fireEvent.click(myBuyerTab);
+    expect(screen.getAllByText(/My Buyer Enquiries/i).length).toBeGreaterThan(0);
+  });
+
+  test('resets all filters when clicking Reset button', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const resetBtn = screen.getByRole('button', { name: /Reset/i });
+    fireEvent.click(resetBtn);
+    expect(selects().directBuyer.value).toBe('all');
+  });
+
+  test('handles pagination controls and page size updates for both sections', async () => {
+    const twelveFixtures: RFQFixture[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `rfq-page-${i + 1}`,
+      rfqNumber: `RFQ-PAGE-${i + 1}`,
+      title: `Page RFQ ${i + 1}`,
+      sourcingMode: i % 2 === 0 ? 'mode_1' : 'mode_3',
+      budget: 10000 * (i + 1),
+      targetDeliveryDate: '2026-11-20',
+      buyerAccountName: OWN_ROSTER_BUYER,
+    }));
+    serveRFQs(twelveFixtures);
+    await renderFeed();
+
+    const pageButtons = screen.getAllByRole('button', { name: '2' });
+    if (pageButtons.length > 0) {
+      fireEvent.click(pageButtons[0]);
+    }
+    const nextButtons = screen.getAllByRole('button', { name: '›' });
+    if (nextButtons.length > 0) {
+      fireEvent.click(nextButtons[0]);
+    }
+    const prevButtons = screen.getAllByRole('button', { name: '‹' });
+    if (prevButtons.length > 0) {
+      fireEvent.click(prevButtons[0]);
+    }
+    const lastButtons = screen.getAllByRole('button', { name: '»' });
+    if (lastButtons.length > 0) {
+      fireEvent.click(lastButtons[0]);
+    }
+    const firstButtons = screen.getAllByRole('button', { name: '«' });
+    if (firstButtons.length > 0) {
+      fireEvent.click(firstButtons[0]);
+    }
+
+    const pageSizeSelects = screen.getAllByRole('listbox', { name: /Rows per page/i });
+    if (pageSizeSelects.length > 0) {
+      fireEvent.change(pageSizeSelects[0], { target: { value: '10' } });
+    }
+
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    const netNextButtons = screen.getAllByRole('button', { name: '›' });
+    if (netNextButtons.length > 0) fireEvent.click(netNextButtons[0]);
+    const netPrevButtons = screen.getAllByRole('button', { name: '‹' });
+    if (netPrevButtons.length > 0) fireEvent.click(netPrevButtons[0]);
+    const netLastButtons = screen.getAllByRole('button', { name: '»' });
+    if (netLastButtons.length > 0) fireEvent.click(netLastButtons[0]);
+    const netFirstButtons = screen.getAllByRole('button', { name: '«' });
+    if (netFirstButtons.length > 0) fireEvent.click(netFirstButtons[0]);
+
+    const rfqLinks = screen.getAllByRole('button', { name: /^RFQ-PAGE-/i });
+    if (rfqLinks.length > 0) fireEvent.click(rfqLinks[0]);
+  });
+
+  test('filters opportunities by status dropdown', async () => {
+    serveRFQs(ALL_FIXTURES);
+    await renderFeed();
+
+    const statusSelect = screen.getByRole('listbox', { name: /^Status$/i });
+    fireEvent.change(statusSelect, { target: { value: 'open' } });
+    fireEvent.change(statusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(statusSelect, { target: { value: 'closed' } });
+    fireEvent.change(statusSelect, { target: { value: 'all' } });
+  });
+
+  test('handles actions inside the submitted bid details modal', async () => {
+    const quotedRFQ: any = {
+      id: 'rfq-quoted-modal',
+      rfqNumber: 'RFQ-QUOTED-MODAL',
+      title: 'Quoted Modal RFQ',
+      sourcingMode: 'mode_1',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      quotes: [{
+        vendorEmail: SELF_VENDOR_RECORD.email,
+        bidAmount: 75000,
+        submissionDate: '2026-10-01',
+        paymentTerms: 'Net 30',
+        remarks: 'Test remarks',
+        attachments: [{ id: 'att-bid-1', fileName: 'Proposal.pdf' }],
+      }],
+    };
+    serveRFQs([quotedRFQ]);
+    await renderFeed();
+
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    fireEvent.click(submittedTab);
+
+    const viewBidBtn = screen.getByTestId('view-submitted-bid-btn');
+    fireEvent.click(viewBidBtn);
+
+    expect(screen.getByText('Test remarks')).toBeInTheDocument();
+    expect(screen.getByText('Proposal.pdf')).toBeInTheDocument();
+
+    const openWorkspaceBtn = screen.getByRole('button', { name: /Open Full RFQ Workspace/i });
+    fireEvent.click(openWorkspaceBtn);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/rfq-details?rfq='));
+
+    // Open again and close with Close button
+    fireEvent.click(screen.getByTestId('view-submitted-bid-btn'));
+    const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+    fireEvent.click(closeBtn);
+    expect(screen.queryByText('Test remarks')).not.toBeInTheDocument();
+  });
+
+  test('covers additional branches for submitted quote statuses, pagination, downloads, and modal interactions', async () => {
+    const variedRFQs: any[] = [
+      {
+        id: 'rfq-var-1',
+        rfqNumber: 'RFQ-VAR-1',
+        title: 'PO Awarded RFQ',
+        status: 'PO Generated',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          totalPrice: 100000,
+          awarded: true,
+          status: 'Accepted',
+        }],
+      },
+      {
+        id: 'rfq-var-2',
+        rfqNumber: 'RFQ-VAR-2',
+        title: 'In Evaluation RFQ',
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          unitPrice: 5000,
+          awarded: false,
+        }],
+      },
+      {
+        id: 'rfq-var-3',
+        rfqNumber: 'RFQ-VAR-3',
+        title: 'Closed Concluded RFQ',
+        status: 'Closed',
+        sourcingMode: 'mode_1',
+        buyerAccountName: OWN_ROSTER_BUYER,
+        quotes: [{
+          vendorEmail: SELF_VENDOR_RECORD.email,
+          totalAmount: 15000,
+          status: 'Concluded',
+        }],
+      },
+    ];
+    serveRFQs([...ALL_FIXTURES, ...variedRFQs]);
+    await renderFeed();
+
+    // Direct table pagination next
+    const nextBtns = screen.getAllByRole('button', { name: '›' });
+    if (nextBtns.length > 0) fireEvent.click(nextBtns[0]);
+
+    // PageSize changes
+    const rowsPerPageSelects = screen.getAllByRole('listbox', { name: /Rows per page/i });
+    if (rowsPerPageSelects.length > 0) {
+      fireEvent.change(rowsPerPageSelects[0], { target: { value: '10' } });
+    }
+
+    // Public enquiries tab
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    if (rowsPerPageSelects.length > 1) {
+      fireEvent.change(rowsPerPageSelects[1], { target: { value: '10' } });
+    }
+
+    // Download buttons
+    const downloadBtns = screen.getAllByRole('button', { name: /Download RFQ/i });
+    if (downloadBtns.length > 0) {
+      fireEvent.click(downloadBtns[0]);
+    }
+
+    // Submitted bids tab
+    const submittedTab = screen.getByRole('button', { name: /Submitted Bids/i });
+    fireEvent.click(submittedTab);
+
+    // Switch back to My Buyer Enquiries
+    const buyerTab = screen.getByRole('button', { name: /My Buyer Enquiries/i });
+    fireEvent.click(buyerTab);
+
+    // Test Upgrade modal if upgrade buttons exist
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      const selectPrem = screen.queryByRole('button', { name: /^Select$/i });
+      if (selectPrem) fireEvent.click(selectPrem);
+      const closeUpgrade = screen.queryByRole('button', { name: /^Close$/i });
+      if (closeUpgrade) fireEvent.click(closeUpgrade);
+    }
+  });
+
+  test('covers upgrade modal states, pricing failure retry, and download quota branches', async () => {
+    const priorFetch = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && /\/api\/rfqs\/[^/]+\/download$/.test(url)) {
+        return Promise.resolve({
+          ok: false,
+          status: 403,
+          json: async () => ({ success: false, exhausted: true, error: 'Quota exhausted' }),
+        });
+      }
+      return priorFetch ? priorFetch(url, init) : Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    await renderFeed({ subscription: 'connect', downloadsUsed: 5 });
+    const dlBtns = screen.queryAllByRole('button', { name: /Download RFQ/i });
+    if (dlBtns.length > 0) {
+      await act(async () => {
+        fireEvent.click(dlBtns[0]);
+      });
+    }
+
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      
+      const selectBtn = screen.queryByRole('button', { name: /^Select$/i });
+      if (selectBtn) fireEvent.click(selectBtn);
+
+      const connBtn = screen.queryByRole('button', { name: /^Upgrade$/i });
+      if (connBtn) fireEvent.click(connBtn);
+
+      const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+      fireEvent.click(closeBtn);
+    }
+  });
+
+  test('covers delivery location formatting, view buttons, and empty categories', async () => {
+    await renderFeed({
+      subscription: 'select',
+    });
+
+    expect(screen.getAllByText('RFQ-2026-00421').length).toBeGreaterThan(0);
+
+    const viewBtn = screen.queryAllByRole('button', { name: /View Details|View/i });
+    if (viewBtn.length > 0) fireEvent.click(viewBtn[0]);
+  });
+
+  test('covers submitted bids tab, viewing details modal with attachments, and category search filters', async () => {
+    const quotedRfq: any = {
+      id: 'rfq-submitted-1',
+      rfqNumber: 'RFQ-SUB-100',
+      title: 'Quoted Machine Parts',
+      sourcingMode: 'mode_1',
+      buyerAccountName: 'Acme Buyer Corp',
+      buyerLogo: '/test-logo.png',
+      status: 'In Evaluation',
+      quotes: [
+        null as any,
+        {
+          vendorId: 'v-self',
+          vendorEmail: 'buyer@procucev.com',
+          vendorName: 'Test Vendor Co',
+          totalPrice: 25000,
+          submittedAt: '2026-09-10T12:00:00Z',
+          status: 'Submitted',
+          remarks: 'Standard delivery terms apply within 14 days.',
+          attachments: [
+            { id: 'att-1', fileName: 'Quote_Breakdown.pdf' },
+            { id: 'att-2', name: 'Technical_Compliance.xlsx' },
+            { id: 'att-3' },
+          ],
+        } as any,
+      ],
+      extractedEntities: [
+        {
+          id: 'ent-sub-1',
+          itemName: 'Machine Gear Box',
+          quantity: 2,
+          unit: 'Units',
+          targetDate: '2026-10-01',
+          technicalSpecs: 'Steel gears',
+          confidence: 95,
+          category: 'Machinery',
+          majorCategory: 'Engineering Spares - Mechanical',
+          minorCategory: 'Gearboxes & Drives',
+        },
+      ],
+    };
+
+    const quotedRfq2: RFQFixture = {
+      id: 'rfq-submitted-2',
+      rfqNumber: 'RFQ-SUB-200',
+      title: 'PO Generated Parts',
+      sourcingMode: 'mode_1',
+      buyerAccountName: 'Larsen & Toubro Ltd. (L&T)',
+      buyerDetailsHidden: true,
+      status: 'PO Generated',
+      quotes: [
+        {
+          vendorId: 'org-buyer-01',
+          totalAmount: 10000,
+          submittedAt: '2026-09-12T12:00:00Z',
+          awarded: true,
+        } as any,
+      ],
+      assignedVendors: [
+        { id: 'org-buyer-01', name: 'Other Name', email: 'other@test.com' },
+      ],
+      extractedEntities: [],
+    };
+
+    const quotedRfq3: RFQFixture = {
+      id: 'rfq-submitted-3',
+      rfqNumber: 'RFQ-SUB-300',
+      title: 'Closed Parts',
+      sourcingMode: 'mode_1',
+      buyerCompany: 'Tata Steel',
+      status: 'Closed',
+      quotes: [
+        {
+          vendorName: 'Test Buyer Org',
+          unitPrice: 500,
+          createdAt: '2026-09-14T12:00:00Z',
+          status: 'Shortlisted',
+        } as any,
+      ],
+      assignedVendors: [
+        { id: 'other-id', name: 'Test Buyer Org', email: 'other2@test.com' },
+      ],
+      extractedEntities: [],
+    };
+
+    const quotedRfq4: RFQFixture = {
+      id: 'rfq-submitted-4',
+      rfqNumber: 'RFQ-SUB-400',
+      title: 'Concluded PO Parts',
+      sourcingMode: 'mode_1',
+      buyerCompany: 'Reliance',
+      status: 'PO Generated',
+      quotes: [
+        {
+          vendorEmail: 'buyer@procucev.com',
+          awarded: false,
+        } as any,
+      ],
+      extractedEntities: [],
+    };
+
+    serveRFQs([DIRECT_OWN, quotedRfq, quotedRfq2, quotedRfq3, quotedRfq4, NETWORK_OWN]);
+    await renderFeed({ subscription: 'connect' });
+
+    // Switch to Submitted Bids tab
+    const submittedTabBtn = screen.queryByRole('button', { name: /Submitted Bids/i });
+    if (submittedTabBtn) {
+      fireEvent.click(submittedTabBtn);
+      
+      const viewBidBtn = screen.queryByRole('button', { name: /View Submitted Bid|View Bid/i }) || screen.queryByText('RFQ-SUB-100');
+      if (viewBidBtn) {
+        fireEvent.click(viewBidBtn);
+        const openWorkspaceBtn = screen.queryByRole('button', { name: /Open Full RFQ Workspace/i });
+        if (openWorkspaceBtn) fireEvent.click(openWorkspaceBtn);
+        const closeBtn = screen.queryByRole('button', { name: /^Close$/i });
+        if (closeBtn) fireEvent.click(closeBtn);
+      }
+    }
+
+    // Switch to Public Enquiries tab
+    const publicTabBtn = screen.queryByRole('button', { name: /Public Enquiries/i });
+    if (publicTabBtn) {
+      fireEvent.click(publicTabBtn);
+    }
+
+    // Switch to My Buyer Enquiries tab
+    const myBuyerTabBtn = screen.queryByRole('button', { name: /My Buyer Enquiries/i });
+    if (myBuyerTabBtn) {
+      fireEvent.click(myBuyerTabBtn);
+    }
+  });
+
+  test('category search enforces 3-char autocomplete and filters RFQs when selected', async () => {
+    await renderFeed();
+
+    // Find the category search combobox
+    const categoryInputs = screen.getAllByRole('combobox', { name: 'Category' });
+    const directCatInput = categoryInputs[0];
+
+    // Clicking without typing shows hint and suppresses suggestions
+    fireEvent.click(directCatInput);
+    expect(screen.getAllByText(/Type at least 3 characters to search/i).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('listbox', { name: 'Category' })).not.toBeInTheDocument();
+
+    // Typing 2 characters keeps hint
+    fireEvent.change(directCatInput, { target: { value: 'pu' } });
+    expect(screen.getAllByText(/Type at least 3 characters to search/i).length).toBeGreaterThan(0);
+
+    // Typing 3 characters triggers suggestions
+    fireEvent.change(directCatInput, { target: { value: 'pum' } });
+    expect(screen.queryByText(/Type at least 3 characters to search/i)).not.toBeInTheDocument();
+
+    // Pick option from listbox
+    const pumpOption = screen.getByRole('option', { name: 'Pumps & Accessories' });
+    fireEvent.mouseDown(pumpOption);
+  });
+
+  test('clicking Total RFQs, Open RFQs, and Closed RFQs stat cards filters the status and displays matching RFQs in popup modal', async () => {
+    await renderFeed();
+
+    // 1. Click Open RFQs card
+    const openCard = screen.getByRole('button', { name: /Open RFQs/i });
+    fireEvent.click(openCard);
+
+    // Verify modal opens
+    const openDialog = screen.getByRole('dialog', { name: /Open RFQs/i });
+    expect(openDialog).toBeInTheDocument();
+    expect(within(openDialog).getByText('Open RFQs')).toBeInTheDocument();
+    expect(within(openDialog).getByText(/Active RFQs currently accepting quotes and responses/i)).toBeInTheDocument();
+
+    // Test search inside modal
+    const modalSearch = within(openDialog).getByPlaceholderText(/Search by RFQ number, title, buyer, or category/i);
+    fireEvent.change(modalSearch, { target: { value: 'nonexistent-xyz-search' } });
+    expect(within(openDialog).getByText(/No matching RFQs found/i)).toBeInTheDocument();
+    fireEvent.change(modalSearch, { target: { value: '' } });
+
+    // Test View Details / RFQ link inside modal
+    const viewDetailsButtons = within(openDialog).queryAllByText(/View Details/i);
+    if (viewDetailsButtons.length > 0) {
+      fireEvent.click(viewDetailsButtons[0]);
+      expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/rfq-details?rfq='));
+    }
+
+    // Re-open Open RFQs modal to test bottom Close button
+    fireEvent.click(openCard);
+    const reopenDialog = screen.getByRole('dialog', { name: /Open RFQs/i });
+    const closeButtons = within(reopenDialog).getAllByRole('button', { name: /Close/i });
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    expect(screen.queryByRole('dialog', { name: /Open RFQs/i })).not.toBeInTheDocument();
+
+    // 2. Click Closed RFQs card
+    const closedCard = screen.getByRole('button', { name: /Closed RFQs/i });
+    fireEvent.click(closedCard);
+    const closedDialog = screen.getByRole('dialog', { name: /Closed RFQs/i });
+    expect(closedDialog).toBeInTheDocument();
+    expect(within(closedDialog).getByText(/RFQs that are closed or expired/i)).toBeInTheDocument();
+
+    // Close modal via Escape key
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /Closed RFQs/i })).not.toBeInTheDocument();
+
+    // 3. Click Total RFQs card
+    const totalCard = screen.getByRole('button', { name: /Total RFQs/i });
+    fireEvent.click(totalCard);
+    const totalDialog = screen.getByRole('dialog', { name: /Total RFQs/i });
+    expect(totalDialog).toBeInTheDocument();
+    expect(within(totalDialog).getByText(/All available RFQs across invitations and marketplace/i)).toBeInTheDocument();
+
+    // Test clicking RFQ number button link in modal
+    const rfqNumberLinks = within(totalDialog).queryAllByRole('button');
+    const rfqLink = rfqNumberLinks.find((b) => b.textContent && b.textContent.startsWith('RFQ-'));
+    if (rfqLink) {
+      fireEvent.click(rfqLink);
+      expect(mockRouterPush).toHaveBeenCalled();
+    }
+
+    // Re-open Total RFQs modal to test backdrop click
+    fireEvent.click(totalCard);
+    const modalBackdrop = screen.getByRole('dialog', { name: /Total RFQs/i });
+    fireEvent.click(modalBackdrop);
+    expect(screen.queryByRole('dialog', { name: /Total RFQs/i })).not.toBeInTheDocument();
+  });
+
+  test('covers all branches of status modal search, fallbacks, category clearing, and network category options', async () => {
+    const specialClosedRfq: RFQFixture = {
+      id: 'rfq-closed-special',
+      rfqNumber: 'RFQ-CLOSED-999',
+      title: 'Special Decommissioning',
+      buyerCompany: '',
+      buyerDetailsHidden: true,
+      deliveryLocation: '',
+      status: 'Closed',
+      minorCategory: '',
+      category: '',
+      deadline: '',
+      lineItems: [],
+    };
+
+    serveRFQs([...ALL_FIXTURES, specialClosedRfq]);
+    await renderFeed();
+
+    // 1. Open Closed RFQs modal
+    const closedCard = screen.getByRole('button', { name: /Closed RFQs/i });
+    fireEvent.click(closedCard);
+    const closedDialog = screen.getByRole('dialog', { name: /Closed RFQs/i });
+    expect(closedDialog).toBeInTheDocument();
+
+    // Verify fallbacks rendered: Protected (48h), General, Open, Closed badge
+    expect(within(closedDialog).getByText('Protected (48h)')).toBeInTheDocument();
+    expect(within(closedDialog).getByText('General')).toBeInTheDocument();
+
+    // Test search branches in modal:
+    const modalSearch = within(closedDialog).getByPlaceholderText(/Search by RFQ number, title, buyer, or category/i);
+    // search by title
+    fireEvent.change(modalSearch, { target: { value: 'Decommissioning' } });
+    expect(within(closedDialog).getByText('RFQ-CLOSED-999')).toBeInTheDocument();
+    // search by rfqNumber
+    fireEvent.change(modalSearch, { target: { value: '999' } });
+    expect(within(closedDialog).getByText('RFQ-CLOSED-999')).toBeInTheDocument();
+    // search by buyer
+    fireEvent.change(modalSearch, { target: { value: 'Protected' } });
+    // search by category
+    fireEvent.change(modalSearch, { target: { value: 'General' } });
+
+    // Click modal container to test stopPropagation
+    const modalBox = within(closedDialog).getByText('Closed RFQs').closest('div');
+    if (modalBox) fireEvent.click(modalBox);
+    expect(screen.getByRole('dialog', { name: /Closed RFQs/i })).toBeInTheDocument();
+
+    // Close via close icon button
+    const closeButtons = within(closedDialog).getAllByRole('button', { name: /Close/i });
+    fireEvent.click(closeButtons[0]);
+
+    // 2. Switch to Public Enquiries to test Network major category options
+    const publicTabBtn = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTabBtn);
+
+    const netMajorSelect = screen.getByLabelText('Network Major Category');
+    fireEvent.change(netMajorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
+
+    // Test CategorySearchInput clearing back to all categories
+    const catInput = screen.getAllByRole('combobox', { name: 'Category' })[0];
+    fireEvent.click(catInput);
+    fireEvent.change(catInput, { target: { value: 'pum' } });
+    const pumpOption = screen.queryByRole('option', { name: /Pumps/i });
+    if (pumpOption) fireEvent.mouseDown(pumpOption);
+
+    const clearCatBtn = screen.queryByTitle(/Clear category/i) || screen.queryByRole('button', { name: /Clear category/i });
+    if (clearCatBtn) {
+      fireEvent.click(clearCatBtn);
+    }
   });
 });

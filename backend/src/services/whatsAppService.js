@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { logger } = require('./loggerService');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -9,8 +10,9 @@ const { logger } = require('./loggerService');
 // Secondary gateway: Meta Cloud API (graph.facebook.com)
 //   Set WHATSAPP_PHONE_NUMBER_ID + WHATSAPP_ACCESS_TOKEN.
 //
-// Fallback (no credentials): returns a deep wa.me direct-link so the
-//   caller always gets something usable regardless of configuration state.
+// When no gateway is configured, or every gateway attempt fails, the function
+//   returns a wa.me deep-link with success:false so a person can share it.
+//   Nothing is reported as sent in that case.
 // ─────────────────────────────────────────────────────────────────────────────
 function getEnv(key, fallback = '') {
   if (process.env[key] !== undefined && process.env[key] !== '') return process.env[key];
@@ -41,6 +43,25 @@ const WHATSAPP_CONFIG = {
 // In-memory throttle cache (30-second cooldown per destination number)
 const recentWhatsAppDispatches = new Map();
 const WA_THROTTLE_WINDOW_MS = 30000;
+
+// Status reported for every send attempt. `success` is true only when a provider accepted the message.
+const WHATSAPP_SEND_STATUS = Object.freeze({
+  SENT: 'sent',
+  THROTTLED: 'throttled',
+  LINK_ONLY: 'link_only',
+  NOT_CONFIGURED: 'not_configured',
+  SKIPPED: 'skipped',
+});
+
+// Messages stay in this module until they move to backend/src/config/constants.js.
+const WHATSAPP_MESSAGES = Object.freeze({
+  INVALID_PHONE: 'Invalid phone number format',
+  RFQ_NUMBER_REQUIRED: 'An RFQ number is required to send a WhatsApp RFQ invitation.',
+  THROTTLED: 'A WhatsApp invitation to this number was sent within the last 30 seconds. Retry after the cooldown ends.',
+  LINK_ONLY: 'No WhatsApp provider accepted the message. Share the returned link manually.',
+  NOT_CONFIGURED: 'No WhatsApp provider is configured. Set WHATSAPP_USERNAME, WHATSAPP_PASSWORD and WHATSAPP_FROM_NUMBER for sendmsg.in, or WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN for Meta Cloud API. Share the returned link manually until then.',
+  NOT_SPECIFIED: 'Not specified',
+});
 
 function clearWhatsAppThrottleCache() {
   recentWhatsAppDispatches.clear();
@@ -94,9 +115,29 @@ function buildDirectWhatsAppLink(phone, messageText) {
   return `https://wa.me/${formatted}?text=${encodeURIComponent(messageText)}`;
 }
 
+/**
+ * Invitation text shared by the wa.me link and the Meta Cloud API message.
+ * Optional descriptive fields show "Not specified" when the caller omits them.
+ */
+function _buildInvitationText({ rfqNumber, rfqTitle, deliveryDate, deliveryLocation, bidUrl }) {
+  return `An RFQ is available on Procucev Portal (QUA AI).\n\n*RFQ ID:* ${rfqNumber}\n*Delivery Date:* ${deliveryDate || WHATSAPP_MESSAGES.NOT_SPECIFIED}\n*Delivery Location:* ${deliveryLocation || WHATSAPP_MESSAGES.NOT_SPECIFIED}\n*Description:* ${rfqTitle || WHATSAPP_MESSAGES.NOT_SPECIFIED}\n\nClick on the Procucev Portal ${bidUrl} link to view or submit your quote.`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal gateway helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns the provider's own message id from a sendmsg.in response item, or undefined.
+ * Never derives an id locally: a local id would claim the provider issued one.
+ * @param {unknown} firstItem
+ * @returns {string|undefined}
+ */
+function _extractSendmsgMessageId(firstItem) {
+  if (!firstItem || typeof firstItem !== 'object') return undefined;
+  const providerId = firstItem.messageId || firstItem.message_id || firstItem.msgid || firstItem.id;
+  return providerId ? String(providerId) : undefined;
+}
 
 /**
  * Build the 5-placeholder template parameter array expected by
@@ -121,10 +162,10 @@ function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, r
   //   *Description:* {{4}}
   //
   //   Click on the Procucev Portal {{5}} link to view or submit your quote.
-  const lp1 = String(rfqNumber || 'N/A');
-  const lp2 = deliveryDate ? String(deliveryDate) : 'As per RFQ';
-  const lp3 = deliveryLocation ? String(deliveryLocation) : 'As per RFQ';
-  const lp4 = rfqTitle ? String(rfqTitle) : 'Procurement Requisition';
+  const lp1 = String(rfqNumber);
+  const lp2 = deliveryDate ? String(deliveryDate) : WHATSAPP_MESSAGES.NOT_SPECIFIED;
+  const lp3 = deliveryLocation ? String(deliveryLocation) : WHATSAPP_MESSAGES.NOT_SPECIFIED;
+  const lp4 = rfqTitle ? String(rfqTitle) : WHATSAPP_MESSAGES.NOT_SPECIFIED;
   const lp5 = resolvedPortalLink;
 
   return {
@@ -155,7 +196,7 @@ async function _sendViaSendmsg(formattedPhone, placeholders) {
         from: WHATSAPP_CONFIG.FROM_NUMBER,
         to: formattedPhone,
         templateid: WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE,
-        smsgid: `rfq_${formattedPhone}_${WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE}_${Date.now()}`,
+        smsgid: `rfq_${formattedPhone}_${WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE}_${crypto.randomUUID()}`,
         placeholders: [placeholders],
         buttons: [],
       },
@@ -193,7 +234,7 @@ async function _sendViaSendmsg(formattedPhone, placeholders) {
       { response: bodyText.slice(0, 200) },
       'WHATSAPP_SERVICE'
     );
-    return { success: true, messageId: `sendmsg-${Date.now()}` };
+    return { success: true, messageId: _extractSendmsgMessageId(firstItem) };
   }
 
   const errDetail = (firstItem && (firstItem.message || firstItem.error || firstItem.reason)) ||
@@ -258,23 +299,23 @@ async function _sendViaMeta(formattedPhone, waMessage) {
  * Gateway priority:
  *   1. sendmsg.in — when WHATSAPP_USERNAME + WHATSAPP_PASSWORD + WHATSAPP_FROM_NUMBER are set
  *   2. Meta Cloud API — when WHATSAPP_PHONE_NUMBER_ID + WHATSAPP_ACCESS_TOKEN are set
- *   3. Deep-link fallback — always available; returns a wa.me link the caller can surface
+ *   3. Link only — returned with success:false when no gateway accepted the message
  *
  * @param {Object} params
  * @param {string} params.phone             Destination mobile number
  * @param {string} params.vendorName        Vendor company name
  * @param {string} [params.contactPerson]   Contact person name
- * @param {string} params.rfqNumber         RFQ reference number
+ * @param {string} params.rfqNumber         RFQ reference number (required)
  * @param {string} params.rfqTitle          RFQ title/scope
  * @param {string} [params.vendorEmail]     Vendor email (embedded in bid URL)
  * @param {string} [params.deliveryDate]    Expected delivery date string
  * @param {string} [params.deliveryLocation] City/state for delivery
- * @returns {Promise<{ success: boolean, messageId?: string, link?: string, throttled?: boolean, error?: string }>}
+ * @returns {Promise<{ success: boolean, status: string, messageId?: string, link?: string, bidUrl?: string, throttled?: boolean, error?: string }>}
  */
 async function sendRFQInvitationWhatsApp({
   phone,
   vendorName,
-  contactPerson = 'Supplier Partner',
+  contactPerson,
   rfqNumber,
   rfqTitle,
   vendorEmail,
@@ -284,7 +325,30 @@ async function sendRFQInvitationWhatsApp({
   const formattedPhone = formatWhatsAppNumber(phone);
   if (!formattedPhone || formattedPhone.length < 10) {
     logger.warn('[WHATSAPP] Dispatch skipped: invalid phone number', { phone }, 'WHATSAPP_SERVICE');
-    return { success: false, error: 'Invalid phone number format' };
+    return { success: false, status: WHATSAPP_SEND_STATUS.SKIPPED, error: WHATSAPP_MESSAGES.INVALID_PHONE };
+  }
+
+  if (!rfqNumber) {
+    logger.warn('[WHATSAPP] Dispatch skipped: RFQ number missing', { phone: formattedPhone }, 'WHATSAPP_SERVICE');
+    return { success: false, status: WHATSAPP_SEND_STATUS.SKIPPED, error: WHATSAPP_MESSAGES.RFQ_NUMBER_REQUIRED };
+  }
+
+  const bidUrl = generateOneClickBidUrl(rfqNumber, vendorEmail);
+  const invitationText = _buildInvitationText({ rfqNumber, rfqTitle, deliveryDate, deliveryLocation, bidUrl });
+  const directLink = buildDirectWhatsAppLink(formattedPhone, invitationText);
+
+  // With no gateway credentials nothing can be sent, so no throttle entry is recorded.
+  const sendmsgConfigured = Boolean(WHATSAPP_CONFIG.USERNAME && WHATSAPP_CONFIG.PASSWORD && WHATSAPP_CONFIG.FROM_NUMBER);
+  const metaConfigured = Boolean(WHATSAPP_CONFIG.PHONE_NUMBER_ID && WHATSAPP_CONFIG.ACCESS_TOKEN);
+  if (!sendmsgConfigured && !metaConfigured) {
+    logger.warn('[WHATSAPP] No gateway configured: returning wa.me link only', { phone: formattedPhone, rfqNumber }, 'WHATSAPP_SERVICE');
+    return {
+      success: false,
+      status: WHATSAPP_SEND_STATUS.NOT_CONFIGURED,
+      link: directLink,
+      bidUrl,
+      error: WHATSAPP_MESSAGES.NOT_CONFIGURED,
+    };
   }
 
   // Throttle guard — skip in test env
@@ -292,29 +356,21 @@ async function sendRFQInvitationWhatsApp({
   const lastSent = recentWhatsAppDispatches.get(formattedPhone) || 0;
   if (process.env.NODE_ENV !== 'test' && now - lastSent < WA_THROTTLE_WINDOW_MS) {
     logger.warn(`[WHATSAPP] Throttled: ${formattedPhone} within cooldown`, {}, 'WHATSAPP_SERVICE');
-    const bidUrl = generateOneClickBidUrl(rfqNumber, vendorEmail);
+    const greeting = contactPerson ? `Hi ${contactPerson}, ` : '';
     return {
-      success: true,
+      success: false,
+      status: WHATSAPP_SEND_STATUS.THROTTLED,
       throttled: true,
-      messageId: 'wa-throttled',
-      link: buildDirectWhatsAppLink(formattedPhone, `Hi ${contactPerson}, view RFQ ${rfqNumber}: ${bidUrl}`),
+      error: WHATSAPP_MESSAGES.THROTTLED,
+      link: buildDirectWhatsAppLink(formattedPhone, `${greeting}view RFQ ${rfqNumber}: ${bidUrl}`),
+      bidUrl,
     };
   }
   recentWhatsAppDispatches.set(formattedPhone, now);
-
-  const bidUrl = generateOneClickBidUrl(rfqNumber, vendorEmail);
-  const directLink = buildDirectWhatsAppLink(
-    formattedPhone,
-    `An RFQ is available on Procucev Portal (QUA AI).\n\n*RFQ ID:* ${rfqNumber}\n*Delivery Date:* ${deliveryDate || 'As per RFQ'}\n*Delivery Location:* ${deliveryLocation || 'As per RFQ'}\n*Description:* ${rfqTitle || 'Procurement Requisition'}\n\nClick on the Procucev Portal ${bidUrl} link to view or submit your quote.`,
-  );
+  let gatewayError = null;
 
   // ── 1. sendmsg.in (primary) ────────────────────────────────────────────────
-  if (
-    WHATSAPP_CONFIG.USERNAME &&
-    WHATSAPP_CONFIG.PASSWORD &&
-    WHATSAPP_CONFIG.FROM_NUMBER &&
-    process.env.NODE_ENV !== 'test'
-  ) {
+  if (sendmsgConfigured && process.env.NODE_ENV !== 'test') {
     try {
       const placeholders = _buildRfqTemplatePlaceholders({
         vendorName,
@@ -327,44 +383,46 @@ async function sendRFQInvitationWhatsApp({
       });
       const result = await _sendViaSendmsg(formattedPhone, placeholders);
       if (result.success) {
-        return { success: true, messageId: result.messageId, link: directLink, bidUrl };
+        return { success: true, status: WHATSAPP_SEND_STATUS.SENT, messageId: result.messageId, link: directLink, bidUrl };
       }
+      gatewayError = result.error;
       // Fall through to Meta if sendmsg.in fails
       logger.warn(`[WHATSAPP] sendmsg.in failed, trying Meta fallback: ${result.error}`, {}, 'WHATSAPP_SERVICE');
     } catch (err) {
+      gatewayError = err.message;
       logger.warn(`[WHATSAPP] sendmsg.in threw, trying Meta fallback: ${err.message}`, {}, 'WHATSAPP_SERVICE');
     }
   }
 
   // ── 2. Meta Cloud API (secondary) ─────────────────────────────────────────
-  if (
-    WHATSAPP_CONFIG.PHONE_NUMBER_ID &&
-    WHATSAPP_CONFIG.ACCESS_TOKEN &&
-    process.env.NODE_ENV !== 'test'
-  ) {
+  if (metaConfigured && process.env.NODE_ENV !== 'test') {
     try {
-      const waMessage = `An RFQ is available on Procucev Portal (QUA AI).\n\n*RFQ ID:* ${rfqNumber}\n*Delivery Date:* ${deliveryDate || 'As per RFQ'}\n*Delivery Location:* ${deliveryLocation || 'As per RFQ'}\n*Description:* ${rfqTitle || 'Procurement Requisition'}\n\nClick on the Procucev Portal ${bidUrl} link to view or submit your quote.`;
-      const result = await _sendViaMeta(formattedPhone, waMessage);
+      const result = await _sendViaMeta(formattedPhone, invitationText);
       if (result.success) {
-        return { success: true, messageId: result.messageId, link: directLink, bidUrl };
+        return { success: true, status: WHATSAPP_SEND_STATUS.SENT, messageId: result.messageId, link: directLink, bidUrl };
       }
+      gatewayError = result.error;
     } catch (err) {
+      gatewayError = err.message;
       logger.warn(`[WHATSAPP] Meta Cloud API threw: ${err.message}`, {}, 'WHATSAPP_SERVICE');
     }
   }
 
-  // ── 3. Deep-link fallback ─────────────────────────────────────────────────
-  logger.info(`[WHATSAPP] Deep-link fallback for ${formattedPhone} (${rfqNumber})`, {}, 'WHATSAPP_SERVICE');
+  // ── 3. Link only: no provider accepted the message ────────────────────────
+  // gatewayError carries the last provider error, when a provider was reached.
+  logger.info(`[WHATSAPP] Link-only result for ${formattedPhone} (${rfqNumber})`, { gatewayError }, 'WHATSAPP_SERVICE');
   return {
-    success: true,
-    messageId: `wa-link-${Date.now()}`,
+    success: false,
+    status: WHATSAPP_SEND_STATUS.LINK_ONLY,
     link: directLink,
     bidUrl,
+    error: gatewayError || WHATSAPP_MESSAGES.LINK_ONLY,
   };
 }
 
 module.exports = {
   WHATSAPP_CONFIG,
+  WHATSAPP_SEND_STATUS,
   clearWhatsAppThrottleCache,
   clearWhatsAppThrottleForPhone,
   formatWhatsAppNumber,

@@ -26,6 +26,7 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const r2Client = require('./r2Client');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { logger } = require('./loggerService');
+const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
@@ -118,7 +119,11 @@ async function resolveOrganizationId(sessionUser, sessionId = null) {
           return lookup.profile.organizationId;
         }
       } catch (e) {
-        // continue
+        logger.warn('Could not resolve ingestion organization from the subject identity; checking alternate identity claims', {
+          error: e,
+          lookupSource: 'subject',
+          hasSessionId: Boolean(sessionId),
+        }, LOG_CATEGORY);
       }
     }
     if (sessionUser.userId || sessionUser.id) {
@@ -128,7 +133,11 @@ async function resolveOrganizationId(sessionUser, sessionId = null) {
           return lookup.profile.organizationId;
         }
       } catch (e) {
-        // continue
+        logger.warn('Could not resolve ingestion organization from user identity claims; checking the session record', {
+          error: e,
+          lookupSource: 'user_id',
+          hasSessionId: Boolean(sessionId),
+        }, LOG_CATEGORY);
       }
     }
   }
@@ -140,7 +149,11 @@ async function resolveOrganizationId(sessionUser, sessionId = null) {
         return sess.organizationId;
       }
     } catch (e) {
-      // continue
+      logger.error('Could not resolve ingestion organization from the session record', {
+        error: e,
+        lookupSource: 'session_id',
+        hasSessionId: true,
+      }, LOG_CATEGORY);
     }
   }
 
@@ -181,7 +194,9 @@ function extractHeaderIndices(headers, type) {
   function findIndex(aliases) {
     for (const alias of aliases) {
       const aliasClean = alias.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const idx = cleaned.findIndex((c) => c === aliasClean || c.includes(aliasClean) || aliasClean.includes(c));
+      const idx = cleaned.findIndex(
+        (c) => c === aliasClean || (c.length > 0 && (c.includes(aliasClean) || (c.length >= 3 && aliasClean.includes(c))))
+      );
       if (idx !== -1) return idx;
     }
     return -1;
@@ -200,8 +215,36 @@ function extractHeaderIndices(headers, type) {
     // PO_DUMP
     map.poNumber = findIndex(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']);
     map.poDate = findIndex(['podate', 'po date', 'date', 'order date', 'creation date']);
-    map.vendorIdentifier = findIndex(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']);
-    map.itemName = findIndex(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']);
+    map.vendorIdentifier = findIndex([
+      'vendor name',
+      'supplier name',
+      'vendor/supplier name',
+      'vendor name / code',
+      'vendor identifier',
+      'company name',
+      'vendor code',
+      'supplier code',
+      'vendor id',
+      'supplier id',
+      'vendor',
+      'supplier',
+    ]);
+    map.itemName = findIndex([
+      'item description',
+      'short text',
+      'material description',
+      'line item description',
+      'item name & description',
+      'item name',
+      'product description',
+      'product name',
+      'service description',
+      'line item',
+      'description',
+      'material',
+      'service',
+      'item',
+    ]);
     map.specs = findIndex(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
     map.quantity = findIndex(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
     map.unit = findIndex(['unit', 'uom', 'unit of measure', 'units']);
@@ -275,17 +318,36 @@ function normalizeEmail(raw) {
 }
 
 /**
- * A single phone number in one standard shape: digits and a leading `+`
- * only, so "+91 98000-00000", "919800000000" and "98000 00000" all collapse
- * to the same value instead of being treated as separate contacts.
+ * A single phone number in one standard shape: country code (+91) followed by
+ * exactly 10 numeric digits without duplication, accepting numbers provided
+ * with +91 or without it.
  */
 function normalizePhone(raw) {
-  const value = String(raw || '').trim();
-  if (value === '') return '';
-  const hasPlus = value.trim().startsWith('+');
-  const digits = value.replace(/[^0-9]/g, '');
-  if (digits === '') return '';
-  return hasPlus ? `+${digits}` : digits;
+  if (raw === null || raw === undefined) return '';
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return '';
+  if (/[a-zA-Z]/.test(trimmed)) return null;
+
+  let remainder = trimmed;
+  // Repeatedly strip duplicate or multiple leading country code indicators
+  while (/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/.test(remainder)) {
+    remainder = remainder.replace(/^\s*(?:\+\s*91|\(\s*\+?91\s*\)|\+\s*)/, '').trim();
+  }
+
+  let digits = remainder.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  if (digits.length === 10 && /^\d{10}$/.test(digits)) {
+    return `+91${digits}`;
+  }
+
+  const allDigits = trimmed.replace(/\D/g, '');
+  if (allDigits === '') return '';
+  return trimmed.startsWith('+') ? `+${allDigits}` : allDigits;
 }
 
 /** Map row values array to object using header indices */
@@ -326,17 +388,19 @@ function mapRowValues(values, headerMap, type, rowIdx) {
       rating,
     };
   } else {
-    // PO_DUMP — same principle: a PO row with only Vendor Name/Code, Item
-    // Details and Category present should still process successfully (see
-    // processPoDumpBatch's required-field check below), with every other
-    // field left blank rather than invented.
+    // PO_DUMP — only Vendor/Supplier Name (or Code) and Item Description/Short
+    // Text/Material Description are mandatory; Specifications and all other
+    // columns stay blank/null rather than invented when omitted.
     const poNumber = normalizePoNumber(get('poNumber')) || null;
     const poDate = normalizePoDate(get('poDate'));
     const vendorName = get('vendorIdentifier') || null;
     const itemDescription = get('itemName') || null;
     const specification = get('specs') || null;
     const qtyRaw = get('quantity');
-    const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
+    // A quantity the row does not give stays null. It is never set to 1, because a
+    // made-up quantity would be stored as though the buyer had entered it.
+    const parsedQuantity = qtyRaw ? Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) : 0;
+    const quantity = parsedQuantity > 0 ? parsedQuantity : null;
     const uom = get('unit') || null;
     const unitPriceRaw = get('unitPrice');
     const spendRaw = get('spend');
@@ -344,7 +408,9 @@ function mapRowValues(values, headerMap, type, rowIdx) {
     const parsedUnitPrice = unitPriceRaw && !isNaN(Number(String(unitPriceRaw).replace(/[^0-9.]/g, ''))) ? Number(String(unitPriceRaw).replace(/[^0-9.]/g, '')) : 0;
     const parsedSpend = spendRaw && !isNaN(Number(String(spendRaw).replace(/[^0-9.]/g, ''))) ? Number(String(spendRaw).replace(/[^0-9.]/g, '')) : 0;
 
-    const spend = parsedSpend > 0 ? parsedSpend : parsedUnitPrice * quantity;
+    // Spend comes from the spend column, or from unit price times quantity when both are
+    // given. Otherwise it stays null rather than being guessed as zero.
+    const spend = parsedSpend > 0 ? parsedSpend : quantity !== null && parsedUnitPrice > 0 ? parsedUnitPrice * quantity : null;
     const department = get('department') || null;
 
     return {
@@ -371,15 +437,55 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
   const valid = [];
   const invalid = [];
 
+  // Track existing vendor codes to prevent collisions and generate sequential codes
+  const usedCodes = new Set();
+  for (const row of batch) {
+    if (row.vendorCode && String(row.vendorCode).trim()) {
+      usedCodes.add(String(row.vendorCode).trim().toLowerCase());
+    }
+  }
+
+  let nextSeq = 1;
+  const getNextSequentialCode = () => {
+    while (usedCodes.has(String(nextSeq).toLowerCase())) {
+      nextSeq++;
+    }
+    const code = String(nextSeq);
+    usedCodes.add(code.toLowerCase());
+    nextSeq++;
+    return code;
+  };
+
   for (const row of batch) {
     const companyName = row.companyName || row.company_name || row.vendorName || row.name || '';
     if (!companyName || String(companyName).trim() === '') {
       invalid.push({ row, reason: 'Company Name is required' });
       continue;
     }
+    const rawPhone = row.phone !== undefined && row.phone !== null ? String(row.phone).trim() : '';
+    let validatedPhone = null;
+    if (rawPhone) {
+      if (/[a-zA-Z]/.test(rawPhone)) {
+        invalid.push({ row, reason: 'Mobile number cannot contain alphanumeric characters' });
+        continue;
+      }
+      const norm = normalizePhone(rawPhone);
+      if (!norm || !norm.startsWith('+91') || norm.slice(3).length !== 10) {
+        invalid.push({ row, reason: 'Mobile number must be exactly 10 numeric digits after country code' });
+        continue;
+      }
+      validatedPhone = norm;
+    }
+
+    const vendorCode = (row.vendorCode && String(row.vendorCode).trim())
+      ? String(row.vendorCode).trim()
+      : getNextSequentialCode();
+
     valid.push({
       ...row,
+      vendorCode,
       companyName: String(companyName).trim(),
+      phone: validatedPhone || (row.phone ? String(row.phone).trim() : null),
     });
   }
 
@@ -407,48 +513,67 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   const valid = [];
   const invalid = [];
 
-  // Minimum required to process a PO row at all: Vendor identity, Item
-  // Details, and Category (the buyer's own wording for this). Everything
-  // else (date, PO number, spend, UOM...) is accepted as-supplied and left
-  // blank when absent — a PO missing only its spend figure should still be
-  // extracted and processed, not rejected outright.
+  // Required (only two): Vendor/Supplier Name (or Vendor Code) and
+  // Item Description/Short Text/Material Description. Specifications and all
+  // other PO columns are optional.
   for (const row of batch) {
-    const vendorName = row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.companyName || '';
-    const vendorCode = row.vendorCode || row.vendor_code || row.supplierCode || '';
-    const itemDescription = row.itemDescription || row.itemName || row.description || '';
-    const category = row.department || row.category || '';
+    const vendorName = String(
+      row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.supplier || row.companyName || ''
+    ).trim();
+    const vendorCode = String(row.vendorCode || row.vendor_code || row.supplierCode || row.vendorId || '').trim();
+    const itemDescription = String(
+      row.itemDescription ||
+        row.itemName ||
+        row.shortText ||
+        row.short_text ||
+        row.materialDescription ||
+        row.material_description ||
+        row.description ||
+        ''
+    ).trim();
+    const specification = String(row.specification || row.specs || '').trim() || null;
+    const department = row.department || row.category || '';
 
     if (!vendorName && !vendorCode) {
       invalid.push({ row, reason: 'Vendor Name or Vendor Code is required' });
       continue;
     }
-    if (!itemDescription) {
-      invalid.push({ row, reason: 'Item Details are required' });
-      continue;
-    }
-    if (!category) {
-      invalid.push({ row, reason: 'Category is required' });
-      continue;
-    }
 
     const poDate = normalizePoDate(row.poDate || row.date);
+    // Quantity and spend are never invented: a row that does not give them keeps them null.
+    const quantity = Number(row.quantity) > 0 ? Number(row.quantity) : null;
+    const spend = [row.spend, row.totalSpend].map(Number).find((value) => value > 0) ?? null;
 
-    // Stamp inHorizon — a row with no parseable PO date can't be confirmed
-    // inside the buyer's selected window, so it's counted as outside it
-    // rather than silently included.
+    const candidate = {
+      poNumber: row.poNumber,
+      poDate,
+      itemDescription,
+      specification,
+      quantity,
+      uom: row.uom || row.unit,
+      spend,
+      department: department || null,
+    };
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.poLineItemRow, candidate);
+    if (!isValid) {
+      invalid.push({ row, reason: Object.values(errors)[0] });
+      continue;
+    }
+
+    // Stamp inHorizon. With no horizon every row is inside. A row without a PO date is
+    // kept inside as well, because a dump no longer has to carry dates to be used.
     const horizonConfigured = Boolean(session && session.horizonStart && session.horizonEnd);
-    const inHorizon = !horizonConfigured
-      ? true
-      : Boolean(poDate) && poDate >= session.horizonStart && poDate <= session.horizonEnd;
+    const inHorizon = !horizonConfigured || !poDate || (poDate >= session.horizonStart && poDate <= session.horizonEnd);
 
     valid.push({
       ...row,
-      poDate: poDate || row.poDate || null,
+      poDate: poDate || null,
       vendorName: vendorName || `Vendor ${vendorCode}`,
       itemDescription,
-      department: category,
-      quantity: row.quantity !== undefined ? Number(row.quantity) || 1 : 1,
-      spend: row.spend !== undefined ? Number(row.spend) || 0 : (Number(row.totalSpend) || 0),
+      specification,
+      department: department || null,
+      quantity,
+      spend,
       inHorizon,
     });
   }
@@ -468,6 +593,55 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   }
 
   return { imported, skipped, failed: invalid.length, errors: invalid.slice(0, 5) };
+}
+
+/**
+ * Stamp the organization's first vendor master upload once a VENDOR_MASTER job has stored rows.
+ * A job that stored nothing does not count, so the buyer stays in setup until a usable file lands.
+ */
+async function recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored }) {
+  if (totalStored <= 0) return;
+  const firstUpload = await queries.markVendorMasterUploaded(organizationId);
+  if (firstUpload) {
+    logger.info(
+      'Organization vendor master upload recorded for the first time',
+      { jobId, sessionId, organizationId, totalStored },
+      LOG_CATEGORY
+    );
+  }
+}
+
+/**
+ * Persist finalized session counts and advance the session step only when rows were actually stored.
+ */
+async function finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType }) {
+  if (jobType === 'VENDOR_MASTER') {
+    const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
+    await queries.updateSession(sessionId, organizationId, {
+      vendorMasterFileName: fileName,
+      vendorMasterRowCount: totalStored,
+      status:
+        session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
+          ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
+          : session.status,
+      currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
+    });
+    await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
+    return;
+  }
+
+  const counts = await queries.countPoLineItems(sessionId, organizationId);
+  await queries.updateSession(sessionId, organizationId, {
+    poFileName: fileName,
+    poRowCount: counts.total,
+    poInHorizonCount: counts.inHorizon,
+    poOutsideHorizonCount: counts.outsideHorizon,
+    status: counts.total > 0 ? VENDOR_INGESTION_SESSION_STATUS.PO_STORED : session.status,
+    currentStep:
+      counts.total > 0
+        ? Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN)
+        : session.currentStep,
+  });
 }
 
 /**
@@ -607,28 +781,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
       }
 
       // Finalize session counts and state
-      if (jobType === 'VENDOR_MASTER') {
-        const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
-        await queries.updateSession(sessionId, organizationId, {
-          vendorMasterFileName: fileName,
-          vendorMasterRowCount: totalStored,
-          status:
-            session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
-              ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
-              : session.status,
-          currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
-        });
-      } else {
-        const counts = await queries.countPoLineItems(sessionId, organizationId);
-        await queries.updateSession(sessionId, organizationId, {
-          poFileName: fileName,
-          poRowCount: counts.total,
-          poInHorizonCount: counts.inHorizon,
-          poOutsideHorizonCount: counts.outsideHorizon,
-          status: VENDOR_INGESTION_SESSION_STATUS.PO_STORED,
-          currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
-        });
-      }
+      await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
 
       // Mark job completed
       await queries.updateIngestionJobProgress(jobId, organizationId, {
@@ -717,28 +870,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
       });
     }
 
-    if (jobType === 'VENDOR_MASTER') {
-      const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
-      await queries.updateSession(sessionId, organizationId, {
-        vendorMasterFileName: fileName,
-        vendorMasterRowCount: totalStored,
-        status:
-          session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
-            ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
-            : session.status,
-        currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
-      });
-    } else {
-      const counts = await queries.countPoLineItems(sessionId, organizationId);
-      await queries.updateSession(sessionId, organizationId, {
-        poFileName: fileName,
-        poRowCount: counts.total,
-        poInHorizonCount: counts.inHorizon,
-        poOutsideHorizonCount: counts.outsideHorizon,
-        status: VENDOR_INGESTION_SESSION_STATUS.PO_STORED,
-        currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
-      });
-    }
+    await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
 
     await queries.updateIngestionJobProgress(jobId, organizationId, {
       totalRecords: Math.max(rows.length, processedRecords),

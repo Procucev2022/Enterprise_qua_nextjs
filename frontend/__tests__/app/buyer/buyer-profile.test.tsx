@@ -244,6 +244,14 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(fetchBuyerProfile).toHaveBeenCalledTimes(1);
   });
 
+  it('shows the registered mobile as read-only because it is an authentication factor', async () => {
+    await renderLoaded();
+    const registeredMobile = screen.getByDisplayValue(PROFILE.contactPhone);
+
+    expect(registeredMobile).toHaveAttribute('readonly');
+    expect(screen.getByText(UI_STRINGS.buyerProfile.registeredMobileReadOnlyHint)).toBeInTheDocument();
+  });
+
   it('does not re-request when the provider hands down a fresh showToast identity', async () => {
     (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: false, data: [], error: 'down' });
     (fetchBuyerProfile as jest.Mock).mockResolvedValue({ success: false, error: 'down' });
@@ -456,6 +464,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
       })
     );
     expect(Object.keys((saveBuyerProfile as jest.Mock).mock.calls[0][0])).not.toContain('contactEmail');
+    expect(Object.keys((saveBuyerProfile as jest.Mock).mock.calls[0][0])).not.toContain('contactPhone');
 
     expect(mockAddAuditLog).toHaveBeenCalledWith(
       expect.stringContaining('Navin Chaudhary Enterprises')
@@ -853,7 +862,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Backfilled Org Name')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Backfilled Brand')).toBeInTheDocument();
     expect(screen.getByDisplayValue('27AAACL1234F1Z5')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('AAACL1234F')).toBeInTheDocument(); // Derived PAN from GSTIN
+    expect(screen.queryByDisplayValue('AAACL1234F')).not.toBeInTheDocument(); // Does not auto-derive dummy PAN from GSTIN
     expect(screen.getByDisplayValue('Pune')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });
@@ -889,8 +898,9 @@ describe('app/buyer/buyer-profile.tsx', () => {
     (validatePincode as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
     jest.useFakeTimers();
     fireEvent.change(pinInput, { target: { value: '400001' } });
-    act(() => {
+    await act(async () => {
       jest.advanceTimersByTime(400);
+      await Promise.resolve();
     });
     jest.useRealTimers();
   });
@@ -1107,6 +1117,17 @@ describe('app/buyer/buyer-profile.tsx', () => {
       'Taxonomy server unreachable',
       'warning'
     );
+    expect(screen.getByText(UI_STRINGS.buyerProfile.taxonomyUnavailable)).toBeInTheDocument();
+  });
+
+  it('shows the empty-master message and no bundled categories when the database returns no taxonomy rows', async () => {
+    mockLoad(PROFILE, []);
+    await renderLoaded();
+
+    expect(screen.getByText(UI_STRINGS.buyerProfile.taxonomyEmpty)).toBeInTheDocument();
+    TAXONOMY.forEach((cat) => {
+      expect(screen.queryByText(cat.majorCategory)).not.toBeInTheDocument();
+    });
   });
 
   it('covers activeBuyerAccount backfilling branches with address1, zip_code, and derived PAN', async () => {

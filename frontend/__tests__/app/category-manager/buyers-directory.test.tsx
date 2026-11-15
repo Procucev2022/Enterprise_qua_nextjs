@@ -241,7 +241,7 @@ describe('BuyersDirectory Component Suite', () => {
     // Check Tab 4: Communications
     const commsTab = screen.getByRole('button', { name: /Communications|Messages/i });
     fireEvent.click(commsTab);
-    expect(await screen.findByText(/Enterprise Onboarding Confirmation/)).toBeInTheDocument();
+    expect(await screen.findByText(/No recorded EMAIL communications found for this buyer/)).toBeInTheDocument();
 
     // Check Tab 5: Payments
     const payTab = screen.getByRole('button', { name: /Payments/i });

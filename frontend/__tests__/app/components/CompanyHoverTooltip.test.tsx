@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 import * as storeModule from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
 
@@ -103,7 +104,7 @@ describe('CompanyHoverTooltip', () => {
     );
     fireEvent.mouseEnter(screen.getByText('EmptyBuyer'));
 
-    expect(screen.getByText('Enterprise Partner')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.recordPlaceholders.notRecorded)).toBeInTheDocument();
     expect(screen.getByText('No contact details on file for this company.')).toBeInTheDocument();
   });
 });

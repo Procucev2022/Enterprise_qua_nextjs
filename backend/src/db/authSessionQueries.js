@@ -6,9 +6,11 @@
 
 const pool = require('./pool');
 const { queryCache } = require('./queryCache');
+const { logger } = require('../services/loggerService');
+const d1Bridge = require('./d1Bridge');
 
 const memoryOtpStore = new Map();
-const memoryRevokedTokens = new Set();
+const memoryRevokedTokens = new Map();
 
 function parseExpiryTimestamp(raw) {
   if (!raw) return 0;
@@ -35,7 +37,39 @@ function extractEmailFromOtpKey(otpKey) {
   return parts.length > 1 ? parts[1].trim() : '';
 }
 
+function throwPersistenceUnavailable(operation, cause) {
+  const error = new Error(`Authentication session ${operation} failed because configured database persistence is unavailable.`);
+  error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.cause = cause;
+  logger.error('Authentication session persistence failed; refusing isolate-local fallback', {
+    operation,
+    error: cause,
+  }, 'AUTH_SESSION');
+  throw error;
+}
+
+function storeMemoryOtp(otpKey, code, expiresMs) {
+  memoryOtpStore.set(otpKey, { otpKey, code, attempts: 0, expiresAt: expiresMs });
+}
+
 // ── OTP codes ────────────────────────────────────────────────────────────────
+
+/**
+ * The email an OTP is issued to: the explicit hint, else the email carried in the OTP key.
+ * Every stored OTP names its email. The live D1 table declares auth_otp_codes.email NOT NULL,
+ * while schema.d1.sql declares it nullable, so writing it always keeps both shapes valid.
+ */
+function resolveOtpEmail(otpKey, emailHint) {
+  const email = String(emailHint || extractEmailFromOtpKey(otpKey) || '').trim();
+  if (email) return email;
+  const error = new Error('An OTP cannot be stored without the email it was issued to.');
+  error.code = 'OTP_EMAIL_REQUIRED';
+  logger.error('OTP storage rejected: no email was supplied for the OTP key', {
+    operation: 'saveOtp',
+    error,
+  }, 'AUTH_SESSION');
+  throw error;
+}
 
 /**
  * Store (or replace) the OTP issued for an email + mobile pair.
@@ -43,58 +77,47 @@ function extractEmailFromOtpKey(otpKey) {
 async function saveOtp(otpKey, code, expiresAt, emailHint) {
   const isoExpiry = new Date(expiresAt).toISOString();
   const expiresMs = new Date(expiresAt).getTime();
-  const email = emailHint || extractEmailFromOtpKey(otpKey);
+  const hasStorage = pool.hasStorage();
 
-  memoryOtpStore.set(otpKey, {
-    otpKey,
-    code,
-    attempts: 0,
-    expiresAt: expiresMs,
-  });
+  if (!hasStorage) {
+    storeMemoryOtp(otpKey, code, expiresMs);
+    return;
+  }
 
-  const primaryQuery = `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
-       values ($1, $2, 0, $3, CURRENT_TIMESTAMP)
+  const email = resolveOtpEmail(otpKey, emailHint);
+
+  try {
+    await pool.query(
+      `insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)
+       values ($1, $2, $3, 0, $4, CURRENT_TIMESTAMP)
        on conflict (otp_key) do update set
+         email = excluded.email,
          code = excluded.code,
          attempts = 0,
          expires_at = excluded.expires_at,
-         created_at = CURRENT_TIMESTAMP`;
+         created_at = CURRENT_TIMESTAMP`,
+      [otpKey, email, code, isoExpiry],
+      { d1: true }
+    );
+    return;
+  } catch (err) {
+    // The upsert needs the unique index on otp_key. Deleting and inserting works without it.
+    logger.warn('OTP upsert failed; retrying as delete then insert', {
+      operation: 'saveOtp',
+      error: err,
+    }, 'AUTH_SESSION');
+  }
 
   try {
-    await pool.query(primaryQuery, [otpKey, code, isoExpiry], { d1: true });
-  } catch (err) {
-    const errMsg = String((err && err.message) || err);
-
-    // If a legacy schema variant has a NOT NULL constraint on email:
-    if (errMsg.includes('auth_otp_codes.email') || errMsg.includes('NOTNULL')) {
-      try {
-        await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
-        await pool.query(
-          `insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)
-           values ($1, $2, $3, 0, $4, CURRENT_TIMESTAMP)`,
-          [otpKey, email, code, isoExpiry],
-          { d1: true }
-        );
-        return;
-      } catch {
-        // proceed to delete-insert fallback
-      }
-    }
-
-    // Standard fallback: delete followed by insert (handles missing ON CONFLICT index)
-    try {
-      await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
-      await pool.query(
-        `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
-         values ($1, $2, 0, $3, CURRENT_TIMESTAMP)`,
-        [otpKey, code, isoExpiry],
-        { d1: true }
-      );
-    } catch (innerErr) {
-      if (typeof console !== 'undefined' && console.error) {
-        console.error('[AUTH_SESSION] saveOtp DB write failed:', innerErr.message);
-      }
-    }
+    await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
+    await pool.query(
+      `insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)
+       values ($1, $2, $3, 0, $4, CURRENT_TIMESTAMP)`,
+      [otpKey, email, code, isoExpiry],
+      { d1: true }
+    );
+  } catch (innerErr) {
+    throwPersistenceUnavailable('OTP storage', innerErr);
   }
 }
 
@@ -102,6 +125,11 @@ async function saveOtp(otpKey, code, expiresAt, emailHint) {
  * Read the OTP stored against a key, or null when there is none.
  */
 async function findOtp(otpKey) {
+  if (!pool.hasStorage()) {
+    const entry = memoryOtpStore.get(otpKey);
+    return entry ? { ...entry } : null;
+  }
+
   try {
     const rows = await pool.rows(
       'select otp_key, code, attempts, expires_at from auth_otp_codes where otp_key = $1 limit 1',
@@ -117,21 +145,17 @@ async function findOtp(otpKey) {
         expiresAt: parseExpiryTimestamp(row.expires_at),
       };
     }
-    if (memoryOtpStore.has(otpKey)) {
-      return { ...memoryOtpStore.get(otpKey) };
-    }
+    memoryOtpStore.delete(otpKey);
     return null;
   } catch (err) {
-    if (typeof console !== 'undefined' && console.error) {
-      console.error('[AUTH_SESSION] findOtp DB read failed:', err.message);
-    }
-    const entry = memoryOtpStore.get(otpKey);
-    return entry ? { ...entry } : null;
+    throwPersistenceUnavailable('OTP lookup', err);
   }
 }
 
 /** Delete an OTP: on successful verification, or once found expired. */
 async function deleteOtp(otpKey) {
+  if (!pool.hasStorage()) return memoryOtpStore.delete(otpKey);
+
   try {
     const result = await pool.query(
       'delete from auth_otp_codes where otp_key = $1',
@@ -141,7 +165,7 @@ async function deleteOtp(otpKey) {
     memoryOtpStore.delete(otpKey);
     return (result.rowCount || 0) > 0;
   } catch (err) {
-    return memoryOtpStore.delete(otpKey);
+    throwPersistenceUnavailable('OTP deletion', err);
   }
 }
 
@@ -149,6 +173,13 @@ async function deleteOtp(otpKey) {
  * Record a failed attempt against a stored code.
  */
 async function incrementOtpAttempts(otpKey) {
+  if (!pool.hasStorage()) {
+    const entry = memoryOtpStore.get(otpKey);
+    if (!entry) return 0;
+    entry.attempts = (entry.attempts || 0) + 1;
+    return entry.attempts;
+  }
+
   try {
     const result = await pool.query(
       'update auth_otp_codes set attempts = attempts + 1 where otp_key = $1 returning attempts',
@@ -157,10 +188,7 @@ async function incrementOtpAttempts(otpKey) {
     );
     return result.rows[0] ? Number(result.rows[0].attempts) : 0;
   } catch (err) {
-    const entry = memoryOtpStore.get(otpKey);
-    if (!entry) return 0;
-    entry.attempts = (entry.attempts || 0) + 1;
-    return entry.attempts;
+    throwPersistenceUnavailable('OTP attempt update', err);
   }
 }
 
@@ -172,6 +200,11 @@ async function incrementOtpAttempts(otpKey) {
 async function revokeToken(signature, expiresAt) {
   const isoExpiry = new Date(expiresAt).toISOString();
   queryCache.invalidate('auth_revoked_tokens');
+  if (!pool.hasStorage()) {
+    memoryRevokedTokens.set(signature, new Date(expiresAt).getTime());
+    return;
+  }
+
   try {
     await pool.query(
       `insert into auth_revoked_tokens (signature, expires_at, revoked_at)
@@ -180,6 +213,7 @@ async function revokeToken(signature, expiresAt) {
       [signature, isoExpiry],
       { d1: true }
     );
+    return;
   } catch (err) {
     try {
       await pool.query('delete from auth_revoked_tokens where signature = $1', [signature], { d1: true });
@@ -189,21 +223,47 @@ async function revokeToken(signature, expiresAt) {
         [signature, isoExpiry],
         { d1: true }
       );
-    } catch {
-      memoryRevokedTokens.add(signature);
+    } catch (fallbackErr) {
+      throwPersistenceUnavailable('token revocation', fallbackErr || err);
     }
   }
 }
 
 /** Whether this token signature has been revoked. */
 async function isTokenRevoked(signature) {
-  if (memoryRevokedTokens.has(signature)) return true;
-  const rows = await pool.rows(
-    'select 1 from auth_revoked_tokens where signature = $1 limit 1',
-    [signature],
-    { d1: true, useCache: true, tag: 'auth_revoked_tokens', ttlMs: 30000 }
-  );
-  return rows.length > 0;
+  if (!pool.hasStorage()) {
+    const expiry = memoryRevokedTokens.get(signature);
+    if (!expiry) return false;
+    if (expiry <= Date.now()) {
+      memoryRevokedTokens.delete(signature);
+      return false;
+    }
+    return true;
+  }
+  const expiry = memoryRevokedTokens.get(signature);
+  if (expiry && expiry > Date.now()) return true;
+  if (expiry) memoryRevokedTokens.delete(signature);
+  if (d1Bridge.isD1Overloaded()) {
+    const error = new Error('Session revocation storage is temporarily unavailable.');
+    error.code = 'PERSISTENCE_UNAVAILABLE';
+    throwPersistenceUnavailable('token revocation lookup', error);
+  }
+  try {
+    const rows = await pool.rows(
+      'select 1 from auth_revoked_tokens where signature = $1 limit 1',
+      [signature],
+      { d1: true, useCache: true, tag: 'auth_revoked_tokens', ttlMs: 30000 }
+    );
+    return rows.length > 0;
+  } catch (err) {
+    if (d1Bridge.isRetryableD1Error(err) || d1Bridge.isD1Overloaded()) {
+      logger.warn('D1 unavailable during token revocation lookup; failing closed', {
+        error: err,
+        operation: 'token-revocation-lookup',
+      }, 'AUTH_SESSION');
+    }
+    throwPersistenceUnavailable('token revocation lookup', err);
+  }
 }
 
 /**
@@ -211,6 +271,25 @@ async function isTokenRevoked(signature) {
  */
 async function purgeExpiredAuthState() {
   const isoNow = new Date().toISOString();
+  if (!pool.hasStorage()) {
+    const now = Date.now();
+    let otpsPurged = 0;
+    let revokedTokensPurged = 0;
+    for (const [key, otp] of memoryOtpStore.entries()) {
+      if (otp.expiresAt <= now) {
+        memoryOtpStore.delete(key);
+        otpsPurged += 1;
+      }
+    }
+    for (const [signature, expiry] of memoryRevokedTokens.entries()) {
+      if (expiry <= now) {
+        memoryRevokedTokens.delete(signature);
+        revokedTokensPurged += 1;
+      }
+    }
+    return { otpsPurged, revokedTokensPurged };
+  }
+
   try {
     const otps = await pool.query(
       'delete from auth_otp_codes where expires_at < now()',
@@ -235,10 +314,7 @@ async function purgeExpiredAuthState() {
       revokedTokensPurged: tokens.rowCount || 0,
     };
   } catch (err) {
-    return {
-      otpsPurged: 0,
-      revokedTokensPurged: 0,
-    };
+    throwPersistenceUnavailable('auth-state cleanup', err);
   }
 }
 

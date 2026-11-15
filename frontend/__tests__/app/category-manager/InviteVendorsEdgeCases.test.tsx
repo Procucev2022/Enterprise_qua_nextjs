@@ -122,7 +122,7 @@ test('creates a sparse API vendor on the all-vendors tab and selects the returne
   expect(global.fetch).toHaveBeenCalledWith('/api/vendors', expect.objectContaining({
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'New supplier', contactPerson: 'New contact', email: 'contact@example.com', phone: '9876543210',
-      majorCategory: 'Cables', minorCategories: ['Custom Minor'], source: 'procucev_network' }),
+      majorCategory: 'Cables', minorCategories: ['Custom Minor'] }),
   }));
   expect(screen.getByText('New supplier')).toBeInTheDocument();
   expect(screen.getByRole('checkbox')).toBeChecked();
@@ -158,4 +158,27 @@ test('handles a thrown value without an error message and closes the add-vendor 
   expect(showToast).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'warning');
   fireEvent.click(within(screen.getByTestId('add-vendor-modal')).getAllByRole('button')[0]);
   expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
+});
+
+test('shows the category load message when the taxonomy request reports a failure', async () => {
+  (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: false, error: 'Category master offline.' });
+  render(<InviteVendorsModal isOpen rfq={rfq} onClose={onClose} />);
+  expect(await screen.findByText(s.categoryOptionsLoadFailed)).toBeInTheDocument();
+});
+
+test('shows the category load message when the taxonomy request rejects', async () => {
+  (fetchCategoryTaxonomy as jest.Mock).mockRejectedValue(new Error('Taxonomy unavailable'));
+  render(<InviteVendorsModal isOpen rfq={rfq} onClose={onClose} />);
+  expect(await screen.findByText(s.categoryOptionsLoadFailed)).toBeInTheDocument();
+});
+
+test('does not add or select a created vendor when the saved record comes back without an id', async () => {
+  await openAll();
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 201, json: async () => ({ success: true, data: { name: 'Unsaved supplier' } }) });
+  const form = fillNewVendor();
+  await act(async () => { fireEvent.submit(form); });
+  expect(await screen.findByText(s.createdVendorIdMissing)).toBeInTheDocument();
+  expect(screen.getByTestId('add-vendor-modal')).toBeInTheDocument();
+  expect(screen.queryByText('Unsaved supplier')).not.toBeInTheDocument();
+  expect(showToast).toHaveBeenCalledWith('Vendor Creation Failed', s.createdVendorIdMissing, 'warning');
 });

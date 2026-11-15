@@ -6,16 +6,59 @@ import {
   GSTIN_PATTERN,
   PHONE_PATTERN,
   INDIAN_MOBILE_PATTERN,
+  EXACT_10_DIGIT_MOBILE_PATTERN,
+  sanitize10DigitMobile,
   PINCODE_PATTERN,
   INDIAN_PINCODE_PATTERN,
   isDummyPincode,
+  isDummyPan,
+  usablePan,
   FormSchema,
+  resolveCityAndStateFromPostalResult,
   resolveLocationFromPostalResult,
-  getFallbackLocationForPincode,
+  PASSWORD_MIN_LENGTH,
+  PROCUCEV_EMAIL_PATTERN,
+  PROCUCEV_EMAIL_MESSAGE,
+  OTP_CODE_PATTERN,
+  OTP_CODE_MESSAGE,
+  DUMMY_PINCODES,
+  PAN_PATTERN,
+  CIN_PATTERN,
+  WEBSITE_PATTERN,
+  PUBLIC_VENDOR_QUERY_SCHEMA,
+  INDIAN_STATES,
+  VENDOR_DIRECTORY_AUTH_SCHEMA,
+  PAYMENT_DUES_COMMUNICATION_SCHEMA,
+  ACTIVITY_LOG_SCHEMA,
+  INTERNAL_TASK_SCHEMA,
+  ACCOUNT_DOCUMENT_UPLOAD_SCHEMA,
+  SELLER_ADD_QUOTE_CREDITS_SCHEMA,
+  BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA,
+  findMissingPoDumpFields,
+  findMissingPoDumpHeaders,
 } from '../../lib/validationSchemas';
+import type { PostOfficeDetail } from '../../lib/validationSchemas';
 import { UI_STRINGS } from '../../lib/uiStrings';
 
 describe('Frontend validationSchemas Unit Tests', () => {
+  test('validates enterprise inquiry details against bounded shared client rules', () => {
+    expect(validateFormData(FORM_SCHEMAS.enterpriseInquiry, {
+      companyName: ' Demo Company ',
+      email: 'buyer@example.test',
+      mobile: '+91 98765 43210',
+    }).isValid).toBe(true);
+
+    expect(validateFormData(FORM_SCHEMAS.enterpriseInquiry, {
+      companyName: 'X',
+      email: 'invalid',
+      mobile: '123',
+    }).fieldErrors).toEqual({
+      companyName: expect.any(String),
+      email: expect.any(String),
+      mobile: expect.any(String),
+    });
+  });
+
   describe('loginForm schema (email + mobile + password)', () => {
     const validLogin = {
       email: 'buyer@procucev.com',
@@ -46,6 +89,32 @@ describe('Frontend validationSchemas Unit Tests', () => {
       }
     );
 
+    describe('EXACT_10_DIGIT_MOBILE_PATTERN and sanitize10DigitMobile', () => {
+      test('accepts valid 10-digit Indian numbers starting with 6, 7, 8, or 9', () => {
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('9876543210')).toBe(true);
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('8765432109')).toBe(true);
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('7654321098')).toBe(true);
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('6543210987')).toBe(true);
+      });
+
+      test('rejects numbers that have fewer or more than 10 digits or invalid starting digit', () => {
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('987654321')).toBe(false); // 9 digits
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('98765432101')).toBe(false); // 11 digits
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('1234567890')).toBe(false); // starts with 1
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('5432167890')).toBe(false); // starts with 5
+        expect(EXACT_10_DIGIT_MOBILE_PATTERN.test('+919876543210')).toBe(false);
+      });
+
+      test('sanitize10DigitMobile strips non-digits and trims country code prefixes', () => {
+        expect(sanitize10DigitMobile('+91 98765 43210')).toBe('9876543210');
+        expect(sanitize10DigitMobile('09876543210')).toBe('9876543210');
+        expect(sanitize10DigitMobile('919876543210')).toBe('9876543210');
+        expect(sanitize10DigitMobile('987654321012345')).toBe('9876543210');
+        expect(sanitize10DigitMobile('abc-123')).toBe('123');
+        expect(sanitize10DigitMobile('')).toBe('');
+      });
+    });
+
     test('rejects a malformed email address', () => {
       const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, email: 'not-an-email' });
       expect(res.isValid).toBe(false);
@@ -56,6 +125,33 @@ describe('Frontend validationSchemas Unit Tests', () => {
       const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, password: '' });
       expect(res.isValid).toBe(false);
       expect(res.fieldErrors.password).toBe(UI_STRINGS.auth.passwordRequired);
+    });
+
+    test('validates buyerRegistrationForm schema', () => {
+      const validReg = {
+        fullName: 'Jane Doe',
+        companyName: 'Acme Enterprises',
+        gstNumber: '27AAAAA0000A1Z5',
+        pincode: '411001',
+        city: 'Pune',
+        state: 'Maharashtra',
+        email: 'jane@acme.com',
+        mobile: '9876543210',
+        password: 'Password123!',
+      };
+
+      const validRes = validateFormData(FORM_SCHEMAS.buyerRegistrationForm, validReg);
+      expect(validRes.isValid).toBe(true);
+
+      // Rejects invalid GSTIN
+      const badGstRes = validateFormData(FORM_SCHEMAS.buyerRegistrationForm, { ...validReg, gstNumber: 'INVALIDGSTIN' });
+      expect(badGstRes.isValid).toBe(false);
+      expect(badGstRes.fieldErrors.gstNumber).toBe(UI_STRINGS.auth.gstinInvalid);
+
+      // Rejects invalid mobile
+      const badMobileRes = validateFormData(FORM_SCHEMAS.buyerRegistrationForm, { ...validReg, mobile: '12345' });
+      expect(badMobileRes.isValid).toBe(false);
+      expect(badMobileRes.fieldErrors.mobile).toBe(UI_STRINGS.auth.mobileInvalid);
     });
   });
 
@@ -341,6 +437,7 @@ describe('validatePincode async postal API validator', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 
   test('returns invalid for empty or non-string input', async () => {
@@ -442,14 +539,24 @@ describe('validatePincode async postal API validator', () => {
     } as any);
 
     const res = await validatePincode('400701');
-    expect(res.isValid).toBe(true);
+    expect(res.isValid).toBe(false);
   });
 
   test('falls back gracefully on network or JSON parse exception', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
 
     const res = await validatePincode('400701');
-    expect(res.isValid).toBe(true);
+    expect(res.isValid).toBe(false);
+  });
+
+  test('clears the request timeout after a network failure', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+    const result = await validatePincode('400701');
+
+    expect(result.isValid).toBe(false);
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   test('handles empty, non-Indian, and dummy pincode validation branches', async () => {
@@ -503,7 +610,7 @@ describe('validatePincode async postal API validator', () => {
     jest.useRealTimers();
   });
 
-  describe('resolveLocationFromPostalResult and getFallbackLocationForPincode', () => {
+  describe('resolveLocationFromPostalResult', () => {
     test('resolves location from postal office District and State', () => {
       const offices = [
         {
@@ -525,40 +632,29 @@ describe('validatePincode async postal API validator', () => {
       expect(loc).toBe('Thane, Maharashtra');
     });
 
-    test('falls back to city/state prefix mapping when no offices returned', () => {
-      expect(resolveLocationFromPostalResult('400701', [])).toBe('Navi Mumbai, Maharashtra');
-      expect(resolveLocationFromPostalResult('110001', [])).toBe('New Delhi, Delhi');
-      expect(resolveLocationFromPostalResult('560001', [])).toBe('Bengaluru, Karnataka');
-      expect(resolveLocationFromPostalResult('600001', [])).toBe('Chennai, Tamil Nadu');
-      expect(resolveLocationFromPostalResult('700001', [])).toBe('Kolkata, West Bengal');
-      expect(resolveLocationFromPostalResult('500001', [])).toBe('Hyderabad, Telangana');
-      expect(resolveLocationFromPostalResult('411001', [])).toBe('Pune, Maharashtra');
-      expect(resolveLocationFromPostalResult('380001', [])).toBe('Ahmedabad, Gujarat');
-      expect(resolveLocationFromPostalResult('302001', [])).toBe('Jaipur, Rajasthan');
-      expect(resolveLocationFromPostalResult('226001', [])).toBe('Lucknow, Uttar Pradesh');
-      expect(resolveLocationFromPostalResult('201301', [])).toBe('Noida, Uttar Pradesh');
-      expect(resolveLocationFromPostalResult('122001', [])).toBe('Gurugram, Haryana');
-      expect(resolveLocationFromPostalResult('160001', [])).toBe('Chandigarh, Punjab');
-      expect(resolveLocationFromPostalResult('800001', [])).toBe('Patna, Bihar');
-      expect(resolveLocationFromPostalResult('751001', [])).toBe('Bhubaneswar, Odisha');
-      expect(resolveLocationFromPostalResult('781001', [])).toBe('Guwahati, Assam');
-      expect(resolveLocationFromPostalResult('682001', [])).toBe('Kochi, Kerala');
-      expect(resolveLocationFromPostalResult('641001', [])).toBe('Coimbatore, Tamil Nadu');
-      expect(resolveLocationFromPostalResult('530001', [])).toBe('Visakhapatnam, Andhra Pradesh');
-      expect(resolveLocationFromPostalResult('452001', [])).toBe('Indore, Madhya Pradesh');
-      expect(resolveLocationFromPostalResult('462001', [])).toBe('Bhopal, Madhya Pradesh');
-      expect(resolveLocationFromPostalResult('695001', [])).toBe('Thiruvananthapuram, Kerala');
-    });
-
-    test('returns state level fallback or empty string for unknown pins', () => {
-      expect(getFallbackLocationForPincode('999999')).toBe('');
-      expect(getFallbackLocationForPincode('')).toBe('');
-      expect(getFallbackLocationForPincode('4')).toBe('');
-      expect(getFallbackLocationForPincode('400001')).toBe('Mumbai, Maharashtra');
-      expect(getFallbackLocationForPincode('440001')).toBe('Nagpur, Maharashtra');
-      expect(getFallbackLocationForPincode('390001')).toBe('Vadodara, Gujarat');
-      expect(getFallbackLocationForPincode('395001')).toBe('Surat, Gujarat');
-      expect(getFallbackLocationForPincode('490001')).toBe('Chhattisgarh');
+    test('returns an empty location when no offices are returned, without guessing from the PIN', () => {
+      expect(resolveLocationFromPostalResult('400701', [])).toBe('');
+      expect(resolveLocationFromPostalResult('110001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('560001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('600001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('700001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('500001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('411001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('380001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('302001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('226001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('201301', [])).toBe('');
+      expect(resolveLocationFromPostalResult('122001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('160001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('800001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('751001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('781001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('682001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('641001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('530001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('452001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('462001', [])).toBe('');
+      expect(resolveLocationFromPostalResult('695001', [])).toBe('');
     });
 
     test('resolves location using fallback office properties or fallback pin lookup', () => {
@@ -575,7 +671,7 @@ describe('validatePincode async postal API validator', () => {
       const officeWithBlankProperties = [
         { Name: '', District: '', Division: '', Circle: '', State: '' } as any,
       ];
-      expect(resolveLocationFromPostalResult('400701', officeWithBlankProperties)).toBe('Navi Mumbai, Maharashtra');
+      expect(resolveLocationFromPostalResult('400701', officeWithBlankProperties)).toBe('');
     });
 
     test('handles non-array response from postal API gracefully', async () => {
@@ -585,16 +681,242 @@ describe('validatePincode async postal API validator', () => {
       } as Response);
 
       const res = await validatePincode('400701');
-      expect(res.isValid).toBe(true);
+      expect(res.isValid).toBe(false);
     });
 
-    test('validates extendRFQ schema custom hours validation', () => {
+    test('validates extendRFQ schema whole-day range and names it when it fails', () => {
       const extendRule = FORM_SCHEMAS.extendRFQ;
-      expect(validateFormData(extendRule, { hours: 24 }).isValid).toBe(true);
-      expect(validateFormData(extendRule, { hours: 48 }).isValid).toBe(true);
-      expect(validateFormData(extendRule, { hours: 12 }).isValid).toBe(false);
-      expect(validateFormData(extendRule, { hours: 'abc' }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 1 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { days: 30 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { days: 31 }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 2.5 }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 'abc' }).isValid).toBe(false);
+      expect(validateFormData(extendRule, {}).isValid).toBe(false);
+      expect(validateFormData(extendRule, { days: 31 }).fieldErrors.days).toContain('from 1 to 30');
     });
   });
 });
 
+
+describe('validatePincode unverified state', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  test('marks a PIN unverified, not accepted, when the postal service returns an HTTP error', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) } as Response);
+
+    const res = await validatePincode('400701');
+
+    expect(res.isValid).toBe(false);
+    expect(res.unverified).toBe(true);
+    expect(res.message).toBe(UI_STRINGS.pincodeVerification.unverified);
+    expect(res.postOffices).toBeUndefined();
+  });
+
+  test('marks a PIN unverified when the postal service cannot be reached', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+    const res = await validatePincode('400701');
+
+    expect(res.isValid).toBe(false);
+    expect(res.unverified).toBe(true);
+    expect(res.message).toBe(UI_STRINGS.pincodeVerification.unverified);
+  });
+
+  test('does not mark unverified when the postal records say the PIN does not exist', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{ Status: 'Error', PostOffice: null }],
+    } as Response);
+
+    const res = await validatePincode('400799');
+
+    expect(res.isValid).toBe(false);
+    expect(res.unverified).toBeUndefined();
+  });
+
+  test('leaves the city and state blank when the lookup fails', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('timeout'));
+
+    const res = await validatePincode('411001');
+
+    expect(res.isValid).toBe(false);
+    expect(resolveLocationFromPostalResult('411001', res.postOffices)).toBe('');
+  });
+});
+
+describe('validationSchemas exported boundaries', () => {
+  test('pins the account, identity and OTP boundaries', () => {
+    expect(PASSWORD_MIN_LENGTH).toBe(8);
+    expect(PROCUCEV_EMAIL_PATTERN.test('ops@procucev.com')).toBe(true);
+    expect(PROCUCEV_EMAIL_PATTERN.test('ops@example.com')).toBe(false);
+    expect(PROCUCEV_EMAIL_MESSAGE).toBe('Must be a valid Procucev corporate email address ending in @procucev.com');
+    expect(OTP_CODE_PATTERN.test('123456')).toBe(true);
+    expect(OTP_CODE_PATTERN.test('12345')).toBe(false);
+    expect(OTP_CODE_MESSAGE).toBe('OTP code must be exactly 6 numeric digits');
+  });
+
+  test('pins the dummy-pincode set and the tax identifier and website formats', () => {
+    expect(DUMMY_PINCODES.has('111111')).toBe(true);
+    expect(DUMMY_PINCODES.has('400701')).toBe(false);
+    expect(PAN_PATTERN.test('AAACL1234F')).toBe(true);
+    expect(PAN_PATTERN.test('AAACL12345')).toBe(false);
+    expect(CIN_PATTERN.test('L28920MH1946PLC004768')).toBe(true);
+    expect(CIN_PATTERN.test('X28920MH1946PLC004768')).toBe(false);
+    expect(WEBSITE_PATTERN.test('https://www.lnt.com')).toBe(true);
+    expect(WEBSITE_PATTERN.test('ftp://lnt.com')).toBe(false);
+  });
+
+  test('pins the vendor directory, payment, activity, task, document and credit schemas', () => {
+    expect(PUBLIC_VENDOR_QUERY_SCHEMA.search).toEqual({ maxLength: 200 });
+    expect(INDIAN_STATES).toContain('Maharashtra');
+    expect(VENDOR_DIRECTORY_AUTH_SCHEMA.passkey).toEqual({ minLength: 1, maxLength: 100 });
+    expect(PAYMENT_DUES_COMMUNICATION_SCHEMA.email).toBeDefined();
+    expect(ACTIVITY_LOG_SCHEMA.channel).toBeDefined();
+    expect(INTERNAL_TASK_SCHEMA.title).toEqual({ minLength: 2, maxLength: 512 });
+    expect(ACCOUNT_DOCUMENT_UPLOAD_SCHEMA.documentName).toEqual({ minLength: 1, maxLength: 255 });
+    expect(SELLER_ADD_QUOTE_CREDITS_SCHEMA.amount).toEqual({ min: 1, max: 5 });
+    expect(BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA.amount).toEqual({ min: 1 });
+  });
+});
+
+describe('validationSchemas edge branches', () => {
+  test('skips string-only length and pattern checks for a non-string value on an untyped rule', () => {
+    const schema: FormSchema = { flag: { pattern: /^x$/ } };
+    expect(validateFormData(schema, { flag: 42 })).toEqual({ isValid: true, fieldErrors: {} });
+  });
+
+  test('reports the PIN as unverified when the request cannot be set up, and sends nothing', async () => {
+    const originalAbortController = global.AbortController;
+    const originalFetch = global.fetch;
+    global.AbortController = (function unavailableAbortController() {
+      throw new Error('AbortController unavailable');
+    }) as unknown as typeof AbortController;
+    global.fetch = jest.fn();
+    try {
+      const res = await validatePincode('400701');
+      expect(res).toEqual({ isValid: false, unverified: true, message: UI_STRINGS.pincodeVerification.unverified });
+      expect(global.fetch).not.toHaveBeenCalled();
+    } finally {
+      global.AbortController = originalAbortController;
+      global.fetch = originalFetch;
+    }
+  });
+});
+
+describe('PO dump required columns', () => {
+  it('reports no missing header when a sheet has only the two mandatory columns (Vendor/Supplier Name and Item Description/Short Text/Material Description)', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Vendor Name', 'Line Item Description', 'Quantity'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['PO Number', 'PO Date', 'Vendor Name / Code', 'Item Name & Description', 'Quantity', 'Unit'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['Vendor/Supplier Name', 'Short Text'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['Supplier Name', 'Material Description', 'Specifications'])).toEqual([]);
+  });
+
+  it('accepts the other spellings of each required column', () => {
+    expect(findMissingPoDumpHeaders(['Vendor Code', 'Item Description'])).toEqual([]);
+    expect(findMissingPoDumpHeaders(['Supplier', 'Item Description/Short Text/Material Description'])).toEqual([]);
+  });
+
+  it('names only the two required columns when missing, ignoring empty headers', () => {
+    expect(findMissingPoDumpHeaders(['PO Number', 'Quantity', 'Specifications', ''])).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+    ]);
+  });
+
+  it('names only the item description column when vendor is present but description is missing', () => {
+    expect(findMissingPoDumpHeaders(['Vendor Name', 'Specifications'])).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+    ]);
+  });
+
+  it('reports no missing field when only vendor and item description are populated and names blank mandatory fields', () => {
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: 'Valve' })).toEqual([]);
+    expect(findMissingPoDumpFields({ vendorIdentifier: '  ', itemName: 'Valve' })).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+    ]);
+  });
+
+  it('treats the description as missing when only the description is blank', () => {
+    expect(findMissingPoDumpFields({ vendorIdentifier: 'Apex', itemName: '' })).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+    ]);
+  });
+});
+
+describe('isDummyPan and usablePan', () => {
+  it('flags the listed sample PANs, whatever their case or surrounding spaces', () => {
+    expect(isDummyPan('ABCPE1234F')).toBe(true);
+    expect(isDummyPan(' abcde1234f ')).toBe(true);
+    expect(isDummyPan('AAACL1234F')).toBe(true);
+  });
+
+  it('flags a PAN made of one letter repeated', () => {
+    expect(isDummyPan('AAAAA0000A')).toBe(true);
+    expect(isDummyPan('zzzzz9999z')).toBe(true);
+  });
+
+  it('does not flag an ordinary PAN, or a value that is blank or not text', () => {
+    expect(isDummyPan('AAACL0140P')).toBe(false);
+    expect(isDummyPan('')).toBe(false);
+    expect(isDummyPan('   ')).toBe(false);
+    expect(isDummyPan(undefined)).toBe(false);
+    expect(isDummyPan(1234)).toBe(false);
+  });
+
+  it('returns the upper-case PAN when it has the PAN format and is not a placeholder', () => {
+    expect(usablePan(' aaacl0140p ')).toBe('AAACL0140P');
+  });
+
+  it('returns null for a placeholder, a value without the PAN format, or a value that is not text', () => {
+    expect(usablePan('ABCPE1234F')).toBeNull();
+    expect(usablePan('Not Provided')).toBeNull();
+    expect(usablePan('AAACL01400')).toBeNull();
+    expect(usablePan(null)).toBeNull();
+    expect(usablePan(undefined)).toBeNull();
+    expect(usablePan(42)).toBeNull();
+  });
+});
+
+describe('resolveCityAndStateFromPostalResult', () => {
+  const offices = [
+    { Name: 'New Delhi GPO', Pincode: '110001', District: 'New Delhi', State: 'Delhi' },
+    { Name: 'Koramangala', Pincode: '560034', District: 'Bangalore Urban', State: 'Karnataka' },
+  ] as PostOfficeDetail[];
+
+  test('returns blank city and state when no office record is available, without guessing from the PIN', () => {
+    expect(resolveCityAndStateFromPostalResult('560034', [])).toEqual({ city: '', state: '' });
+    expect(resolveCityAndStateFromPostalResult('560034')).toEqual({ city: '', state: '' });
+  });
+
+  test('takes the office whose Pincode matches the requested PIN, and falls back to the first office', () => {
+    expect(resolveCityAndStateFromPostalResult('560034', offices)).toEqual({ city: 'Bangalore Urban', state: 'Karnataka' });
+    expect(resolveCityAndStateFromPostalResult('999999', offices)).toEqual({ city: 'New Delhi', state: 'Delhi' });
+  });
+
+  test('takes the city from District, then Division, then Circle, then Name', () => {
+    const district = [{ Name: 'PO', Division: 'Div', Circle: 'Cir', District: 'Dist', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const division = [{ Name: 'PO', Division: 'Div', Circle: 'Cir', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const circle = [{ Name: 'PO', Circle: 'Cir', State: 'Maharashtra' }] as PostOfficeDetail[];
+    const name = [{ Name: 'PO', State: 'Maharashtra' }] as PostOfficeDetail[];
+
+    expect(resolveCityAndStateFromPostalResult('400701', district)).toEqual({ city: 'Dist', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', division)).toEqual({ city: 'Div', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', circle)).toEqual({ city: 'Cir', state: 'Maharashtra' });
+    expect(resolveCityAndStateFromPostalResult('400701', name)).toEqual({ city: 'PO', state: 'Maharashtra' });
+  });
+
+  test('leaves the state blank when the office record has none', () => {
+    const noState = [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[];
+    expect(resolveCityAndStateFromPostalResult('400701', noState)).toEqual({ city: 'Dist', state: '' });
+  });
+
+  test('resolveLocationFromPostalResult joins the same city and state', () => {
+    expect(resolveLocationFromPostalResult('560034', offices)).toBe('Bangalore Urban, Karnataka');
+    expect(resolveLocationFromPostalResult('999999', [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[])).toBe('Dist');
+  });
+});

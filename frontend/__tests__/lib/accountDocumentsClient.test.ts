@@ -2,11 +2,13 @@ import {
   fetchAccountDocuments,
   uploadAccountDocument,
   deleteAccountDocument,
+  createCreditApprovalIdempotencyKey,
   requestBuyerCreditApproval,
   requestSellerQuoteCreditApproval,
   addSellerQuoteCredits,
 } from '../../lib/accountDocumentsClient';
 import { authClient } from '../../lib/authClient';
+import { UI_STRINGS, formatString } from '../../lib/uiStrings';
 
 describe('accountDocumentsClient', () => {
   const origFetch = global.fetch;
@@ -18,6 +20,34 @@ describe('accountDocumentsClient', () => {
 
   afterEach(() => {
     global.fetch = origFetch;
+  });
+
+  it('creates a UUID idempotency key when crypto.randomUUID is unavailable', () => {
+    const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    const getRandomValues = jest.fn((bytes: Uint8Array) => bytes);
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } });
+
+    try {
+      expect(createCreditApprovalIdempotencyKey()).toMatch(
+        /^00000000-0000-4000-8000-000000000000$/i
+      );
+      expect(getRandomValues).toHaveBeenCalledWith(expect.any(Uint8Array));
+    } finally {
+      if (originalCrypto) Object.defineProperty(globalThis, 'crypto', originalCrypto);
+      else delete (globalThis as { crypto?: Crypto }).crypto;
+    }
+  });
+
+  it('throws the secure-ID message when the Web Crypto API is unavailable', () => {
+    const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+
+    try {
+      expect(() => createCreditApprovalIdempotencyKey()).toThrow(UI_STRINGS.dataLoad.secureIdUnavailable);
+    } finally {
+      if (originalCrypto) Object.defineProperty(globalThis, 'crypto', originalCrypto);
+      else delete (globalThis as { crypto?: Crypto }).crypto;
+    }
   });
 
   describe('fetchAccountDocuments', () => {
@@ -44,7 +74,11 @@ describe('accountDocumentsClient', () => {
         json: async () => ({ success: false }),
       } as unknown as Response);
 
-      const upRes = await uploadAccountDocument('buyer', 'b-1', { documentName: 'D', category: 'C' });
+      const noFileRes = await uploadAccountDocument('buyer', 'b-1', { documentName: 'D', category: 'C' });
+      expect(noFileRes.success).toBe(false);
+      expect(noFileRes.error).toBe(UI_STRINGS.dataLoad.documentFileRequired);
+
+      const upRes = await uploadAccountDocument('buyer', 'b-1', { documentName: 'D', category: 'C', fileName: 'd.pdf' });
       expect(upRes.error).toBe('Failed to upload document.');
 
       const reqRes = await requestBuyerCreditApproval('b-1', { amount: 5, approverName: 'Srinu Sir', initiatorName: 'Govardhan' });
@@ -76,7 +110,7 @@ describe('accountDocumentsClient', () => {
           }),
         })
       );
-      expect(docs).toEqual(mockDocs);
+      expect(docs).toEqual({ documents: mockDocs });
     });
 
     it('fetches seller documents with bare URL and ignores all/default filters', async () => {
@@ -94,23 +128,34 @@ describe('accountDocumentsClient', () => {
         '/api/vendors/seller-1/documents',
         expect.anything()
       );
-      expect(docs).toEqual([]);
+      expect(docs).toEqual({ documents: [] });
     });
 
-    it('returns empty array when response is not ok', async () => {
+    it('returns no documents and an error when the response is not ok', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: false,
         status: 500,
       } as unknown as Response);
 
       const docs = await fetchAccountDocuments('buyer', 'b-err');
-      expect(docs).toEqual([]);
+      expect(docs.documents).toEqual([]);
+      expect(docs.error).toBe(
+        formatString(UI_STRINGS.dataLoad.failedWithStatus, {
+          resource: UI_STRINGS.dataLoad.resources.accountDocuments,
+          status: 500,
+        })
+      );
     });
 
-    it('handles network throw gracefully', async () => {
+    it('returns no documents and an error when the network request throws', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
       const docs = await fetchAccountDocuments('seller', 's-err');
-      expect(docs).toEqual([]);
+      expect(docs.documents).toEqual([]);
+      expect(docs.error).toBe(
+        formatString(UI_STRINGS.dataLoad.networkFailed, {
+          resource: UI_STRINGS.dataLoad.resources.accountDocuments,
+        })
+      );
     });
   });
 
@@ -166,6 +211,7 @@ describe('accountDocumentsClient', () => {
 
       const result = await uploadAccountDocument('buyer', 'buyer-1', {
         documentName: 'Large Doc',
+        fileName: 'large.pdf',
         category: 'PAN',
       });
 
@@ -177,6 +223,7 @@ describe('accountDocumentsClient', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Upload socket drop'));
       const result = await uploadAccountDocument('seller', 's-1', {
         documentName: 'Doc',
+        fileName: 'doc.pdf',
         category: 'Other',
       });
       expect(result.success).toBe(false);
@@ -242,6 +289,10 @@ describe('accountDocumentsClient', () => {
           method: 'POST',
         })
       );
+      const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+      expect(JSON.parse(requestOptions.body).idempotencyKey).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      );
     });
 
     it('handles failure when server rejects credit request', async () => {
@@ -295,6 +346,10 @@ describe('accountDocumentsClient', () => {
         expect.objectContaining({
           method: 'POST',
         })
+      );
+      const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+      expect(JSON.parse(requestOptions.body).idempotencyKey).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       );
     });
 
@@ -365,5 +420,17 @@ describe('accountDocumentsClient', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('Connection reset');
     });
+  });
+});
+
+describe('createCreditApprovalIdempotencyKey without a secure random source', () => {
+  it('throws the secure-ID message instead of falling back to Math.random', () => {
+    const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined });
+    try {
+      expect(() => createCreditApprovalIdempotencyKey()).toThrow(UI_STRINGS.dataLoad.secureIdUnavailable);
+    } finally {
+      if (originalCrypto) Object.defineProperty(globalThis, 'crypto', originalCrypto);
+    }
   });
 });

@@ -18,6 +18,8 @@ interface AllRFQsConsoleProps {
 }
 
 const S = UI_STRINGS.allRfqs;
+// Shown wherever a value is not recorded on the RFQ or quote.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 /** Every real RFQ status → badge tone. Covers all members of the union. */
 const STATUS_TONE: Record<RFQItem['status'], string> = {
@@ -54,6 +56,26 @@ function latestQuoteSubmittedAt(rfq: RFQItem): string | null {
     .filter((t): t is string => !!t && !Number.isNaN(Date.parse(t)));
   if (times.length === 0) return null;
   return times.reduce((latest, t) => (Date.parse(t) > Date.parse(latest) ? t : latest));
+}
+
+/**
+ * Name and id of an invited vendor, read from whichever field the API set.
+ * A value that is not present stays null, so the caller can show a dash.
+ */
+function invitedVendorIdentity(vendor: RFQAssignedVendor): { name: string | null; id: string | null } {
+  const raw: unknown = vendor;
+  if (typeof raw === 'string') {
+    return { name: raw.trim() || null, id: null };
+  }
+  const record = (raw || {}) as Record<string, unknown>;
+  const pick = (...keys: string[]): string | null => {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return null;
+  };
+  return { name: pick('name', 'vendorName', 'companyName'), id: pick('id', 'vendorId') };
 }
 
 /** Check if RFQ has any category signal in header or line items */
@@ -303,7 +325,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
       {!loading && !error && filtered.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-850 dark:bg-gray-950/40">
-          <table className="w-full min-w-[1600px] table-fixed text-sm">
+          <table className="w-full min-w-[1750px] table-fixed text-sm">
             <caption className="sr-only">{S.subtitle}</caption>
             <colgroup>
               <col className="w-[155px]" />
@@ -311,7 +333,8 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               <col className="w-[165px]" />
               <col className="w-[145px]" />
               <col className="w-[75px]" />
-              <col className="w-[210px]" />
+              <col className="w-[190px]" />
+              <col className="w-[190px]" />
               <col className="w-[125px]" />
               <col className="w-[105px]" />
               <col className="w-[180px]" />
@@ -324,6 +347,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colBuyer}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colStatus}</th>
                 <th scope="col" className="px-3 py-3 text-right font-bold">{S.colQuotes}</th>
+                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colInvitedVendors}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colVendors}</th>
                 <th scope="col" className="px-3 py-3 text-right font-bold">{S.colBudget}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colCreated}</th>
@@ -334,7 +358,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
             <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
               {filtered.map((rfq) => {
                 const isUncategorizedV0 =
-                  (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as any) === 'v0') &&
+                  (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as string) === 'v0') &&
                   !rfqHasCategorySignal(rfq) &&
                   (!rfq.assignedVendors || rfq.assignedVendors.length === 0);
                 const needsAssignment = Boolean(rfq.needsCategoryManagerAssignment || isUncategorizedV0);
@@ -380,6 +404,55 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   </td>
                   <td className="px-3 py-3 text-right font-mono text-slate-700 dark:text-gray-300">{rfq.quotesCount}</td>
+                  {/* Invited Vendors column */}
+                  <td className="px-3 py-3">
+                    {rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
+                      <div className="flex flex-col items-start gap-1 max-w-full">
+                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500">
+                          Invited ({rfq.assignedVendors.length})
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {rfq.assignedVendors.slice(0, 2).map((av, idx) => {
+                            const identity = invitedVendorIdentity(av);
+                            const vName = identity.name ?? EMPTY_VALUE;
+                            const vId = identity.id;
+                            return (
+                              <button
+                                key={vId || idx}
+                                type="button"
+                                onClick={() =>
+                                  setSelectedVendorInfo({
+                                    name: vName,
+                                    id: vId,
+                                    assignedVendor: av,
+                                    rfq,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors max-w-[125px] truncate cursor-pointer"
+                                title={`Invited vendor: ${vName}. Click to view details.`}
+                              >
+                                <Store size={10} className="text-slate-400 shrink-0" />
+                                <span className="truncate">{vName}</span>
+                              </button>
+                            );
+                          })}
+                          {rfq.assignedVendors.length > 2 && (
+                            <button
+                              type="button"
+                              onClick={() => setVendorListModalData({ rfq, mode: 'assigned' })}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900 transition border border-indigo-200 dark:border-indigo-800 cursor-pointer"
+                              title="Click to view all invited vendors"
+                            >
+                              +{rfq.assignedVendors.length - 2} more
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="italic text-slate-400 text-xs">{S.colInvitedVendorsNone}</span>
+                    )}
+                  </td>
+                  {/* Quoted Vendors column */}
                   <td className="px-3 py-3">
                     {rfq.quotes && rfq.quotes.length > 0 ? (
                       <div className="flex flex-col items-start gap-1 max-w-full">
@@ -416,47 +489,6 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                               title="Click to view all quoted vendors"
                             >
                               +{rfq.quotes.length - 2} more
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
-                      <div className="flex flex-col items-start gap-1 max-w-full">
-                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500">
-                          Invited ({rfq.assignedVendors.length})
-                        </span>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {rfq.assignedVendors.slice(0, 2).map((av, idx) => {
-                            const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
-                            const vId = av.id || (av as any).vendorId || null;
-                            return (
-                              <button
-                                key={vId || idx}
-                                type="button"
-                                onClick={() =>
-                                  setSelectedVendorInfo({
-                                    name: vName,
-                                    id: vId,
-                                    assignedVendor: av,
-                                    rfq,
-                                  })
-                                }
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors max-w-[125px] truncate cursor-pointer"
-                                title={`Invited vendor: ${vName}. Click to view details.`}
-                              >
-                                <Store size={10} className="text-slate-400 shrink-0" />
-                                <span className="truncate">{vName}</span>
-                              </button>
-                            );
-                          })}
-                          {rfq.assignedVendors.length > 2 && (
-                            <button
-                              type="button"
-                              onClick={() => setVendorListModalData({ rfq, mode: 'assigned' })}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900 transition border border-indigo-200 dark:border-indigo-800 cursor-pointer"
-                              title="Click to view all invited vendors"
-                            >
-                              +{rfq.assignedVendors.length - 2} more
                             </button>
                           )}
                         </div>
@@ -603,8 +635,8 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         </div>
                         <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-gray-450 mt-1">
                           <span>Total: <strong className="text-slate-800 dark:text-gray-200">{formatCurrency(q.totalPrice)}</strong></span>
-                          <span>Lead: <strong>{q.leadTimeDays}d</strong></span>
-                          <span>Warranty: <strong>{q.warrantyYears || 0}y</strong></span>
+                          <span>Lead: <strong>{q.leadTimeDays != null ? `${q.leadTimeDays}d` : EMPTY_VALUE}</strong></span>
+                          <span>Warranty: <strong>{q.warrantyYears != null ? `${q.warrantyYears}y` : EMPTY_VALUE}</strong></span>
                         </div>
                       </div>
                       <button
@@ -626,8 +658,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   ))
                 : (vendorListModalData.rfq.assignedVendors || []).map((av, idx) => {
-                    const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
-                    const vId = av.id || (av as any).vendorId || null;
+                    const identity = invitedVendorIdentity(av);
+                    const vName = identity.name ?? EMPTY_VALUE;
+                    const vId = identity.id;
                     return (
                       <div
                         key={vId || idx}

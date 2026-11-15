@@ -146,6 +146,47 @@ describe('StandardRFQEmailModal', () => {
     );
   });
 
+  it('omits the SHA-256 stamp from the screen and the copied text when the email has no seal', () => {
+    jest.useFakeTimers();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      selectedEmailForModal: { ...sampleEmailPayload, shaSignature: '' },
+      emailModalOpen: true,
+      setEmailModalOpen: mockSetEmailModalOpen,
+      showToast: mockShowToast,
+    });
+
+    const { unmount } = render(<StandardRFQEmailModal />);
+
+    expect(screen.queryByText(/SHA-256:/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Copy Email Text/));
+    const writeText = navigator.clipboard.writeText as jest.Mock;
+    const copied = String(writeText.mock.calls[writeText.mock.calls.length - 1][0]);
+    expect(copied).not.toContain('SHA-256 DIGITAL AUDIT SEAL');
+    expect(copied).toContain(sampleEmailPayload.subject);
+
+    unmount();
+    jest.useRealTimers();
+  });
+
+  it('shows the first 24 characters of the SHA-256 seal on screen and the full seal in the copied text', () => {
+    jest.useFakeTimers();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      selectedEmailForModal: sampleEmailPayload,
+      emailModalOpen: true,
+      setEmailModalOpen: mockSetEmailModalOpen,
+      showToast: mockShowToast,
+    });
+
+    render(<StandardRFQEmailModal />);
+
+    expect(screen.getByText(`SHA-256: ${sampleEmailPayload.shaSignature.slice(0, 24)}...`)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Copy Email Text/));
+    const writeText = navigator.clipboard.writeText as jest.Mock;
+    const copied = String(writeText.mock.calls[writeText.mock.calls.length - 1][0]);
+    expect(copied).toContain(`SHA-256 DIGITAL AUDIT SEAL: ${sampleEmailPayload.shaSignature}`);
+    jest.useRealTimers();
+  });
+
   it('handles print action with iframe and fallback', () => {
     jest.useFakeTimers();
     (storeModule.useApp as jest.Mock).mockReturnValue({

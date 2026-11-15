@@ -68,7 +68,7 @@ export function isVerifiedBuyer(buyer?: { status?: string; verificationStatus?: 
   );
 }
 
-import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig, BuyerCommunicationItem, BuyerPaymentTransaction, ActionCenterSummaryPopupColumn } from '@/lib/types';
+import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig, ActionCenterSummaryPopupColumn } from '@/lib/types';
 import {
   RFQ_MODES,
   RFQ_MODE_LABELS,
@@ -84,7 +84,7 @@ import { exportReportToExcel } from '@/lib/reportsClient';
 interface BuyersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   initialBuyerId?: string;
-  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments';
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
 }
 
 export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTab }: BuyersDirectoryProps) {
@@ -245,7 +245,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       }
     }
   }, [initialBuyerId, initialTab, buyerAccounts]);
-  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'activity'>('profile');
+  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents'>('profile');
 
   // Pre-calculate per-buyer RFQ counts and actual spend from the live RFQs collection
   const buyerMetricsMap = useMemo(() => {
@@ -519,64 +519,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     });
   }, [activeBuyer, auditLogs]);
 
-  // Synthetic/Standardized communications & payments derived from buyer state
-  const buyerCommunications = useMemo<BuyerCommunicationItem[]>(() => {
-    if (!activeBuyer) return [];
-    const logs: BuyerCommunicationItem[] = [];
-    if (activeBuyer.createdDate) {
-      logs.push({
-        id: `comm-reg-${activeBuyer.id}`,
-        accountId: activeBuyer.id,
-        channel: 'EMAIL',
-        subject: 'Enterprise Onboarding Confirmation & API Key Generation',
-        recipient: activeBuyer.corporateEmail || '',
-        message: `Welcome ${activeBuyer.contactPerson || activeBuyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
-        preview: `Welcome ${activeBuyer.contactPerson || activeBuyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
-        deliveryStatus: 'DELIVERED',
-        sentAt: activeBuyer.createdDate,
-      });
-    }
-    buyerRfqs.forEach((rfq, idx) => {
-      if (rfq.createdAt) {
-        logs.push({
-          id: `comm-rfq-${rfq.id}-${idx}`,
-          accountId: activeBuyer.id,
-          channel: 'SYSTEM_NOTIFICATION',
-          subject: `RFQ Dispatch & Supplier Sourcing Match: ${rfq.rfqNumber}`,
-          recipient: activeBuyer.corporateEmail || '',
-          message: `RFQ for "${rfq.title}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
-          preview: `RFQ for "${rfq.title}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
-          deliveryStatus: 'DISPATCHED',
-          sentAt: rfq.createdAt,
-        });
-      }
-    });
-    return logs;
-  }, [activeBuyer, buyerRfqs]);
-
-  const buyerPayments = useMemo<BuyerPaymentTransaction[]>(() => {
-    if (!activeBuyer) return [];
-    const payments: BuyerPaymentTransaction[] = [];
-    if (activeBuyer.createdDate) {
-      payments.push({
-        id: `pay-init-${activeBuyer.id}`,
-        paymentId: `PAY-${activeBuyer.id.slice(0, 5).toUpperCase()}`,
-        invoiceNo: `INV-2026-${activeBuyer.id.slice(0, 5).toUpperCase()}`,
-        description: `Plan: ${activeBuyer.subscriptionPlan || 'Free Enterprise Trial'}`,
-        subscriptionPlan: activeBuyer.subscriptionPlan || 'Free Enterprise Trial',
-        amount: activeBuyer.subscriptionPlan?.includes('growth') ? 14999 : activeBuyer.subscriptionPlan?.includes('custom') ? 49999 : 0,
-        currency: 'INR',
-        status: 'PAID',
-        gateway: 'Zoho Payments (India UPI / NetBanking)',
-        paymentMethod: 'Zoho Payments (India UPI / NetBanking)',
-        transactionDate: activeBuyer.createdDate,
-        date: activeBuyer.createdDate,
-      });
-    }
-    return payments;
-  }, [activeBuyer]);
-
-    // Summary Card Modal State
+  // Summary Card Modal State
   const [summaryModalState, setSummaryModalState] = useState<{
     isOpen: boolean;
     title: string;
@@ -935,16 +878,16 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       </div>
 
       {/* Toolbar / Search & Filter Controls with Export and Gear Icon (Horizontal Row) */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-2 shadow-sm flex flex-row items-center gap-1.5 sm:gap-2 w-full min-w-0 max-w-full box-border">
         {/* Search input */}
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+        <div className="relative flex-1 min-w-[180px] max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             placeholder="Search company, contact person, email, city..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full has-leading-icon has-trailing-icon pr-3 py-1.5 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
 
@@ -1400,13 +1343,11 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
             totalSpend: buyerMetricsMap.get(activeBuyer.id)?.spendFormatted || (activeBuyer.totalSpend ? activeBuyer.totalSpend.split("$").join("₹") : "₹0"),
             totalRFQsCreated: buyerMetricsMap.get(activeBuyer.id)?.rfqCount ?? activeBuyer.totalRFQsCreated,
           }}
-          initialTab={dossierTab as any}
-          onTabChange={(t) => setDossierTab(t as any)}
+          initialTab={dossierTab}
+          onTabChange={setDossierTab}
           onClose={() => setActiveBuyer(null)}
           onSelectRFQ={onSelectRFQ}
           buyerRfqs={buyerRfqs}
-          initialCommunications={buyerCommunications}
-          initialPayments={buyerPayments}
         />
       )}
     </div>

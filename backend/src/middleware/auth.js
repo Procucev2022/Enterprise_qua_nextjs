@@ -43,6 +43,13 @@ async function authenticate(req, res, next) {
 
   const verification = await authService.assertSessionActive(token);
   if (!verification.valid) {
+    if (verification.error === AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE) {
+      return res.status(503).json({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE,
+      });
+    }
     return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
   }
 
@@ -91,6 +98,25 @@ async function authenticate(req, res, next) {
 }
 
 /**
+ * Authentication for the frontend log beacon (POST /api/logs). It checks the token signature and
+ * expiry only, with no revocation read, so each log line costs no database query. Log lines are
+ * written to the console, so a logged-out token can still post them until it expires. Every other
+ * route keeps the full check in authenticate().
+ */
+function authenticateTelemetry(req, res, next) {
+  const token = extractToken(req);
+  if (!token) {
+    return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+  }
+  const verification = authService.verifySessionToken(token);
+  if (!verification.valid) {
+    return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
+  }
+  req.user = verification.user;
+  return next();
+}
+
+/**
  * Optional authentication: resolves and attaches req.user if a valid token is
  * supplied, but does not block requests that lack a token.
  */
@@ -104,8 +130,12 @@ async function optionalAuthenticate(req, res, next) {
     if (verification.valid) {
       req.user = verification.user;
     }
-  } catch {
+  } catch (err) {
     // Non-blocking fallback for optional endpoints
+    logger.warn('Optional authentication could not validate the session; continuing without a user', {
+      error: err,
+      requestId: req.id || req.requestId || null,
+    }, 'AUTH_MIDDLEWARE');
   }
   return next();
 }
@@ -159,7 +189,18 @@ async function requireVendorDirectorySession(req, res, next) {
   try {
     session = await vendorDirectorySessionQueries.findSessionById(req.user.sessionId);
   } catch (err) {
-    logger.warn('Failed to load vendor directory session', { error: err.message, sessionId: req.user.sessionId }, 'AUTH_MIDDLEWARE');
+    if (err.code === 'PERSISTENCE_UNAVAILABLE') {
+      logger.error('Vendor Directory session validation is unavailable', {
+        error: err,
+        sessionId: req.user.sessionId,
+      }, 'AUTH_MIDDLEWARE');
+      return res.status(503).json({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE,
+      });
+    }
+    logger.warn('Failed to load vendor directory session', { error: err, sessionId: req.user.sessionId }, 'AUTH_MIDDLEWARE');
     session = null;
   }
 
@@ -205,7 +246,18 @@ async function requireVendorDirectorySession(req, res, next) {
   try {
     await vendorDirectorySessionQueries.updateSessionActivity(session.id);
   } catch (actErr) {
-    logger.warn('Failed to update directory session activity', { error: actErr.message }, 'AUTH_MIDDLEWARE');
+    if (actErr.code === 'PERSISTENCE_UNAVAILABLE') {
+      logger.error('Vendor Directory activity update could not be persisted', {
+        error: actErr,
+        sessionId: session.id,
+      }, 'AUTH_MIDDLEWARE');
+      return res.status(503).json({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE,
+      });
+    }
+    logger.warn('Failed to update directory session activity', { error: actErr, sessionId: session.id }, 'AUTH_MIDDLEWARE');
   }
 
   req.directorySession = session;
@@ -215,6 +267,7 @@ async function requireVendorDirectorySession(req, res, next) {
 module.exports = {
   extractToken,
   authenticate,
+  authenticateTelemetry,
   optionalAuthenticate,
   requireRole,
   requireVendorDirectorySession,

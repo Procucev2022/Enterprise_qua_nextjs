@@ -398,6 +398,26 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
+/* Whole-field date picker. Chromium (Chrome, Edge) opens its calendar only from the small
+   calendar icon, so the icon is stretched over the whole field and drawn transparent. A click
+   anywhere in the field then opens the picker. Firefox already opens the picker from any click,
+   so it needs no rule. Used on Target Delivery Date inputs that a buyer fills in. */
+input[type="date"].date-input-whole-field {
+  position: relative;
+}
+input[type="date"].date-input-whole-field::-webkit-calendar-picker-indicator {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto;
+  height: auto;
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+}
+
 /* Custom Input Styles
    Covers every text-like input type. password/tel/search were previously
    omitted, which left the sign-in and registration fields with no border,

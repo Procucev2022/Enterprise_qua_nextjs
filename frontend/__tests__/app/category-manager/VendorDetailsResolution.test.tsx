@@ -97,6 +97,14 @@ describe('VendorDetailsModal record resolution', () => {
     expect(screen.getByText(legacy.pan)).toBeInTheDocument();
   });
 
+  test('hides placeholder dummy PAN values on VendorDetailsModal', () => {
+    const dummy = { ...vendor, pan: 'ABCPE1234F', panNumber: 'ABCDE1234F' } as unknown as typeof vendor;
+    (useApp as jest.Mock).mockReturnValue({ buyerVendors: [dummy] });
+    render(<VendorDetailsModal isOpen onClose={jest.fn()} vendorId={dummy.id} />);
+    expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+    expect(screen.queryByText('ABCDE1234F')).not.toBeInTheDocument();
+  });
+
   test('renders when the store is unavailable and closes only on Escape or backdrop clicks', () => {
     (useApp as jest.Mock).mockReturnValue(undefined);
     const onClose = jest.fn();

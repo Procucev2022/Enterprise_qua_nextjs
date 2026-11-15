@@ -13,10 +13,9 @@
 //      CLOUDFLARE_API_TOKEN are set, queries are forwarded to the
 //      Cloudflare REST endpoint:
 //        POST /accounts/:account/d1/database/:db/query
-//      getD1HttpClient() returns a pseudo-binding shaped like a Workers
-//      D1 binding so queryD1() / batchD1() work unchanged.  The HTTP
-//      client is initialised lazily on first call and cached for the
-//      process lifetime.
+//      getD1HttpClient() returns a pseudo-binding for single-query reads and
+//      writes. Its multi-request helper is not transactional, so batchD1()
+//      rejects multi-statement use through this adapter.
 //
 //   3. pg (PostgreSQL via DATABASE_URL)
 //      Handled entirely in pool.js — this file is not involved.
@@ -26,6 +25,9 @@
 // Real ESM `import { env } from 'cloudflare:workers'` only exists in
 // worker.mjs, which stashes it on `globalThis.__CF_ENV__` at module load.
 // ==============================================================================
+
+const { logger } = require('../services/loggerService');
+const { D1_RETRY_CONFIG } = require('../config/constants');
 
 /** Returns the D1 binding (env.DB) when running on Workers with it configured, else null. */
 function getD1Binding() {
@@ -46,9 +48,8 @@ let _d1HttpClient = undefined; // undefined = not yet resolved, null = not confi
  * API via `fetch`.  Works from any Node.js host (local dev, Render, etc.).
  *
  * The returned object exposes `prepare(sql)` whose result has `.bind(...args)`
- * and `.all()` — exactly the surface that queryD1() / batchD1() call — so
- * both helpers work without modification whether the caller has a real Workers
- * binding or this HTTP shim.
+ * and `.all()` — the surface queryD1() needs. Multi-statement batches are
+ * rejected by batchD1() because this HTTP API has no transaction.
  *
  * Returns null when the required env vars are absent.
  */
@@ -72,7 +73,7 @@ function getD1HttpClient() {
 
   /**
    * Execute one SQL statement via the REST API.
-   * Returns `{ rows, rowCount }` shaped like pg / the Workers binding.
+   * Returns rows, modified-row count, and D1 query metadata.
    */
   async function execHttp(sql, params = []) {
     const body = JSON.stringify({ sql, params });
@@ -91,25 +92,51 @@ function getD1HttpClient() {
 
     // The REST API wraps results in json.result[0]
     const result = Array.isArray(json.result) ? json.result[0] : json.result;
+    const meta = result && result.meta ? result.meta : {};
     return {
       rows:     (result && result.results) || [],
-      rowCount: (result && result.meta && result.meta.changes) ?? undefined,
+      rowCount: meta.changes ?? undefined,
+      ...(result && result.meta ? { meta: result.meta } : {}),
     };
   }
 
   /**
-   * Execute multiple statements as a single batch (one HTTP round-trip each
-   * for the REST API — D1's HTTP API does not have a true batch endpoint, so
-   * we run them in parallel via Promise.all, which is still far cheaper than
-   * sequential awaits and mirrors the Workers db.batch() intent).
+   * Execute multiple statements as an atomic batch using Cloudflare D1's native
+   * `/query` REST API batch payload `{ batch: [ { sql, params }, ... ] }`.
    */
   async function batchHttp(statements) {
-    return Promise.all(statements.map(({ sql, params }) => execHttp(sql, params)));
+    if (!statements || statements.length === 0) return [];
+    const body = JSON.stringify({
+      batch: statements.map((s) => ({ sql: s.sql, params: s.params || [] })),
+    });
+    const res = await fetch(baseUrl, { method: 'POST', headers, body });
+
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch {
+      throw new Error(`D1 HTTP API returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
+    }
+
+    if (!res.ok || !json.success) {
+      const msg = (json.errors && json.errors[0] && json.errors[0].message) || text.slice(0, 300);
+      throw new Error(`D1 HTTP batch failed (${res.status}): ${msg}`);
+    }
+
+    const rawResults = Array.isArray(json.result) ? json.result : [json.result];
+    return rawResults.map((item) => {
+      const rows = Array.isArray(item?.results) ? item.results : (Array.isArray(item?.rows) ? item.rows : []);
+      const meta = item?.meta || {};
+      return {
+        rows,
+        rowCount: meta.changes ?? item?.rowCount,
+        meta,
+      };
+    });
   }
 
   // The real Workers D1 binding's `.all()` resolves to `{results, success,
   // meta}` — queryD1()/batchD1() below read exactly that shape. execHttp
-  // returns a different, pg-like `{rows, rowCount}` shape instead (kept as-is
+  // returns a different, pg-like `{rows, rowCount, meta}` shape instead (kept as-is
   // since scripts/test-rfq-sms.js calls `_execHttp` directly and already
   // depends on that shape) — this adapter translates one into the other, so
   // the prepare().bind().all() path queryD1() actually calls returns what it
@@ -119,8 +146,8 @@ function getD1HttpClient() {
   // error — `result.results` was always undefined, so `result.results ||
   // []` just resolved to an empty array every single time.
   async function allAsNativeShape(sql, params) {
-    const { rows, rowCount } = await execHttp(sql, params);
-    return { results: rows, success: true, meta: { changes: rowCount } };
+    const { rows, rowCount, meta } = await execHttp(sql, params);
+    return { results: rows, success: true, meta: { ...(meta || {}), changes: rowCount } };
   }
 
   // Build a shim that looks like a Workers D1 binding to queryD1() / batchD1()
@@ -214,28 +241,121 @@ function isRetryableD1Error(err) {
   return RETRYABLE_D1_ERROR_PATTERNS.some((pattern) => pattern.test(msg));
 }
 
+// Narrower than isRetryableD1Error: only the platform's own overload message. The generic
+// patterns (for example "rate limit") can come from other providers and must not change an
+// HTTP response into a database-busy response.
+const D1_OVERLOAD_ERROR_PATTERN = /D1 DB is overloaded|too many resources consumed/i;
+
+function isD1OverloadError(err) {
+  if (!err) return false;
+  const msg = err.message || String(err);
+  return D1_OVERLOAD_ERROR_PATTERN.test(msg);
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Whether a failed D1 attempt is retried. An overload is never retried: the database has already
+ * spent its budget for the current window, and each retry spends more of that budget.
+ */
+function shouldRetryD1Attempt(err, attempts) {
+  return attempts < D1_RETRY_CONFIG.MAX_ATTEMPTS
+    && isRetryableD1Error(err)
+    && !isD1OverloadError(err);
+}
+
+function d1RetryBackoffMs(attempts) {
+  return D1_RETRY_CONFIG.BACKOFF_BASE_MS * attempts + Math.floor(Math.random() * D1_RETRY_CONFIG.BACKOFF_JITTER_MS);
+}
+
+/** Records how many attempts a failed query used, so its log line shows the retry pressure. */
+function annotateD1Attempts(err, attempts) {
+  if (err && typeof err === 'object') err.d1Attempts = attempts;
+  return err;
+}
+
+/**
+ * 1-based positions of the parameters that are `undefined`. D1 rejects those with
+ * "Type 'undefined' not supported", and the position names the placeholder that needs a value.
+ */
+function findUndefinedParameterIndexes(params) {
+  if (!Array.isArray(params)) return [];
+  const indexes = [];
+  params.forEach((value, index) => {
+    if (value === undefined) indexes.push(index + 1);
+  });
+  return indexes;
+}
+
+let _d1OverloadUntil = 0;
+const D1_OVERLOAD_COOLDOWN_MS = 15000;
+
+function markD1Overloaded() {
+  _d1OverloadUntil = Date.now() + D1_OVERLOAD_COOLDOWN_MS;
+}
+
+function isD1Overloaded() {
+  return Date.now() < _d1OverloadUntil;
+}
+
+function resetD1OverloadState() {
+  _d1OverloadUntil = 0;
+}
+
 async function queryD1(db, text, params = []) {
+  const isErrorLog = typeof text === 'string' && text.includes('system_error_logs');
+
+  // If D1 is currently experiencing resource overload and this query is an error log write,
+  // drop it immediately without sending subrequests to D1 to avoid amplifying the overload.
+  if (isErrorLog && isD1Overloaded()) {
+    return { rows: [], rowCount: 0 };
+  }
+
   const stmt = db.prepare(toD1Sql(text));
   const boundParams = expandD1Params(text, params);
   const bound = boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   let attempts = 0;
-  const isErrorLog = typeof text === 'string' && text.includes('system_error_logs');
-  const maxAttempts = isErrorLog ? 1 : 3;
+  const maxAttempts = isErrorLog ? 1 : D1_RETRY_CONFIG.MAX_ATTEMPTS;
+  let result;
   while (attempts < maxAttempts) {
     try {
-      const result = await bound.all();
-      return { rows: result.results || [], rowCount: result.meta ? result.meta.changes : undefined };
+      result = await bound.all();
+      break;
     } catch (err) {
       attempts++;
-      if (attempts < maxAttempts && isRetryableD1Error(err)) {
-        await sleep(250 * attempts + Math.floor(Math.random() * 100));
+      if (isRetryableD1Error(err)) {
+        markD1Overloaded();
+      }
+      if (isErrorLog) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (shouldRetryD1Attempt(err, attempts)) {
+        await sleep(d1RetryBackoffMs(attempts));
         continue;
       }
-      throw err;
+      throw annotateD1Attempts(err, attempts);
     }
   }
+  const rawMeta = result && result.meta && typeof result.meta === 'object' ? result.meta : {};
+  const metadataFields = [
+    ['rowsRead', 'rows_read', 'rowsRead'],
+    ['rowsWritten', 'rows_written', 'rowsWritten'],
+    ['durationMs', 'duration', 'durationMs'],
+    ['sizeAfterBytes', 'size_after', 'sizeAfterBytes'],
+    ['servedByRegion', 'served_by_region', 'servedByRegion'],
+    ['servedByPrimary', 'served_by_primary', 'servedByPrimary'],
+    ['servedByColo', 'served_by_colo', 'servedByColo'],
+  ];
+  const meta = {};
+  metadataFields.forEach(([normalizedName, snakeName, camelName]) => {
+    const value = rawMeta[snakeName] ?? rawMeta[camelName];
+    if (value !== undefined && value !== null) meta[normalizedName] = value;
+  });
+  return {
+    rows: result && Array.isArray(result.results) ? result.results : [],
+    rowCount: rawMeta.changes,
+    ...(Object.keys(meta).length > 0 ? { meta } : {}),
+  };
 }
 
 /**
@@ -269,7 +389,7 @@ async function batchD1(db, statements) {
     return boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   });
   let attempts = 0;
-  const maxAttempts = 3;
+  const maxAttempts = D1_RETRY_CONFIG.MAX_ATTEMPTS;
   let results;
   while (attempts < maxAttempts) {
     try {
@@ -277,11 +397,14 @@ async function batchD1(db, statements) {
       break;
     } catch (err) {
       attempts++;
-      if (attempts < maxAttempts && isRetryableD1Error(err)) {
-        await sleep(250 * attempts + Math.floor(Math.random() * 100));
+      if (isRetryableD1Error(err)) {
+        markD1Overloaded();
+      }
+      if (shouldRetryD1Attempt(err, attempts)) {
+        await sleep(d1RetryBackoffMs(attempts));
         continue;
       }
-      throw err;
+      throw annotateD1Attempts(err, attempts);
     }
   }
   return results.map((result) => {
@@ -309,4 +432,19 @@ function getWaitUntil() {
   }
 }
 
-module.exports = { getD1Binding, getD1HttpClient, resetD1HttpClientCache, toD1Sql, expandD1Params, queryD1, batchD1, getWaitUntil };
+module.exports = {
+  getD1Binding,
+  getD1HttpClient,
+  resetD1HttpClientCache,
+  toD1Sql,
+  expandD1Params,
+  queryD1,
+  batchD1,
+  getWaitUntil,
+  isRetryableD1Error,
+  isD1OverloadError,
+  findUndefinedParameterIndexes,
+  isD1Overloaded,
+  markD1Overloaded,
+  resetD1OverloadState,
+};

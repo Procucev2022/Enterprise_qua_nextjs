@@ -129,7 +129,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       const res = mockRes();
       const next = jest.fn();
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-1' }, user: { role: 'vendor' } },
+        { params: { sessionId: '00000000-0000-4000-8000-000000000001' }, user: { role: 'vendor' } },
         res,
         next
       );
@@ -142,7 +142,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue(null);
 
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-missing' }, user: { role: 'admin' } },
+        { params: { sessionId: '00000000-0000-4000-8000-000000000002' }, user: { role: 'admin' } },
         res,
         next
       );
@@ -152,15 +152,23 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
     test('returns session data when found in DB', async () => {
       const res = mockRes();
       const next = jest.fn();
-      const session = { id: 'sess-1', status: 'COMPLETED', totalRows: 50 };
+      const session = {
+        id: '00000000-0000-4000-8000-000000000003',
+        created_by_email: 'cm@procucev.com',
+        status: 'COMPLETED',
+        totalRows: 50,
+      };
       jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue(session);
 
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-1' }, user: { role: 'category_manager' } },
+        { params: { sessionId: session.id }, user: { role: 'category_manager', email: 'CM@procucev.com' } },
         res,
         next
       );
-      expect(res.json).toHaveBeenCalledWith({ success: true, data: session });
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: { id: session.id, status: 'COMPLETED', totalRows: 50 },
+      });
     });
 
     test('forwards DB errors to next(err)', async () => {
@@ -169,7 +177,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockRejectedValue(new Error('DB connection drop'));
 
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-err' }, user: { role: 'admin' } },
+        { params: { sessionId: '00000000-0000-4000-8000-000000000004' }, user: { role: 'admin' } },
         res,
         next
       );
@@ -192,7 +200,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(resBad.status).toHaveBeenCalledWith(400);
 
       // Valid identifiers
-      jest.spyOn(vendorPresenceService, 'getPresence').mockReturnValue({ onlineCount: 2 });
+      jest.spyOn(vendorPresenceService, 'getPresenceDurably').mockResolvedValue({ onlineCount: 2 });
       await vendorController.getVendorsPresence(
         { query: { identifiers: 'v1,v2' } },
         res,
@@ -201,9 +209,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(res.json).toHaveBeenCalledWith({ onlineCount: 2 });
 
       // Error forwarding
-      jest.spyOn(vendorPresenceService, 'getPresence').mockImplementation(() => {
-        throw new Error('Presence query failed');
-      });
+      jest.spyOn(vendorPresenceService, 'getPresenceDurably').mockRejectedValue(new Error('Presence query failed'));
       await vendorController.getVendorsPresence(
         { query: { identifiers: 'v1' } },
         res,
@@ -219,36 +225,58 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       // Invalid body schema
       const resBad = mockRes();
       await vendorController.recordVendorHeartbeat(
-        { body: { status: 9999 }, user: null },
+        { body: { status: 9999 }, user: { role: 'vendor', email: 'vendor@example.com' } },
         resBad,
         next
       );
       expect(resBad.status).toHaveBeenCalledWith(400);
 
-      // Missing identifier
+      // Missing session
       await vendorController.recordVendorHeartbeat(
         { body: { status: 'online' }, user: null },
         res,
         next
       );
-      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.status).toHaveBeenCalledWith(401);
+
+      const resBuyer = mockRes();
+      await vendorController.recordVendorHeartbeat(
+        { body: { status: 'online' }, user: { role: 'buyer', email: 'buyer@example.com' } },
+        resBuyer,
+        next
+      );
+      expect(resBuyer.status).toHaveBeenCalledWith(403);
+
+      const resMissingEmail = mockRes();
+      await vendorController.recordVendorHeartbeat(
+        { body: { status: 'online' }, user: { role: 'vendor' } },
+        resMissingEmail,
+        next
+      );
+      expect(resMissingEmail.status).toHaveBeenCalledWith(400);
 
       // Successful heartbeat
-      jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockReturnValue({ recorded: true });
+      jest.spyOn(vendorPresenceService, 'recordHeartbeatDurably').mockResolvedValue({ recorded: true });
       const resOk = mockRes();
       await vendorController.recordVendorHeartbeat(
-        { body: { identifier: 'v-test-hb', role: 'vendor', status: 'online' }, user: { role: 'vendor' } },
+        {
+          body: { identifier: 'spoofed@example.com', role: 'admin', status: 'online' },
+          user: { role: 'vendor', email: 'owner@example.com', sub: 'vendor-subject' },
+        },
         resOk,
         next
       );
       expect(resOk.json).toHaveBeenCalledWith({ recorded: true });
+      expect(vendorPresenceService.recordHeartbeatDurably).toHaveBeenCalledWith(expect.objectContaining({
+        identifier: 'owner@example.com',
+        role: 'vendor',
+        vendorId: null,
+      }));
 
       // Error forwarding
-      jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockImplementation(() => {
-        throw new Error('Heartbeat error');
-      });
+      jest.spyOn(vendorPresenceService, 'recordHeartbeatDurably').mockRejectedValue(new Error('Heartbeat error'));
       await vendorController.recordVendorHeartbeat(
-        { body: { identifier: 'v-err' }, user: { role: 'vendor' } },
+        { body: { identifier: 'v-err' }, user: { role: 'vendor', email: 'owner@example.com' } },
         res,
         next
       );
@@ -378,7 +406,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       const next = jest.fn();
       const newVendor = { id: 'v-cm-1', name: 'CM Vendor', majorCategory: 'Tools', email: 'cm@vendor.com' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
-      jest.spyOn(storeService, 'addVendor').mockReturnValue(newVendor);
+      const addVendorSpy = jest.spyOn(storeService, 'addVendorDurably').mockResolvedValue(newVendor);
       jest.spyOn(storeService, 'provisionVendorOnboarding').mockResolvedValue({ error: null });
 
       await vendorController.createVendor(
@@ -391,6 +419,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         next
       );
 
+      expect(addVendorSpy).toHaveBeenCalledWith(expect.objectContaining({ source: 'procucev_network' }), 'cm@procucev.com', null);
       expect(res.status).toHaveBeenCalledWith(201);
     });
 
@@ -449,7 +478,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
 
       // Valid plan 'premium'
       const resOk = mockRes();
-      jest.spyOn(storeService, 'updateVendor').mockReturnValue({ ...vendor, subscriptionPlan: 'premium' });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ ...vendor, subscriptionPlan: 'premium' });
       await vendorController.updateSubscription(
         {
           params: { id: 'v-sub-1' },
@@ -482,7 +511,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
 
       // Invalid plan
       const resPlan = mockRes();
-      const vendorWithEmail = { id: 'v-ok', email: 'ok@vendor.com' };
+      const vendorWithEmail = { id: 'v-ok', email: 'ok@vendor.com', phone: '+919876543210' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValueOnce(vendorWithEmail);
       await vendorController.createSubscriptionPaymentLink(
         { params: { id: 'v-ok' }, body: { plan: 'invalid_tier' }, user: { role: 'admin' } },
@@ -530,7 +559,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         zohoPaymentLinkId: 'zpl_123',
         status: 'CREATED',
       });
-      jest.spyOn(storeService, 'createPaymentLinkRecord').mockReturnValue({
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockResolvedValue({
         id: 'pl-123',
         paymentUrl: 'https://payment.zoho.com/test',
         status: 'CREATED',
@@ -552,6 +581,27 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
           data: expect.objectContaining({ paymentLinkId: 'pl-123' }),
         })
       );
+
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorWithEmail);
+      jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValueOnce({
+        paymentUrl: 'https://payment.zoho.com/untracked',
+        zohoPaymentLinkId: 'zpl-untracked',
+        status: 'CREATED',
+      });
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockRejectedValueOnce(
+        Object.assign(new Error('database unavailable'), { statusCode: 503, code: 'PAYMENT_LINK_PERSISTENCE_UNAVAILABLE' })
+      );
+      const resPersistFail = mockRes();
+      await vendorController.createSubscriptionPaymentLink(
+        {
+          params: { id: 'v-ok' },
+          body: { plan: 'connect', billingDuration: '12_months' },
+          user: { role: 'admin' },
+        },
+        resPersistFail,
+        next
+      );
+      expect(resPersistFail.status).toHaveBeenCalledWith(503);
 
       // Error from Zoho service returns 502
       jest.spyOn(zohoPaymentService, 'createPaymentLink').mockRejectedValue(new Error('Zoho down'));
@@ -796,8 +846,11 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       });
       const resVendor = { id: 'v-bulk-1', name: 'Bulk 1' };
       jest.spyOn(storeService, 'bulkAddVendors').mockResolvedValue({
-        results: [{ rowNumber: 1, vendor: resVendor, hasIssues: false }],
-        importedCount: 1,
+        results: [
+          { rowNumber: 1, vendor: { ...resVendor, id: 'v-bulk-skipped', onboardingEmailStatus: 'skipped' }, onboardingEmailStatus: 'skipped', hasIssues: false },
+          { rowNumber: 2, vendor: { ...resVendor, id: 'v-bulk-failed', onboardingEmailStatus: 'failed' }, onboardingEmailStatus: 'failed', hasIssues: false },
+        ],
+        importedCount: 2,
         duplicateCount: 0,
         missingEmailCount: 0,
       });
@@ -807,7 +860,10 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       await vendorController.bulkImportVendors(
         {
           user: { role: 'buyer', email: 'buyer@authed.com' },
-          body: { vendors: [{ name: 'Bulk Vendor', email: 'bulk1@vendor.com', majorCategory: 'Tools' }] },
+          body: { vendors: [
+            { name: 'Bulk Vendor', email: 'bulk1@vendor.com', majorCategory: 'Tools' },
+            { name: 'Bulk Vendor Two', email: 'bulk2@vendor.com', majorCategory: 'Tools' },
+          ] },
         },
         res,
         next
@@ -815,9 +871,15 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
-          data: expect.objectContaining({ sessionId: expect.any(String) }),
+          data: expect.objectContaining({
+            sessionId: expect.any(String),
+            onboardingFailed: 1,
+            onboardingSkipped: 1,
+          }),
         })
       );
+      // The import is attributed to the signed-in user, not to a built-in mailbox.
+      expect(storeService.bulkAddVendors).toHaveBeenCalledWith(expect.any(Array), 'buyer@authed.com');
     });
 
     test('isHydratedFromDB surfaces persisted source in getVendors and getVendorById', async () => {
@@ -850,17 +912,55 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       storeService.isHydratedFromDB = false;
     });
 
-    test('recordVendorHeartbeat with user.sub and fallback role', async () => {
+    test('getVendors fails closed and logs when the persisted vendor page query throws', async () => {
       const next = jest.fn();
       const res = mockRes();
-      jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockReturnValue({ recorded: true });
+      const pool = require('../src/db/pool');
+      const { logger } = require('../src/services/loggerService');
+      const logError = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      storeService.vendors = [
+        { id: 'v-b1', name: 'Alpha Fasteners', email: 'alpha@fast.com', majorCategory: 'Industrial', buyerId: 'b-99' },
+        { id: 'v-b2', name: 'Beta Tools', email: 'beta@tools.com', majorCategory: 'Tools', buyerId: 'b-other' },
+      ];
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('D1 DB is overloaded'));
 
-      await vendorController.recordVendorHeartbeat(
-        { body: {}, user: { sub: 'usr-sub-only' } },
+      await vendorController.getVendors(
+        { query: { page: '1', pageSize: '10', buyerId: 'buyer@example.com', search: 'alpha' } },
         res,
         next
       );
-      expect(res.json).toHaveBeenCalledWith({ recorded: true });
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          code: 'PERSISTENCE_UNAVAILABLE',
+          retryable: true,
+        })
+      );
+      expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({ source: 'in_memory_fallback' }));
+      expect(logError).toHaveBeenCalledWith(
+        'Persisted vendor directory page query failed',
+        expect.objectContaining({ operation: 'vendor-directory-page-read', hasBuyerScope: true }),
+        'VENDOR_CONTROLLER'
+      );
+      expect(logError.mock.calls[0][1]).not.toHaveProperty('buyerId');
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    test('recordVendorHeartbeat rejects vendor sessions without an email identity', async () => {
+      const next = jest.fn();
+      const res = mockRes();
+      const recordHeartbeat = jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockReturnValue({ recorded: true });
+
+      await vendorController.recordVendorHeartbeat(
+        { body: {}, user: { role: 'vendor', sub: 'usr-sub-only' } },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(recordHeartbeat).not.toHaveBeenCalled();
     });
 
     test('covers updateVendor, updateSubscription, and catch branches in vendorController', async () => {
@@ -918,7 +1018,8 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(resCat404.status).toHaveBeenCalledWith(404);
 
       // bulkImportVendors with existing sessionId
-      jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({ id: 'sess-existing' });
+      const existingSessionId = '00000000-0000-4000-8000-000000000005';
+      jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({ id: existingSessionId });
       jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockResolvedValue(true);
       jest.spyOn(storeService, 'bulkAddVendors').mockResolvedValue({
         results: [{ rowNumber: 1, vendor: { id: 'v1' }, hasIssues: false }],
@@ -930,13 +1031,156 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       await vendorController.bulkImportVendors(
         {
           user: { role: 'admin' },
-          body: { sessionId: 'sess-existing', vendors: [{ name: 'V', email: 'v@v.com', majorCategory: 'Tools' }] },
+          body: { sessionId: existingSessionId, vendors: [{ name: 'V', email: 'v@v.com', majorCategory: 'Tools' }] },
         },
         resSess,
         next
       );
       expect(resSess.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, data: expect.objectContaining({ sessionId: 'sess-existing' }) })
+        expect.objectContaining({ success: true, data: expect.objectContaining({ sessionId: existingSessionId }) })
+      );
+
+      // Branch coverage for id === 'me' in updateSubscription, createSubscriptionPaymentLink, getPaymentLinks, downloadInvoice
+      const meVendor = { id: 'v-me', email: 'me@vendor.com', phone: '+919988776655' };
+      jest.spyOn(storeService, 'getVendorById').mockImplementation((queryId) => {
+        if (queryId === 'me@vendor.com') return meVendor;
+        return null;
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ ...meVendor, subscriptionPlan: 'premium' });
+      jest.spyOn(storeService, 'getPaymentLinksForVendor').mockResolvedValue([]);
+      jest.spyOn(storeService, 'getPaymentLinkById').mockResolvedValue(null);
+
+      const resSubMe = mockRes();
+      await vendorController.updateSubscription(
+        { params: { id: 'me' }, body: { plan: 'premium' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resSubMe,
+        next
+      );
+      expect(resSubMe.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      const resPayMe = mockRes();
+      await vendorController.createSubscriptionPaymentLink(
+        { params: { id: 'me' }, body: { plan: 'connect' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resPayMe,
+        next
+      );
+      // Zoho payment link created or attempted
+      expect(resPayMe.json).toHaveBeenCalled();
+
+      const resLinksMe = mockRes();
+      await vendorController.getPaymentLinks(
+        { params: { id: 'me' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resLinksMe,
+        next
+      );
+      expect(resLinksMe.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      const resInvMe = mockRes();
+      await vendorController.downloadInvoice(
+        { params: { id: 'me', linkId: 'missing-link' }, user: { email: 'me@vendor.com', role: 'vendor' } },
+        resInvMe,
+        next
+      );
+      expect(resInvMe.status).toHaveBeenCalledWith(404);
+
+      // Bulk delete vendor when deleteVendorDurably returns false
+      const nonDeletable = { id: 'v-nodelete', email: 'admin@qua.com' };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(nonDeletable);
+      jest.spyOn(storeService, 'deleteVendorDurably').mockResolvedValue(false);
+      const resBulkDel = mockRes();
+      await vendorController.bulkDeleteVendors(
+        { body: { vendorIds: ['v-nodelete'] }, user: { role: 'admin', email: 'admin@qua.com' } },
+        resBulkDel,
+        next
+      );
+      expect(resBulkDel.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, skippedIds: ['v-nodelete'] })
+      );
+
+      // Public vendor with 11+ digits un-prefixed phone to exercise maskPhoneNumber slice branch
+      const phoneVendor = {
+        id: 'v-phone-long',
+        name: 'Phone Vendor',
+        email: 'phone@vendor.com',
+        phone: '123456789012',
+      };
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(phoneVendor);
+      const resPubPhone = mockRes();
+      await vendorController.getPublicVendorById(
+        { params: { id: 'v-phone-long' } },
+        resPubPhone,
+        next
+      );
+      expect(resPubPhone.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, data: expect.objectContaining({ phone: expect.any(String) }) })
+      );
+
+      // Public vendor when sanitizePublicVendor returns null
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue('invalid-vendor-object');
+      const resPubInvalid = mockRes();
+      await vendorController.getPublicVendorById(
+        { params: { id: 'v-invalid' } },
+        resPubInvalid,
+        next
+      );
+      expect(resPubInvalid.status).toHaveBeenCalledWith(404);
+    });
+
+    test('deleteVendor and bulkDeleteVendors allow buyers to delete their uploaded vendors permanently', async () => {
+      const next = jest.fn();
+      const buyerUser = { role: 'buyer', email: 'procurement@acme.com', sub: 'buyer-sub-1' };
+      const timestampVendor = {
+        id: 'v-1792579884052-6ip0',
+        name: 'Internal Rigor Supplies',
+        email: 'rigor@internal.com',
+        buyerEmail: 'procurement@acme.com',
+        addedByBuyerCompany: 'Acme Corp',
+        source: 'buyer_manual',
+      };
+
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'acc-buyer-1',
+        organizationName: 'Acme Corp',
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(timestampVendor);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(timestampVendor);
+      const deleteDurablySpy = jest.spyOn(storeService, 'deleteVendorDurably').mockResolvedValue(true);
+
+      // Single delete
+      const resDelete = mockRes();
+      await vendorController.deleteVendor(
+        { params: { id: 'v-1792579884052-6ip0' }, user: buyerUser },
+        resDelete,
+        next
+      );
+      expect(resDelete.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('deleted successfully') })
+      );
+      expect(deleteDurablySpy).toHaveBeenCalledWith('v-1792579884052-6ip0', 'procurement@acme.com');
+
+      // Deletion when vendor is not in memory (DB fallback / cleanup)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      const resCleanup = mockRes();
+      await vendorController.deleteVendor(
+        { params: { id: 'v-1792579884052-6ip0' }, user: buyerUser },
+        resCleanup,
+        next
+      );
+      expect(resCleanup.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('deleted successfully') })
+      );
+
+      // Bulk delete
+      const resBulk = mockRes();
+      await vendorController.bulkDeleteVendors(
+        { body: { vendorIds: ['v-1792579884052-6ip0'] }, user: buyerUser },
+        resBulk,
+        next
+      );
+      expect(resBulk.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, deletedCount: 1, deletedIds: ['v-1792579884052-6ip0'] })
       );
     });
   });

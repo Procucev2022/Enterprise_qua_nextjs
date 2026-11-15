@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { authClient } from './authClient';
+import { UI_STRINGS, formatString } from './uiStrings';
 
 export type ReportCategoryKey = 'seller' | 'rfq' | 'buyer' | 'daily_activity';
 
@@ -166,10 +167,12 @@ export async function fetchReportData(
     }
     const result = await res.json();
     return result;
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
-      error: err.message || 'Failed to fetch report from server',
+      error: err instanceof Error && err.message
+        ? err.message
+        : formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.report }),
     };
   }
 }

@@ -5,6 +5,7 @@ import CategoryManagerSellersDirectoryPage from '@/app/category-manager/sellers-
 import { useApp } from '@/lib/store';
 import * as reportsClient from '@/lib/reportsClient';
 import * as rfqClient from '@/lib/rfqClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { RFQ_MODES } from '@/lib/constants';
 
 jest.mock('@/lib/store', () => ({
@@ -148,6 +149,28 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.queryByText('Apex Fasteners Ltd')).not.toBeInTheDocument();
   });
 
+  test('strips placeholder dummy PAN values from both remote and buyer sellers', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: [{ ...mockRemoteVendors[0], panNumber: 'ABCPE1234F', pan: undefined }],
+    });
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [{ ...mockBuyerVendors[0], panNumber: undefined, pan: 'ABCDE1234F' }],
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<SellersDirectory />);
+    await waitFor(() => expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Apex Fasteners Ltd'));
+    expect(screen.queryByText('ABCPE1234F')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Precision Forgings Pvt Ltd'));
+    expect(screen.queryByText('ABCDE1234F')).not.toBeInTheDocument();
+  });
+
   test('filters sellers by source, category, and rating', async () => {
     render(<SellersDirectory />);
 
@@ -200,8 +223,8 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
     });
 
-    // Apex Fasteners has genuine login timestamp, Precision Forgings displays "Never"
-    expect(screen.getByText('Never')).toBeInTheDocument();
+    // Apex Fasteners has a genuine login timestamp. Precision Forgings has none, so its login cell shows a dash.
+    expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
 
     const searchInput = screen.getByPlaceholderText(/Search company/i);
     // Unified search by email
@@ -420,7 +443,9 @@ describe('SellersDirectory Component Suite', () => {
     const dossierBtns = screen.getAllByText('360° Dossier');
     // Clicking dossier must not throw "TypeError: can't access property toLowerCase, activeSeller.email is null"
     expect(() => fireEvent.click(dossierBtns[0])).not.toThrow();
-    expect(screen.getByText('supplier@procucev.com')).toBeInTheDocument();
+    // No email is invented for a seller that has none on record.
+    expect(screen.queryByText('supplier@procucev.com')).not.toBeInTheDocument();
+    expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
   });
   test('opens and interacts with Column Settings modal, toggling columns and resetting', async () => {
     (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
@@ -837,7 +862,7 @@ describe('SellersDirectory Component Suite', () => {
       fireEvent.click(settingsBtn);
 
       // Verify column renders for sparse/empty rows
-      expect(screen.getAllByText('Never').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
       expect(screen.getAllByText('—').length).toBeGreaterThan(0);
 
       // 3. Test column headers sorting branches (asc & desc with sparse/complete data)

@@ -29,6 +29,15 @@
 -- as a Buffer and needed a conversion helper on every single row; that helper is
 -- gone along with the driver.
 
+-- Applied D1-compatible migration ledger. PostgreSQL uses the same version
+-- registry so schema changes have one environment-neutral identity.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version VARCHAR(128) PRIMARY KEY,
+  description VARCHAR(255) NOT NULL,
+  checksum VARCHAR(64),
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS role (
   uuid VARCHAR(64) PRIMARY KEY,
   role_name VARCHAR(255) NOT NULL,
@@ -79,6 +88,7 @@ CREATE TABLE IF NOT EXISTS organization (
   city VARCHAR(255),
   state VARCHAR(255),
   zip_code VARCHAR(32),
+  pincode VARCHAR(32),
   country VARCHAR(255) DEFAULT 'India',
   contact_person VARCHAR(255),
   contact_designation VARCHAR(255),
@@ -102,6 +112,11 @@ CREATE TABLE IF NOT EXISTS organization (
   last_modified_by VARCHAR(255),
   last_modified_ts TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- PROFILE_SELECT and profile updates read/write both address aliases. CREATE
+-- TABLE IF NOT EXISTS does not repair existing databases, so add the column
+-- idempotently for installations created before pincode was modeled here.
+ALTER TABLE organization ADD COLUMN IF NOT EXISTS pincode VARCHAR(32);
 
 -- Registration reuses an existing organisation by (name, type).
 CREATE INDEX IF NOT EXISTS idx_organization_name_type ON organization (organization_name, org_type_uuid);
@@ -263,7 +278,6 @@ CREATE TABLE IF NOT EXISTS vendors (
   raw JSONB NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
 -- Default listing/pagination sort (getVendorsPageFromDB's ORDER BY created_at
 -- DESC LIMIT/OFFSET) — without this, every "Load more" page at 600k+ rows
@@ -301,7 +315,6 @@ CREATE TABLE IF NOT EXISTS rfqs (
   raw JSONB NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
 CREATE INDEX IF NOT EXISTS idx_rfqs_category ON rfqs (category);
 CREATE INDEX IF NOT EXISTS idx_rfqs_status ON rfqs (status);
 CREATE INDEX IF NOT EXISTS idx_rfqs_status_created ON rfqs (status, created_at DESC);
@@ -351,7 +364,6 @@ CREATE TABLE IF NOT EXISTS buyer_accounts (
   raw JSONB NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_is_active ON buyer_accounts (is_active);
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_status ON buyer_accounts (status);
 
@@ -994,16 +1006,26 @@ CREATE TABLE IF NOT EXISTS payment_dues_communications (
   account_type VARCHAR(32) NOT NULL,
   account_name VARCHAR(255),
   channel VARCHAR(32) NOT NULL,
-  recipient VARCHAR(255) NOT NULL,
-  subject VARCHAR(500),
-  message TEXT,
+  recipient VARCHAR(320) NOT NULL,
+  subject TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL,
   sent_by_user_id VARCHAR(64),
   sent_by_name VARCHAR(255),
   status VARCHAR(32) NOT NULL DEFAULT 'SENT',
   metadata JSONB,
-  sent_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  notification_status VARCHAR(64) NOT NULL DEFAULT 'Notification Sent',
+  delivery_status VARCHAR(64) NOT NULL DEFAULT 'Delivered',
+  acknowledgement_status VARCHAR(64) NOT NULL DEFAULT 'Acknowledgement Pending',
+  communicated_by VARCHAR(255) NOT NULL DEFAULT 'Category Manager',
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by VARCHAR(255),
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pd_comm_account ON payment_dues_communications (account_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_communications_sent ON payment_dues_communications (sent_at DESC);
 
 CREATE TABLE IF NOT EXISTS approvals (
   id VARCHAR(64) PRIMARY KEY,
@@ -1077,6 +1099,46 @@ CREATE TABLE IF NOT EXISTS document_vault (
 CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (category);
 CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);
 
+-- Restart-resilient scheduled notifications. Keep this table in sync with
+-- schema.d1.sql so chaser jobs survive process restarts on either backend.
+CREATE TABLE IF NOT EXISTS chaser_queue (
+  id VARCHAR(64) PRIMARY KEY,
+  rfq_number VARCHAR(128) NOT NULL,
+  rfq_id VARCHAR(64) NOT NULL,
+  vendor_id VARCHAR(64) NOT NULL,
+  vendor_name VARCHAR(255) NOT NULL,
+  vendor_phone VARCHAR(64),
+  vendor_email VARCHAR(320),
+  vendor_contact_person VARCHAR(255),
+  rfq_title TEXT,
+  channel VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  fire_at TIMESTAMPTZ NOT NULL,
+  fired_at TIMESTAMPTZ,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_chaser_queue_status_fire_at ON chaser_queue (status, fire_at);
+CREATE INDEX IF NOT EXISTS idx_chaser_queue_rfq_number ON chaser_queue (rfq_number);
+
+-- Durable five-minute buyer comparison follow-up after automatic RFQ closure.
+CREATE TABLE IF NOT EXISTS rfq_comparison_queue (
+  id VARCHAR(64) PRIMARY KEY,
+  rfq_id VARCHAR(64) NOT NULL UNIQUE,
+  rfq_number VARCHAR(128) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  fire_at TIMESTAMPTZ NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  email_completed_at TIMESTAMPTZ,
+  sms_completed_at TIMESTAMPTZ,
+  last_error TEXT,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_rfq_comparison_queue_status_fire_at
+  ON rfq_comparison_queue (status, fire_at);
 
 -- ==============================================================================
 -- ACCOUNT DOCUMENTS (Buyer & Seller Dossier Associated Documents)
@@ -1128,3 +1190,33 @@ CREATE INDEX IF NOT EXISTS idx_user_login_logs_login_at ON user_login_logs (logi
 CREATE INDEX IF NOT EXISTS idx_user_login_logs_status ON user_login_logs (status);
 CREATE INDEX IF NOT EXISTS idx_user_login_logs_email ON user_login_logs (email);
 
+CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  user_uuid VARCHAR(64) NOT NULL,
+  email VARCHAR(320) NOT NULL,
+  role VARCHAR(64) NOT NULL DEFAULT 'category_manager',
+  auth_method VARCHAR(32) NOT NULL DEFAULT 'EMAIL_OTP',
+  login_at TIMESTAMPTZ NOT NULL,
+  last_activity_at TIMESTAMPTZ NOT NULL,
+  logout_at TIMESTAMPTZ,
+  duration_seconds INTEGER DEFAULT 0,
+  logout_reason TEXT,
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  ip_address VARCHAR(64),
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user ON vendor_directory_sessions (user_uuid);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions (email);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions (status);
+
+-- Access-path indexes added while merging the latest test-v3 database updates.
+CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_source_created ON vendors (source, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_raw_corporate_email ON vendors (lower(raw->>'corporateEmail'));
+
+CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
+
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);

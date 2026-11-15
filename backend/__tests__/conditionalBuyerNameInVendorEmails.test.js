@@ -4,7 +4,7 @@ const emailService = require('../src/services/emailService');
 const storeService = require('../src/services/storeService');
 
 describe('Conditionally Display Buyer Company Name in Vendor Email Templates', () => {
-  const sampleRfq = {
+  const rfqFixture = {
     rfqNumber: 'RFQ262610210914',
     title: 'RFQ for Engineering Spares',
     category: 'Engineering Spares - Mechanical',
@@ -18,6 +18,9 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
       { itemName: 'Mechanical Seal 45mm', quantity: 4, unit: 'Sets' },
     ],
   };
+
+  // Required identifiers and counts for the transactional templates under test.
+  const templateRequired = { rfq_id: 'RFQ-TEMPLATE-1', item_count: 2 };
 
   describe('isBuyerUploadedVendor Classifier Logic (Rule 4: database / assignment logic without email/company hardcoding)', () => {
     test('identifies vendor with addedByBuyerCompany as buyer-uploaded', () => {
@@ -53,12 +56,13 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
       });
     });
 
-    test('identifies vendor with buyer ID prefixes as buyer-uploaded', () => {
+    test('identifies vendor with buyer ID prefixes as buyer-uploaded, and no longer keys on a personal name prefix', () => {
       expect(mailerService.isBuyerUploadedVendor({ id: 'v-buyer-001' })).toBe(true);
       expect(mailerService.isBuyerUploadedVendor({ id: 'vm-custom-12' })).toBe(true);
       expect(mailerService.isBuyerUploadedVendor({ id: 'v-hist-dump-3' })).toBe(true);
       expect(mailerService.isBuyerUploadedVendor({ id: 'v-ingest-master' })).toBe(true);
-      expect(mailerService.isBuyerUploadedVendor({ id: 'v-navin-custom' })).toBe(true);
+      // Name-based special-casing was removed; a vendor id that merely contains a name is not a buyer signal.
+      expect(mailerService.isBuyerUploadedVendor({ id: 'v-custom-1' })).toBe(false);
     });
 
     test('identifies Procucev platform vendors as NOT buyer-uploaded', () => {
@@ -101,7 +105,7 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
       };
 
       const email = mailerService.buildRfqInviteEmail(buyerUploadedVendor.email, {
-        rfq: sampleRfq,
+        rfq: rfqFixture,
         recipientName: buyerUploadedVendor.contactPerson,
         vendor: buyerUploadedVendor,
         isBuyerUploaded: true,
@@ -123,14 +127,14 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
     test('Scenario 2: Procucev platform vendor does NOT see the buyer company name', () => {
       const platformVendor = {
         id: 'v-plat-50',
-        name: 'Apex Industrial Spares',
+        name: 'Test Industrial Spares',
         contactPerson: 'chandan',
         email: 'chandan@example.com',
         source: 'procucev_network',
       };
 
       const email = mailerService.buildRfqInviteEmail(platformVendor.email, {
-        rfq: sampleRfq,
+        rfq: rfqFixture,
         recipientName: platformVendor.contactPerson,
         vendor: platformVendor,
         isBuyerUploaded: false,
@@ -152,14 +156,14 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
 
     test('Reminder invitations conditionally display buyer name for buyer-uploaded vendors and hide for platform vendors', () => {
       const reminderBuyerUploaded = mailerService.buildRfqInviteEmail('v@buyer.com', {
-        rfq: sampleRfq,
+        rfq: rfqFixture,
         isReminder: true,
         isBuyerUploaded: true,
       });
       expect(reminderBuyerUploaded.html).toContain('This is a reminder to submit your quotation for the verified business enquiry from <strong>Veera solutions pvt ltd</strong> matching your category.');
 
       const reminderPlatform = mailerService.buildRfqInviteEmail('v@plat.com', {
-        rfq: sampleRfq,
+        rfq: rfqFixture,
         isReminder: true,
         isBuyerUploaded: false,
       });
@@ -168,7 +172,7 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
     });
 
     test('handles fallback when buyerAccountName is missing on RFQ for buyer-uploaded vendor', () => {
-      const rfqNoBuyer = { ...sampleRfq, buyerAccountName: null };
+      const rfqNoBuyer = { ...rfqFixture, buyerAccountName: null };
       const email = mailerService.buildRfqInviteEmail('v@buyer.com', {
         rfq: rfqNoBuyer,
         isBuyerUploaded: true,
@@ -180,33 +184,34 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
   describe('buildVendorCategoryMismatchEmail: Conditional Buyer Company Name', () => {
     test('displays buyer company name when vendor is buyer-uploaded', () => {
       const email = mailerService.buildVendorCategoryMismatchEmail('v@x.com', {
-        rfq: sampleRfq,
-        rfqNumber: sampleRfq.rfqNumber,
-        rfqTitle: sampleRfq.title,
-        buyerAccountName: sampleRfq.buyerAccountName,
+        rfq: rfqFixture,
+        rfqNumber: rfqFixture.rfqNumber,
+        rfqTitle: rfqFixture.title,
+        buyerAccountName: rfqFixture.buyerAccountName,
         vendorName: 'Supplier Co',
         isBuyerUploaded: true,
       });
-      expect(email.html).toContain(`released by <strong>${sampleRfq.buyerAccountName}</strong>`);
+      expect(email.html).toContain(`released by <strong>${rfqFixture.buyerAccountName}</strong>`);
     });
 
     test('hides buyer company name when vendor is a Procucev platform vendor', () => {
       const email = mailerService.buildVendorCategoryMismatchEmail('v@x.com', {
-        rfq: sampleRfq,
-        rfqNumber: sampleRfq.rfqNumber,
-        rfqTitle: sampleRfq.title,
-        buyerAccountName: sampleRfq.buyerAccountName,
+        rfq: rfqFixture,
+        rfqNumber: rfqFixture.rfqNumber,
+        rfqTitle: rfqFixture.title,
+        buyerAccountName: rfqFixture.buyerAccountName,
         vendorName: 'Supplier Co',
         isBuyerUploaded: false,
       });
-      expect(email.html).not.toContain(sampleRfq.buyerAccountName);
-      expect(email.html).toContain(`You were identified as a potential supplier for RFQ <strong>#${sampleRfq.rfqNumber}</strong> (${sampleRfq.title}).`);
+      expect(email.html).not.toContain(rfqFixture.buyerAccountName);
+      expect(email.html).toContain(`You were identified as a potential supplier for RFQ <strong>#${rfqFixture.rfqNumber}</strong> (${rfqFixture.title}).`);
     });
   });
 
   describe('transactionalEmailTemplates (Emails 3, 4, 12): Conditional Buyer Company Name', () => {
     test('Email 3: displays buyer company only when vendor is buyer-uploaded', () => {
       const buyerUploaded = transactionalEmailTemplates.buildEmail3_NewRfqIntimation({
+        ...templateRequired,
         buyer_company: 'Veera solutions pvt ltd',
         is_buyer_uploaded: true,
       });
@@ -214,6 +219,7 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
       expect(buyerUploaded.text).toContain('Buyer: Veera solutions pvt ltd');
 
       const platformVendor = transactionalEmailTemplates.buildEmail3_NewRfqIntimation({
+        ...templateRequired,
         buyer_company: 'Veera solutions pvt ltd',
         is_buyer_uploaded: false,
         buyer_industry: 'Heavy Industrial',
@@ -226,17 +232,21 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
 
     test('Email 4: displays buyer company only when vendor is buyer-uploaded', () => {
       const buyerUploaded = transactionalEmailTemplates.buildEmail4_NewRfqToQuote({
+        ...templateRequired,
         buyer_company: 'Veera solutions pvt ltd',
         is_buyer_uploaded: true,
+        credit_balance: 5,
       });
       expect(buyerUploaded.html).toContain('Veera solutions pvt ltd');
       expect(buyerUploaded.text).toContain('Buyer: Veera solutions pvt ltd');
 
       const platformVendor = transactionalEmailTemplates.buildEmail4_NewRfqToQuote({
+        ...templateRequired,
         buyer_company: 'Veera solutions pvt ltd',
         is_buyer_uploaded: false,
         buyer_industry: 'Enterprise Buyer',
         buyer_city: 'Bengaluru',
+        credit_balance: 5,
       });
       expect(platformVendor.html).not.toContain('Veera solutions pvt ltd');
       expect(platformVendor.html).toContain('Enterprise Buyer company, Bengaluru');
@@ -245,6 +255,7 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
 
     test('Email 12: displays buyer company only when vendor is buyer-uploaded', () => {
       const buyerUploaded = transactionalEmailTemplates.buildEmail12_RfqRevisedBuyerQuestion({
+        rfq_id: 'RFQ-TEMPLATE-12',
         buyer_company: 'Veera solutions pvt ltd',
         is_buyer_uploaded: true,
         rfq_title: 'Centrifugal Pumps',
@@ -253,6 +264,7 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
       expect(buyerUploaded.text).toContain('Veera solutions pvt ltd has updated Centrifugal Pumps:');
 
       const platformVendor = transactionalEmailTemplates.buildEmail12_RfqRevisedBuyerQuestion({
+        rfq_id: 'RFQ-TEMPLATE-12',
         buyer_company: 'Veera solutions pvt ltd',
         is_buyer_uploaded: false,
         rfq_title: 'Centrifugal Pumps',
@@ -271,7 +283,7 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
         email: 'alpha@example.com',
         addedByBuyerCompany: 'Veera solutions pvt ltd',
       };
-      const emailBuyer = emailService.generateStandardRFQEmail(sampleRfq, buyerUploadedVendor);
+      const emailBuyer = emailService.generateStandardRFQEmail(rfqFixture, buyerUploadedVendor);
       expect(emailBuyer.htmlBody).toContain('Buyer:');
       expect(emailBuyer.htmlBody).toContain('Veera solutions pvt ltd');
 
@@ -281,7 +293,7 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
         email: 'beta@example.com',
         source: 'procucev_network',
       };
-      const emailPlatform = emailService.generateStandardRFQEmail(sampleRfq, platformVendor);
+      const emailPlatform = emailService.generateStandardRFQEmail(rfqFixture, platformVendor);
       expect(emailPlatform.htmlBody).not.toContain('Veera solutions pvt ltd');
     });
   });

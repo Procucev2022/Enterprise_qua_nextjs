@@ -122,7 +122,7 @@ describe('LoginLogsDashboard', () => {
       page: 1,
       totalPages: 1,
     });
-    (fetchLoginLogsSummary as jest.Mock).mockResolvedValue(mockSummary);
+    (fetchLoginLogsSummary as jest.Mock).mockResolvedValue({ summary: mockSummary });
   });
 
   it('renders header, title, and KPI metric cards correctly', async () => {

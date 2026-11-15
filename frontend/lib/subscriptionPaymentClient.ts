@@ -1,6 +1,33 @@
 import { authClient } from './authClient';
 import { UI_STRINGS, formatString } from './uiStrings';
+import { logger } from './logger';
 import type { PaymentLinkCreateResult } from './types';
+
+const SUBSCRIPTION_PAYMENT_LOG_CATEGORY = 'SUBSCRIPTION_PAYMENT_CLIENT';
+
+function logSubscriptionPaymentFailure(
+  operation: string,
+  error: unknown,
+  metadata: Record<string, unknown> = {}
+): void {
+  const errorDetails = error instanceof Error
+    ? { error, errorName: error.name, errorMessage: error.message }
+    : { errorName: 'UnknownError', errorMessage: 'Non-Error subscription payment failure' };
+  logger.error(`Subscription payment ${operation} failed`, { ...errorDetails, ...metadata }, SUBSCRIPTION_PAYMENT_LOG_CATEGORY);
+}
+
+function logSubscriptionPaymentResponseFailure(
+  operation: string,
+  status: number,
+  failureKind: string
+): void {
+  const httpFailure = status < 200 || status >= 300;
+  logSubscriptionPaymentFailure(operation, new Error(httpFailure ? `HTTP ${status}` : 'Payment API response was incomplete'), {
+    status,
+    failureKind,
+    errorName: httpFailure ? 'HttpError' : 'InvalidPaymentResponse',
+  });
+}
 
 /**
  * Create a real Zoho payment link for a vendor's `connect`/`select` subscription
@@ -24,14 +51,16 @@ export async function createPaymentLink(
       },
       body: JSON.stringify(billingDuration ? { plan, billingDuration } : { plan }),
     });
-  } catch {
+  } catch (error: unknown) {
+    logSubscriptionPaymentFailure('vendor link request', error, { accountType: 'vendor', method: 'POST' });
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
   let body: { success?: boolean; data?: { paymentUrl?: string; paymentLinkId?: string; status?: string }; error?: string } = {};
   try {
     body = await res.json();
-  } catch {
+  } catch (error: unknown) {
+    logSubscriptionPaymentFailure('vendor link response parsing', error, { accountType: 'vendor', status: res.status });
     return {
       success: false,
       reason: 'NETWORK',
@@ -40,9 +69,15 @@ export async function createPaymentLink(
   }
 
   if (res.status === 401 || res.status === 403) {
+    logSubscriptionPaymentResponseFailure('vendor link creation', res.status, 'UNAUTHORIZED');
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !body.data || !body.data.paymentUrl) {
+    logSubscriptionPaymentResponseFailure(
+      'vendor link creation',
+      res.status,
+      res.status === 400 ? 'VALIDATION' : res.ok ? 'INVALID_RESPONSE' : 'SERVER'
+    );
     return {
       success: false,
       reason: res.status === 400 ? 'VALIDATION' : 'SERVER',
@@ -73,11 +108,25 @@ export async function getVendorPaymentLinkStatus(vendorId: string, linkId: strin
     const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/payment-links`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    const body = await res.json().catch(() => null);
-    if (!res.ok || !body?.success || !Array.isArray(body.data)) return null;
+    let body: { success?: boolean; data?: unknown } | null;
+    try {
+      body = await res.json();
+    } catch (error: unknown) {
+      logSubscriptionPaymentFailure('vendor link status response parsing', error, { accountType: 'vendor', status: res.status });
+      return null;
+    }
+    if (!res.ok) {
+      logSubscriptionPaymentResponseFailure('vendor link status lookup', res.status, 'SERVER');
+      return null;
+    }
+    if (!body?.success || !Array.isArray(body.data)) {
+      logSubscriptionPaymentResponseFailure('vendor link status lookup', res.status, 'INVALID_RESPONSE');
+      return null;
+    }
     const match = body.data.find((l: { id?: string; status?: string }) => l.id === linkId);
     return match?.status || null;
-  } catch {
+  } catch (error: unknown) {
+    logSubscriptionPaymentFailure('vendor link status lookup', error, { accountType: 'vendor' });
     return null;
   }
 }
@@ -89,11 +138,25 @@ export async function getBuyerPaymentLinkStatus(buyerAccountId: string, linkId: 
     const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerAccountId)}/payment-links`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    const body = await res.json().catch(() => null);
-    if (!res.ok || !body?.success || !Array.isArray(body.data)) return null;
+    let body: { success?: boolean; data?: unknown } | null;
+    try {
+      body = await res.json();
+    } catch (error: unknown) {
+      logSubscriptionPaymentFailure('buyer link status response parsing', error, { accountType: 'buyer', status: res.status });
+      return null;
+    }
+    if (!res.ok) {
+      logSubscriptionPaymentResponseFailure('buyer link status lookup', res.status, 'SERVER');
+      return null;
+    }
+    if (!body?.success || !Array.isArray(body.data)) {
+      logSubscriptionPaymentResponseFailure('buyer link status lookup', res.status, 'INVALID_RESPONSE');
+      return null;
+    }
     const match = body.data.find((l: { id?: string; status?: string }) => l.id === linkId);
     return match?.status || null;
-  } catch {
+  } catch (error: unknown) {
+    logSubscriptionPaymentFailure('buyer link status lookup', error, { accountType: 'buyer' });
     return null;
   }
 }
@@ -121,14 +184,16 @@ export async function createBuyerPaymentLink(
       },
       body: JSON.stringify({ plan, billingDuration }),
     });
-  } catch {
+  } catch (error: unknown) {
+    logSubscriptionPaymentFailure('buyer link request', error, { accountType: 'buyer', method: 'POST' });
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
   let body: { success?: boolean; data?: { paymentUrl?: string; paymentLinkId?: string; status?: string }; error?: string } = {};
   try {
     body = await res.json();
-  } catch {
+  } catch (error: unknown) {
+    logSubscriptionPaymentFailure('buyer link response parsing', error, { accountType: 'buyer', status: res.status });
     return {
       success: false,
       reason: 'NETWORK',
@@ -137,9 +202,15 @@ export async function createBuyerPaymentLink(
   }
 
   if (res.status === 401 || res.status === 403) {
+    logSubscriptionPaymentResponseFailure('buyer link creation', res.status, 'UNAUTHORIZED');
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
   if (!res.ok || !body.success || !body.data || !body.data.paymentUrl) {
+    logSubscriptionPaymentResponseFailure(
+      'buyer link creation',
+      res.status,
+      res.status === 400 ? 'VALIDATION' : res.ok ? 'INVALID_RESPONSE' : 'SERVER'
+    );
     return {
       success: false,
       reason: res.status === 400 ? 'VALIDATION' : 'SERVER',
@@ -172,12 +243,24 @@ export interface SubscriptionPricingResponse {
 export async function fetchSubscriptionPricing(): Promise<SubscriptionPricingResponse | null> {
   try {
     const res = await fetch('/api/subscriptions/pricing');
-    const body = await res.json().catch(() => null);
+    let body: { success?: boolean; data?: unknown } | null;
+    try {
+      body = await res.json();
+    } catch (error: unknown) {
+      logSubscriptionPaymentFailure('pricing response parsing', error, { status: res.status });
+      return null;
+    }
+    if (!res.ok) {
+      logSubscriptionPaymentResponseFailure('pricing fetch', res.status, 'SERVER');
+      return null;
+    }
     if (res.ok && body?.success && body?.data) {
       return body.data as SubscriptionPricingResponse;
     }
+    logSubscriptionPaymentResponseFailure('pricing fetch', res.status, 'INVALID_RESPONSE');
     return null;
-  } catch {
+  } catch (error: unknown) {
+    logSubscriptionPaymentFailure('pricing fetch', error);
     return null;
   }
 }

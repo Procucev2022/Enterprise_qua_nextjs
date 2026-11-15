@@ -1,11 +1,14 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import RfqUpgradePlanModal from '@/app/buyer/RfqUpgradePlanModal';
 import * as storeModule from '@/lib/store';
+import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 
 jest.mock('@/lib/store');
 jest.mock('@/lib/subscriptionPaymentClient', () => ({
   fetchSubscriptionPricing: jest.fn().mockResolvedValue({
+    gstPercent: 18,
+    gstRate: 0.18,
     buyer: {
       version_1: {
         '12_months': { price: 4999, baseDurationPrice: 59988, gstAmount: 10797.84, totalWithGst: 70785.84 },
@@ -119,7 +122,7 @@ describe('RfqUpgradePlanModal', () => {
     });
   });
 
-  it('calls createBuyerPaymentLink on proceed to pay', async () => {
+  it('calls createBuyerPaymentLink on proceed to pay once the server price has loaded', async () => {
     mockCreateBuyerPaymentLink.mockResolvedValue('https://checkout.zoho.in/procucev-silver-12m');
 
     render(
@@ -130,7 +133,7 @@ describe('RfqUpgradePlanModal', () => {
       />
     );
 
-    const payBtn = screen.getByRole('button', { name: /Proceed to Pay/i });
+    const payBtn = await screen.findByRole('button', { name: /Proceed to Pay ₹70,785\.84/i });
     fireEvent.click(payBtn);
 
     await waitFor(() => {
@@ -189,7 +192,7 @@ describe('RfqUpgradePlanModal', () => {
 
     expect(screen.getByText(/You don't have credits to publish the RFQ in unknown_mode/i)).toBeInTheDocument();
 
-    const payBtn = screen.getByRole('button', { name: /Proceed to Pay/i });
+    const payBtn = await screen.findByRole('button', { name: /Proceed to Pay/i });
     fireEvent.click(payBtn);
 
     await waitFor(() => {
@@ -208,7 +211,7 @@ describe('RfqUpgradePlanModal', () => {
       />
     );
 
-    const payBtn = screen.getByRole('button', { name: /Proceed to Pay/i });
+    const payBtn = await screen.findByRole('button', { name: /Proceed to Pay/i });
     fireEvent.click(payBtn);
 
     await waitFor(() => {
@@ -222,6 +225,82 @@ describe('RfqUpgradePlanModal', () => {
       expect(screen.getByText(/Payment initiation failed\. Please try again\./i)).toBeInTheDocument();
     });
   });
+
+  it('shows the server-priced amount, server GST rate, and computed saving, with no strike-through', async () => {
+    const { container } = render(
+      <RfqUpgradePlanModal isOpen={true} onClose={mockOnClose} targetMode="mode_1" />
+    );
+
+    expect(await screen.findByText('₹4,999')).toBeInTheDocument();
+    expect(screen.getByText('₹70,785.84')).toBeInTheDocument();
+    expect(screen.getByText('Applicable GST (18%)')).toBeInTheDocument();
+    expect(screen.getByText('Save 9%')).toBeInTheDocument();
+    expect(container.querySelector('.line-through')).toBeNull();
+    expect(screen.queryByText('₹50,000')).not.toBeInTheDocument();
+  });
+
+  it('shows an explicit unavailable state and disables payment when the server returns no pricing', async () => {
+    (fetchSubscriptionPricing as jest.Mock).mockResolvedValueOnce(null);
+
+    render(<RfqUpgradePlanModal isOpen={true} onClose={mockOnClose} targetMode="mode_1" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Plan prices could not be loaded from the server');
+    const payBtn = screen.getByRole('button', { name: 'Price unavailable' });
+    expect(payBtn).toBeDisabled();
+    fireEvent.click(payBtn);
+    expect(mockCreateBuyerPaymentLink).not.toHaveBeenCalled();
+    expect(screen.getByText('Total Amount to Upgrade').parentElement).toHaveTextContent('—');
+    expect(screen.queryByText('₹4,999')).not.toBeInTheDocument();
+  });
 });
 
 
+
+describe('RfqUpgradePlanModal: billing toggle, default target and pricing lifecycle', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      createBuyerPaymentLink: jest.fn(),
+      showToast: jest.fn(),
+    });
+  });
+
+  it('returns to the 12-month plan after the 6-month plan was chosen', async () => {
+    render(<RfqUpgradePlanModal isOpen={true} onClose={jest.fn()} targetMode="mode_1" />);
+    // Waits for the server price so the pricing request has settled inside the test.
+    await screen.findByText(/\/ month/);
+
+    fireEvent.click(screen.getByRole('button', { name: /6 Months Plan/i }));
+    await waitFor(() => expect(screen.getByText(/Base Subscription \(6 Months\)/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /12 Months Plan/i }));
+    await waitFor(() => expect(screen.getByText(/Base Subscription \(12 Months\)/i)).toBeInTheDocument());
+  });
+
+  it('targets Mode 1 when no target mode is passed', async () => {
+    render(<RfqUpgradePlanModal isOpen={true} onClose={jest.fn()} />);
+    await screen.findByText(/\/ month/);
+
+    expect(screen.getByText(/publish the RFQ in Mode 1\./)).toBeInTheDocument();
+  });
+
+  it('ignores a pricing reply that arrives after the dialog has unmounted', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    let resolvePricing: (value: unknown) => void = () => undefined;
+    (fetchSubscriptionPricing as jest.Mock).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePricing = resolve;
+      })
+    );
+
+    const { unmount } = render(<RfqUpgradePlanModal isOpen={true} onClose={jest.fn()} targetMode="mode_1" />);
+    unmount();
+
+    await act(async () => {
+      resolvePricing({ buyer: { version_1: { '12_months': { price: 4999 } } } });
+    });
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});

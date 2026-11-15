@@ -1,8 +1,34 @@
 const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES } = require('../config/constants');
+
+const VENDOR_DOSSIER_ERRORS = Object.freeze({
+  ACTOR_REQUIRED: 'Sign in with a staff account to record this vendor communication. No signed-in user was found on the request.',
+});
+
+/** Display name of the signed-in user, or null when the session carries no identity. */
+function actorDisplayName(user) {
+  return user?.fullName || user?.name || user?.email || null;
+}
+
+/**
+ * Sends a retryable 503 when the store is unavailable, so the caller knows nothing was saved.
+ * Every other error goes to next(err).
+ */
+function sendDossierError(res, next, err) {
+  if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
+    return res.status(503).json({
+      success: false,
+      error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+      code: 'PERSISTENCE_UNAVAILABLE',
+      retryable: true,
+    });
+  }
+  return next(err);
+}
 
 function assertCategoryManagerOrAdmin(req, res) {
   const user = req.user;
@@ -64,7 +90,8 @@ async function getCreditHistory(req, res, next) {
     const creditInfo = storeService.getVendorRfqCredits(vendor.id);
     let transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
 
-    const alloc = creditInfo.freeCreditsAllocated || 5;
+    // The seeded allocation is the vendor's recorded allocation. No recorded allocation seeds 0.
+    const alloc = Number(creditInfo.freeCreditsAllocated ?? 0);
     if (!transactions || transactions.length === 0) {
       await domainQueries.recordCreditTransactionInDB({
         id: `vtx-init-${vendor.id.slice(0, 8)}`,
@@ -155,7 +182,7 @@ async function getCreditHistory(req, res, next) {
       return {
         id: t.id,
         transactionId: t.id,
-        transactionDate: t.created_at || new Date().toISOString(),
+        transactionDate: t.created_at || null,
         transactionType: txType,
         creditSource,
         creditsAdded: isDeduction ? 0 : Math.abs(amt),
@@ -172,7 +199,7 @@ async function getCreditHistory(req, res, next) {
     return res.json({ success: true, summary, transactions: formattedTransactions });
   } catch (err) {
     logger.error('Error fetching vendor credit history', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -188,66 +215,10 @@ async function getVendorCommunications(req, res, next) {
 
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const comms = await paymentDuesQueries.getCommunicationHistory(vendor.id);
-    const combined = [...comms];
-
-    const hasOnboarding = combined.some((c) => c.subject && c.subject.includes('Onboarding'));
-    if (!hasOnboarding) {
-      combined.push({
-        id: `comm-vendor-reg-${vendor.id}`,
-        accountId: vendor.id,
-        accountType: 'vendor',
-        channel: 'EMAIL',
-        subject: 'Supplier Network Onboarding & Verification Confirmation',
-        sender: 'Procucev Supplier Operations',
-        recipient: vendor.email || '',
-        message: `Welcome ${vendor.contactPerson || vendor.name} to the Procucev Supplier Network. Catalog indexed across ${vendor.majorCategory || 'Industrial Supplies'}. Free quotation credits allocated.`,
-        deliveryStatus: 'Delivered',
-        notificationStatus: 'Delivered',
-        acknowledgementStatus: 'Acknowledged',
-        sentAt: vendor.createdAt || new Date().toISOString(),
-        direction: 'OUTGOING',
-      });
-    }
-
-    const allRfqs = storeService.getRFQs ? storeService.getRFQs() : [];
-    const vendorEmail = (vendor.email || '').toLowerCase();
-    const vendorName = (vendor.name || '').toLowerCase();
-    const relatedRfqs = allRfqs.filter((r) => {
-      const isAssigned = (r.assignedVendors || []).some(
-        (v) => (v.id && v.id === vendor.id) || (v.email && v.email.toLowerCase() === vendorEmail)
-      );
-      const hasQuote = (r.quotes || []).some(
-        (q) => (q.vendorId && q.vendorId === vendor.id) || (q.vendorName && q.vendorName.toLowerCase() === vendorName)
-      );
-      return isAssigned || hasQuote;
-    });
-
-    relatedRfqs.forEach((rfq, idx) => {
-      const commId = `comm-vrfq-${rfq.id}-${idx}`;
-      if (!combined.some((c) => c.id === commId)) {
-        combined.push({
-          id: commId,
-          accountId: vendor.id,
-          accountType: 'vendor',
-          channel: 'EMAIL',
-          subject: `Opportunity Invitation: RFQ ${rfq.rfqNumber || rfq.id}`,
-          sender: 'Qua AI Matchmaking Dispatcher',
-          recipient: vendor.email || '',
-          message: `Direct opportunity invitation sent for "${rfq.title || 'Procurement'}" under ${rfq.sourcingMode || 'Mode 1'}. Target submission deadline active.`,
-          deliveryStatus: 'Delivered',
-          notificationStatus: 'Dispatched',
-          acknowledgementStatus: 'Acknowledged',
-          sentAt: rfq.createdAt || new Date().toISOString(),
-          direction: 'OUTGOING',
-        });
-      }
-    });
-
-    combined.sort((a, b) => new Date(b.sentAt || 0).getTime() - new Date(a.sentAt || 0).getTime());
-    return res.json({ success: true, data: combined });
+    return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching vendor communications', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -279,6 +250,11 @@ async function recordVendorCommunication(req, res, next) {
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const internalTaskQueries = require('../db/internalTaskQueries');
 
+    const actorName = actorDisplayName(req.user);
+    if (!actorName) {
+      return res.status(401).json({ success: false, error: VENDOR_DOSSIER_ERRORS.ACTOR_REQUIRED });
+    }
+
     const normalizedChannel = (channel || 'EMAIL').toUpperCase();
     const commNotes = [
       callOutcome ? `Call Outcome: ${callOutcome}` : null,
@@ -286,57 +262,136 @@ async function recordVendorCommunication(req, res, next) {
       notes || null,
     ].filter(Boolean).join(' | ');
 
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
+    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
+    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10)
+      ? normalizedVendorPhone
+      : vendor.phone;
+    const shouldDispatchEmail = isStaff && normalizedChannel === 'EMAIL' && Boolean(emailTo);
+    const shouldDispatchSms = isStaff && normalizedChannel === 'SMS' && Boolean(smsTo);
+    const deliveryPending = shouldDispatchEmail || shouldDispatchSms;
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: vendor.id,
       accountType: 'vendor',
       channel: normalizedChannel,
-      recipient: recipient || vendor.email || vendor.phone || '',
       subject: subject || null,
       message: message || '',
-      notificationStatus: 'Delivered',
-      deliveryStatus: 'Delivered',
-      acknowledgementStatus: 'Acknowledgement Pending',
-      communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
+      notificationStatus: deliveryPending ? 'Delivery Pending' : 'Delivered',
+      deliveryStatus: deliveryPending ? 'Pending' : 'Delivered',
+      acknowledgementStatus: deliveryPending ? 'Delivery Pending' : 'Acknowledgement Pending',
+      communicatedBy: actorName,
       notes: commNotes || null,
       metadata: {
         ...(metadata || {}),
         callOutcome: callOutcome || null,
         duration: duration || null,
         nextFollowupDate: nextFollowupDate || null,
+        ...(shouldDispatchEmail ? {
+          deliveryEmailSubject: `[Procucev] ${subject || 'Supplier Communication'}`,
+          ...(req.user?.email ? { deliveryReplyTo: req.user.email } : {}),
+        } : {}),
+        ...(shouldDispatchSms ? {
+          deliveryRecipientName: vendor.companyName || vendor.name || 'Supplier',
+          deliveryEntityType: 'supplier_dossier',
+        } : {}),
       },
+      recipient: shouldDispatchEmail
+        ? emailTo
+        : shouldDispatchSms
+          ? smsTo
+          : recipient || vendor.email || vendor.phone || '',
     });
 
-    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
-    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
-    const smsService = require('../services/smsService');
-    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
-    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
-    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10) ? recipient : vendor.phone;
-    if (isStaff && normalizedChannel === 'EMAIL' && emailTo) {
+    let deliveryRecord = record;
+    if (deliveryPending && pool.hasStorage()) {
       try {
-        const mailerService = require('../services/mailerService');
-        if (typeof mailerService.deliver === 'function') {
-          mailerService.deliver({
+        const eventOutboxService = require('../services/eventOutboxService');
+        await eventOutboxService.dispatchDueEventOutboxJobs(1);
+      } catch (dispatchError) {
+        logger.error('Immediate supplier dossier delivery failed; durable recovery will retry', {
+          error: dispatchError,
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      }
+      try {
+        const current = await paymentDuesQueries.getCommunicationById(record.id);
+        if (current) deliveryRecord = current;
+        else logger.error('Supplier dossier communication disappeared after durable delivery was queued', {
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      } catch (lookupError) {
+        logger.error('Supplier dossier delivery state could not be reloaded after queueing', {
+          error: lookupError,
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      }
+    } else {
+      let deliveryError = null;
+      if (shouldDispatchEmail) {
+        try {
+          const mailerService = require('../services/mailerService');
+          if (typeof mailerService.deliver !== 'function') {
+            throw new Error('Shared email delivery service is unavailable.');
+          }
+          const result = await mailerService.deliver({
             to: emailTo,
             subject: '[Procucev] ' + (subject || 'Supplier Communication'),
             text: message || commNotes || '',
             replyTo: req.user?.email || undefined,
-          }, 'SUPPLIER_DOSSIER_COMM').catch((err) => logger.warn('Async vendor email dispatch error', { error: err.message }));
+          }, 'SUPPLIER_DOSSIER_COMM');
+          if (!result?.sent) deliveryError = new Error(result?.reason || 'Email provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Supplier dossier email dispatch failed', { error, vendorId: vendor.id, communicationId: record.id }, 'VENDOR_CONTROLLER');
         }
-      } catch (mailErr) {
-        logger.warn('Failed to dispatch external email for vendor communication', { error: mailErr.message });
+      } else if (shouldDispatchSms) {
+        try {
+          const result = await smsService.sendActionCenterSms({
+            mobile: smsTo,
+            recipientName: vendor.companyName || vendor.name || 'Supplier',
+            message: message || subject || 'Supplier notification',
+            entityType: 'supplier_dossier',
+          });
+          if (!result?.success) deliveryError = new Error(result?.error || 'SMS provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Supplier dossier SMS dispatch failed', { error, vendorId: vendor.id, communicationId: record.id }, 'VENDOR_CONTROLLER');
+        }
       }
-    } else if (isStaff && normalizedChannel === 'SMS' && smsTo) {
-      try {
-        const smsService = require('../services/smsService');
-        smsService.sendActionCenterSms({
-          mobile: smsTo,
-          recipientName: vendor.companyName || vendor.name || 'Supplier',
-          message: message || subject || 'Supplier notification',
-          entityType: 'supplier_dossier',
-        }).catch((err) => logger.warn('Async vendor SMS dispatch error', { error: err.message }));
-      } catch (smsErr) {
-        logger.warn('Failed to dispatch external SMS for vendor communication', { error: smsErr.message });
+
+      if (deliveryPending) {
+        const delivered = !deliveryError;
+        const status = delivered ? 'Delivered' : 'Failed';
+        try {
+          const updated = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+            communicationId: record.id,
+            notificationStatus: delivered ? 'Notification Sent' : 'Failed',
+            deliveryStatus: status,
+            acknowledgementStatus: delivered ? 'Acknowledgement Pending' : 'Failed',
+          });
+          if (updated) {
+            deliveryRecord = updated;
+          } else {
+            logger.error('Supplier dossier delivery result could not be matched to its persisted communication', {
+              vendorId: vendor.id,
+              communicationId: record.id,
+              deliveryStatus: status,
+            }, 'VENDOR_CONTROLLER');
+          }
+        } catch (statusError) {
+          logger.error('Supplier dossier delivery result could not be saved; communication remains pending', {
+            error: statusError,
+            vendorId: vendor.id,
+            communicationId: record.id,
+            providerAccepted: delivered,
+          }, 'VENDOR_CONTROLLER');
+        }
       }
     }
 
@@ -345,7 +400,7 @@ async function recordVendorCommunication(req, res, next) {
     let completedTask = null;
     try {
       const channelLabel = normalizedChannel === 'CALL' ? 'Call' : normalizedChannel === 'WHATSAPP' ? 'WhatsApp' : normalizedChannel === 'SMS' ? 'SMS' : 'Email';
-      const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+      const actor = req.user;
       completedTask = await internalTaskQueries.createInternalTask({
         title: `[${channelLabel} Log / Completed] ${subject || vendorLabel}`,
         description: message || commNotes || 'Vendor communication activity recorded.',
@@ -356,7 +411,7 @@ async function recordVendorCommunication(req, res, next) {
         relatedEntityId: vendor.id,
         relatedEntityLabel: vendorLabel,
         assignedToUserId: actor.uuid || actor.id || null,
-        assignedToName: actor.fullName || actor.name || actor.email || 'Category Manager',
+        assignedToName: actorName,
         dueDate: new Date().toISOString(),
         notes: commNotes || '',
       }, actor);
@@ -367,7 +422,7 @@ async function recordVendorCommunication(req, res, next) {
     let followupTask = null;
     if (nextFollowupDate) {
       try {
-        const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+        const actor = req.user;
         followupTask = await internalTaskQueries.createInternalTask({
           title: `[Follow-up] ${vendorLabel} - ${subject || 'Vendor Follow-up'}`,
           description: followupNotes || `Follow-up needed following ${normalizedChannel} outreach: ${message || ''}`,
@@ -378,7 +433,7 @@ async function recordVendorCommunication(req, res, next) {
           relatedEntityId: vendor.id,
           relatedEntityLabel: vendorLabel,
           assignedToUserId: followupAssigneeId || actor.uuid || actor.id || null,
-          assignedToName: followupAssigneeName || actor.fullName || actor.name || actor.email || 'Category Manager',
+          assignedToName: followupAssigneeName || actorName,
           dueDate: nextFollowupDate,
           notes: followupNotes || '',
         }, actor);
@@ -387,10 +442,10 @@ async function recordVendorCommunication(req, res, next) {
       }
     }
 
-    return res.status(201).json({ success: true, data: record, completedTask, followupTask });
+    return res.status(201).json({ success: true, data: deliveryRecord, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording vendor communication', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -411,42 +466,22 @@ async function getVendorPaymentHistory(req, res, next) {
     }
 
     const payments = [];
-    const planName = vendor.subscriptionPlan || 'Preferred Partner';
-    const planLower = planName.toLowerCase();
-    const baseAmount = planLower.includes('connect') ? 1999 : (planLower.includes('select') ? 9999 : 5999);
-    const regDate = vendor.createdAt || new Date().toISOString();
-
-    payments.push({
-      id: `vpay-init-${vendor.id}`,
-      paymentId: `vpay-init-${vendor.id}`,
-      invoiceNo: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
-      invoiceNumber: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
-      description: `Plan: ${planName}`,
-      subscriptionPlan: planName,
-      amount: baseAmount,
-      currency: 'INR',
-      gateway: 'Zoho Corporate Payments',
-      paymentMethod: 'UPI / NetBanking / Corporate Card',
-      status: 'PAID',
-      gatewayRef: `ZOHO-VINIT-${vendor.id.slice(0, 8)}`,
-      date: regDate,
-      transactionDate: regDate,
-      receiptUrl: `/api/vendors/${vendor.id}/payment-links/vpay-init-${vendor.id}/invoice`,
-    });
-
+    // Subscription state is not proof of a payment; only provider records count. A field the
+    // provider record does not hold is returned as null, never as a made-up value.
     for (const link of links) {
-      const linkDate = link.createdAt || new Date().toISOString();
+      const linkDate = link.createdAt || null;
+      const invoiceNumber = link.invoiceNumber || null;
       payments.push({
         id: link.id,
         paymentId: link.id,
-        invoiceNo: link.invoiceNumber || `SUP-INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
-        invoiceNumber: link.invoiceNumber || `SUP-INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
-        description: `Subscription Renewal: ${link.planId || planName}`,
-        subscriptionPlan: link.planId || planName,
-        amount: Number(link.amount || 0),
-        currency: link.currency || 'INR',
+        invoiceNo: invoiceNumber,
+        invoiceNumber,
+        description: link.planId ? `Subscription payment: ${link.planId}` : 'Subscription payment',
+        subscriptionPlan: link.planId || null,
+        amount: link.amount === undefined || link.amount === null ? null : Number(link.amount),
+        currency: link.currency || null,
         gateway: 'Zoho Payments',
-        paymentMethod: 'Credit Card / NetBanking / UPI',
+        paymentMethod: null,
         status: String(link.status || 'CREATED').toUpperCase(),
         gatewayRef: link.zohoPaymentLinkId || link.id,
         date: linkDate,
@@ -464,14 +499,14 @@ async function getVendorPaymentHistory(req, res, next) {
     for (const p of payments) {
       const st = String(p.status).toUpperCase();
       if (st === 'PAID' || st === 'SUCCESS' || st === 'COMPLETED') {
-        totalPaid += p.amount;
+        totalPaid += p.amount || 0;
         totalSuccessful += 1;
       } else if (st === 'PENDING' || st === 'CREATED' || st === 'IN_PROGRESS') {
         pending += 1;
       } else if (st === 'FAILED' || st === 'EXPIRED') {
         failed += 1;
       } else if (st === 'REFUNDED') {
-        refunded += p.amount;
+        refunded += p.amount || 0;
       }
     }
 
@@ -486,7 +521,7 @@ async function getVendorPaymentHistory(req, res, next) {
     return res.json({ success: true, summary, payments });
   } catch (err) {
     logger.error('Error fetching vendor payment history', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -518,7 +553,8 @@ async function addQuoteCredits(req, res, next) {
     }
 
     const amount = Number(validation.sanitizedData.amount);
-    const reason = validation.sanitizedData.reason || 'Manual quote credit addition by Category Manager';
+    const actor = actorDisplayName(req.user) || 'signed-in user';
+    const reason = validation.sanitizedData.reason || `Manual quote credit addition by ${actor}`;
 
     const currentBalance = vendor.freeQuotationCredits !== undefined
       ? Number(vendor.freeQuotationCredits)
@@ -566,7 +602,14 @@ async function addQuoteCredits(req, res, next) {
         if (inTx && typeof client.query === 'function') {
           try {
             await client.query('ROLLBACK');
-          } catch (_) {}
+          } catch (rollbackError) {
+            logger.error('Vendor quote-credit transaction rollback failed', {
+              error: rollbackError,
+              operation: 'rollback-vendor-quote-credit-transaction',
+              vendorId: vendor.id,
+              transactionId: tx.id,
+            }, 'VENDOR_CONTROLLER');
+          }
         }
         logger.error('Failed to update vendor credits atomically in PostgreSQL transaction', dbErr, 'VENDOR_CONTROLLER');
         return res.status(500).json({
@@ -586,7 +629,14 @@ async function addQuoteCredits(req, res, next) {
         queryCache.invalidate('vendor_credits');
         queryCache.invalidate('vendors');
       }
-    } catch (_) {}
+    } catch (cacheError) {
+      logger.warn('Vendor quote-credit write committed but local query-cache invalidation failed', {
+        error: cacheError,
+        operation: 'invalidate-vendor-quote-credit-cache',
+        vendorId: vendor.id,
+        cacheTags: ['vendor_credits', 'vendors'],
+      }, 'VENDOR_CONTROLLER');
+    }
 
     // Update in-memory vendor balance only after database transaction succeeds
     storeService.updateVendor(vendor.id, {
@@ -594,10 +644,6 @@ async function addQuoteCredits(req, res, next) {
       freeRfqDownloadCredits: updatedBalance,
       credits: updatedBalance,
     });
-
-    const actor = req.user
-      ? (req.user.fullName || req.user.name || req.user.email || 'Category Manager')
-      : 'Category Manager';
 
     logger.info(`Quote credits added to vendor ${vendor.id}: +${amount} (New Balance: ${updatedBalance}) by ${actor}`, { vendorId: vendor.id, amount }, 'VENDOR_CONTROLLER');
 
@@ -610,7 +656,7 @@ async function addQuoteCredits(req, res, next) {
     });
   } catch (err) {
     logger.error('Error adding vendor quote credits', err, 'VENDOR_CONTROLLER');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 
@@ -630,7 +676,6 @@ async function requestCreditApproval(req, res, next) {
 
     const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
     const internalTaskQueries = require('../db/internalTaskQueries');
-    const approvalQueries = require('../db/approvalQueries');
 
     const validation = validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, req.body);
     if (!validation.isValid) {
@@ -641,12 +686,18 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
+    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+    // The maker is the signed-in user. The request body does not set who submitted the approval.
+    const makerName = actorDisplayName(req.user);
+    if (!makerName) {
+      return res.status(401).json({ success: false, error: VENDOR_DOSSIER_ERRORS.ACTOR_REQUIRED });
+    }
+    const makerRole = req.user?.role || null;
 
     const vendorLabel = vendor.name || vendor.id;
     const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
 
-    const task = await internalTaskQueries.createInternalTask(
+    const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
         taskCategory: 'CREDIT_MANAGEMENT',
         taskType: 'Add Credits',
@@ -662,23 +713,20 @@ async function requestCreditApproval(req, res, next) {
         creditAccountName: vendorLabel,
         creditQuantity: amount,
         creditReason: reason,
-        notes: `Initiated By: ${initiatorName}. Requires review and approval by ${approverName}.`,
+        notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'SELLER',
         relatedEntityId: vendor.id,
         relatedEntityLabel: vendorLabel,
       },
       {
-        fullName: initiatorName,
-        name: initiatorName,
-        email: req.user?.email || 'cm@procucev.com',
-        role: 'category_manager',
-      }
-    );
-
-    // Link to Approvals section
-    await approvalQueries.createApproval(
+        fullName: makerName,
+        name: makerName,
+        email: req.user?.email || null,
+        role: makerRole,
+      },
       {
         module: 'Seller Credit Addition',
+        idempotencyKey,
         request_type: 'Seller Credit Addition',
         project: vendorLabel,
         applicant_name: vendorLabel,
@@ -687,28 +735,21 @@ async function requestCreditApproval(req, res, next) {
         amount,
         quantity: amount,
         available_balance: vendor.freeQuotationCredits ?? VENDOR_FREE_CREDITS_LIMIT,
-        maker_name: initiatorName,
-        maker_role: 'Category Manager',
+        maker_name: makerName,
+        maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
         details: taskReason,
-        internal_task_id: task.id,
         seller_id: vendor.id,
         history: [
           {
             action: 'SUBMITTED',
-            actor_name: initiatorName,
-            actor_role: 'Category Manager',
+            actor_name: makerName,
+            actor_role: makerRole,
             timestamp: new Date().toISOString(),
             remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
           },
         ],
-      },
-      {
-        fullName: initiatorName,
-        name: initiatorName,
-        email: req.user?.email || 'cm@procucev.com',
-        role: 'category_manager',
       }
     );
 
@@ -725,7 +766,7 @@ async function requestCreditApproval(req, res, next) {
     });
   } catch (err) {
     logger.error('Error requesting quote credit approval for seller', err, 'VENDOR_DOSSIER_EXTENSIONS');
-    next(err);
+    return sendDossierError(res, next, err);
   }
 }
 

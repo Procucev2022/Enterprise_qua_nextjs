@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
-import { resolveConfirmationVendorCount } from './ingestion-wizard';
+import { resolveConfirmationVendorCount, resolveOwnVendorCount, V2_V3_SOURCING_MODES } from './ingestion-wizard';
 import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals, selectVendorsForCategories } from '@/lib/vendorMatching';
 import {
   Plus,
@@ -48,6 +48,8 @@ import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingM
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
+import RequiredMarker from '@/app/components/RequiredMarker';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import {
   addManualRFQLineItem,
   createEmptyManualRFQForm,
@@ -73,6 +75,21 @@ const EXTRACTION = UI_STRINGS.rfqExtraction;
 
 const MANUAL = UI_STRINGS.manualRfq;
 const MODAL = UI_STRINGS.manualRfqModal;
+
+const ALL_SOURCING_MODES: SourcingMode[] = SOURCING_MODES.map((mode) => mode.id);
+
+// Plans that include paid sourcing modes, so an exhausted free balance does not block them.
+const PAID_PLANS: string[] = ['version_1', 'version_2', 'version_3', 'unlimited'];
+
+/** A count the store reported, or null when none has been reported yet. */
+function toReportedCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** A plan name the store reported, or null when the value is missing or is not text. */
+function toReportedPlan(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
 
 // Read at render time from the taxonomy registry the store populates from the
 // database, not captured at module scope from a bundled JSON file. A bundled copy
@@ -106,32 +123,27 @@ function FieldError({ message }: { message?: string }) {
 }
 
 export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQModalProps) {
-  let buyerVendors: any[] = [];
-  let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
-  let remainingFreeRFQs = 5;
-  let activeSubscription = 'free_trial';
-  let activeBuyerAccount: any = null;
+  // Plan, balance and supplier list come only from the store. A null plan or balance means the server has not reported it.
   let store: ReturnType<typeof useApp> | null = null;
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     store = useApp();
-    buyerVendors = store?.buyerVendors || [];
-    const hasUnlimited = Boolean(store?.activeBuyerAccount?.unlimitedRfqAccess || store?.activeBuyerAccount?.unlimitedAccess);
-    entitledModes = entitledSourcingModes(
-      store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription,
-      store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs,
-      hasUnlimited
-    );
-    remainingFreeRFQs = store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs ?? 5;
-    activeSubscription = store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription ?? 'free_trial';
-    activeBuyerAccount = store?.activeBuyerAccount;
   } catch {
-    buyerVendors = [];
+    store = null;
   }
-  const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
+  const buyerVendors: VendorEntry[] = store?.buyerVendors || [];
+  const activeBuyerAccount = store?.activeBuyerAccount ?? null;
   const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess);
-  const isPaidPlan = hasUnlimited || ['version_1', 'version_2', 'version_3', 'unlimited'].includes(activeSubscription);
-  const isQuotaExhausted = !isPaidPlan && remainingFreeRFQs <= 0 && form.sourcingMode !== 'mode_0';
+  const reportedPlan = toReportedPlan(activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
+  const reportedBalance = toReportedCount(activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs);
+  // With no plan reported, the modes are not restricted here. The server checks the plan on every RFQ it receives.
+  const entitledModes: SourcingMode[] = reportedPlan === null && !hasUnlimited
+    ? ALL_SOURCING_MODES
+    : entitledSourcingModes(reportedPlan, reportedBalance ?? undefined, hasUnlimited);
+  const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
+  const isPaidPlan = hasUnlimited || (reportedPlan !== null && PAID_PLANS.includes(reportedPlan));
+  // The upgrade prompt appears only when the store reports the free balance as used up.
+  const isQuotaExhausted = !isPaidPlan && reportedBalance !== null && reportedBalance <= 0 && form.sourcingMode !== 'mode_0';
 
   useEffect(() => {
     if (isOpen && activeBuyerAccount) {
@@ -166,7 +178,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const [modalVendorCategoryTab, setModalVendorCategoryTab] = useState<'matched' | 'all' | 'mismatched'>('matched');
   const [confirmationRfq, setConfirmationRfq] = useState<RFQItem | null>(null);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
-  const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [completedCategoryEmailVendors, setCompletedCategoryEmailVendors] = useState<string[]>([]);
+  const categoryUpdateIdempotencyKeys = useRef<Record<string, string>>({});
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode>('mode_1');
 
@@ -179,21 +192,36 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         vendorId: vendor.id,
         vendorEmail: vendor.email,
         vendorName: vendor.name || vendor.contactPerson,
-        rfqCategory: signals.join(', ') || form.lineItems?.[0]?.majorCategory || 'Requested Category',
-        rfqTitle: form.title || 'Procurement Requisition',
+        rfqCategory: signals.join(', ') || form.lineItems?.[0]?.majorCategory || '',
+        rfqTitle: form.title || '',
+        idempotencyKey: categoryUpdateIdempotencyKeys.current[vendorKey],
       });
       if (res.success) {
-        setSentCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        delete categoryUpdateIdempotencyKeys.current[vendorKey];
+        setCompletedCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        const isQueued = res.deliveryStatus === 'queued';
         store?.showToast?.(
-          'Category Update Email Sent',
-          `An email has been sent to ${vendor.name || vendor.contactPerson || 'Vendor'} (${vendor.email}) requesting them to update their category to match this RFQ.`,
+          isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedTitle : UI_STRINGS.vendorCategoryUpdate.sentTitle,
+          formatString(
+            isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedMessage : UI_STRINGS.vendorCategoryUpdate.sentMessage,
+            { vendorName: vendor.name || vendor.contactPerson || UI_STRINGS.recordPlaceholders.notRecorded, vendorEmail: vendor.email || '' }
+          ),
           'success'
         );
       } else {
-        store?.showToast?.('Email Delivery Issue', res.error || 'Failed to dispatch email.', 'warning');
+        if (res.idempotencyKey) categoryUpdateIdempotencyKeys.current[vendorKey] = res.idempotencyKey;
+        store?.showToast?.(
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
+          res.error || UI_STRINGS.vendorCategoryUpdate.failureMessage,
+          'warning'
+        );
       }
     } catch (err: any) {
-      store?.showToast?.('Error', err?.message || 'Failed to send update email.', 'warning');
+      store?.showToast?.(
+        UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+        err?.message || UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+        'warning'
+      );
     } finally {
       setSendingCategoryEmailVendors((prev) => prev.filter((id) => id !== vendorKey));
     }
@@ -225,7 +253,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   // never looked past the first 500 rows of an 80k+-row table. Fetched from
   // the real paginated/searchable directory instead, scoped to the RFQ's
   // own category signals, same as every other screen fixed this session.
-  const { rawSignals: categoryFetchSignals } = useMemo(() => extractRfqCategorySignals(form), [form]);
+  const categorySignalSet = useMemo(() => extractRfqCategorySignals(form), [form]);
+  const categoryFetchSignals = categorySignalSet.rawSignals;
   const [fetchedCategoryVendors, setFetchedCategoryVendors] = useState<VendorEntry[]>([]);
   const lastFetchedCategorySignalsRef = useRef<string>('');
   useEffect(() => {
@@ -302,8 +331,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           id: item.id,
           itemName: item.itemName,
           technicalSpecs: item.technicalSpecs,
-          quantity: Number(item.quantity) || 1,
-          unit: item.unit || 'nos',
+          quantity: Number(item.quantity) || 0,
+          unit: item.unit || '',
           targetDate: item.targetDate || '',
           category: '',
           majorCategory: '',
@@ -577,6 +606,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     setSubmitAttempted(true);
     setSubmitError(null);
 
+    // No mode is preselected. An unchosen mode stops the submit, and the same message shows under the mode cards.
+    if (form.sourcingMode === null) {
+      setSubmitError(MANUAL.sourcingModeRequired);
+      return;
+    }
+
     if (isQuotaExhausted) {
       setSubmitError(MODAL.quotaExhaustedMessage);
       setUpgradeModalTargetMode(form.sourcingMode);
@@ -600,7 +635,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
-        const { signals } = extractRfqCategorySignals(form);
+        const { signals, minorOnly } = extractRfqCategorySignals(form);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -609,7 +644,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         const mismatchedVendors: typeof candidatePool = [];
 
         for (const v of candidatePool) {
-          if (signals.length === 0 || matchVendorAgainstSignals(v, signals).isMatch) {
+          if (signals.length === 0 || matchVendorAgainstSignals(v, signals, minorOnly).isMatch) {
             matchingVendors.push(v);
           } else {
             mismatchedVendors.push(v);
@@ -618,29 +653,51 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
         if (mismatchedVendors.length > 0) {
           store?.showToast?.(
-            'Shortlist Adjusted',
-            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
+            MODAL.shortlistAdjustedTitle,
+            formatString(MODAL.shortlistMismatchNotice, { count: mismatchedVendors.length }),
             'info'
           );
         }
 
-        const finalMatching = signals.length > 0
+        let finalMatching = signals.length > 0
           ? selectVendorsForCategories(
               matchingVendors,
               signals,
               VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: form.deliveryLocation, pincode: form.deliveryPincode }
+              { location: form.deliveryLocation, pincode: form.deliveryPincode },
+              minorOnly
             ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+
+        if (finalMatching.length === 0 && matchingVendors.length > 0) {
+          finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+        }
 
         if (finalMatching.length > 0) {
           mode1AssignedVendors = finalMatching.map((v) => ({
             id: v.id,
-            name: v.name || 'Enterprise Vendor',
+            name: v.name ?? '',
             email: v.email || null,
             contactPerson: v.contactPerson || v.name || null,
             phone: v.phone || (v as any).mobile || (v as any).mobileNumber || null,
           }));
+        }
+      }
+
+      if (form.sourcingMode === 'mode_3' && Array.isArray(fetchedCategoryVendors) && fetchedCategoryVendors.length > 0) {
+        const already = new Set((mode1AssignedVendors || []).map((v) => v.id));
+        const procAdditions = fetchedCategoryVendors
+          .filter((v) => !already.has(v.id))
+          .slice(0, 10)
+          .map((v) => ({
+            id: v.id,
+            name: v.name ?? '',
+            email: v.email || null,
+            contactPerson: v.contactPerson || v.name || null,
+            phone: v.phone || (v as any).mobile || (v as any).mobileNumber || null,
+          }));
+        if (procAdditions.length > 0) {
+          mode1AssignedVendors = [...(mode1AssignedVendors || []), ...procAdditions];
         }
       }
       if (form.sourcingMode === RFQ_MODES.MODE_1 && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
@@ -679,6 +736,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       return;
     }
 
+    if (store?.adoptCreatedRFQ) {
+      if (typeof result.remainingFreeRFQs === 'number') {
+        store.adoptCreatedRFQ(result.rfq, result.remainingFreeRFQs);
+      } else {
+        store.adoptCreatedRFQ(result.rfq);
+      }
+    }
     onCreated(result.rfq);
     setConfirmationRfq(result.rfq);
     setSubmitAttempted(false);
@@ -754,7 +818,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   }
                   return (
                     <>
-                      Your RFQ <strong className="text-indigo-600 dark:text-indigo-400 font-mono">{confirmationRfq.rfqNumber}</strong> has been saved and invitations have been queued for matched suppliers.
+                      Your RFQ <strong className="text-indigo-600 dark:text-indigo-400 font-mono">{confirmationRfq.rfqNumber}</strong> has been saved.
                     </>
                   );
                 })()}
@@ -775,11 +839,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
                 <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Items / Budget</span>
                 <span className="text-xs font-bold text-slate-800 dark:text-gray-200">
-                  {confirmationRfq.extractedEntities?.length || 1} items {confirmationRfq.budget ? `· ₹${confirmationRfq.budget.toLocaleString()}` : ''}
+                  {Array.isArray(confirmationRfq.extractedEntities)
+                    ? formatString(MODAL.itemsCount, { count: confirmationRfq.extractedEntities.length })
+                    : UI_STRINGS.recordPlaceholders.notRecorded} {confirmationRfq.budget ? `· ₹${confirmationRfq.budget.toLocaleString()}` : ''}
                 </span>
               </div>
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
-                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Vendors Assigned</span>
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">
+                  {V2_V3_SOURCING_MODES.includes(String(confirmationRfq.sourcingMode || ''))
+                    ? 'Your Invited Vendors'
+                    : 'Mode & Vendors'}
+                </span>
                 <span data-testid="confirmation-vendor-count" className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono">
                   {(() => {
                     const mode = confirmationRfq.sourcingMode as any;
@@ -788,10 +858,28 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     if (isV0 && !hasCat && (!confirmationRfq.assignedVendors || confirmationRfq.assignedVendors.length === 0)) {
                       return '0 (Pending CM Assignment)';
                     }
-                    return resolveConfirmationVendorCount(confirmationRfq);
+                    return V2_V3_SOURCING_MODES.includes(String(confirmationRfq.sourcingMode || ''))
+                      ? resolveOwnVendorCount(confirmationRfq)
+                      : resolveConfirmationVendorCount(confirmationRfq);
                   })()}
                 </span>
               </div>
+              {V2_V3_SOURCING_MODES.includes(String(confirmationRfq.sourcingMode || '')) && (
+                <div
+                  data-testid="confirmation-procucev-vendor-box"
+                  className="p-3 bg-emerald-50/60 dark:bg-emerald-950/30 rounded-xl border border-emerald-200/60 dark:border-emerald-800/50"
+                >
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 block uppercase tracking-wider">
+                    Procucev Vendors
+                  </span>
+                  <span
+                    data-testid="confirmation-procucev-vendor-count"
+                    className="text-xs font-bold text-emerald-700 dark:text-emerald-300 font-mono"
+                  >
+                    {resolveConfirmationVendorCount(confirmationRfq)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-3 pt-4 border-t border-slate-200 dark:border-gray-800">
@@ -861,7 +949,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   href="/buyer/subscription-center"
                   onClick={(e) => {
                     e.preventDefault();
-                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                     setIsUpgradeModalOpen(true);
                   }}
                   className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
@@ -982,10 +1070,14 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             <div className="xl:col-span-2">
               <label htmlFor="manual-rfq-title" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
                 {MODAL.titleLabel}
+                <RequiredMarker />
               </label>
               <input
                 id="manual-rfq-title"
                 type="text"
+                required
+                aria-required
+                aria-invalid={!!formErrors.title}
                 value={form.title}
                 onChange={(e) => patchForm('title', e.target.value)}
                 placeholder={MODAL.titlePlaceholder}
@@ -1091,14 +1183,18 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             <div>
               <label htmlFor="manual-rfq-date" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
                 {MODAL.targetDateLabel}
+                <RequiredMarker />
               </label>
               <input
                 id="manual-rfq-date"
                 type="date"
+                required
+                aria-required
+                aria-invalid={!!formErrors.targetDeliveryDate}
                 min={new Date().toISOString().slice(0, 10)}
                 value={form.targetDeliveryDate}
                 onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
-                className="font-medium"
+                className="date-input-whole-field font-medium"
               />
               <FieldError message={formErrors.targetDeliveryDate} />
             </div>
@@ -1117,7 +1213,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   onClick={handleAutoCategorizeAll}
                   disabled={isCategorizing || form.lineItems.length === 0}
                   className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
-                  title="Auto-identify and assign major/minor categories for all items"
+                  title={MODAL.autoCategorizeTitle}
                 >
                   {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                   {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
@@ -1142,22 +1238,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 <table className="w-full text-left min-w-[1080px]">
                   <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400">
                     <tr>
-                      <th className="px-2 py-2 font-bold">{MODAL.colItem}</th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colSpecs}</th>
-                      <th className="px-2 py-2 font-bold">
-                        {MODAL.colMajor}
-                        {form.sourcingMode === 'mode_0' && (
-                          <span className="ml-1 text-[9px] font-medium text-slate-400 normal-case">(Optional)</span>
-                        )}
-                      </th>
-                      <th className="px-2 py-2 font-bold">
-                        {MODAL.colMinor}
-                        {form.sourcingMode === 'mode_0' && (
-                          <span className="ml-1 text-[9px] font-medium text-slate-400 normal-case">(Optional)</span>
-                        )}
-                      </th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colQty}</th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colUnit}</th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colItem}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colQty}<RequiredMarker /></th>
+                      <th className="px-2 py-2 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
                       <th className="px-2 py-2" />
                     </tr>
                   </thead>
@@ -1182,15 +1268,19 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <input
                               type="text"
                               aria-label={MODAL.colSpecs}
+                              aria-required
+                              aria-invalid={!!errors.technicalSpecs}
                               value={item.technicalSpecs}
                               onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
                               placeholder={MODAL.specsPlaceholder}
                               className="w-48"
                             />
+                            <FieldError message={errors.technicalSpecs} />
                           </td>
                           <td className="px-2 py-2 align-top">
                             <select
                               aria-label={MODAL.colMajor}
+                              aria-required
                               aria-invalid={!!errors.majorCategory}
                               value={item.majorCategory}
                               onChange={(e) => {
@@ -1210,21 +1300,16 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <FieldError message={errors.majorCategory} />
                           </td>
                           <td className="px-2 py-2 align-top">
-                            <select
-                              aria-label={MODAL.colMinor}
-                              aria-invalid={!!errors.minorCategory}
+                            <CategorySearchInput
+                              label={MODAL.colMinor}
+                              required
+                              invalid={!!errors.minorCategory}
                               value={item.minorCategory}
+                              options={minorsFor(item.majorCategory)}
+                              onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
                               disabled={!item.majorCategory}
-                              onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                              className="w-44 disabled:opacity-50"
-                            >
-                              <option value="">{MODAL.selectPlaceholder}</option>
-                              {minorsFor(item.majorCategory).map((minor) => (
-                                <option key={minor} value={minor}>
-                                  {minor}
-                                </option>
-                              ))}
-                            </select>
+                              placeholder={item.majorCategory ? UI_STRINGS.categorySearch.searchPlaceholder : MODAL.selectPlaceholder}
+                            />
                             <FieldError message={errors.minorCategory} />
                           </td>
                           <td className="px-2 py-2 align-top">
@@ -1482,6 +1567,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
 
 
+            <FieldError message={formErrors.sourcingMode} />
+
             {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
             {form.sourcingMode === 'mode_1' && (
               <div className="mt-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
@@ -1522,10 +1609,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   }
 
                   const matchingVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                     : allMyVendors;
                   const mismatchedVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                     : [];
 
                   let pool = allMyVendors;
@@ -1659,7 +1746,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             : [];
 
                           const matchResult = categoryFetchSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                            ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
                             : { isMatch: true };
                           const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 
@@ -1739,9 +1826,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               <div className="pt-1.5 border-t border-slate-100 dark:border-gray-800 space-y-1">
                                 <div className="flex items-center justify-between text-[9px] text-slate-500 dark:text-gray-400">
                                   <span className="font-semibold text-blue-700 dark:text-blue-300 truncate">
-                                    {vendor.majorCategory || 'General Industrial'}
+                                    {vendor.majorCategory || UI_STRINGS.recordPlaceholders.notRecorded}
                                   </span>
-                                  <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
+                                  <span className="truncate">{vendor.city || vendor.state || vendor.location || UI_STRINGS.recordPlaceholders.notRecorded}</span>
                                 </div>
                                 {minorList.length > 0 && (
                                   <div className="flex flex-wrap gap-1">
@@ -1777,12 +1864,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                     {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <Loader2 size={10} className="animate-spin" />
-                                        <span>Sending Email...</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                       </>
-                                    ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                    ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <CheckCircle2 size={10} />
-                                        <span>Update Email Sent ✓</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                       </>
                                     ) : (
                                       <>
@@ -1886,10 +1973,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       ) : (() => {
                         const matchingVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                           : allMyVendors;
                         const mismatchedVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
                           : [];
 
                         let pool = allMyVendors;
@@ -2024,7 +2111,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   : [];
 
                                 const matchResult = categoryFetchSignals.length > 0
-                                  ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                                  ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
                                   : { isMatch: true };
                                 const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 
@@ -2116,9 +2203,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                     <div className="pt-1.5 border-t border-slate-100 dark:border-gray-800 space-y-1">
                                       <div className="flex items-center justify-between text-[9px] text-slate-500 dark:text-gray-400">
                                         <span className="font-semibold text-blue-700 dark:text-blue-300 truncate">
-                                          {vendor.majorCategory || 'General Industrial'}
+                                          {vendor.majorCategory || UI_STRINGS.recordPlaceholders.notRecorded}
                                         </span>
-                                        <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
+                                        <span className="truncate">{vendor.city || vendor.state || vendor.location || UI_STRINGS.recordPlaceholders.notRecorded}</span>
                                       </div>
                                       {minorList.length > 0 && (
                                         <div className="flex flex-wrap gap-1">
@@ -2154,12 +2241,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                           {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                             <>
                                               <Loader2 size={10} className="animate-spin" />
-                                              <span>Sending Email...</span>
+                                              <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                             </>
-                                          ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                          ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                             <>
                                               <CheckCircle2 size={10} />
-                                              <span>Update Email Sent ✓</span>
+                                              <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                             </>
                                           ) : (
                                             <>
@@ -2301,8 +2388,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                 )}
                               </div>
                               <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/40 text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                                <span className="truncate font-semibold text-indigo-700 dark:text-indigo-300">{vendor.majorCategory || 'General Industrial'}</span>
-                                <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
+                                <span className="truncate font-semibold text-indigo-700 dark:text-indigo-300">{vendor.majorCategory || UI_STRINGS.recordPlaceholders.notRecorded}</span>
+                                <span className="truncate">{vendor.city || vendor.state || vendor.location || UI_STRINGS.recordPlaceholders.notRecorded}</span>
                               </div>
                             </div>
                           ))}
@@ -2349,7 +2436,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   href="/buyer/subscription-center"
                   onClick={(e) => {
                     e.preventDefault();
-                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                     setIsUpgradeModalOpen(true);
                   }}
                   className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
@@ -2378,7 +2465,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}
         targetMode={upgradeModalTargetMode}
-        remainingCredits={remainingFreeRFQs}
+        remainingCredits={reportedBalance ?? undefined}
         onSwitchToMode0={() => {
           patchForm('sourcingMode', 'mode_0');
           setIsUpgradeModalOpen(false);

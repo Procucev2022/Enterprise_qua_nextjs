@@ -74,11 +74,11 @@ describe('Header', () => {
       activeSubscription: undefined,
       currentUserSession: {
         id: 'usr-1',
-        email: 'navinchaudhary.dev@gmail.com',
-        name: 'Navin Chaudhary',
+        email: 'buyer.one@example.com',
+        name: 'Test Buyer',
         role: 'buyer',
         orgId: 'org-1',
-        orgName: 'Navin Chaudhary Enterprises',
+        orgName: 'Test Buyer Enterprises',
         authMethod: 'PASSWORD',
       },
       setCurrentUserSession: mockSetCurrentUserSession,
@@ -212,18 +212,31 @@ describe('Header', () => {
     expect(screen.queryByTitle('Vendor Subscription Access Model')).not.toBeInTheDocument();
   });
 
-  it('renders sourcing credit card for buyer on free trial showing Total, Used, and Remaining', () => {
+  it('shows only the server-reported remaining sourcing credits for a buyer on the free trial', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       ...(storeModule.useApp as jest.Mock)(),
       currentRole: 'buyer',
       activeSubscription: 'free_trial',
-      remainingFreeRFQs: 5,
+      remainingFreeRFQs: 3,
     });
     render(<Header />);
     expect(screen.getByText('Sourcing Credits:')).toBeInTheDocument();
-    expect(screen.getByText('Total: 5')).toBeInTheDocument();
-    expect(screen.getByText('Used: 0')).toBeInTheDocument();
-    expect(screen.getByText('Remaining: 5')).toBeInTheDocument();
+    expect(screen.getByText('Remaining: 3')).toBeInTheDocument();
+    // The server does not report the allowance, so no total or used figure is shown.
+    expect(screen.queryByText(/^Total:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Used:/)).not.toBeInTheDocument();
+  });
+
+  it('shows a dash instead of a sourcing balance the server has not reported', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...(storeModule.useApp as jest.Mock)(),
+      currentRole: 'buyer',
+      activeSubscription: 'free_trial',
+      remainingFreeRFQs: null,
+    });
+    render(<Header />);
+    expect(screen.getByText(`Remaining: ${UI_STRINGS.headerNav.creditBalanceUnknown}`)).toBeInTheDocument();
+    expect(screen.queryByText('Remaining: 5')).not.toBeInTheDocument();
   });
 
   it('renders active plan badge when buyer is subscribed to a paid plan', () => {
@@ -256,11 +269,11 @@ describe('Header', () => {
     fireEvent.click(screen.getByTitle('Signed-in account details'));
 
     // Real values from the verified session record
-    expect(screen.getAllByText('Navin Chaudhary').length).toBeGreaterThan(0);
-    expect(screen.getByText('navinchaudhary.dev@gmail.com')).toBeInTheDocument();
+    expect(screen.getAllByText('Test Buyer').length).toBeGreaterThan(0);
+    expect(screen.getByText('buyer.one@example.com')).toBeInTheDocument();
     expect(screen.getByText('Password verified')).toBeInTheDocument();
     // Initials are derived from the real name
-    expect(screen.getAllByText('NC').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('TB').length).toBeGreaterThan(0);
 
     // The hardcoded demo identities and the switcher are gone
     expect(screen.queryByText('Switch Active User / Demo Persona')).not.toBeInTheDocument();
@@ -277,7 +290,7 @@ describe('Header', () => {
 
     fireEvent.click(screen.getByTitle('Signed-in account details'));
 
-    expect(screen.getAllByText('Navin Chaudhary Enterprises').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Test Buyer Enterprises').length).toBeGreaterThan(0);
     expect(screen.queryByText('Tata Motors')).not.toBeInTheDocument();
   });
 
@@ -287,15 +300,15 @@ describe('Header', () => {
       ...base,
       currentUserSession: { ...base.currentUserSession, orgName: '' },
       activeBuyerAccount: {
-        organizationName: 'Navin Chaudhary Enterprises',
-        corporateEmail: 'navinchaudhary.dev@gmail.com',
+        organizationName: 'Test Buyer Enterprises',
+        corporateEmail: 'buyer.one@example.com',
       },
     });
 
     render(<Header />);
     fireEvent.click(screen.getByTitle('Signed-in account details'));
 
-    expect(screen.getAllByText('Navin Chaudhary Enterprises').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Test Buyer Enterprises').length).toBeGreaterThan(0);
   });
 
   it('shows no organisation when neither the session nor a matching account has one', () => {
@@ -416,15 +429,15 @@ describe('Header session identity', () => {
     mountWith({
       currentUserSession: {
         id: 'u1',
-        email: 'navin@procucev.com',
-        name: 'Navin',
+        email: 'asha@example.com',
+        name: 'Asha',
         role: 'buyer',
         orgId: 'o1',
         orgName: 'Procucev',
       },
     });
 
-    expect(screen.getAllByText('NA').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('AS').length).toBeGreaterThan(0);
   });
 
   it('falls back to the login email when the account has no display name', () => {
@@ -472,7 +485,7 @@ describe('Header session identity', () => {
 
     fireEvent.click(screen.getByText(/Logout/i));
 
-    expect(addAuditLog).toHaveBeenCalledWith('User logged out of session', undefined, undefined);
+    expect(addAuditLog).toHaveBeenCalledWith('User logged out of session');
     expect(setIsLoggedIn).toHaveBeenCalledWith(false);
     expect(mockReplace).toHaveBeenCalled();
   });
@@ -575,14 +588,11 @@ describe('Header Session Timer and Auto Logout', () => {
     const timer = screen.getByTestId('header-session-timer');
     expect(timer).toBeInTheDocument();
     fireEvent.click(timer);
-    expect(mockShowToast).toHaveBeenCalledWith(
-      'Session Extended',
-      expect.stringContaining('3 hours'),
-      'info'
-    );
+    expect(screen.getByTestId('header-session-timer')).toHaveTextContent('03:00:00');
+    expect(mockShowToast).not.toHaveBeenCalled();
   });
 
-  it('allows user to click session timer to extend session by 30 minutes for admin role', () => {
+  it('resets the admin session countdown to 30 minutes on click, without a server-extension toast', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       isLoggedIn: true,
       currentRole: 'admin',
@@ -595,11 +605,9 @@ describe('Header Session Timer and Auto Logout', () => {
     render(<Header />);
     const timer = screen.getByTestId('header-session-timer');
     fireEvent.click(timer);
-    expect(mockShowToast).toHaveBeenCalledWith(
-      'Session Extended',
-      expect.stringMatching(/(5|30) minutes/),
-      'info'
-    );
+    expect(screen.getByTestId('header-session-timer')).toHaveTextContent('30:00');
+    // No server call backs the extension, so no "extended" claim is shown.
+    expect(mockShowToast).not.toHaveBeenCalled();
   });
 
   it('triggers auto logout when session timer expires', () => {
@@ -734,19 +742,16 @@ describe('Header Session Timer and Auto Logout', () => {
     timer = screen.getByTestId('header-session-timer');
     expect(timer.className).toContain('text-rose');
 
-    // Keydown on timer (Enter, Space, other key)
+    // Enter resets the category manager countdown to 3 hours; no toast claims a server extension.
     fireEvent.keyDown(timer, { key: 'Enter' });
-    expect(mockShowToast).toHaveBeenCalledWith(
-      'Session Extended',
-      expect.stringMatching(/(5|30) minutes|3 hours/),
-      'info'
-    );
+    expect(screen.getByTestId('header-session-timer')).toHaveTextContent('03:00:00');
+    expect(mockShowToast).not.toHaveBeenCalled();
 
     fireEvent.keyDown(timer, { key: ' ' });
-    expect(mockShowToast).toHaveBeenCalledTimes(2);
+    expect(mockShowToast).not.toHaveBeenCalled();
 
     fireEvent.keyDown(timer, { key: 'Tab' });
-    expect(mockShowToast).toHaveBeenCalledTimes(2);
+    expect(mockShowToast).not.toHaveBeenCalled();
 
     // Auto logout where logout rejects to cover catch callback (func 13)
     (authClient.logout as jest.Mock).mockRejectedValueOnce(new Error('Logout network error'));

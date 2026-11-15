@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { findMajorForMinor, getMinorCategories, getDefaultCategoryTaxonomy } from '@/lib/categoryTaxonomy';
+import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   ShieldCheck,
@@ -28,17 +28,17 @@ import {
   X,
   KeyRound,
   Lock,
+  Eye,
+  Trash2,
 } from 'lucide-react';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
-import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan } from '@/lib/validationSchemas';
 
 export default function VendorProfilePage() {
   const {
     addAuditLog,
     showToast,
     vendorSubscription,
-    completeVendorProfile,
-    clientMappedCategories,
     vendorSelectedCategories,
     saveVendorProfileCategories,
     currentUserSession,
@@ -50,17 +50,21 @@ export default function VendorProfilePage() {
 
   const MAX_CATEGORIES = 10;
 
+  // Loads the category master once. The store function is recreated on every render, so
+  // listing it as a dependency would refetch on each render while the request fails.
   useEffect(() => {
     if (typeof ensureCategoryTaxonomy === 'function') {
       void ensureCategoryTaxonomy();
     }
-  }, [ensureCategoryTaxonomy]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Vendor Organization State — starts blank; populated from the authenticated
   // vendor's own backend record once it loads (see the profile-load effect below).
+  // Nothing is pre-selected for the vendor: an unset constitution is saved as unset.
   const [companyName, setCompanyName] = useState('');
   const [brandName, setBrandName] = useState('');
-  const [orgType, setOrgType] = useState<'Private Limited' | 'Public Limited' | 'Partnership' | 'Sole Proprietorship' | 'LLP'>('Private Limited');
+  const [orgType, setOrgType] = useState<'' | 'Private Limited' | 'Public Limited' | 'Partnership' | 'Sole Proprietorship' | 'LLP'>('');
   const [panNumber, setPanNumber] = useState('');
   const [gstNumber, setGstNumber] = useState('');
   const [msmeNumber, setMsmeNumber] = useState('');
@@ -130,7 +134,7 @@ export default function VendorProfilePage() {
       setPincodePostOffices([]);
     }
   }, [pincode]);
-  const [country, setCountry] = useState('India');
+  const [country, setCountry] = useState('');
 
   // Contact Person State. Email is the vendor's own login identity (see the
   // read-only field below) — it's what the backend uses to find this vendor's
@@ -152,14 +156,32 @@ export default function VendorProfilePage() {
   const [loadedClientCats, setLoadedClientCats] = useState<string[]>([]);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  // Set when the saved profile could not be read. The form then stays blocked, because
+  // saving a blank form would create a second vendor record instead of updating this one.
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
 
   const CUSTOM_CATEGORY_GROUP = UI_STRINGS.vendorProfile.customCategoryGroup;
   const [customCategoryInput, setCustomCategoryInput] = useState('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
+  const [viewCategory, setViewCategory] = useState<{ name: string; major: string; status: string } | null>(null);
+  const categorySearchContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (categorySearchContainerRef.current && !categorySearchContainerRef.current.contains(event.target as Node)) {
+        setShowCategorySuggestions(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Groups a flat list of minor category names (as persisted by the backend)
   // back into the major->minor shape this screen's selector state uses.
   // Preserves unknown or custom categories under the custom categories group.
-  const groupMinorCategories = (flat: string[]) => {
+  const groupMinorCategories = useCallback((flat: string[]) => {
     const majors: string[] = [];
     const minorMap: Record<string, string[]> = {};
     flat.forEach((minorName) => {
@@ -175,7 +197,7 @@ export default function VendorProfilePage() {
       }
     });
     return { majors, minorMap };
-  };
+  }, [CUSTOM_CATEGORY_GROUP]);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,6 +208,7 @@ export default function VendorProfilePage() {
         setIsLoadingProfile(false);
         return;
       }
+      setProfileLoadError(null);
       try {
         const token = authClient.getToken();
         const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
@@ -197,14 +220,22 @@ export default function VendorProfilePage() {
           return;
         }
         const data = await res.json();
-        if (cancelled || !res.ok || !data.success || !data.data) return;
+        if (cancelled) return;
+        if (!res.ok || !data.success || !data.data) {
+          setProfileLoadError(
+            typeof data?.error === 'string' && data.error
+              ? data.error
+              : `Your supplier profile could not be loaded (server responded with HTTP ${res.status}).`
+          );
+          return;
+        }
 
         const v = data.data;
         setVendorRecordId(v.id);
         setCompanyName(v.name || '');
         setBrandName(v.brandName || '');
         if (v.orgType) setOrgType(v.orgType);
-        setPanNumber(v.pan || '');
+        setPanNumber(usablePan(v.pan || v.panNumber) || '');
         setGstNumber(v.gst || v.gstin || '');
         setMsmeNumber(v.msme || '');
         setWebsite(v.website || '');
@@ -213,7 +244,7 @@ export default function VendorProfilePage() {
         setCity(v.city || '');
         setState(v.state || '');
         setPincode(v.pincode || '');
-        setCountry(v.country || 'India');
+        setCountry(v.country || '');
         setContactName(v.contactPerson || '');
         setContactDesignation(v.contactDesignation || '');
         setContactEmail(email);
@@ -225,9 +256,12 @@ export default function VendorProfilePage() {
         setSelectedMinor(minorMap);
         setExpandedMajor(Object.fromEntries(majors.map((m) => [m, true])));
       } catch {
-        // Network failure loading the profile: leave the form blank rather
-        // than showing fabricated placeholder data for the wrong vendor.
-        if (!cancelled) setContactEmail(email);
+        // Network failure: the form stays blank and the error is shown above it, so a
+        // blank form is never read as a profile that does not exist yet.
+        if (!cancelled) {
+          setContactEmail(email);
+          setProfileLoadError('Your supplier profile could not be reached. Check your connection and reload this page.');
+        }
       } finally {
         if (!cancelled) setIsLoadingProfile(false);
       }
@@ -237,13 +271,13 @@ export default function VendorProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [currentUserSession?.email]);
+  }, [currentUserSession?.email, groupMinorCategories]);
 
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
 
   // PAN Validation Helper
-  const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
+  const isPanValid = (pan: string) => Boolean(usablePan(pan));
   // GST Validation Helper
   const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
 
@@ -455,8 +489,32 @@ export default function VendorProfilePage() {
     });
   };
 
-  // Base taxonomy from backend, or standard default fixture if backend table has 0 rows
-  const displayTaxonomy = categoryTaxonomy.length > 0 ? categoryTaxonomy : getDefaultCategoryTaxonomy();
+  // Collect all available categories across taxonomy for autocomplete search
+  const allAvailableCategories = React.useMemo(() => {
+    const list: { name: string; major: string }[] = [];
+    (categoryTaxonomy || []).forEach((c) => {
+      if (c.majorCategory && !list.some((item) => item.name.toLowerCase() === c.majorCategory.toLowerCase())) {
+        list.push({ name: c.majorCategory, major: c.majorCategory });
+      }
+      (c.minorCategories || []).forEach((m) => {
+        if (m && !list.some((item) => item.name.toLowerCase() === m.toLowerCase())) {
+          list.push({ name: m, major: c.majorCategory });
+        }
+      });
+    });
+    return list;
+  }, [categoryTaxonomy]);
+
+  const filteredCategorySuggestions = React.useMemo(() => {
+    const q = customCategoryInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableCategories.filter(
+      (item) => item.name.toLowerCase().includes(q) || item.major.toLowerCase().includes(q)
+    );
+  }, [customCategoryInput, allAvailableCategories]);
+
+  // The category master as the database returned it. Empty while loading or after a failure.
+  const displayTaxonomy = categoryTaxonomy;
 
   // Include custom categories in the active taxonomy list under 'Other'
   const customMinors = selectedMinor[CUSTOM_CATEGORY_GROUP] || [];
@@ -487,16 +545,9 @@ export default function VendorProfilePage() {
     return matchesMajor || matchesMinor;
   });
 
-  // Reconciled Dual Stream Categories — prefer this vendor's own backend
-  // record over the shared client-side store fallback (which isn't scoped
-  // to a specific vendor and only reflects whichever profile was last saved
-  // in this browser session).
-  const clientCats =
-    loadedClientCats.length > 0
-      ? loadedClientCats
-      : clientMappedCategories && clientMappedCategories.length > 0
-      ? clientMappedCategories
-      : ['Bearings & Accessories', 'Pumps & Accessories'];
+  // Buyer-mapped categories come only from this vendor's own backend record. The shared store
+  // copy is not scoped to a vendor, so it is never substituted here.
+  const clientCats: string[] = loadedClientCats;
   const flatSelectedCategories = Object.values(selectedMinor).flat();
   const clientLower = clientCats.map((c: string) => c.toLowerCase().trim());
   const vendorLower = flatSelectedCategories.map((c) => c.toLowerCase().trim());
@@ -509,11 +560,15 @@ export default function VendorProfilePage() {
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!companyName.trim() || !panNumber.trim() || !gstNumber.trim()) {
-      showToast('Validation Error', 'Company Name, PAN, and GSTIN are required.', 'warning');
+      showToast(UI_STRINGS.vendorProfile.validationErrorTitle, UI_STRINGS.vendorProfile.panRequiredToastMessage, 'warning');
+      return;
+    }
+    if (isDummyPan(panNumber)) {
+      showToast(UI_STRINGS.vendorProfile.validationErrorTitle, UI_STRINGS.vendorProfile.panDummyRejectedMessage, 'warning');
       return;
     }
     if (!isPanValid(panNumber)) {
-      showToast('Validation Error', 'PAN number format is invalid (expected e.g. AAACA9876K).', 'warning');
+      showToast(UI_STRINGS.vendorProfile.validationErrorTitle, UI_STRINGS.vendorProfile.panInvalidToastMessage, 'warning');
       return;
     }
     if (!isGstValid(gstNumber)) {
@@ -544,8 +599,9 @@ export default function VendorProfilePage() {
       const profilePayload = {
         name: companyName,
         brandName,
-        orgType,
-        pan: panNumber,
+        // Omitted (not sent as an empty string) when the vendor has not chosen one.
+        orgType: orgType || undefined,
+        pan: usablePan(panNumber) || panNumber.trim().toUpperCase(),
         gst: gstNumber,
         msme: msmeNumber,
         website,
@@ -609,8 +665,12 @@ export default function VendorProfilePage() {
       }
       addAuditLog(`Updated Vendor Supplier Profile & Manufacturing Capabilities for ${companyName}`);
       showToast('Profile Saved', 'Supplier details and manufacturing categories updated successfully.', 'success');
-    } catch (err: any) {
-      showToast('Save Failed', err?.message || 'Could not save the supplier profile. Please try again.', 'warning');
+    } catch (err: unknown) {
+      showToast(
+        'Save Failed',
+        err instanceof Error && err.message ? err.message : 'Could not save the supplier profile. Please try again.',
+        'warning'
+      );
     } finally {
       setIsSaving(false);
     }
@@ -637,7 +697,7 @@ export default function VendorProfilePage() {
           </a>
           <button
             onClick={handleSaveProfile}
-            disabled={isLoadingProfile || isSaving}
+            disabled={isLoadingProfile || isSaving || Boolean(profileLoadError)}
             className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <Save size={16} /> {isSaving ? 'Saving...' : 'Save Supplier Profile'}
@@ -649,6 +709,12 @@ export default function VendorProfilePage() {
         <p className="text-xs text-slate-500 dark:text-gray-400 -mt-2">Loading your supplier profile…</p>
       )}
 
+      {profileLoadError && (
+        <p role="alert" className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-xs font-semibold text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {profileLoadError}
+        </p>
+      )}
+
       <form onSubmit={handleSaveProfile} className="space-y-6">
         {/* Section 1: Legal Entity & Tax Compliance */}
         <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
@@ -656,9 +722,7 @@ export default function VendorProfilePage() {
             <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
               <ShieldCheck className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 1: Supplier Tax & Business Details
             </h2>
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
-              <CheckCircle2 size={12} /> Verified Vendor
-            </span>
+
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -696,9 +760,10 @@ export default function VendorProfilePage() {
               </label>
               <select
                 value={orgType}
-                onChange={(e) => setOrgType(e.target.value as any)}
+                onChange={(e) => setOrgType(e.target.value as typeof orgType)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
               >
+                <option value="" disabled>—</option>
                 <option value="Private Limited">Private Limited Company</option>
                 <option value="Public Limited">Public Limited Company</option>
                 <option value="LLP">Limited Liability Partnership (LLP)</option>
@@ -713,11 +778,21 @@ export default function VendorProfilePage() {
                 <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
                   PAN Number *
                 </label>
-                {isPanValid(panNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
-                ) : (
-                  <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
-                )}
+                {panNumber.trim() ? (
+                  isPanValid(panNumber) ? (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                      {UI_STRINGS.vendorProfile.panValidFormat}
+                    </span>
+                  ) : isDummyPan(panNumber) ? (
+                    <span className="text-[10px] font-bold text-rose-500">
+                      {UI_STRINGS.vendorProfile.panPlaceholderBadge}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-rose-500">
+                      {UI_STRINGS.vendorProfile.panInvalidBadge}
+                    </span>
+                  )
+                ) : null}
               </div>
               <input
                 type="text"
@@ -725,8 +800,19 @@ export default function VendorProfilePage() {
                 onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
                 maxLength={10}
                 required
+                placeholder={UI_STRINGS.vendorProfile.panPlaceholderHint}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
               />
+              {panNumber.trim() && isDummyPan(panNumber) && (
+                <p className="text-[10px] text-rose-500 font-medium mt-1">
+                  {UI_STRINGS.vendorProfile.panDummyRejectedMessage}
+                </p>
+              )}
+              {panNumber.trim() && !isDummyPan(panNumber) && !isPanValid(panNumber) && (
+                <p className="text-[10px] text-rose-500 font-medium mt-1">
+                  {UI_STRINGS.vendorProfile.panInvalidFormatMessage}
+                </p>
+              )}
             </div>
 
             {/* GST Number */}
@@ -736,7 +822,7 @@ export default function VendorProfilePage() {
                   GSTIN / GST Number *
                 </label>
                 {isGstValid(gstNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ State 27 Verified</span>
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid format</span>
                 ) : (
                   <span className="text-[10px] font-bold text-rose-500">Invalid GSTIN</span>
                 )}
@@ -749,6 +835,11 @@ export default function VendorProfilePage() {
                 required
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
               />
+              {gstNumber.trim() && !isGstValid(gstNumber) && (
+                <p className="text-[10px] text-rose-500 font-medium mt-1">
+                  Invalid GSTIN format (15 characters alphanumeric, e.g. 29AAAAA0000A1Z5)
+                </p>
+              )}
             </div>
 
             {/* MSME / Udyam Number */}
@@ -935,9 +1026,6 @@ export default function VendorProfilePage() {
                 <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
                   <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Dual-Stream Category Reconciliation &amp; Taxonomy (Max 10 Categories)
                 </h2>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
-                  Backend Dual-Stream Active
-                </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
                 Manage your self-selected supply capabilities (up to 10 categories). The system reconciles buyer-mapped categories and routes RFQs across both streams.
@@ -999,11 +1087,11 @@ export default function VendorProfilePage() {
                   )}
                 </div>
                 <p className="text-[9.5px] text-slate-400">
-                  Extracted from historical buyer pre-purchase orders &amp; master records (Larsen &amp; Toubro).
+                  Extracted from historical buyer pre-purchase orders &amp; master records.
                 </p>
               </div>
 
-              {/* Card 2: Vendor Profile Self-Selected Categories */}
+              {/* Card 2: Vendor Profile Self-Selected Categories (Table Format) */}
               <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
@@ -1013,42 +1101,91 @@ export default function VendorProfilePage() {
                     {flatSelectedCategories.length} / {MAX_CATEGORIES} Selected
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-1.5 min-h-[36px]">
-                  {flatSelectedCategories.length > 0 ? (
-                    flatSelectedCategories.map((c) => {
-                      const isCommon = commonCategories.includes(c);
-                      return (
-                        <span
-                          key={c}
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold flex items-center gap-1.5 ${
-                            isCommon
-                              ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200'
-                              : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200'
-                          }`}
-                        >
-                          {isCommon && <span className="text-[9px]">✓</span>}
-                          <span>{c}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCategory(c)}
-                            className="text-slate-400 hover:text-rose-500 font-bold leading-none cursor-pointer p-0.5 rounded hover:bg-slate-200/50 dark:hover:bg-gray-800"
-                            title={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
-                            aria-label={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
-                          >
-                            <X size={11} />
-                          </button>
-                        </span>
-                      );
-                    })
-                  ) : (
-                    <span className="text-[10px] text-slate-400 italic">
-                      {UI_STRINGS.vendorProfile.noCategoriesSelected}
-                    </span>
-                  )}
+
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-gray-900/60 shadow-xs">
+                  <div className="overflow-x-auto max-h-72">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] font-bold border-b border-slate-200 dark:border-gray-800 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left w-10">#</th>
+                          <th className="px-3 py-2 text-left">Category / Capability Name</th>
+                          <th className="px-3 py-2 text-left">Major Category</th>
+                          <th className="px-3 py-2 text-center">Status</th>
+                          <th className="px-3 py-2 text-right w-32">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800 text-[11px]">
+                        {flatSelectedCategories.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-6 text-center text-slate-400 text-xs">
+                              {UI_STRINGS.vendorProfile.noCategoriesSelected}
+                            </td>
+                          </tr>
+                        ) : (
+                          flatSelectedCategories.map((c, idx) => {
+                            const majorName = findMajorForMinor(c) || CUSTOM_CATEGORY_GROUP;
+                            const isClientMapped = clientCats.some((cc) => cc.toLowerCase() === c.toLowerCase());
+                            const isDualAligned = isClientMapped;
+
+                            return (
+                              <tr key={c} className="hover:bg-slate-50/70 dark:hover:bg-gray-850/40 transition-colors">
+                                <td className="px-3 py-2 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                <td className="px-3 py-2 font-bold text-slate-900 dark:text-white">
+                                  {c}
+                                </td>
+                                <td className="px-3 py-2 text-slate-500 dark:text-gray-400 font-medium">
+                                  Domain: {majorName}
+                                </td>
+                                <td className="px-3 py-2 text-center whitespace-nowrap">
+                                  {isDualAligned ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200">
+                                      ✓ Dual Aligned
+                                    </span>
+                                  ) : isClientMapped ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-400 border border-indigo-200">
+                                      Buyer-Empanelled
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200">
+                                      Self-Selected
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap">
+                                  <div className="flex justify-end items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setViewCategory({
+                                          name: c,
+                                          major: majorName,
+                                          status: isDualAligned ? 'Dual Aligned (Buyer & Vendor)' : isClientMapped ? 'Buyer-Empanelled' : 'Self-Selected',
+                                        })
+                                      }
+                                      className="btn btn-secondary btn-xs font-semibold inline-flex items-center gap-1"
+                                      title={`View details for ${c}`}
+                                    >
+                                      <Eye size={11} /> View
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveCategory(c)}
+                                      className="btn btn-ghost btn-xs text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/60 inline-flex items-center gap-1 cursor-pointer"
+                                      title={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
+                                      aria-label={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
+                                    >
+                                      <Trash2 size={11} /> Remove
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-                <p className="text-[9.5px] text-slate-400">
-                  Selected directly by vendor. Chips with ✓ indicate common match with buyer roster. Click × on any chip to remove it.
-                </p>
               </div>
             </div>
 
@@ -1097,25 +1234,78 @@ export default function VendorProfilePage() {
             <p className="text-[11px] text-slate-600 dark:text-gray-300 leading-relaxed">
               {UI_STRINGS.vendorProfile.customCategoriesDesc}
             </p>
-            <div className="flex flex-col sm:flex-row gap-2 pt-1">
-              <input
-                type="text"
-                value={customCategoryInput}
-                onChange={(e) => setCustomCategoryInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleAddCustomCategory();
-                  }
-                }}
-                placeholder={UI_STRINGS.vendorProfile.customCategoryPlaceholder}
-                className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-white dark:bg-gray-900 text-slate-900 dark:text-white placeholder:text-slate-400"
-              />
+            <div className="relative flex flex-col sm:flex-row gap-2 pt-1" ref={categorySearchContainerRef}>
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={customCategoryInput}
+                  onChange={(e) => {
+                    setCustomCategoryInput(e.target.value);
+                    setShowCategorySuggestions(true);
+                  }}
+                  onFocus={() => {
+                    if (customCategoryInput.trim().length >= 3) {
+                      setShowCategorySuggestions(true);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddCustomCategory();
+                    } else if (e.key === 'Escape') {
+                      setShowCategorySuggestions(false);
+                    }
+                  }}
+                  placeholder={UI_STRINGS.vendorProfile.customCategoryPlaceholder}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-white dark:bg-gray-900 text-slate-900 dark:text-white placeholder:text-slate-400"
+                />
+                {customCategoryInput.trim().length > 0 && customCategoryInput.trim().length < 3 && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
+                    Type at least 3 characters to search master categories
+                  </p>
+                )}
+                {showCategorySuggestions && customCategoryInput.trim().length >= 3 && (
+                  <div
+                    role="listbox"
+                    className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-2xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                  >
+                    <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                      <span>Matching Categories ({filteredCategorySuggestions.length})</span>
+                      <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">Taxonomy Master</span>
+                    </div>
+                    {filteredCategorySuggestions.length > 0 ? (
+                      filteredCategorySuggestions.map((item) => (
+                        <button
+                          key={`${item.major}-${item.name}`}
+                          type="button"
+                          role="option"
+                          aria-selected={customCategoryInput === item.name}
+                          onClick={() => {
+                            setCustomCategoryInput(item.name);
+                            setShowCategorySuggestions(false);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors"
+                        >
+                          <span className="font-semibold text-slate-800 dark:text-white">{item.name}</span>
+                          <span className="text-[10px] text-slate-400 italic">{item.major}</span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="p-3 text-center space-y-1">
+                        <p className="text-xs text-slate-500 dark:text-gray-400">No matching master categories found</p>
+                        <p className="text-[11px] text-indigo-600 dark:text-indigo-400">
+                          Click &quot;+ Add Category&quot; to add &quot;{customCategoryInput.trim()}&quot; as custom capability
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={handleAddCustomCategory}
                 disabled={!customCategoryInput.trim()}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-xs whitespace-nowrap"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-xs whitespace-nowrap self-start"
               >
                 <Plus size={14} />
                 <span>{UI_STRINGS.vendorProfile.addCategoryButton}</span>
@@ -1137,9 +1327,14 @@ export default function VendorProfilePage() {
 
           {/* Categories Selector Grid */}
           <div className="space-y-3 pt-1">
-            {filteredCategories.length === 0 && (
-              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+            {categoryTaxonomy.length === 0 && (
+              <p role="alert" className="text-xs font-semibold text-amber-700 dark:text-amber-400">
                 {categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty}
+              </p>
+            )}
+            {categoryTaxonomy.length > 0 && filteredCategories.length === 0 && (
+              <p className="text-xs font-semibold text-slate-500 dark:text-gray-400">
+                No supply categories match your search.
               </p>
             )}
             {filteredCategories.map((cat) => {
@@ -1244,7 +1439,7 @@ export default function VendorProfilePage() {
         <div className="flex justify-end pt-2">
           <button
             type="submit"
-            disabled={isLoadingProfile || isSaving}
+            disabled={isLoadingProfile || isSaving || Boolean(profileLoadError)}
             className="btn btn-emerald btn-lg shadow-xl shadow-emerald-600/20 font-bold flex items-center gap-2 px-8 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <Save size={18} /> {isSaving ? 'Saving...' : 'Save & Reconcile Vendor Profile'}
@@ -1275,6 +1470,50 @@ export default function VendorProfilePage() {
 
         <AccountSecurityPanel />
       </div>
+
+      {/* Category View Modal */}
+      {viewCategory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Category Details</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewCategory(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-gray-200"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Category Name</span>
+                <p className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">{viewCategory.name}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Major Category</span>
+                <p className="font-semibold text-slate-700 dark:text-gray-300 mt-0.5">{viewCategory.major}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Alignment Status</span>
+                <p className="font-semibold text-slate-700 dark:text-gray-300 mt-0.5">{viewCategory.status}</p>
+              </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setViewCategory(null)}
+                className="btn btn-secondary btn-sm px-4"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

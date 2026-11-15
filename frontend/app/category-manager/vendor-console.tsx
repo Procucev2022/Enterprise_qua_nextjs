@@ -67,13 +67,28 @@ export type VendorSectionId = 'cm_procucev' | 'self_onboard_buyer';
 
 export interface VendorSourceClassification {
   section: VendorSectionId;
-  subType: 'cm_upload' | 'procucev_network' | 'self_onboarded' | 'buyer_added';
+  subType: 'cm_upload' | 'procucev_network' | 'self_onboarded' | 'buyer_added' | 'source_not_recorded';
   label: string;
   shortLabel: string;
   badgeClass: string;
-  icon: 'shield' | 'upload' | 'zap' | 'building';
+  icon: 'shield' | 'upload' | 'zap' | 'building' | 'none';
   description: string;
 }
+
+// Shown when the vendor record does not say how the vendor was added. Such a
+// vendor is not labelled as a Procucev network member.
+const SOURCE_NOT_RECORDED: VendorSourceClassification = {
+  section: 'cm_procucev',
+  subType: 'source_not_recorded',
+  label: 'Source not recorded',
+  shortLabel: 'Source not recorded',
+  badgeClass: 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border-slate-200 dark:border-gray-700',
+  icon: 'none',
+  description: 'The vendor record does not state how this vendor was added',
+};
+
+// Shown wherever a value is not recorded on the vendor record or its quotes.
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 /**
  * Classifies a vendor into Section 1 (Category Manager uploaded / Procucev Network)
@@ -87,15 +102,7 @@ export function classifyVendorSource(v: {
   buyerAccountId?: string;
 }): VendorSourceClassification {
   if (!v) {
-    return {
-      section: 'cm_procucev',
-      subType: 'procucev_network',
-      label: 'Procucev Network',
-      shortLabel: 'Procucev Network',
-      badgeClass: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200/60 dark:border-emerald-800/60',
-      icon: 'shield',
-      description: 'Verified Procucev platform supplier network',
-    };
+    return SOURCE_NOT_RECORDED;
   }
 
   const s = String(v.source || '').toLowerCase().trim();
@@ -133,7 +140,6 @@ export function classifyVendorSource(v: {
       s.includes('ingestion') ||
       s.includes('purchase_dump') ||
       id.startsWith('v-hist-') ||
-      id.startsWith('v-navin-') ||
       id.startsWith('vm-') ||
       id.startsWith('v-ingest-') ||
       id.startsWith('v-buyer-')) &&
@@ -171,31 +177,32 @@ export function classifyVendorSource(v: {
     };
   }
 
-  return {
-    section: 'cm_procucev',
-    subType: 'procucev_network',
-    label: 'Procucev Network',
-    shortLabel: 'Procucev Network',
-    badgeClass: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200/60 dark:border-emerald-800/60',
-    icon: 'shield',
-    description: 'Verified Procucev platform supplier network',
-  };
+  if (s === 'procucev_network' || s.includes('procucev')) {
+    return {
+      section: 'cm_procucev',
+      subType: 'procucev_network',
+      label: 'Procucev Network',
+      shortLabel: 'Procucev Network',
+      badgeClass: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200/60 dark:border-emerald-800/60',
+      icon: 'shield',
+      description: 'Procucev platform supplier network',
+    };
+  }
+
+  return SOURCE_NOT_RECORDED;
 }
 
-export const isProcucevNetworkVendor = (v: any): boolean => {
+export const isProcucevNetworkVendor = (v: Parameters<typeof classifyVendorSource>[0]): boolean => {
   return classifyVendorSource(v).section === 'cm_procucev';
 };
 
-export const isBuyerOrSelfOnboardedVendor = (v: any): boolean => {
+export const isBuyerOrSelfOnboardedVendor = (v: Parameters<typeof classifyVendorSource>[0]): boolean => {
   return classifyVendorSource(v).section === 'self_onboard_buyer';
 };
 
-// Fetched a page at a time straight from the real vendor directory (which
-// reached 80k+ rows via a bulk Vendor Master import) — the bootstrap payload
-// this screen used to read from is capped at 500, so it silently hid the
-// vast majority of real vendors. Same pagination pattern as the Invite
-// Vendors modal (see InviteVendorsModal.tsx), including the same
-// "aggregate metrics only cover loaded pages" caveat.
+// Vendors are fetched one page at a time from the vendor directory API, so the
+// list is not limited to the bootstrap payload. Aggregate metrics cover only
+// the pages loaded so far, as in InviteVendorsModal.tsx.
 const VENDOR_CARDS_PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 350;
 
@@ -350,18 +357,18 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
 
       const awardedSpend = rfqs
         .filter((r) => r.status === 'PO Generated' && r.awardedVendor === vendor.name)
-        .reduce((sum, r) => sum + (r.awardedAmount as number), 0);
+        .reduce((sum, r) => sum + (Number(r.awardedAmount) || 0), 0);
 
       const style = avatarStyleFor(vendor.name || '?');
       const classification = classifyVendorSource(vendor);
 
       return {
         id: vendor.id,
-        name: vendor.contactPerson || vendor.name || 'Unnamed Vendor',
-        contactPerson: vendor.contactPerson || vendor.name || 'Unnamed Vendor',
+        name: vendor.contactPerson || vendor.name || EMPTY_VALUE,
+        contactPerson: vendor.contactPerson || vendor.name || EMPTY_VALUE,
         email: vendor.email || '',
         phone: vendor.phone || '',
-        company: vendor.name || 'Unnamed Vendor',
+        company: vendor.name || EMPTY_VALUE,
         logoLetter: (vendor.name || '?').charAt(0).toUpperCase(),
         logoBg: style.bg,
         avatarColor: style.avatar,
@@ -493,7 +500,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
 
                 {/* Rating badge */}
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/40 flex items-center gap-0.5 shrink-0 ml-auto sm:ml-0">
-                  ⭐ {v.rating}
+                  ⭐ {v.rating ?? EMPTY_VALUE}
                 </span>
               </div>
 
@@ -513,7 +520,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 )}
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-500 dark:text-gray-400">
                   <span className="flex items-center gap-0.5 truncate max-w-[200px]" title={v.email || undefined}>
-                    <Mail size={10} className="text-indigo-500 shrink-0" /> {v.email || 'No Email'}
+                    <Mail size={10} className="text-indigo-500 shrink-0" /> {v.email || EMPTY_VALUE}
                   </span>
                   {v.phone ? (
                     <>
@@ -870,7 +877,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                     </span>
 
                     <span className="mono font-bold text-slate-900 dark:text-white text-[11px]">
-                      Compliance: {v.complianceRate === null ? '—' : `${v.complianceRate}%`} · Lead: {v.leadTimeDays === null ? '—' : `${v.leadTimeDays}d`} · Rating: ⭐ {v.rating}
+                      Compliance: {v.complianceRate === null ? EMPTY_VALUE : `${v.complianceRate}%`} · Lead: {v.leadTimeDays === null ? EMPTY_VALUE : `${v.leadTimeDays}d`} · Rating: ⭐ {v.rating ?? EMPTY_VALUE}
                     </span>
                   </div>
 
@@ -890,7 +897,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                           {v.email}
                         </a>
                       ) : (
-                        <span className="text-slate-400 dark:text-gray-500 italic">N/A</span>
+                        <span className="text-slate-400 dark:text-gray-500 italic">{EMPTY_VALUE}</span>
                       )}
                     </span>
                     <span className="text-slate-300 dark:text-gray-700">•</span>
@@ -902,7 +909,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                           {v.phone}
                         </a>
                       ) : (
-                        <span className="text-slate-400 dark:text-gray-500 italic">N/A</span>
+                        <span className="text-slate-400 dark:text-gray-500 italic">{EMPTY_VALUE}</span>
                       )}
                     </span>
                   </div>
@@ -1155,7 +1162,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200/80 dark:border-gray-800 text-xs">
                 <div>
                   <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Overall Rating</div>
-                  <div className="font-black text-slate-900 dark:text-white text-xs mt-0.5">⭐ {selectedVendor.rating}</div>
+                  <div className="font-black text-slate-900 dark:text-white text-xs mt-0.5">⭐ {selectedVendor.rating ?? EMPTY_VALUE}</div>
                 </div>
                 <div>
                   <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Awarded Spend</div>
@@ -1179,11 +1186,11 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 </div>
                 <div className="flex items-center gap-2">
                   <Mail size={14} className="text-indigo-500 shrink-0" />
-                  <span className="truncate">Email: <strong className="text-slate-900 dark:text-white">{selectedVendor.email || 'N/A'}</strong></span>
+                  <span className="truncate">Email: <strong className="text-slate-900 dark:text-white">{selectedVendor.email || EMPTY_VALUE}</strong></span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Phone size={14} className="text-indigo-500 shrink-0" />
-                  <span className="truncate">Phone: <strong className="text-slate-900 dark:text-white">{selectedVendor.phone || 'N/A'}</strong></span>
+                  <span className="truncate">Phone: <strong className="text-slate-900 dark:text-white">{selectedVendor.phone || EMPTY_VALUE}</strong></span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Tag size={14} className="text-indigo-500 shrink-0" />
@@ -1208,7 +1215,8 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                   <div className="space-y-3">
                     {selectedVendor.rfqsList.map((rfq) => {
                       const isQuoteExpanded = expandedQuoteNumber === rfq.rfqNumber;
-                      const matchingQuote = rfq.quotes.find((q) => q.vendorId === selectedVendor.id)!;
+                      const matchingQuote = rfq.quotes.find((q) => q.vendorId === selectedVendor.id);
+                      if (!matchingQuote) return null;
 
                       return (
                         <div
@@ -1270,7 +1278,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                                     </div>
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">Payment Terms:</span>
-                                      <span className="font-bold text-slate-800 dark:text-white">{matchingQuote.paymentTerms}</span>
+                                      <span className="font-bold text-slate-800 dark:text-white">{matchingQuote.paymentTerms || EMPTY_VALUE}</span>
                                     </div>
                                   </div>
                                 </div>
@@ -1278,7 +1286,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                                 <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-250/60 dark:border-gray-850 space-y-2">
                                   <h4 className="text-[10px] font-bold uppercase text-slate-450 dark:text-gray-500 tracking-wider">Remarks & Compliance Audit</h4>
                                   <p className="text-slate-650 dark:text-gray-300 text-[11px] leading-relaxed">
-                                    {matchingQuote.remarks}
+                                    {matchingQuote.remarks || EMPTY_VALUE}
                                   </p>
                                 </div>
                               </div>

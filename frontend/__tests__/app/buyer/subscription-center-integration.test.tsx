@@ -24,10 +24,33 @@ const ACTIVE_ACCOUNT = {
   remainingFreeRFQs: 3,
 };
 
+const PRICING_RESPONSE = {
+  gstPercent: 18,
+  gstRate: 0.18,
+  buyer: {
+    version_1: {
+      '6_months': { price: 5499, baseDurationPrice: 32994, gstAmount: 5938.92, totalWithGst: 38932.92 },
+      '12_months': { price: 4999, baseDurationPrice: 59988, gstAmount: 10797.84, totalWithGst: 70785.84 },
+    },
+    version_2: {
+      '6_months': { price: 7999, baseDurationPrice: 47994, gstAmount: 8638.92, totalWithGst: 56632.92 },
+      '12_months': { price: 7499, baseDurationPrice: 89988, gstAmount: 16197.84, totalWithGst: 106185.84 },
+    },
+    version_3: {
+      '6_months': { price: 10499, baseDurationPrice: 62994, gstAmount: 11338.92, totalWithGst: 74332.92 },
+      '12_months': { price: 9999, baseDurationPrice: 119988, gstAmount: 21597.84, totalWithGst: 141585.84 },
+    },
+  },
+  seller: {},
+};
+
 function mockFetchImpl(url: string, options: any = {}) {
   const method = options.method || 'GET';
   if (/\/api\/bootstrap/.test(url)) {
     return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { vendors: [] } }) });
+  }
+  if (/\/api\/subscriptions\/pricing$/.test(url)) {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: PRICING_RESPONSE }) });
   }
   if (/\/api\/buyer-accounts\/active$/.test(url)) {
     return Promise.resolve({ ok: true, json: async () => ({ success: true, data: ACTIVE_ACCOUNT }) });
@@ -62,8 +85,8 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
       await Promise.resolve();
     });
 
-    expect(await screen.findByText(/Remaining: 3 \/ 5/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Used: 2 \/ 5/i)).toBeInTheDocument();
+    expect(await screen.findByText('Remaining: 3 free RFQs')).toBeInTheDocument();
+    expect(screen.queryByText(/Used:/i)).not.toBeInTheDocument();
   });
 
   it('subscribing to a plan opens the real Zoho checkout modal and creates a real payment link on Pay', async () => {
@@ -71,6 +94,7 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
     await act(async () => {
       await Promise.resolve();
     });
+    await screen.findByText('₹7,499');
 
     const subscribeBtn = screen.getByTestId('subscribe-btn-version_2');
     await act(async () => {

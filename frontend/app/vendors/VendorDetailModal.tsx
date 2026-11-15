@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import type { PublicVendor } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { isDummyPan } from '@/lib/validationSchemas';
 import {
   Building2,
   Mail,
@@ -396,8 +397,9 @@ function ComplianceRow({
 }
 
 function ComplianceTab({ vendor }: { vendor: PublicVendor }) {
+  const sanitizedPan = vendor.pan && !isDummyPan(vendor.pan) ? vendor.pan : null;
   const hasAny =
-    vendor.gstin || vendor.pan || vendor.msme || vendor.orgType || vendor.annualTurnover;
+    vendor.gstin || sanitizedPan || vendor.msme || vendor.orgType || vendor.annualTurnover;
 
   if (!hasAny) {
     return (
@@ -417,7 +419,7 @@ function ComplianceTab({ vendor }: { vendor: PublicVendor }) {
         value={vendor.gstin}
         verified={Boolean(vendor.gstin)}
       />
-      <ComplianceRow label={S.labels.pan} value={vendor.pan} />
+      <ComplianceRow label={S.labels.pan} value={sanitizedPan} />
       <ComplianceRow label={S.labels.msme} value={vendor.msme} />
       <ComplianceRow label={S.labels.orgType} value={vendor.orgType} />
       <ComplianceRow label={S.labels.annualTurnover} value={vendor.annualTurnover} />
@@ -480,10 +482,10 @@ function PerformanceTab({ vendor }: { vendor: PublicVendor }) {
             <BadgeCheck size={18} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
             <div>
               <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                GSTIN / Tax Verified
+                {UI_STRINGS.vendorWorkspace.publicDirectory.gstinRecorded}
               </p>
               <p className="text-xs text-emerald-600/70 dark:text-emerald-400/70">
-                Registered business entity with valid tax credentials.
+                {UI_STRINGS.vendorWorkspace.publicDirectory.gstinNotChecked}
               </p>
             </div>
           </div>

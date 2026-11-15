@@ -1,5 +1,12 @@
 import * as XLSX from 'xlsx';
 import type { ExtractedEntity, LineItemBid, QuoteComparison, RFQItem } from './types';
+import { UI_STRINGS } from './uiStrings';
+
+/** A quote that may carry a tax rate, as sent by the quote endpoint. */
+type QuoteWithTaxRate = QuoteComparison & { taxRate?: number };
+
+/** Cell shown where the quote does not record a value. Never a substitute number or label. */
+const EMPTY_CELL = UI_STRINGS.dataLoad.emptyCell;
 
 /** Shared build-workbook-and-download-it tail for single-sheet exports. */
 function downloadWorkbook(sheetName: string, rows: Record<string, string | number>[], header: string[], fileName: string): void {
@@ -67,9 +74,10 @@ export function findVendorLineItemPrice(quote: QuoteComparison, rfqItem: Extract
  * - Header Row 2: Rate, Amount under each vendor
  * - Line item rows: S.No (1, 2, ...), Item Description, Qty, UOM, and Rate & Amount per vendor
  * - Bottom summary rows:
- *   - BasicAmount (with 0 in s.no col and vendor item subtotal in Amount cols)
- *   - GSTAmount (with 0 in s.no col and tax amount in Amount cols)
- *   - TotalAmount (with 0 in s.no col and total amount in Amount cols)
+ *   - BasicAmount (vendor item subtotal, or the quote total when no line prices exist)
+ *   - GSTAmount (the quote's tax amount, or its tax rate applied to the basic amount; blank when neither is recorded)
+ *   - TotalAmount (basic plus GST; blank when GST is not known)
+ * A value the quote does not record is left blank or shown as a dash. No default rate or label is used.
  */
 export function buildBidComparisonWorksheet(rfq: RFQItem, quotes: QuoteComparison[]): XLSX.WorkSheet {
   const safeQuotes = quotes || [];
@@ -89,7 +97,7 @@ export function buildBidComparisonWorksheet(rfq: RFQItem, quotes: QuoteCompariso
 
   safeQuotes.forEach((quote, qIdx) => {
     const startCol = 4 + qIdx * 2;
-    headerRow1.push(quote.vendorName || `Vendor ${qIdx + 1}`, '');
+    headerRow1.push(quote.vendorName || EMPTY_CELL, '');
     headerRow2.push('Rate', 'Amount');
     merges.push({
       s: { r: 0, c: startCol },
@@ -106,13 +114,18 @@ export function buildBidComparisonWorksheet(rfq: RFQItem, quotes: QuoteCompariso
   lineItems.forEach((item, itemIdx) => {
     const sNo = itemIdx + 1;
     const rawSpecs = (item.technicalSpecs || '').trim();
-    const isMock = !rawSpecs || rawSpecs.toLowerCase() === 'standard specification' || rawSpecs.toLowerCase() === 'standard enterprise specification' || rawSpecs.toLowerCase() === 'industrial grade';
-    const hasDistinctSpecs = !isMock && rawSpecs.toLowerCase() !== (item.itemName || '').trim().toLowerCase();
+    // Generic filler specs ("standard specification" and similar) are placeholder text, not
+    // real technical detail, so they are left out of the item name.
+    const isPlaceholderSpec = !rawSpecs || rawSpecs.toLowerCase() === 'standard specification' || rawSpecs.toLowerCase() === 'standard enterprise specification' || rawSpecs.toLowerCase() === 'industrial grade';
+    const hasDistinctSpecs = !isPlaceholderSpec && rawSpecs.toLowerCase() !== (item.itemName || '').trim().toLowerCase();
     const itemName = hasDistinctSpecs ? `${item.itemName} (${rawSpecs})` : (item.itemName || '');
-    const qty = typeof item.quantity === 'number' ? item.quantity : (Number(item.quantity) || 0);
+    // A quantity the RFQ does not record is left blank in the sheet. It is never written out as zero.
+    const quantity = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity);
+    const hasQuantity = Number.isFinite(quantity);
+    const qty = hasQuantity ? quantity : 0;
     const uom = item.unit || '';
 
-    const row: (string | number)[] = [sNo, itemName, qty, uom];
+    const row: (string | number)[] = [sNo, itemName, hasQuantity ? qty : '', uom];
 
     safeQuotes.forEach((quote, qIdx) => {
       const matched = findVendorLineItemPrice(quote, item);
@@ -148,44 +161,33 @@ export function buildBidComparisonWorksheet(rfq: RFQItem, quotes: QuoteCompariso
   });
 
   // Footer summary rows (matching enterprise template)
-  // 1. BasicAmount
+  const basicAmountFor = (quote: QuoteComparison, qIdx: number): number | '' => {
+    if (vendorTotals[qIdx] > 0) return vendorTotals[qIdx];
+    return typeof quote.totalPrice === 'number' ? quote.totalPrice : '';
+  };
+  const gstAmountFor = (quote: QuoteComparison, basic: number | ''): number | '' => {
+    const { taxes, taxRate } = quote as QuoteWithTaxRate;
+    if (typeof taxes === 'number' && taxes > 0) return taxes;
+    if (typeof taxRate === 'number' && taxRate > 0 && typeof basic === 'number' && basic > 0) {
+      return Math.round((basic * taxRate) / 100);
+    }
+    return '';
+  };
+
   const basicRow: (string | number)[] = ['', 'BasicAmount', '', ''];
-  safeQuotes.forEach((quote, qIdx) => {
-    const basicAmount = vendorTotals[qIdx] > 0 ? vendorTotals[qIdx] : (quote.totalPrice || 0);
-    basicRow.push('', basicAmount);
-  });
-  aoa.push(basicRow);
-
-  // 2. GSTAmount (calculated at quote.taxRate or standard 18% GST if taxes not explicitly provided)
   const gstRow: (string | number)[] = ['', 'GSTAmount', '', ''];
-  safeQuotes.forEach((quote, qIdx) => {
-    const basicAmount = vendorTotals[qIdx] > 0 ? vendorTotals[qIdx] : (quote.totalPrice || 0);
-    const taxRate = typeof (quote as any).taxRate === 'number' && (quote as any).taxRate > 0
-      ? (quote as any).taxRate
-      : 18;
-    const gstVal = typeof quote.taxes === 'number' && quote.taxes > 0
-      ? quote.taxes
-      : (basicAmount > 0 ? Math.round((basicAmount * taxRate) / 100) : 0);
-    gstRow.push('', gstVal);
-  });
-  aoa.push(gstRow);
-
-  // 3. TotalAmount (Basic Amount + GST Amount)
   const totalRow: (string | number)[] = ['', 'TotalAmount', '', ''];
   safeQuotes.forEach((quote, qIdx) => {
-    const basicAmount = vendorTotals[qIdx] > 0 ? vendorTotals[qIdx] : (quote.totalPrice || 0);
-    const taxRate = typeof (quote as any).taxRate === 'number' && (quote as any).taxRate > 0
-      ? (quote as any).taxRate
-      : 18;
-    const gstVal = typeof quote.taxes === 'number' && quote.taxes > 0
-      ? quote.taxes
-      : (basicAmount > 0 ? Math.round((basicAmount * taxRate) / 100) : 0);
-    const totalVal = basicAmount + gstVal;
-    totalRow.push('', totalVal);
+    const basic = basicAmountFor(quote, qIdx);
+    const gst = gstAmountFor(quote, basic);
+    const total = typeof basic === 'number' && typeof gst === 'number' ? basic + gst : '';
+    basicRow.push('', basic);
+    gstRow.push('', gst);
+    totalRow.push('', total);
   });
-  aoa.push(totalRow);
+  aoa.push(basicRow, gstRow, totalRow);
 
-  // 4. Commercial & Bid Info Rows at Bottom (Warranty, Best Price, Payment Terms, Submitted, Remarks)
+  // Commercial & bid info rows at the bottom (Warranty, Best Price, Payment Terms, Submitted, Remarks)
   const addMergedInfoRow = (label: string, getValue: (q: QuoteComparison) => string | number) => {
     const row: (string | number)[] = ['', label, '', ''];
     const rowIdx = aoa.length;
@@ -201,21 +203,23 @@ export function buildBidComparisonWorksheet(rfq: RFQItem, quotes: QuoteCompariso
     aoa.push(row);
   };
 
-  addMergedInfoRow('Warranty', (q) =>
-    typeof q.warrantyYears === 'number' && q.warrantyYears > 0
-      ? `${q.warrantyYears} Year(s)`
-      : (q.warrantyYears === 0 ? 'None' : 'N/A')
-  );
+  addMergedInfoRow('Warranty', (q) => {
+    if (typeof q.warrantyYears === 'number' && q.warrantyYears > 0) return `${q.warrantyYears} Year(s)`;
+    return q.warrantyYears === 0 ? 'None' : EMPTY_CELL;
+  });
 
-  addMergedInfoRow('Best Price', (q) => (q.isBestPrice ? 'Yes' : 'No'));
+  addMergedInfoRow('Best Price', (q) => {
+    if (q.isBestPrice === true) return 'Yes';
+    return q.isBestPrice === false ? 'No' : EMPTY_CELL;
+  });
 
-  addMergedInfoRow('Payment Terms', (q) => q.paymentTerms || 'N/A');
+  addMergedInfoRow('Payment Terms', (q) => q.paymentTerms || EMPTY_CELL);
 
   addMergedInfoRow('Submitted', (q) =>
-    q.submittedAt ? new Date(q.submittedAt).toLocaleDateString('en-IN') : 'N/A'
+    q.submittedAt ? new Date(q.submittedAt).toLocaleDateString('en-IN') : EMPTY_CELL
   );
 
-  addMergedInfoRow('Remarks', (q) => q.remarks || 'None');
+  addMergedInfoRow('Remarks', (q) => q.remarks || EMPTY_CELL);
 
   const worksheet = XLSX.utils.aoa_to_sheet(aoa);
   worksheet['!merges'] = merges;
@@ -284,32 +288,35 @@ export function downloadFullQuotesExcel(rfq: RFQItem, quotes: QuoteComparison[])
 
 /**
  * Downloads a single vendor's quotation in Excel format.
+ *
+ * When the quote has no line-item prices, each RFQ line is listed with blank price cells.
+ * The quote total is shown only in the summary row. It is not copied onto every line.
  */
 export function downloadSingleVendorQuoteExcel(rfq: RFQItem, quote: QuoteComparison): void {
-  const items = Array.isArray(quote.lineItemQuotes) && quote.lineItemQuotes.length > 0
-    ? quote.lineItemQuotes
-    : (rfq.extractedEntities || []).map((e) => ({
-        lineItemId: e.id,
-        itemName: e.itemName,
-        quantity: e.quantity,
-        unit: e.unit,
-        unitPrice: quote.unitPrice,
-        totalPrice: quote.totalPrice,
-        leadTimeDays: quote.leadTimeDays,
-        warrantyYears: quote.warrantyYears,
+  const lineItemQuotes = Array.isArray(quote.lineItemQuotes) ? quote.lineItemQuotes : [];
+  const rows: Record<string, string | number>[] = lineItemQuotes.length > 0
+    ? lineItemQuotes.map((item, idx) => ({
+        'S.No': idx + 1,
+        'Item ID': item.lineItemId || '',
+        'Item Name': item.itemName,
+        'Quantity': item.quantity,
+        'Unit': item.unit || '',
+        'Unit Price (INR)': item.unitPrice ?? '',
+        'Total Price (INR)': item.totalPrice ?? '',
+        'Lead Time (Days)': (item as any).leadTimeDays ?? '',
+        'Warranty (Years)': (item as any).warrantyYears ?? '',
+      }))
+    : (rfq.extractedEntities || []).map((entity, idx) => ({
+        'S.No': idx + 1,
+        'Item ID': entity.id || '',
+        'Item Name': entity.itemName,
+        'Quantity': entity.quantity,
+        'Unit': entity.unit || '',
+        'Unit Price (INR)': '',
+        'Total Price (INR)': '',
+        'Lead Time (Days)': '',
+        'Warranty (Years)': '',
       }));
-
-  const rows: Record<string, string | number>[] = items.map((item, idx) => ({
-    'S.No': idx + 1,
-    'Item ID': item.lineItemId || '',
-    'Item Name': item.itemName,
-    'Quantity': item.quantity,
-    'Unit': item.unit || 'Nos',
-    'Unit Price (INR)': item.unitPrice,
-    'Total Price (INR)': item.totalPrice,
-    'Lead Time (Days)': (item as any).leadTimeDays ?? quote.leadTimeDays ?? '',
-    'Warranty (Years)': (item as any).warrantyYears ?? quote.warrantyYears ?? '',
-  }));
 
   // Append summary row
   rows.push({

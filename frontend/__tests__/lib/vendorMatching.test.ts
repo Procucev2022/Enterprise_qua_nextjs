@@ -1,13 +1,18 @@
 import {
   normalizeCategory,
   extractRfqCategorySignals,
+  extractRfqCategoryFilters,
+  hasExplicitAllCategoriesChoice,
   matchVendorAgainstSignals,
   getCategoryMatchedProcucevVendors,
   selectVendorsForCategories,
   scoreVendorLocation,
   rankProcucevVendorsForV3,
+  selectTopProcucevVendorsForMode3,
+  minorNamesMatch,
 } from '@/lib/vendorMatching';
 import type { VendorEntry } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 describe('vendorMatching module', () => {
   describe('normalizeCategory', () => {
@@ -31,13 +36,19 @@ describe('vendorMatching module', () => {
         ],
       };
 
-      const { signals, rawSignals } = extractRfqCategorySignals(form);
+      const { signals, rawSignals, minorOnly } = extractRfqCategorySignals(form);
       expect(rawSignals).toContain('Mechanical');
       expect(rawSignals).toContain('Centrifugal Pumps');
       expect(rawSignals).toContain('Motors & Drives');
-      expect(signals).toContain('mechanical');
-      expect(signals).toContain('centrifugal pumps');
-      expect(signals).toContain('motors and drives');
+      // An RFQ that names minor categories is matched by those minors only.
+      expect(minorOnly).toBe(true);
+      expect(signals).toEqual(['centrifugal pumps', 'motors and drives']);
+    });
+
+    it('matches on the major and category labels when the RFQ names no minor category', () => {
+      const { signals, minorOnly } = extractRfqCategorySignals({ majorCategory: 'Mechanical', category: 'Pumps' });
+      expect(minorOnly).toBe(false);
+      expect(signals).toEqual(['mechanical', 'pumps']);
     });
 
     it('handles empty forms safely', () => {
@@ -327,7 +338,7 @@ describe('vendorMatching module', () => {
     it('returns a neutral score when nothing matches', () => {
       const r = scoreVendorLocation(vendorAt({ location: 'Delhi' }), { location: 'Chennai', pincode: '600001' });
       expect(r.score).toBe(40);
-      expect(r.reason).toMatch(/Nationwide/i);
+      expect(r.reason).toBe(UI_STRINGS.vendorRanking.locationNotConfirmed);
     });
   });
 
@@ -372,11 +383,9 @@ describe('vendorMatching module', () => {
       expect(rankProcucevVendorsForV3(pool, signals, {}, 10)).toHaveLength(10);
     });
 
-    it('falls back to a neutral category baseline when there are no signals yet', () => {
+    it('ranks no vendor when there are no category signals, instead of inventing a baseline score', () => {
       const pool = [vendor({ id: 'proc-x', name: 'Baseline Co' })];
-      const ranked = rankProcucevVendorsForV3(pool, [], {}, 10);
-      expect(ranked).toHaveLength(1);
-      expect(ranked[0].categoryScore).toBeGreaterThan(0);
+      expect(rankProcucevVendorsForV3(pool, [], {}, 10)).toEqual([]);
     });
 
     it('handles V3 tie-breaks and excludes non-matching vendors', () => {
@@ -450,5 +459,359 @@ describe('vendorMatching module', () => {
       expect(ranked[0].matchedMinorCategory).toBe('Centrifugal Pumps');
       expect(ranked[1].hasMinorMatch).toBe(false);
     });
+  });
+});
+
+describe('vendorMatching edge branches', () => {
+  const procucevVendor = (overrides: Partial<VendorEntry>): VendorEntry =>
+    ({
+      id: 'p-default',
+      name: 'Procucev Partner',
+      source: 'procucev_network',
+      contactPerson: 'Contact',
+      phone: '9999999999',
+      email: 'partner@procucev.com',
+      ...overrides,
+    }) as VendorEntry;
+
+  test('extractRfqCategorySignals reads only the category fields that are present', () => {
+    const { rawSignals, signals } = extractRfqCategorySignals({
+      category: 'Valves',
+      lineItems: [{ majorCategory: undefined, minorCategory: '   ', category: 'Gate Valves' }],
+    });
+    expect(rawSignals).toEqual(['Valves', 'Gate Valves']);
+    expect(signals).toHaveLength(2);
+  });
+
+  test('matchVendorAgainstSignals leaves matchedMajor empty when the vendor has no major category and nothing matches', () => {
+    const result = matchVendorAgainstSignals(
+      procucevVendor({ majorCategory: undefined, minorCategories: ['Valves'] }),
+      ['Pumps']
+    );
+    expect(result.isMatch).toBe(false);
+    expect(result.matchedMajor).toBe('');
+  });
+
+  test('matchVendorAgainstSignals matches a shorter vendor category inside a longer buyer category', () => {
+    const result = matchVendorAgainstSignals(
+      procucevVendor({ majorCategory: undefined, minorCategories: ['Pumps'] }),
+      ['Centrifugal Pumps']
+    );
+    expect(result.isMatch).toBe(true);
+    expect(result.matchScore).toBe(92);
+    expect(result.matchedCategories).toEqual(['Pumps']);
+  });
+
+  test('rankProcucevVendorsForV3 puts preferred-minor matches first, then by rating, and tolerates missing minor lists', () => {
+    const vendors = [
+      procucevVendor({ id: 'a', majorCategory: 'Mechanical', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'b', majorCategory: 'Mechanical', minorCategories: ['Valves'] }),
+      procucevVendor({ id: 'c', majorCategory: 'Mechanical', minorCategories: undefined }),
+      procucevVendor({ id: 'd', majorCategory: 'Mechanical', minorCategories: ['Pumps', 'Valves'], rating: 4 }),
+      procucevVendor({ id: 'e', majorCategory: 'Mechanical' }),
+    ];
+    const ranked = rankProcucevVendorsForV3(vendors, ['Mechanical'], {}, 10, ['Pumps']);
+
+    expect(ranked.map((r) => r.vendor.id)).toEqual(['d', 'a', 'b', 'c', 'e']);
+    expect(ranked[0].hasMinorMatch).toBe(true);
+    expect(ranked.find((r) => r.vendor.id === 'b')?.matchedMinorCategory).toBe('Valves');
+    expect(ranked.find((r) => r.vendor.id === 'c')?.matchedMinorCategory).toBeNull();
+  });
+
+  test('getCategoryMatchedProcucevVendors orders by match score, then rating, and keeps unrated vendors after rated ones', () => {
+    const vendors = [
+      procucevVendor({ id: 'x', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'y', majorCategory: 'Pumps', minorCategories: [] }),
+      procucevVendor({ id: 'z', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'w', minorCategories: ['Pumps'], rating: 3 }),
+    ];
+    const results = getCategoryMatchedProcucevVendors(vendors, ['Pumps']);
+    expect(results.map((r) => r.vendor.id)).toEqual(['w', 'x', 'z', 'y']);
+  });
+
+  test('selectVendorsForCategories returns nothing when every signal normalises to empty', () => {
+    expect(selectVendorsForCategories([procucevVendor({ id: 'q', minorCategories: ['Pumps'] })], ['  ', ''])).toEqual([]);
+  });
+
+  test('selectVendorsForCategories skips keyless vendors and does not pick one vendor twice', () => {
+    const vendors = [
+      procucevVendor({ id: 'm1', minorCategories: ['Pumps'], rating: 5 }),
+      procucevVendor({ id: 'm2', majorCategory: 'Pumps', minorCategories: [] }),
+      procucevVendor({ id: 'm3', minorCategories: ['Pumps'] }),
+      procucevVendor({ id: 'm4', minorCategories: ['Pumps', 'Valves'], rating: 1 }),
+      procucevVendor({ id: 'v1', minorCategories: ['Valves'], rating: 2 }),
+      procucevVendor({ id: '', email: '', minorCategories: ['Valves'] }),
+    ];
+    const selected = selectVendorsForCategories(vendors, ['Pumps', 'Valves'], 10);
+    expect(selected.map((s) => s.vendor.id)).toEqual(['m1', 'v1', 'm4', 'm3', 'm2']);
+  });
+});
+
+describe('vendorMatching minor-only matching', () => {
+  const vendorWithMinor = {
+    id: 'v-min',
+    name: 'Minor Vendor',
+    majorCategory: 'Mechanical',
+    minorCategories: ['Bearings & Accessories'],
+    rating: 4,
+    source: 'procucev_network',
+  } as unknown as VendorEntry;
+  const vendorMajorOnly = {
+    id: 'v-maj',
+    name: 'Major Vendor',
+    majorCategory: 'Engineering Spares - Mechanical',
+    minorCategories: [],
+    rating: 5,
+    source: 'procucev_network',
+  } as unknown as VendorEntry;
+  const vendorSibling = {
+    id: 'v-sib',
+    name: 'Accessory Vendor',
+    majorCategory: 'Engineering Spares - Mechanical',
+    minorCategories: ['Accessories'],
+    rating: 4,
+    source: 'procucev_network',
+  } as unknown as VendorEntry;
+
+  it('minorNamesMatch accepts the same name or its plural, and rejects a name that only contains the other', () => {
+    expect(minorNamesMatch('bearings and accessories', 'bearings and accessories')).toBe(true);
+    expect(minorNamesMatch('box', 'boxes')).toBe(true);
+    expect(minorNamesMatch('boxes', 'box')).toBe(true);
+    expect(minorNamesMatch('steel', 'steels')).toBe(true);
+    expect(minorNamesMatch('steels', 'steel')).toBe(true);
+    expect(minorNamesMatch('accessories', 'bearings and accessories')).toBe(false);
+    expect(minorNamesMatch('', 'steel')).toBe(false);
+  });
+
+  it('matches only a minor-level label, never the major or a sibling minor', () => {
+    const signals = ['bearings and accessories'];
+    const minorMatch = matchVendorAgainstSignals(vendorWithMinor, signals, true);
+    expect(minorMatch.isMatch).toBe(true);
+    expect(minorMatch.matchScore).toBe(98);
+    expect(matchVendorAgainstSignals(vendorMajorOnly, signals, true).isMatch).toBe(false);
+    expect(matchVendorAgainstSignals(vendorSibling, signals, true).isMatch).toBe(false);
+  });
+
+  it('accepts the plural of a minor, and a major that is itself named like the minor', () => {
+    const plural = { ...vendorWithMinor, minorCategories: ['Steel'] } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(plural, ['steels'], true).isMatch).toBe(true);
+    const majorNamed = { id: 'v-mn', name: 'Named', majorCategory: 'Steels', minorCategories: [] } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(majorNamed, ['steels'], true).matchScore).toBe(95);
+  });
+
+  it('scores selected and client-mapped labels exactly in minor-only mode, never by token', () => {
+    const selected = {
+      id: 'v-sel',
+      name: 'Selected',
+      majorCategory: 'Mechanical',
+      vendorSelectedCategories: ['Safety Valves'],
+      minorCategories: [],
+    } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(selected, ['safety valves'], true).matchScore).toBe(94);
+    expect(matchVendorAgainstSignals(selected, ['valves'], true).isMatch).toBe(false);
+
+    const mapped = {
+      id: 'v-map',
+      name: 'Mapped',
+      majorCategory: 'Mechanical',
+      clientMappedCategories: ['Industrial Turbines'],
+      minorCategories: [],
+    } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(mapped, ['industrial turbines'], true).matchScore).toBe(96);
+    expect(matchVendorAgainstSignals(mapped, ['turbines'], true).isMatch).toBe(false);
+  });
+
+  it('does not reach a vendor through the taxonomy parent of a minor-only signal', () => {
+    const parentMajor = {
+      id: 'v-parent',
+      name: 'Parent',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategories: ['Pumps & Accessories'],
+    } as unknown as VendorEntry;
+    expect(matchVendorAgainstSignals(parentMajor, ['bearings and accessories'], true).isMatch).toBe(false);
+  });
+
+  it('selects, matches and ranks only the vendors carrying the minor', () => {
+    const pool = [vendorWithMinor, vendorMajorOnly, vendorSibling];
+    const signals = ['bearings and accessories'];
+    expect(selectVendorsForCategories(pool, signals, 5, undefined, true).map((r) => r.vendor.id)).toEqual(['v-min']);
+    expect(getCategoryMatchedProcucevVendors(pool, signals, 80, true).map((r) => r.vendor.id)).toEqual(['v-min']);
+
+    const ranked = rankProcucevVendorsForV3(
+      pool,
+      signals,
+      { location: null, pincode: null },
+      10,
+      ['Bearings & Accessories'],
+      true
+    );
+    expect(ranked.map((r) => r.vendor.id)).toEqual(['v-min']);
+    expect(ranked[0].hasMinorMatch).toBe(true);
+  });
+});
+
+describe('Mode 3 top-10 vendor selection', () => {
+  const makeNetVendor = (overrides: Partial<VendorEntry> & { id: string }): VendorEntry =>
+    ({
+      name: `Vendor ${overrides.id}`,
+      contactPerson: 'Network Contact',
+      phone: '+91-9000000000',
+      email: `${overrides.id}@net.example`,
+      source: 'procucev_network',
+      rating: 4.5,
+      ...overrides,
+    }) as VendorEntry;
+
+  const makePrivateVendor = (overrides: Partial<VendorEntry> & { id: string }): VendorEntry =>
+    ({
+      name: `Private ${overrides.id}`,
+      contactPerson: 'Private Contact',
+      phone: '+91-9000000001',
+      email: `${overrides.id}@priv.example`,
+      source: 'buyer_uploaded',
+      buyerId: 'buyer-1',
+      rating: 5.0,
+      ...overrides,
+    }) as VendorEntry;
+
+  it('ignores All Categories sentinel in extractRfqCategorySignals while flagging explicit All Categories choice', () => {
+    const allOnlyForm = {
+      majorCategory: 'All Categories',
+      minorCategory: 'All Categories',
+      lineItems: [{ majorCategory: 'All Categories', minorCategory: '' }],
+    };
+    expect(extractRfqCategorySignals(allOnlyForm)).toEqual({ signals: [], rawSignals: [], minorOnly: false });
+    expect(hasExplicitAllCategoriesChoice(allOnlyForm)).toBe(true);
+
+    const blankForm = { majorCategory: '', minorCategory: '', lineItems: [{ majorCategory: '', minorCategory: '' }] };
+    expect(hasExplicitAllCategoriesChoice(blankForm)).toBe(false);
+
+    const narrowedWithAll = {
+      majorCategory: 'All Categories',
+      minorCategory: 'Laptop',
+      lineItems: [{ majorCategory: 'IT', minorCategory: 'Laptop' }],
+    };
+    expect(hasExplicitAllCategoriesChoice(narrowedWithAll)).toBe(false);
+    expect(extractRfqCategorySignals(narrowedWithAll)).toEqual({
+      signals: ['laptop'],
+      rawSignals: ['Laptop', 'IT'],
+      minorOnly: true,
+    });
+  });
+
+  it('rankProcucevVendorsForV3 recognizes minor matches in vendorSelectedCategories, clientMappedCategories, and plural stems', () => {
+    const vendors = [
+      makeNetVendor({ id: 'v-sel', vendorSelectedCategories: ['Boxes'], majorCategory: 'Packaging' }),
+      makeNetVendor({ id: 'v-map', clientMappedCategories: ['Box'], majorCategory: 'Packaging' }),
+    ];
+    const ranked = rankProcucevVendorsForV3(
+      vendors,
+      ['boxes'],
+      { location: null, pincode: null },
+      10,
+      ['Boxes'],
+      true
+    );
+    expect(ranked.map((r) => r.vendor.id)).toEqual(expect.arrayContaining(['v-sel', 'v-map']));
+    expect(ranked.every((r) => r.hasMinorMatch && (r.matchedMinorCategory === 'Boxes' || r.matchedMinorCategory === 'Box'))).toBe(true);
+  });
+
+  it('selectTopProcucevVendorsForMode3 returns top 10 combining minor matches first plus parent-major top-up', () => {
+    const minorMatches = [
+      makeNetVendor({ id: 'v-m1', majorCategory: 'IT', minorCategories: ['Laptop'], city: 'Bengaluru', pincode: '560001', rating: 4.9 }),
+      makeNetVendor({ id: 'v-m2', majorCategory: 'IT', vendorSelectedCategories: ['Laptop'], city: 'Delhi', rating: 4.2 }),
+    ];
+    const majorOnly = Array.from({ length: 12 }, (_, idx) =>
+      makeNetVendor({
+        id: `v-maj-${idx}`,
+        majorCategory: 'IT',
+        minorCategories: ['Routers'],
+        city: idx < 2 ? 'Bengaluru' : 'Pune',
+        rating: 4.8 - idx * 0.05,
+      })
+    );
+    const privateVendor = makePrivateVendor({ id: 'v-priv', majorCategory: 'IT', minorCategories: ['Laptop'] });
+
+    const top10 = selectTopProcucevVendorsForMode3([...minorMatches, ...majorOnly, privateVendor], {
+      majorCategory: 'IT',
+      minorCategory: 'Laptop',
+      deliveryLocation: 'Bengaluru',
+      deliveryPincode: '560058',
+      lineItems: [{ majorCategory: 'IT', minorCategory: 'Laptop' }],
+    });
+
+    expect(top10).toHaveLength(10);
+    expect(top10.some((r) => r.vendor.id === 'v-priv')).toBe(false);
+    expect(top10.slice(0, 2).map((r) => r.vendor.id)).toEqual(['v-m1', 'v-m2']);
+    expect(top10.slice(0, 2).every((r) => r.hasMinorMatch)).toBe(true);
+    expect(top10.slice(2).every((r) => !r.hasMinorMatch)).toBe(true);
+  });
+
+  it('selectTopProcucevVendorsForMode3 stops after Tier 1 when enough minor matches fill top 10', () => {
+    const twelveMinors = Array.from({ length: 12 }, (_, idx) =>
+      makeNetVendor({
+        id: `v-full-${idx}`,
+        majorCategory: 'Mechanical',
+        minorCategories: ['Centrifugal Pumps'],
+        rating: 4.0 + idx * 0.05,
+      })
+    );
+    const top10 = selectTopProcucevVendorsForMode3(twelveMinors, {
+      majorCategory: 'Mechanical',
+      lineItems: [{ majorCategory: 'Mechanical', minorCategory: 'Centrifugal Pumps' }],
+    });
+    expect(top10).toHaveLength(10);
+    expect(top10.every((r) => r.hasMinorMatch)).toBe(true);
+  });
+
+  it('selectTopProcucevVendorsForMode3 ranks top 10 by location & rating on explicit All Categories, while staying empty for blank RFQs', () => {
+    const pool = [
+      makeNetVendor({ id: 'v-no-major', rating: undefined, city: 'Jaipur', pincode: '302001' }),
+      ...Array.from({ length: 11 }, (_, idx) =>
+        makeNetVendor({
+          id: `v-all-${idx}`,
+          majorCategory: idx % 2 === 0 ? 'IT' : 'Civil Works',
+          city: idx === 5 ? 'Bengaluru' : 'Jaipur',
+          pincode: idx === 5 ? '560058' : '302001',
+          rating: 3.5 + (idx % 3) * 0.5,
+        })
+      ),
+    ];
+
+    expect(selectTopProcucevVendorsForMode3(null as unknown as VendorEntry[], { majorCategory: 'IT' })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3([makePrivateVendor({ id: 'only-priv', majorCategory: 'IT' })], { majorCategory: 'IT' })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3(pool, { majorCategory: '', lineItems: [] })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3([], { majorCategory: 'All Categories' })).toEqual([]);
+    expect(selectTopProcucevVendorsForMode3(pool, { majorCategory: 'All Categories' }, 0)).toEqual([]);
+
+    const allTop = selectTopProcucevVendorsForMode3(pool, {
+      majorCategory: 'All Categories',
+      deliveryLocation: 'Bengaluru',
+      deliveryPincode: '560058',
+      lineItems: [{ majorCategory: 'All Categories' }],
+    });
+    expect(allTop).toHaveLength(10);
+    expect(allTop[0].vendor.id).toBe('v-all-5');
+
+    const majorOnlyTop = selectTopProcucevVendorsForMode3(pool, {
+      majorCategory: 'IT',
+      lineItems: [{ majorCategory: 'IT', minorCategory: '' }],
+    });
+    expect(majorOnlyTop.every((r) => r.vendor.majorCategory === 'IT')).toBe(true);
+
+    const unknownMinorNoMajor = selectTopProcucevVendorsForMode3(pool, {
+      lineItems: [{ minorCategory: 'Exotic Widget XYZ' }],
+    });
+    expect(unknownMinorNoMajor).toEqual([]);
+  });
+
+  it('extractRfqCategoryFilters infers canonical parent major from taxonomy and deduplicates labels', () => {
+    const filters = extractRfqCategoryFilters({
+      majorCategory: 'All Categories',
+      minorCategory: 'Centrifugal Pumps',
+      lineItems: [{ majorCategory: 'Mechanical', minorCategory: 'Centrifugal Pumps' }],
+    });
+    expect(filters.minors).toEqual(['Centrifugal Pumps']);
+    expect(filters.majors.map((m) => m.toLowerCase())).toContain('mechanical');
   });
 });

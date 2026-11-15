@@ -59,10 +59,10 @@ describe('Dynamic Buyer & Seller Subscription Pricing', () => {
       expect(buyerPricing.version_3['12_months']).toBe(9999);
 
       const sellerPricing = getSellerSubscriptionPricing();
-      expect(sellerPricing.connect['12_months']).toBe(6355.08);
-      expect(sellerPricing.select['12_months']).toBe(12711.02);
-      expect(computeZohoPlanAmount('connect', '12_months')).toBe(7498.99);
-      expect(computeZohoPlanAmount('select', '12_months')).toBe(14999);
+      expect(sellerPricing.connect['12_months']).toBe(7499);
+      expect(sellerPricing.select['12_months']).toBe(14999);
+      expect(computeZohoPlanAmount('connect', '12_months')).toBe(8848.82);
+      expect(computeZohoPlanAmount('select', '12_months')).toBe(17698.82);
     });
   });
 
@@ -99,13 +99,13 @@ describe('Dynamic Buyer & Seller Subscription Pricing', () => {
       process.env.SELLER_V2_12M_PRICE = '16000';
       process.env.SUBSCRIPTION_GST_PERCENT = '18';
 
-      // connect 12m configured inclusive price: 8000
+      // connect 12m configured base price 8000 + 18% GST: 9440
       const connectAmount = computeZohoPlanAmount('connect', '12_months');
-      expect(connectAmount).toBe(8000);
+      expect(connectAmount).toBe(9440);
 
-      // select 12m configured inclusive price: 16000
+      // select 12m configured base price 16000 + 18% GST: 18880
       const selectAmount = computeZohoPlanAmount('select', '12_months');
-      expect(selectAmount).toBe(16000);
+      expect(selectAmount).toBe(18880);
     });
   });
 

@@ -265,6 +265,7 @@ describe('Buyer profile service', () => {
         state: 'UP',
         pincode: '201301',
         gstin: '07AAACL1234F1Z5',
+        pan: 'AAACL1234F',
         country: 'India',
       });
       const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
@@ -317,10 +318,10 @@ describe('Buyer profile service', () => {
       expect(profile.street).toBe('Bengaluru, Karnataka');
       expect(profile.pincode).toBe('560001');
       expect(profile.gstNumber).toBe('29AAACL1234F1Z5');
-      expect(profile.panNumber).toBe('AAACL1234F');
+      expect(profile.panNumber).toBeNull();
     });
 
-    test('auto-heals PAN from GSTIN when buyer account not found in storeService', async () => {
+    test('does not auto-heal dummy PAN from GSTIN when buyer account not found in storeService', async () => {
       const partialProfile = {
         organizationId: 'org-1',
         userId: 'user-1',
@@ -334,12 +335,8 @@ describe('Buyer profile service', () => {
       const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
 
       const profile = await buyerProfileService.getProfile(SESSION);
-      expect(profile.panNumber).toBe('AAACL1234F');
-      expect(updateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          patch: { panNumber: 'AAACL1234F' },
-        })
-      );
+      expect(profile.panNumber).toBeNull();
+      expect(updateSpy).not.toHaveBeenCalled();
     });
 
     test('handles storeService and updateProfile errors gracefully in auto-healing', async () => {
@@ -662,9 +659,9 @@ describe('Buyer profile service', () => {
       ).rejects.toMatchObject({ status: 503 });
     });
 
-    test('syncs storeService buyer account with real phone and dispatches notifications', async () => {
+    test('durably syncs account profile fields without accepting a login-phone override', async () => {
       mockHappyPath();
-      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'buyer-1' });
       const dispatchSpy = jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
 
       await buyerProfileService.saveProfile(SESSION, {
@@ -678,71 +675,73 @@ describe('Buyer profile service', () => {
         panNumber: 'AAAAA0000A',
       });
 
-      expect(updateAccSpy).toHaveBeenCalledWith(
-        SESSION.email,
-        expect.objectContaining({
-          organizationName: 'ACME Real Ltd',
-          phone: '9876543210',
-          phoneVerified: true,
-          status: 'ACTIVE_VERIFIED',
-        })
-      );
+      expect(updateAccSpy).toHaveBeenCalledWith(SESSION.email, expect.objectContaining({
+        organizationName: 'ACME Real Ltd',
+        status: 'ACTIVE_VERIFIED',
+      }));
+      expect(updateAccSpy.mock.calls[0][1]).not.toEqual(expect.objectContaining({
+        phone: expect.anything(),
+        mobileNumber: expect.anything(),
+        phoneVerified: expect.anything(),
+      }));
       expect(dispatchSpy).toHaveBeenCalledWith(SESSION.email);
     });
 
-    test('syncs storeService with placeholder phone without verifying phone', async () => {
+    test('does not sync an unverified placeholder phone from an extra request field', async () => {
       mockHappyPath();
-      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
-      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
+      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'buyer-1' });
+      const dispatchSpy = jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
 
       await buyerProfileService.saveProfile(SESSION, {
         companyName: 'ACME Placeholder Ltd',
         contactPhone: '9999999999',
       });
 
-      expect(updateAccSpy).toHaveBeenCalledWith(
-        SESSION.email,
-        expect.not.objectContaining({
-          phoneVerified: true,
-        })
-      );
-    });
-
-    test('syncs storeService with 0000000000 placeholder phone', async () => {
-      mockHappyPath();
-      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
-      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
-
-      await buyerProfileService.saveProfile(SESSION, {
-        companyName: 'ACME Zero Ltd',
-        contactPhone: '0000000000',
-      });
-
-      expect(updateAccSpy).toHaveBeenCalledWith(
-        SESSION.email,
-        expect.not.objectContaining({
-          phoneVerified: true,
-        })
-      );
+      expect(updateAccSpy.mock.calls[0][1]).not.toEqual(expect.objectContaining({
+        phone: expect.anything(),
+        mobileNumber: expect.anything(),
+        phoneVerified: expect.anything(),
+      }));
+      expect(dispatchSpy).toHaveBeenCalledWith(SESSION.email);
     });
 
     test('syncs storeService successfully with valid profile data', async () => {
       mockHappyPath();
-      jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'buyer-1' });
       jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
 
       const result = await buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Valid', city: 'Pune' });
       expect(result).toBeDefined();
     });
 
-    test('handles storeService sync errors gracefully without throwing', async () => {
+    test('dispatches pending notifications even if durable account synchronization fails', async () => {
       mockHappyPath();
-      jest.spyOn(storeService, 'updateBuyerAccount').mockImplementation(() => {
-        throw new Error('Store sync failed');
-      });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockRejectedValue(new Error('Store sync failed'));
+      const dispatchSpy = jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
 
       await expect(
         buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Ltd', contactPhone: '9876543210' })
+      ).resolves.toBeDefined();
+      expect(dispatchSpy).toHaveBeenCalledWith(SESSION.email);
+    });
+
+    test('keeps a notification dispatch error from changing the saved profile result', async () => {
+      mockHappyPath();
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'buyer-1' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockRejectedValue(new Error('notification queue unavailable'));
+
+      await expect(
+        buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Ltd' })
+      ).resolves.toBeDefined();
+    });
+
+    test('logs a missing buyer-account mirror without failing the canonical profile save', async () => {
+      mockHappyPath();
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue(null);
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
+
+      await expect(
+        buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Ltd' })
       ).resolves.toBeDefined();
     });
   });
@@ -827,7 +826,7 @@ describe('Buyer profile service', () => {
       expect(profile.street).toBe('Delhi');
     });
 
-    test('catches updateProfile error during PAN auto-healing in getProfile', async () => {
+    test('catches updateProfile error during buyer account auto-healing in getProfile', async () => {
       const partialProfile = {
         organizationId: 'org-1',
         userId: 'user-1',
@@ -837,7 +836,7 @@ describe('Buyer profile service', () => {
         panNumber: null,
       };
       jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
-      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ pan: 'AAACL1234F' });
       jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValue(new Error('PAN update failed'));
 
       const profile = await buyerProfileService.getProfile(SESSION);

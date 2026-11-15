@@ -13,13 +13,77 @@
 
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
+const auditLogQueries = require('./auditLogQueries');
+const buyerCreditQueries = require('./buyerCreditQueries');
+const buyerRfqCreationQueries = require('./buyerRfqCreationQueries');
+const vendorRfqUnlockQueries = require('./vendorRfqUnlockQueries');
+const vendorQuoteCreditQueries = require('./vendorQuoteCreditQueries');
+const vendorQuoteSubmissionQueries = require('./vendorQuoteSubmissionQueries');
 const { queryCache } = require('./queryCache');
-const { INDIAN_STATES } = require('../config/constants');
-const { parseSearchTokens } = require('../config/constants');
+const {
+  INDIAN_STATES,
+  parseSearchTokens,
+  RFQ_COMPARISON_RETRY_DELAY_MS,
+  RFQ_COMPARISON_MAX_ATTEMPTS,
+  RFQ_COMPARISON_QUEUE_MAX_LIMIT,
+  RFQ_COMPARISON_ERROR_MAX_LENGTH,
+  RFQ_CHASER_MAX_ATTEMPTS,
+  RFQ_CHASER_RETRY_BASE_MS,
+  RFQ_CHASER_RETRY_MAX_MS,
+  RFQ_CHASER_ERROR_MAX_LENGTH,
+  D1_NOTIFICATION_INSERT_BATCH_SIZE,
+  DATABASE_QUERY_CACHE,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
+  clearDummyPanFields,
+} = require('../config/constants');
+const { logger } = require('../services/loggerService');
+
+function getRetryableStaleCacheValue(cacheKey, error, operation) {
+  if (
+    !cacheKey ||
+    typeof d1Bridge.isRetryableD1Error !== 'function' ||
+    !d1Bridge.isRetryableD1Error(error)
+  ) return null;
+  const staleValue = queryCache.getStale(cacheKey, []);
+  if (staleValue === null) return null;
+  logger.warn('Serving stale cached domain data after a retryable database failure', {
+    error,
+    operation,
+    cacheKey,
+  }, 'DATABASE_QUERY');
+  return staleValue;
+}
+
+function normalizeVendorEmail(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeVendorRecord(vendor) {
+  if (!vendor || typeof vendor !== 'object' || Array.isArray(vendor)) return null;
+  const normalized = { ...vendor };
+  delete normalized.tempPassword;
+  clearDummyPanFields(normalized);
+  if (Object.prototype.hasOwnProperty.call(vendor, 'email')) {
+    normalized.email = normalizeVendorEmail(vendor.email);
+  }
+  return normalized;
+}
+
+function parseVendorRaw(value) {
+  const vendor = parseRaw(value);
+  if (vendor && typeof vendor === 'object' && !Array.isArray(vendor)) {
+    delete vendor.tempPassword;
+    clearDummyPanFields(vendor);
+  }
+  return vendor;
+}
 
 let cachedUnfilteredVendorsTotal = null;
 let lastVendorsTotalCacheTime = 0;
 const VENDORS_TOTAL_CACHE_TTL_MS = 3600000; // 1 hour
+const nonVendorEmailCache = new Map();
+const NON_VENDOR_CACHE_TTL_MS = 60000;
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -45,7 +109,7 @@ async function getVendorsFromDB(limit = null) {
   );
   return (result && result.rows)
     ? result.rows.map((row) => {
-        const v = parseRaw(row.raw);
+        const v = parseVendorRaw(row.raw);
         if (row.created_at && !v.created_at) v.created_at = row.created_at;
         if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
         if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
@@ -67,9 +131,18 @@ async function getVendorsFromDB(limit = null) {
  */
 async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', state = '', city = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
   if (!pool.hasStorage()) return { rows: [], total: 0 };
-  const cacheKey = (!search && !email && !category && !state && !city)
-    ? `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}`
-    : null;
+  const cacheKey = queryCache.generateKey('vendors_page', [
+    limit,
+    offset,
+    search,
+    email,
+    category,
+    state,
+    city,
+    publicOnly,
+    scopedBuyerId,
+    skipCount,
+  ]);
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
     if (cached) return cached;
@@ -179,7 +252,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR raw->>'city' ILIKE $${p}
           OR raw->>'deliveryLocation' ILIKE $${p})`);
 
-        d1TokenConditions.push(`(${d1CatCondition}
+        const d1SearchCondition = `(${d1CatCondition}
           OR lower(email) LIKE lower($${p})
           OR ${d1NameCondition}
           OR ${d1MinorCatCondition}
@@ -187,7 +260,8 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
-          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
+          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`;
+        d1TokenConditions.push(d1SearchCondition);
       }
 
       if (tokenConditions.length > 0) {
@@ -206,13 +280,13 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     params.push(category.trim());
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
-    d1Conditions.push(`(lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))`);
+    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR (raw LIKE ('%' || lower($${p}) || '%') AND (lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))))`);
   }
   if (state) {
     params.push(`%${state.trim()}%`);
     const p = params.length;
     conditions.push(`(raw->>'state' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
-    d1Conditions.push(`(lower(json_extract(raw,'$.state')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
+    d1Conditions.push(`(raw LIKE $${p} AND (lower(json_extract(raw,'$.state')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p})))`);
   }
   if (city) {
     const trimmedCity = city.trim();
@@ -224,20 +298,26 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       const idx1 = params.length - 1;
       const idx2 = params.length;
       conditions.push(`(raw->>'city' ILIKE $${idx1} OR raw->>'location' ILIKE $${idx1} OR raw->>'city' ILIKE $${idx2} OR raw->>'location' ILIKE $${idx2})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower($${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx2}))`);
+      d1Conditions.push(`((raw LIKE $${idx1} OR raw LIKE $${idx2}) AND (lower(json_extract(raw,'$.city')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower($${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx2})))`);
     } else {
       params.push(`%${trimmedCity}%`);
       const p = params.length;
       conditions.push(`(raw->>'city' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
+      d1Conditions.push(`(raw LIKE $${p} AND (lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p})))`);
     }
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
-    conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
-    d1Conditions.push(`source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`);
+    conditions.push(`lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`);
+    // No lower() on D1: lower() does not change NULL-ness, and the lower() form let the planner
+    // pick the 0025 expression indexes over idx_vendors_public_created_at (see migration 0032).
+    d1Conditions.push(`(
+      (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+      AND json_extract(raw,'$.buyerId') IS NULL
+      AND json_extract(raw,'$.buyerAccountId') IS NULL
+    )`);
   }
   if (scopedBuyerId) {
     // A buyer's paginated listing must include every public vendor (no
@@ -247,19 +327,19 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     // request fell through to storeService.getVendors(buyerId), which
     // re-fetches and re-serializes every one of 600k+ rows on every single
     // call regardless of scope, since almost all vendors are public and thus
-    // visible to every buyer anyway. Backed by idx_vendors_buyer_id/
-    // idx_vendors_buyer_account_id (schema.sql) so the OR still uses indexes
-    // instead of a sequential scan.
+    // visible to every buyer anyway. Exact lower-case owner expressions are
+    // indexed by migration 0025, including the legacy buyerEmail alias, so
+    // the owner OR branches can use indexes instead of scanning vendor JSON.
     params.push(scopedBuyerId);
     const p = params.length;
     conditions.push(`(
-      ((raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL)
+      (lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL)
       OR lower(raw->>'buyerId') = lower($${p})
       OR lower(raw->>'buyerAccountId') = lower($${p})
       OR lower(raw->>'buyerEmail') = lower($${p})
     )`);
     d1Conditions.push(`(
-      (json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL)
+      (lower(json_extract(raw,'$.buyerId')) IS NULL AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL)
       OR lower(json_extract(raw,'$.buyerId')) = lower($${p})
       OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
       OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
@@ -270,7 +350,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
 
   let total = 0;
   if (!skipCount) {
-    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1);
+    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1) || (scopedBuyerId && !search && !category && !email && !state && !city);
     if (
       isUnfiltered &&
       cachedUnfilteredVendorsTotal !== null &&
@@ -280,23 +360,33 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       total = cachedUnfilteredVendorsTotal;
     } else {
       try {
+        const d1CountSql = isUnfiltered && !d1Where
+          ? 'SELECT CAST(coalesce(MAX(rowid), 0) AS INTEGER) AS total FROM vendors'
+          : `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`;
         const countResult = await pool.query(
           `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
           [...params],
           {
             d1: true,
-            d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`,
+            d1Text: d1CountSql,
             useCache: true,
             tag: 'vendors',
-            ttlMs: 300000,
+            ttlMs: DATABASE_QUERY_CACHE.VENDOR_PAGE_COUNT_TTL_MS,
           }
         );
-        total = countResult.rows[0]?.total || 0;
+        total = Number(countResult.rows?.[0]?.total) || 0;
         if (isUnfiltered && total > 0) {
           cachedUnfilteredVendorsTotal = total;
           lastVendorsTotalCacheTime = Date.now();
         }
       } catch (err) {
+        const staleResponse = getRetryableStaleCacheValue(cacheKey, err, 'getVendorsPageFromDB');
+        if (staleResponse !== null) return staleResponse;
+        logger.warn('Vendor count query failed; using the last cached count when available', {
+          error: err,
+          isUnfiltered,
+          hasCachedCount: cachedUnfilteredVendorsTotal !== null,
+        }, 'DATABASE_QUERY');
         if (cachedUnfilteredVendorsTotal !== null) {
           total = cachedUnfilteredVendorsTotal;
         } else {
@@ -309,20 +399,27 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
   const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
   const dataParams = [...params, effectiveLimit, effectiveOffset];
-  const dataResult = await pool.query(
-    `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-    dataParams,
-    {
-      d1: true,
-      d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-      useCache: true,
-      tag: 'vendors',
-      ttlMs: 120000,
-    }
-  );
+  let dataResult;
+  try {
+    dataResult = await pool.query(
+      `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams,
+      {
+        d1: true,
+        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 120000,
+      }
+    );
+  } catch (err) {
+    const staleResponse = getRetryableStaleCacheValue(cacheKey, err, 'getVendorsPageFromDB');
+    if (staleResponse !== null) return staleResponse;
+    throw err;
+  }
   const response = {
     rows: dataResult.rows.map((row) => {
-      const v = parseRaw(row.raw);
+      const v = parseVendorRaw(row.raw);
       if (row.created_at && !v.created_at) v.created_at = row.created_at;
       if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
       if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
@@ -387,32 +484,31 @@ async function countPublicVendorsMatchingCategories(signals) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
       d1OrGroups.push(`(
-        lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+        major_category = $${pExact} COLLATE NOCASE
+        OR raw LIKE $${pJson}
       )`);
     } else {
       params.push(`%${sig}%`);
       const p = params.length;
       orGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
+        lower(coalesce(major_category, raw->>'majorCategory', raw->>'category', '')) LIKE $${p}
         OR lower((raw->'minorCategories')::text) LIKE $${p}
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
-      d1OrGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-      )`);
+      const d1CategoryCondition = `(
+        major_category LIKE $${p}
+        OR raw LIKE $${p}
+      )`;
+      d1OrGroups.push(d1CategoryCondition);
     }
   }
 
   // Public-only: a vendor tagged to a specific buyer is never in the network pool.
-  const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;
-  const publicD1 = `source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`;
+  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+  const publicD1 = `(source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+    AND lower(json_extract(raw,'$.buyerId')) IS NULL
+    AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`;
 
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
@@ -429,6 +525,136 @@ async function countPublicVendorsMatchingCategories(signals) {
     }
   );
   return result.rows[0]?.total || 0;
+}
+
+/**
+ * Public (Procucev-network) vendor rows whose MAJOR category is one of the given RFQ
+ * category signals, newest first, capped by `limit`. This is the lookup V0 assignment
+ * uses.
+ *
+ * It reads the indexed major_category column (idx_vendors_major_category_nocase), so it
+ * reads only the matching vendors. The LIKE-based lookups below match the whole raw JSON
+ * and so scan the entire vendors table: on D1 one such scan read about a million rows, and
+ * under the D1 per-window budget that failed, which left V0 RFQs with no vendors. Every
+ * categorised network vendor carries majorCategory in its major_category column
+ * (upsertVendorInDB writes both), so the indexed match finds them. A vendor whose only
+ * category sits in minorCategories is not returned here; the in-memory matcher still checks
+ * those fields.
+ *
+ * @param {string[]} signals Category strings the RFQ carries.
+ * @param {number} limit Max rows to return.
+ * @returns {Promise<object[]>} Matching public vendor records.
+ */
+async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT) {
+  if (!pool.hasStorage()) return [];
+  const cleaned = Array.from(
+    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  if (cleaned.length === 0) return [];
+
+  const safeLimit = Math.min(
+    Math.max(Number(limit) || PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, 1),
+    PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT
+  );
+  const d1Placeholders = cleaned.map((_, index) => `$${index + 1}`).join(', ');
+  const limitIndex = cleaned.length + 1;
+  const result = await pool.query(
+    `SELECT raw FROM vendors
+     WHERE lower(major_category) = ANY($1::text[])
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL
+     ORDER BY created_at DESC LIMIT $2`,
+    [cleaned, safeLimit],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors
+       WHERE major_category COLLATE NOCASE IN (${d1Placeholders})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL
+       ORDER BY created_at DESC LIMIT $${limitIndex}`,
+      d1Params: [...cleaned, safeLimit],
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
+  );
+  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
+}
+
+/**
+ * Public (Procucev-network) vendor rows that carry one of the given minor categories and sit
+ * under one of the given major categories, newest first, capped by `limit`.
+ *
+ * This is the lookup V0 assignment uses for an RFQ that names minor categories. The major
+ * filter reads the indexed major_category column, so the scan covers only the vendors filed
+ * under the minors' parent major rather than the whole table (a LIKE match over the full raw
+ * JSON overloaded D1; see getPublicVendorsByMajorCategoryFromDB). The minor match runs in the
+ * same query, so the row cap applies to vendors that carry a matching minor. The minor match is
+ * a quoted substring test over the JSON text, so callers re-check each row against the exact
+ * minor name. A vendor filed under a different major than the minor's parent is not returned.
+ *
+ * @param {string[]} minorSearchTerms Lower-case minor names, plus their singular/plural stems, the RFQ carries.
+ * @param {string[]} majorCategories Parent major names, including legacy aliases, those minors sit under.
+ * @param {number} limit Max rows to return.
+ * @returns {Promise<object[]>} Matching public vendor records.
+ */
+async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCategories, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT) {
+  if (!pool.hasStorage()) return [];
+  const terms = Array.from(
+    new Set((Array.isArray(minorSearchTerms) ? minorSearchTerms : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const majors = Array.from(
+    new Set((Array.isArray(majorCategories) ? majorCategories : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
+  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  if (terms.length === 0 || majors.length === 0) return [];
+
+  const safeLimit = Math.min(
+    Math.max(Number(limit) || PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, 1),
+    PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT
+  );
+  // A term matches an element that starts with it, inside the JSON quotes, so the singular or
+  // plural stem reaches the same vendors the exact minor check accepts.
+  const patterns = terms.map((term) => `%"${term}`);
+
+  // Postgres: one array parameter for the majors, then one quoted pattern per minor, then the limit.
+  const pgParams = [majors, ...patterns, safeLimit];
+  const pgMinorClauses = patterns.map((_, index) => {
+    const p = index + 2;
+    return `(lower((raw->'minorCategories')::text) LIKE $${p}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${p})`;
+  });
+
+  // D1 (SQLite) has no array parameter, so each major gets its own placeholder, then each
+  // pattern, then the limit. Every placeholder is used once, in order, so the bindings line up.
+  const d1Params = [...majors, ...patterns, safeLimit];
+  const d1Majors = majors.map((_, index) => `$${index + 1}`).join(', ');
+  const d1MinorClauses = patterns.map((_, index) => `raw LIKE $${majors.length + index + 1}`);
+  const d1LimitIndex = majors.length + patterns.length + 1;
+
+  const result = await pool.query(
+    `SELECT raw FROM vendors
+     WHERE lower(major_category) = ANY($1::text[])
+       AND (${pgMinorClauses.join(' OR ')})
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL
+     ORDER BY created_at DESC LIMIT $${pgParams.length}`,
+    pgParams,
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors
+       WHERE major_category COLLATE NOCASE IN (${d1Majors})
+         AND (${d1MinorClauses.join(' OR ')})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL
+       ORDER BY created_at DESC LIMIT $${d1LimitIndex}`,
+      d1Params,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
+  );
+  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
 }
 
 /**
@@ -468,31 +694,30 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
       d1OrGroups.push(`(
-        lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+        major_category = $${pExact} COLLATE NOCASE
+        OR raw LIKE $${pJson}
       )`);
     } else {
       params.push(`%${sig}%`);
       const p = params.length;
       orGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
+        lower(coalesce(major_category, raw->>'majorCategory', raw->>'category', '')) LIKE $${p}
         OR lower((raw->'minorCategories')::text) LIKE $${p}
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
-      d1OrGroups.push(`(
-        lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE $${p}
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-      )`);
+      const d1CategoryCondition = `(
+        major_category LIKE $${p}
+        OR raw LIKE $${p}
+      )`;
+      d1OrGroups.push(d1CategoryCondition);
     }
   }
 
-  const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;
-  const publicD1 = `source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`;
+  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+  const publicD1 = `(source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+    AND lower(json_extract(raw,'$.buyerId')) IS NULL
+    AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`;
 
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
@@ -510,7 +735,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
       ttlMs: 60000,
     }
   );
-  return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
+  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
 }
 
 /**
@@ -543,10 +768,18 @@ async function getPublicVendorsPerCategoryFromDB(categories, maxPerCategory = 25
 
 /** Single-row lookup by email — used to guarantee a specific vendor is
  * present in a capped/paginated listing without fetching the whole table. */
-async function getVendorByEmailFromDB(email) {
+async function getVendorByEmailFromDB(email, { fresh = false } = {}) {
   if (!pool.hasStorage() || !email) return null;
   const cleanEmail = String(email).trim().toLowerCase();
   if (!cleanEmail) return null;
+  const now = Date.now();
+  const cachedNegative = nonVendorEmailCache.get(cleanEmail);
+  if (!fresh && process.env.NODE_ENV !== 'test' && cachedNegative && now - cachedNegative < NON_VENDOR_CACHE_TTL_MS) {
+    return null;
+  }
+  if (cachedNegative && now - cachedNegative >= NON_VENDOR_CACHE_TTL_MS) {
+    nonVendorEmailCache.delete(cleanEmail);
+  }
 
   // 1. Primary lookup by indexed email column.
   // Using `email = $1 COLLATE NOCASE` on SQLite/D1 leverages idx_vendors_email / idx_vendors_email_nocase
@@ -557,34 +790,52 @@ async function getVendorByEmailFromDB(email) {
     {
       d1: true,
       d1Text: `SELECT raw FROM vendors WHERE email = $1 COLLATE NOCASE LIMIT 1`,
-      useCache: true,
+      useCache: !fresh,
       tag: 'vendors',
       ttlMs: 60000,
     }
   );
   if (result && result.rows && result.rows[0]) {
-    return parseRaw(result.rows[0].raw);
+    nonVendorEmailCache.delete(cleanEmail);
+    return parseVendorRaw(result.rows[0].raw);
   }
 
-  // 2. Secondary fallback lookup: only if not found by primary email.
+  // D1 has no indexed corporateEmail column. Avoid a full-table JSON scan there:
+  // the primary email lookup above is indexed and the fallback could read every vendor row.
+  const d1Active = Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
+  if (d1Active) {
+    if (!fresh && process.env.NODE_ENV !== 'test') {
+      if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
+      nonVendorEmailCache.set(cleanEmail, now);
+    }
+    return null;
+  }
+
+  // Postgres keeps the compatibility lookup for vendors with a separate corporateEmail.
   result = await pool.query(
     `SELECT raw FROM vendors WHERE lower(raw->>'corporateEmail') = $1 LIMIT 1`,
     [cleanEmail],
     {
       d1: true,
       d1Text: `SELECT raw FROM vendors WHERE lower(json_extract(raw,'$.corporateEmail')) = $1 LIMIT 1`,
-      useCache: true,
+      useCache: !fresh,
       tag: 'vendors',
       ttlMs: 60000,
     }
   );
-  return result && result.rows && result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  const found = result && result.rows && result.rows[0] ? parseVendorRaw(result.rows[0].raw) : null;
+  if (!found && !fresh && process.env.NODE_ENV !== 'test') {
+    if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
+    nonVendorEmailCache.set(cleanEmail, now);
+  }
+  return found;
 }
 
 /**
  * A buyer's own uploaded/added vendors only (never the public network) —
- * bounded, so it never reads more than `limit` rows regardless of table
- * size. Used by storeService.getBootstrapData's buyer-scoped branch, which
+ * bounded, so it never returns more than `limit` rows regardless of table
+ * size. Matching owner-expression indexes keep its filter from scanning the
+ * full vendor table. Used by storeService.getBootstrapData's buyer-scoped branch, which
  * used to call storeService.getVendors() (a full unbounded re-sync of the
  * exhausted (6.7M rows read in 24h against a 20k-row table: confirmed live
  * via `wrangler d1 info`). A buyer's own vendor count is realistically
@@ -616,7 +867,12 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
         if (acc && acc.id) {
           addCandidate(acc.id);
         }
-      } catch (_) {}
+      } catch (error) {
+        logger.warn('Buyer account lookup failed while resolving vendor ownership; continuing with supplied identifiers', {
+          error,
+          operation: 'resolve-vendor-buyer-candidates',
+        }, 'DATABASE_QUERY');
+      }
     }
   }
 
@@ -645,15 +901,22 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
      ORDER BY created_at DESC
      LIMIT ${limitPlaceholder}`;
 
-  const result = await pool.query(
-    pgQuery,
-    [...ids, maxLimit],
-    {
-      d1: true,
-      d1Text: d1Query,
-    }
-  );
-  const rows = result.rows.map((row) => parseRaw(row.raw));
+  let result;
+  try {
+    result = await pool.query(
+      pgQuery,
+      [...ids, maxLimit],
+      {
+        d1: true,
+        d1Text: d1Query,
+      }
+    );
+  } catch (err) {
+    const staleRows = getRetryableStaleCacheValue(cacheKey, err, 'getVendorsByBuyerFromDB');
+    if (staleRows !== null) return staleRows;
+    throw err;
+  }
+  const rows = result.rows.map((row) => parseVendorRaw(row.raw));
   queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
   return rows;
 }
@@ -665,67 +928,156 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
  * live, D1-backed paginated search (e.g. the CM's "All Vendors" invite
  * picker) can be entirely absent from that cache, making an id it just
  * returned fail to resolve moments later. This is the D1 fallback for that. */
-async function getVendorByIdFromDB(id) {
+async function getVendorByIdFromDB(id, { fresh = false } = {}) {
   if (!pool.hasStorage() || !id) return null;
   const result = await pool.query(
     'SELECT raw FROM vendors WHERE id = $1 LIMIT 1',
     [id],
     {
       d1: true,
-      useCache: true,
+      useCache: !fresh,
       tag: 'vendors',
       ttlMs: 60000,
     }
   );
-  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  return result.rows[0] ? parseVendorRaw(result.rows[0].raw) : null;
+}
+
+async function getVendorSnapshotByIdFromDB(id) {
+  if (!pool.hasStorage() || !id) return null;
+  const result = await pool.query('SELECT id, raw FROM vendors WHERE id = $1 LIMIT 1', [id], { d1: true });
+  const row = result.rows[0];
+  if (!row) return null;
+  const raw = typeof row.raw === 'string' ? row.raw : JSON.stringify(row.raw);
+  return { id: row.id, vendor: parseVendorRaw(raw), raw };
+}
+
+async function getVendorSnapshotByEmailFromDB(email) {
+  if (!pool.hasStorage() || !email) return null;
+  const result = await pool.query(
+    'SELECT id, raw FROM vendors WHERE lower(email) = lower($1) LIMIT 1',
+    [email],
+    { d1: true }
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const raw = typeof row.raw === 'string' ? row.raw : JSON.stringify(row.raw);
+  return { id: row.id, vendor: parseVendorRaw(raw), raw };
+}
+
+async function updateVendorIfUnchangedInDB(snapshot, vendor) {
+  if (!pool.hasStorage() || !snapshot?.id || !snapshot.raw) return null;
+  const normalizedVendor = normalizeVendorRecord(vendor);
+  if (!normalizedVendor) return null;
+  const { id, majorCategory, status, source } = normalizedVendor;
+  const email = normalizeVendorEmail(normalizedVendor.email);
+  const expectedRaw = typeof snapshot.raw === 'string' ? snapshot.raw : JSON.stringify(snapshot.raw);
+  const result = await pool.query(
+    `UPDATE vendors
+     SET email = $2, major_category = $3, status = $4, source = $5, raw = $6, updated_at = now()
+     WHERE id = $1 AND raw = $7::jsonb
+     RETURNING raw`,
+    [id, email, majorCategory || null, status || null, source || null, JSON.stringify(normalizedVendor), expectedRaw],
+    {
+      d1: true,
+      d1Text: `UPDATE vendors
+       SET email = $2, major_category = $3, status = $4, source = $5, raw = $6, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND raw = $7
+       RETURNING raw`,
+    }
+  );
+  if (!result.rows[0]) return null;
+  queryCache.invalidate('vendors');
+  return parseVendorRaw(result.rows[0].raw);
 }
 
 async function syncVendorCategoriesIndexed(vendorId, vendor) {
   if (!pool.hasStorage() || !vendorId) return;
+  let categoryPersistenceMode = 'query-sequence';
+  let categoryCount = 0;
   try {
-    const categories = [];
+    const categoriesByKey = new Map();
+    const addCategory = (value, type) => {
+      if (!value) return;
+      const name = String(value).trim();
+      if (!name) return;
+      const key = `${type}:${name.toLowerCase()}`;
+      if (!categoriesByKey.has(key)) categoriesByKey.set(key, { name, type });
+    };
+
     if (vendor.majorCategory) {
-      categories.push({ name: String(vendor.majorCategory).trim(), type: 'major' });
+      addCategory(vendor.majorCategory, 'major');
     }
     if (Array.isArray(vendor.minorCategories)) {
       for (const m of vendor.minorCategories) {
-        if (m) categories.push({ name: String(m).trim(), type: 'minor' });
+        addCategory(m, 'minor');
       }
     }
     if (Array.isArray(vendor.vendorSelectedCategories)) {
       for (const s of vendor.vendorSelectedCategories) {
-        if (s) categories.push({ name: String(s).trim(), type: 'selected' });
+        addCategory(s, 'selected');
       }
     }
     if (Array.isArray(vendor.clientMappedCategories)) {
       for (const c of vendor.clientMappedCategories) {
-        if (c) categories.push({ name: String(c).trim(), type: 'client_mapped' });
+        addCategory(c, 'client_mapped');
       }
     }
-    if (categories.length === 0) return;
+    categoryCount = categoriesByKey.size;
 
     const delSql = 'DELETE FROM vendor_categories_indexed WHERE vendor_id = $1';
-    await pool.query(delSql, [vendorId], { d1: true, d1Text: delSql });
+    const insertSql = `
+      INSERT INTO vendor_categories_indexed (vendor_id, category_name, category_type)
+      VALUES ($1, $2, $3)
+    `;
+    const statements = [
+      { text: delSql, params: [vendorId] },
+      ...Array.from(categoriesByKey.values(), (category) => ({
+        text: insertSql,
+        params: [vendorId, category.name, category.type],
+      })),
+    ];
 
-    for (const cat of categories) {
-      const insSql = `
-        INSERT INTO vendor_categories_indexed (vendor_id, category_name, category_type)
-        VALUES ($1, $2, $3)
-      `;
-      const d1InsSql = `
-        INSERT OR IGNORE INTO vendor_categories_indexed (vendor_id, category_name, category_type)
-        VALUES ($1, $2, $3)
-      `;
-      await pool.query(insSql, [vendorId, cat.name, cat.type], { d1: true, d1Text: d1InsSql });
+    const d1Binding = d1Bridge.getD1Binding();
+    if (d1Binding) {
+      categoryPersistenceMode = 'd1-worker-batch';
+      await d1Bridge.batchD1(d1Binding, statements);
+      return;
     }
-  } catch {
-    // Non-fatal category indexing sync
+
+    if (pool.pool && typeof pool.pool.connect === 'function') {
+      categoryPersistenceMode = 'postgres-transaction';
+      await pool.withTransaction(async (client) => {
+        for (const statement of statements) {
+          await client.query(statement.text, statement.params);
+        }
+      });
+      return;
+    }
+
+    for (const statement of statements) {
+      await pool.query(statement.text, statement.params, {
+        d1: true,
+        d1Text: statement.text,
+      });
+    }
+  } catch (error) {
+    logger.error('Vendor category index synchronization failed', {
+      error,
+      operation: 'replace-vendor-category-index',
+      vendorId,
+      categoryCount,
+      persistenceMode: categoryPersistenceMode,
+    }, 'DATABASE_QUERY');
   }
 }
 
 async function upsertVendorInDB(vendor) {
   if (!pool.hasStorage()) return null;
-  const { id, email, majorCategory, status, source } = vendor;
+  const normalizedVendor = normalizeVendorRecord(vendor);
+  if (!normalizedVendor) return null;
+  const { id, majorCategory, status, source } = normalizedVendor;
+  const email = normalizeVendorEmail(normalizedVendor.email);
   // See upsertEvaluationInDB's comment for why the D1 path needs its own
   // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP/now() —
   // created_at is sorted on directly by getVendorsFromDB/getVendorsPageFromDB.
@@ -740,7 +1092,7 @@ async function upsertVendorInDB(vendor) {
        raw = EXCLUDED.raw,
        updated_at = now()
      RETURNING raw`,
-    [id, email || null, majorCategory || null, status || null, source || null, JSON.stringify(vendor)],
+    [id, email, majorCategory || null, status || null, source || null, JSON.stringify(normalizedVendor)],
     {
       d1: true,
       d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
@@ -756,10 +1108,11 @@ async function upsertVendorInDB(vendor) {
     }
   );
   queryCache.invalidate('vendors');
+  if (email) nonVendorEmailCache.delete(String(email).trim().toLowerCase());
   if (vendor && vendor.id) {
     void syncVendorCategoriesIndexed(vendor.id, vendor);
   }
-  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  return result.rows[0] ? parseVendorRaw(result.rows[0].raw) : null;
 }
 
 async function deleteVendorInDB(id) {
@@ -770,6 +1123,7 @@ async function deleteVendorInDB(id) {
     { d1: true }
   );
   queryCache.invalidate('vendors');
+  nonVendorEmailCache.clear();
   return result.rowCount > 0;
 }
 
@@ -797,18 +1151,20 @@ async function deleteVendorInDB(id) {
 // INSERT (its own 65535-parameter ceiling is far above anything a single
 // request already caps out at via MAX_BULK_IMPORT_ROWS_PER_REQUEST).
 async function bulkInsertVendorsInDB(vendors) {
-  if (!pool.hasStorage() || vendors.length === 0) return [];
+  if (!pool.hasStorage() || !Array.isArray(vendors) || vendors.length === 0) return [];
+  const normalizedVendors = vendors.map(normalizeVendorRecord).filter(Boolean);
+  if (normalizedVendors.length === 0) return [];
 
   const d1 = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
   if (d1) {
-    const statements = vendors.map((vendor) => ({
+    const statements = normalizedVendors.map((vendor) => ({
       text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
        ON CONFLICT (email) DO NOTHING
        RETURNING email`,
       params: [
         vendor.id,
-        vendor.email || null,
+        normalizeVendorEmail(vendor.email),
         vendor.majorCategory || null,
         vendor.status || null,
         vendor.source || null,
@@ -817,16 +1173,17 @@ async function bulkInsertVendorsInDB(vendors) {
     }));
     const results = await d1Bridge.batchD1(d1, statements);
     queryCache.invalidate('vendors');
+    nonVendorEmailCache.clear();
     return results.flatMap((result) => result.rows.map((row) => row.email));
   }
 
   const values = [];
   const placeholders = [];
-  vendors.forEach((vendor, i) => {
+  normalizedVendors.forEach((vendor, i) => {
     const base = i * 6;
     values.push(
       vendor.id,
-      vendor.email || null,
+      normalizeVendorEmail(vendor.email),
       vendor.majorCategory || null,
       vendor.status || null,
       vendor.source || null,
@@ -842,6 +1199,7 @@ async function bulkInsertVendorsInDB(vendors) {
     values
   );
   queryCache.invalidate('vendors');
+  nonVendorEmailCache.clear();
   return result.rows.map((row) => row.email);
 }
 
@@ -863,7 +1221,7 @@ async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared
 async function getBulkImportSessionFromDB(id) {
   if (!pool.hasStorage()) return null;
   const result = await pool.query(
-    `SELECT id, status, total_rows_declared, processed_count, imported_count,
+    `SELECT id, created_by_email, status, total_rows_declared, processed_count, imported_count,
             missing_email_count, duplicate_count, invalid_count
      FROM bulk_vendor_import_sessions WHERE id = $1`,
     [id],
@@ -958,12 +1316,66 @@ async function getRFQByIdFromDB(idOrNumber) {
     {
       d1: true,
       d1Text: 'SELECT raw FROM rfqs WHERE id = $1 OR rfq_number = $1 LIMIT 1',
-      useCache: true,
       tag: 'rfqs',
-      ttlMs: 60000,
     }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
+async function getRFQSnapshotByIdFromDB(idOrNumber) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    'SELECT id, raw FROM rfqs WHERE id = $1 OR rfq_number = $1 LIMIT 1',
+    [idOrNumber],
+    { d1: true }
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    rfq: parseRaw(row.raw),
+    raw: row.raw,
+  };
+}
+
+/**
+ * Compare-and-swap an RFQ raw record. Partial service updates are merged with
+ * the latest persisted snapshot before this call; the raw equality predicate
+ * prevents another isolate from replacing that snapshot between the read and
+ * write. A null result means the caller should reload and retry the merge.
+ */
+async function updateRFQIfUnchangedInDB(snapshot, rfq) {
+  if (!pool.hasStorage()) return null;
+  const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
+  const expectedRaw = typeof snapshot.raw === 'string' ? snapshot.raw : JSON.stringify(snapshot.raw);
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET rfq_number = $2, category = $3, status = $4, sourcing_mode = $5,
+         budget = $6, raw = $7, updated_at = now()
+     WHERE id = $1 AND raw = $8::jsonb
+     RETURNING raw`,
+    [
+      id,
+      rfqNumber || null,
+      category || null,
+      status || null,
+      sourcingMode || null,
+      Number.isFinite(Number(budget)) ? Number(budget) : null,
+      JSON.stringify(rfq),
+      expectedRaw,
+    ],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET rfq_number = $2, category = $3, status = $4, sourcing_mode = $5,
+           budget = $6, raw = $7, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND raw = $8
+       RETURNING raw`,
+    }
+  );
+  if (!result.rows[0]) return null;
+  queryCache.invalidate('rfqs');
+  return parseRaw(result.rows[0].raw);
 }
 
 async function upsertRFQInDB(rfq) {
@@ -1011,6 +1423,105 @@ async function upsertRFQInDB(rfq) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+/**
+ * Atomically close RFQs whose closing time has passed. An RFQ with a stored closingDeadline closes when
+ * that time arrives, so a one-time extension keeps it open. An RFQ stored before closingDeadline existed
+ * closes 48 hours after its createdAt, which is the moment cutoffIso marks.
+ *
+ * createdAt is stored to the minute as "YYYY-MM-DD HH:mm UTC", so it is compared as a minute key against
+ * the cutoff. A plain text comparison against the ISO cutoff put an RFQ created on the cutoff's day before
+ * the cutoff, because a space sorts before "T", and closed it up to a day early.
+ *
+ * The eligibility predicate and status transition share one statement so concurrent schedulers cannot
+ * both dispatch closure side effects.
+ */
+async function closeExpiredRFQsInDB(cutoffIso, closedAtIso, closeReason) {
+  if (!pool.hasStorage()) return [];
+  const closurePatch = JSON.stringify({
+    status: 'Closed',
+    closedAt: closedAtIso,
+    closedReason: closeReason,
+  });
+  const createdCutoffKey = String(cutoffIso).slice(0, 16);
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET status = 'Closed', raw = raw || $2::jsonb, updated_at = now()
+     WHERE COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
+       AND COALESCE(raw->>'poFinalised', 'false') <> 'true'
+       AND COALESCE(raw->>'poNumber', '') = ''
+       AND (
+         (COALESCE(raw->>'closingDeadline', '') <> '' AND raw->>'closingDeadline' <= $1)
+         OR (
+           COALESCE(raw->>'closingDeadline', '') = ''
+           AND COALESCE(raw->>'createdAt', '') <> ''
+           AND replace(substr(raw->>'createdAt', 1, 16), ' ', 'T') <= $3
+         )
+       )
+     RETURNING raw`,
+    [closedAtIso, closurePatch, createdCutoffKey],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET status = 'Closed', raw = json_patch(raw, $2), updated_at = CURRENT_TIMESTAMP
+       WHERE COALESCE(json_extract(raw, '$.status'), status, '') NOT IN ('Closed', 'PO Generated', 'Expired')
+         AND COALESCE(json_extract(raw, '$.poFinalised'), 0) NOT IN (1, 'true')
+         AND COALESCE(json_extract(raw, '$.poNumber'), '') = ''
+         AND (
+           (COALESCE(json_extract(raw, '$.closingDeadline'), '') <> '' AND json_extract(raw, '$.closingDeadline') <= $1)
+           OR (
+             COALESCE(json_extract(raw, '$.closingDeadline'), '') = ''
+             AND COALESCE(json_extract(raw, '$.createdAt'), '') <> ''
+             AND replace(substr(json_extract(raw, '$.createdAt'), 1, 16), ' ', 'T') <= $3
+           )
+         )
+       RETURNING raw`,
+    }
+  );
+  return (result.rows || []).map((row) => parseRaw(row.raw));
+}
+
+/**
+ * Apply a one-time deadline extension only while the durable RFQ is still
+ * eligible. The predicate and write share one SQL statement, so concurrent
+ * requests cannot both extend the same RFQ based on stale application state.
+ */
+async function extendRFQOnceInDB(id, updates) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET raw = raw || $2::jsonb, updated_at = now()
+     WHERE id = $1
+       AND COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'Expired')
+       AND COALESCE(raw->>'isExtended', 'false') <> 'true'
+       AND COALESCE(raw->>'extendedAt', '') = ''
+       AND COALESCE(raw->>'extensionHours', '') = ''
+     RETURNING raw`,
+    [id, JSON.stringify(updates)],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET raw = json_set(
+         raw,
+         '$.closingDeadline', json_extract($2, '$.closingDeadline'),
+         '$.deadline', json_extract($2, '$.deadline'),
+         '$.isExtended', json_extract($2, '$.isExtended'),
+         '$.extensionHours', json_extract($2, '$.extensionHours'),
+         '$.extendedAt', json_extract($2, '$.extendedAt'),
+         '$.extendedByEmail', json_extract($2, '$.extendedByEmail'),
+         '$.updatedAt', json_extract($2, '$.updatedAt')
+       ), updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+         AND COALESCE(json_extract(raw, '$.status'), status, '') NOT IN ('Closed', 'Expired')
+         AND COALESCE(json_extract(raw, '$.isExtended'), 0) NOT IN (1, 'true')
+         AND COALESCE(json_extract(raw, '$.extendedAt'), '') = ''
+         AND COALESCE(json_extract(raw, '$.extensionHours'), '') = ''
+       RETURNING raw`,
+    }
+  );
+  if (result.rows[0]) queryCache.invalidate('rfqs');
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
 async function deleteRFQInDB(id) {
   if (!pool.hasStorage()) return false;
   const result = await pool.query(
@@ -1042,6 +1553,28 @@ async function getEvaluationsFromDB(limit = null) {
       ttlMs: 60000,
     }
   );
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
+// Upper bound on rows one vendor lookup may return. Matches the cap the
+// evaluation list endpoint applies to its limit parameter.
+const VENDOR_EVALUATION_LOOKUP_MAX_ROWS = 500;
+
+// Saved evaluations for one vendor, newest first. Reads the table directly
+// through idx_evaluations_vendor_id, so a record older than the in-memory window
+// is still found. Deliberately not cached: a cached "no record" answer on one
+// worker would let a request go out for a vendor another worker just evaluated.
+async function getEvaluationsForVendorFromDB(vendorId, limit = 1) {
+  if (!pool.hasStorage()) return [];
+  const normalizedVendorId = String(vendorId || '').trim();
+  if (!normalizedVendorId) return [];
+  const requestedRows = Number.parseInt(limit, 10);
+  const rowLimit = Math.min(Math.max(Number.isInteger(requestedRows) ? requestedRows : 1, 1), VENDOR_EVALUATION_LOOKUP_MAX_ROWS);
+  const sql = 'SELECT raw FROM evaluations WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2';
+  const result = await pool.query(sql, [normalizedVendorId, rowLimit], {
+    d1: true,
+    d1Text: sql,
+  });
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
@@ -1082,7 +1615,7 @@ async function upsertEvaluationInDB(evaluation) {
 
 // ── Vendor catalogue ────────────────────────────────────────────────────────
 
-async function getVendorCatalogueFromDB(limit = null) {
+async function getVendorCatalogueFromDB(limit = null, { fresh = false } = {}) {
   if (!pool.hasStorage()) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
@@ -1095,7 +1628,7 @@ async function getVendorCatalogueFromDB(limit = null) {
     {
       d1: true,
       d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000',
-      useCache: true,
+      useCache: !fresh,
       tag: 'catalogue',
       ttlMs: 60000,
     }
@@ -1103,38 +1636,107 @@ async function getVendorCatalogueFromDB(limit = null) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
+async function getVendorCatalogueByVendorFromDB(vendorId, limit = 100) {
+  if (!pool.hasStorage() || !vendorId) return [];
+  const safeLimit = Number.isInteger(Number(limit)) && Number(limit) > 0
+    ? Math.min(Number(limit), 500)
+    : 100;
+  const sql = 'SELECT raw FROM vendor_catalogue WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2';
+  const result = await pool.query(sql, [vendorId, safeLimit], {
+    d1: true,
+    d1Text: sql,
+    useCache: false,
+  });
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
+async function getCatalogueProductByIdFromDB(id) {
+  if (!pool.hasStorage() || !id) return null;
+  const sql = 'SELECT raw FROM vendor_catalogue WHERE id = $1 LIMIT 1';
+  const result = await pool.query(sql, [id], {
+    d1: true,
+    d1Text: sql,
+    useCache: false,
+  });
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
 async function upsertCatalogueProductInDB(product) {
   if (!pool.hasStorage()) return null;
   const { id, vendorId, sku, category } = product;
+  const normalizedSku = typeof sku === 'string' ? sku.trim() : sku;
+  const normalizedProduct = { ...product, sku: normalizedSku || null };
+  const params = [id, vendorId || null, normalizedSku || null, category || null, JSON.stringify(normalizedProduct)];
   // See upsertEvaluationInDB's comment: CURRENT_TIMESTAMP on D1 renders in a
   // format that doesn't sort correctly against the ISO created_at/updated_at
   // already in the column from migrated data, since this table's D1 default
   // needs the same ISO form.
-  const result = await pool.query(
-    `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+  const pgSql = `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
+     SELECT $1, $2, $3, $4, $5, now()
+     WHERE $2 IS NULL OR $3 IS NULL OR trim($3) = '' OR NOT EXISTS (
+       SELECT 1 FROM vendor_catalogue
+       WHERE vendor_id = $2 AND lower(trim(sku)) = lower(trim($3)) AND id <> $1
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       vendor_id = EXCLUDED.vendor_id,
+       sku = EXCLUDED.sku,
+       category = EXCLUDED.category,
+       raw = EXCLUDED.raw,
+       updated_at = now()
+     RETURNING raw`;
+  const d1Sql = `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
+     SELECT $1, $2, $3, $4, $5, CURRENT_TIMESTAMP
+     WHERE $2 IS NULL OR $3 IS NULL OR trim($3) = '' OR NOT EXISTS (
+       SELECT 1 FROM vendor_catalogue
+       WHERE vendor_id = $2 AND lower(trim(sku)) = lower(trim($3)) AND id <> $1
+     )
      ON CONFLICT (id) DO UPDATE SET
        vendor_id = EXCLUDED.vendor_id,
        sku = EXCLUDED.sku,
        category = EXCLUDED.category,
        raw = EXCLUDED.raw,
        updated_at = CURRENT_TIMESTAMP
-     RETURNING raw`,
-    [id, vendorId || null, sku || null, category || null, JSON.stringify(product)],
-    {
-      d1: true,
-      d1Text: `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-     ON CONFLICT (id) DO UPDATE SET
-       vendor_id = EXCLUDED.vendor_id,
-       sku = EXCLUDED.sku,
-       category = EXCLUDED.category,
-       raw = EXCLUDED.raw,
-       updated_at = CURRENT_TIMESTAMP
-     RETURNING raw`,
+     RETURNING raw`;
+
+  let result;
+  const d1Binding = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
+  if (!d1Binding && vendorId && normalizedSku && pool.pool && typeof pool.pool.connect === 'function') {
+    const startedAt = Date.now();
+    try {
+      result = await pool.withTransaction(async (client) => {
+        // Serialize same-vendor SKU writes across PostgreSQL connections. The
+        // conditional INSERT below then sees the winner before it commits.
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [String(vendorId)]);
+        return client.query(pgSql, params);
+      });
+    } catch (error) {
+      logger.error('Catalogue product write transaction failed', {
+        error,
+        operation: 'upsert',
+        table: 'vendor_catalogue',
+        productId: id,
+        vendorId,
+      }, 'DATABASE_QUERY');
+      throw error;
+    } finally {
+      pool.queryAuditor?.auditQuery(pgSql, params, Date.now() - startedAt, false);
     }
-  );
+  } else {
+    result = await pool.query(pgSql, params, {
+      d1: true,
+      d1Text: d1Sql,
+      useCache: false,
+    });
+  }
+
   queryCache.invalidate('catalogue');
+  if (!result.rows[0]) {
+    const conflict = new Error('A product with this SKU already exists in this vendor catalogue.');
+    conflict.statusCode = 409;
+    conflict.code = 'CATALOGUE_SKU_CONFLICT';
+    logger.warn('Rejected duplicate vendor catalogue SKU', { productId: id, vendorId }, 'DATABASE_INTEGRITY');
+    throw conflict;
+  }
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -1182,14 +1784,69 @@ async function getBuyerAccountsFromDB(limit = null) {
 // Reads straight from Postgres rather than an in-memory cache, so a plan/role
 // change made by any other process (a script, another instance) is visible on
 // the very next request instead of requiring this process to restart.
-async function getBuyerAccountByEmailFromDB(email) {
+async function getBuyerAccountByEmailFromDB(email, { fresh = false } = {}) {
   if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
     'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
     [email],
-    { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
+    { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
+async function getBuyerAccountByIdFromDB(id, { fresh = false } = {}) {
+  if (!pool.hasStorage() || !id) return null;
+  const result = await pool.query(
+    'SELECT raw FROM buyer_accounts WHERE id = $1 LIMIT 1',
+    [id],
+    { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
+async function getBuyerAccountSnapshotByIdFromDB(id) {
+  if (!pool.hasStorage() || !id) return null;
+  const result = await pool.query('SELECT id, raw FROM buyer_accounts WHERE id = $1 LIMIT 1', [id], { d1: true });
+  const row = result.rows[0];
+  if (!row) return null;
+  const raw = typeof row.raw === 'string' ? row.raw : JSON.stringify(row.raw);
+  return { id: row.id, account: parseRaw(raw), raw };
+}
+
+async function getBuyerAccountSnapshotByEmailFromDB(email) {
+  if (!pool.hasStorage() || !email) return null;
+  const result = await pool.query(
+    'SELECT id, raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    [email],
+    { d1: true }
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const raw = typeof row.raw === 'string' ? row.raw : JSON.stringify(row.raw);
+  return { id: row.id, account: parseRaw(raw), raw };
+}
+
+async function updateBuyerAccountIfUnchangedInDB(snapshot, account) {
+  if (!pool.hasStorage() || !snapshot?.id || !snapshot.raw) return null;
+  const { id, corporateEmail, status } = account;
+  const expectedRaw = typeof snapshot.raw === 'string' ? snapshot.raw : JSON.stringify(snapshot.raw);
+  const result = await pool.query(
+    `UPDATE buyer_accounts
+     SET corporate_email = $2, status = $3, raw = $4, updated_at = now()
+     WHERE id = $1 AND raw = $5::jsonb
+     RETURNING raw`,
+    [id, corporateEmail || null, status || null, JSON.stringify(account), expectedRaw],
+    {
+      d1: true,
+      d1Text: `UPDATE buyer_accounts
+       SET corporate_email = $2, status = $3, raw = $4, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND raw = $5
+       RETURNING raw`,
+    }
+  );
+  if (!result.rows[0]) return null;
+  queryCache.invalidate('buyer_accounts');
+  return parseRaw(result.rows[0].raw);
 }
 
 async function upsertBuyerAccountInDB(account) {
@@ -1252,6 +1909,74 @@ async function setActiveBuyerAccountInDB(id) {
   queryCache.invalidate('buyer_accounts');
 }
 
+async function setActiveBuyerAccountDurablyInDB(id) {
+  if (!pool.hasStorage() || !id) return null;
+  const result = await pool.query(
+    `UPDATE buyer_accounts
+     SET is_active = (id = $1)
+     WHERE EXISTS (SELECT 1 FROM buyer_accounts WHERE id = $1)
+     RETURNING id, raw`,
+    [id],
+    { d1: true }
+  );
+  queryCache.invalidate('buyer_accounts');
+  const activeRow = (result.rows || []).find((row) => row.id === id);
+  return activeRow ? parseRaw(activeRow.raw) : null;
+}
+
+async function deleteBuyerAccountAndPromoteActiveInDB(id) {
+  if (!pool.hasStorage() || !id) return { deleted: false, activeAccount: null };
+
+  const binding = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
+  let result;
+  if (binding) {
+    const batchResults = await d1Bridge.batchD1(binding, [
+      { text: 'DELETE FROM buyer_accounts WHERE id = $1 RETURNING id', params: [id] },
+      {
+        text: `UPDATE buyer_accounts
+               SET is_active = COALESCE(id = (
+                 SELECT id FROM buyer_accounts
+                 ORDER BY is_active DESC, created_at DESC, id ASC
+                 LIMIT 1
+               ), false)`,
+        params: [],
+      },
+      { text: 'SELECT raw FROM buyer_accounts WHERE is_active = true ORDER BY created_at DESC, id ASC LIMIT 1', params: [] },
+    ]);
+    result = {
+      deleted: Boolean(batchResults[0]?.rows?.length),
+      activeAccount: batchResults[2]?.rows?.[0] ? parseRaw(batchResults[2].rows[0].raw) : null,
+    };
+  } else {
+    result = await pool.withTransaction(async (client) => {
+      const deleted = await client.query(
+        'DELETE FROM buyer_accounts WHERE id = $1 RETURNING id',
+        [id]
+      );
+      if (!deleted.rows?.length) return { deleted: false, activeAccount: null };
+
+      await client.query(
+        `UPDATE buyer_accounts
+         SET is_active = COALESCE(id = (
+           SELECT id FROM buyer_accounts
+           ORDER BY is_active DESC, created_at DESC, id ASC
+           LIMIT 1
+         ), false)`
+      );
+      const active = await client.query(
+        'SELECT raw FROM buyer_accounts WHERE is_active = true ORDER BY created_at DESC, id ASC LIMIT 1'
+      );
+      return {
+        deleted: true,
+        activeAccount: active.rows?.[0] ? parseRaw(active.rows[0].raw) : null,
+      };
+    });
+  }
+
+  queryCache.invalidate('buyer_accounts');
+  return result;
+}
+
 // ── AI feed (100-item cap, trimmed here so triggerBatchChaser's bulk-insert
 // path — which bypasses addAIFeedItem's in-memory pop() — gets the same
 // trim without needing its own bookkeeping of which item to evict) ──────────
@@ -1281,48 +2006,35 @@ async function upsertAIFeedItemInDB(item) {
     [id, JSON.stringify(item)],
     { d1: true }
   );
-  await pool.query(
-    `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`,
-    [],
-    {
-      d1: true,
-      d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
-    }
-  );
+  const persistedItem = result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  if (!persistedItem) return null;
+
+  try {
+    await pool.query(
+      `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`,
+      [],
+      {
+        d1: true,
+        d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
+      }
+    );
+  } catch (error) {
+    logger.warn('AI feed item was saved, but retention cleanup failed', { itemId: id, error }, 'DATABASE_MAINTENANCE');
+  }
   queryCache.invalidate('ai_feed');
-  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  return persistedItem;
 }
 
-// ── Audit logs (SHA-256 hash chain — sequence must reflect exact insertion
-// order, see schema.sql's comment on audit_logs.sequence) ───────────────────
+// ── Audit logs (Database table audit_logs dropped per migration 0029) ─────────
+// Audit events are logged to the filesystem locally and Cloudflare Observability in production.
 
-async function getAuditLogsFromDB(limit = null) {
-  if (!pool.hasStorage()) return [];
-  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
-  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
-  const limitClause = hasLimit ? 'LIMIT $1' : 'LIMIT 1000';
-  const sql = `SELECT raw FROM audit_logs ORDER BY sequence DESC ${limitClause}`.trim();
-  const d1Sql = `SELECT raw FROM audit_logs ORDER BY rowid DESC ${limitClause}`.trim();
-  const result = await pool.query(
-    sql,
-    params,
-    { d1: true, d1Text: d1Sql, useCache: true, tag: 'audit_logs', ttlMs: 30000 }
-  );
-  return result.rows.map((row) => parseRaw(row.raw));
+async function getAuditLogsFromDB(limit = null, { fresh = false } = {}) {
+  // Table audit_logs was dropped via migration 0029. Return empty array without querying database.
+  return [];
 }
 
 async function upsertAuditLogInDB(entry) {
-  if (!pool.hasStorage()) return null;
-  const { id } = entry;
-  const result = await pool.query(
-    `INSERT INTO audit_logs (id, raw) VALUES ($1, $2)
-     ON CONFLICT (id) DO UPDATE SET raw = EXCLUDED.raw
-     RETURNING raw`,
-    [id, JSON.stringify(entry)],
-    { d1: true }
-  );
-  queryCache.invalidate('audit_logs');
-  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  return auditLogQueries.appendAuditLogInDB(entry);
 }
 
 // ── Notifications ────────────────────────────────────────────────────────────
@@ -1359,11 +2071,19 @@ async function insertNotificationInDB(notification) {
     `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (id) DO UPDATE SET
-       is_read = EXCLUDED.is_read,
-       raw = EXCLUDED.raw
+       is_read = notifications.is_read,
+       raw = jsonb_set(EXCLUDED.raw, '{read}', to_jsonb(notifications.is_read), true)
      RETURNING raw`,
     [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)],
-    { d1: true }
+    {
+      d1: true,
+      d1Text: `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (id) DO UPDATE SET
+       is_read = notifications.is_read,
+       raw = json_set(EXCLUDED.raw, '$.read', json(CASE WHEN notifications.is_read != 0 THEN 'true' ELSE 'false' END))
+     RETURNING raw`,
+    }
   );
   queryCache.invalidate('notifications');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
@@ -1372,48 +2092,74 @@ async function insertNotificationInDB(notification) {
 // One multi-row INSERT for the whole fan-out of a single RFQ to every matched
 // vendor, rather than a write per vendor.
 async function bulkInsertNotificationsInDB(notifications) {
-  if (!pool.hasStorage() || notifications.length === 0) return [];
-  const values = [];
-  const placeholders = notifications.map((n, i) => {
-    const base = i * 7;
-    values.push(
-      n.id,
-      n.recipientType,
-      n.recipientId,
-      n.kind,
-      n.rfqId || null,
-      !!n.read,
-      JSON.stringify(n)
-    );
-    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
-  });
-  const result = await pool.query(
-    `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
+  if (!pool.hasStorage() || !Array.isArray(notifications) || notifications.length === 0) return [];
+  const makeInsertStatement = (batch) => {
+    const values = [];
+    const placeholders = batch.map((notification, index) => {
+      const base = index * 7;
+      values.push(
+        notification.id,
+        notification.recipientType,
+        notification.recipientId,
+        notification.kind,
+        notification.rfqId || null,
+        !!notification.read,
+        JSON.stringify(notification)
+      );
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
+    });
+    return {
+      text: `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
      VALUES ${placeholders.join(', ')}
      ON CONFLICT (id) DO NOTHING
      RETURNING id`,
-    values,
-    { d1: true }
-  );
+      params: values,
+    };
+  };
+
+  const d1Binding = d1Bridge.getD1Binding();
+  if (d1Binding) {
+    const statements = notifications.map((notification) => makeInsertStatement([notification]));
+    const results = await d1Bridge.batchD1(d1Binding, statements);
+    queryCache.invalidate('notifications');
+    return results.flatMap((result) => result.rows.map((row) => row.id));
+  }
+
+  const d1HttpClient = d1Bridge.getD1HttpClient();
+  if (d1HttpClient) {
+    const insertedIds = [];
+    for (let index = 0; index < notifications.length; index += D1_NOTIFICATION_INSERT_BATCH_SIZE) {
+      const statement = makeInsertStatement(notifications.slice(index, index + D1_NOTIFICATION_INSERT_BATCH_SIZE));
+      const result = await pool.query(statement.text, statement.params, { d1: true });
+      insertedIds.push(...result.rows.map((row) => row.id));
+    }
+    queryCache.invalidate('notifications');
+    return insertedIds;
+  }
+
+  const statement = makeInsertStatement(notifications);
+  const result = await pool.query(statement.text, statement.params);
   queryCache.invalidate('notifications');
   return result.rows.map((row) => row.id);
 }
 
-async function markNotificationReadInDB(id) {
-  if (!pool.hasStorage()) return false;
+async function markNotificationReadInDB(id, recipientType, recipientId) {
+  if (!pool.hasStorage() || !recipientType || !recipientId) return false;
   // jsonb_set has no shared Postgres/SQLite spelling (SQLite's equivalent is
   // json_set, and 'true'::jsonb is Postgres-only cast syntax), so this needs
   // a real second SQL string for the D1 path rather than a placeholder swap.
   const result = await pool.query(
     `UPDATE notifications
        SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
-     WHERE id = $1`,
-    [id],
+     WHERE id = $1 AND recipient_type = $2 AND recipient_id = $3
+     RETURNING id`,
+    [id, recipientType, recipientId],
     {
       d1: true,
       d1Text: `UPDATE notifications
        SET is_read = 1, raw = json_set(raw, '$.read', json('true'))
-     WHERE id = $1`,
+     WHERE id = $1 AND recipient_type = $2 AND recipient_id = $3
+     RETURNING id`,
     }
   );
   queryCache.invalidate('notifications');
@@ -1501,6 +2247,34 @@ async function getPaymentLinksFromDB(limit = null) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
+/**
+ * Fetch the oldest payment links in the requested statuses for scheduled
+ * reconciliation. Filtering in SQL lets the status index serve this query
+ * and prevents newer terminal links from hiding older unpaid links behind a
+ * fixed "latest N" window. The bounded oldest-first batch makes progress
+ * through a backlog without loading the full payment_links table into a
+ * Worker isolate.
+ */
+async function getPaymentLinksByStatusFromDB(statuses, limit = 100) {
+  if (!pool.hasStorage() || !Array.isArray(statuses)) return [];
+  const safeStatuses = [...new Set(statuses.map((status) => String(status || '').trim()).filter(Boolean))];
+  if (safeStatuses.length === 0) return [];
+
+  const safeLimit = Math.min(Math.max(Math.floor(Number(limit) || 100), 1), 100);
+  const statusParameters = safeStatuses.map((_, index) => `$${index + 1}`).join(', ');
+  const limitParameter = `$${safeStatuses.length + 1}`;
+  const params = [...safeStatuses, safeLimit];
+  const result = await pool.query(
+    `SELECT raw FROM payment_links
+     WHERE status IN (${statusParameters})
+     ORDER BY updated_at ASC
+     LIMIT ${limitParameter}`,
+    params,
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
 async function getPaymentLinksByVendorFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
@@ -1539,7 +2313,7 @@ async function getPaymentLinksByBuyerFromDB(buyerAccountId, limit = 50) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
-async function getPaymentLinkByIdFromDB(id) {
+async function getPaymentLinkByIdFromDB(id, { fresh = false } = {}) {
   if (!pool.hasStorage() || !id) return null;
   const result = await pool.query(
     'SELECT raw FROM payment_links WHERE id = $1 LIMIT 1',
@@ -1547,7 +2321,7 @@ async function getPaymentLinkByIdFromDB(id) {
     {
       d1: true,
       d1Text: 'SELECT raw FROM payment_links WHERE id = $1 LIMIT 1',
-      useCache: true,
+      useCache: !fresh,
       tag: 'payment_links',
       ttlMs: 60000,
     }
@@ -1596,6 +2370,20 @@ async function upsertPaymentLinkInDB(link) {
 // ── Chaser Queue ─────────────────────────────────────────────────────────────
 // Persists pending chaser dispatches so they survive process restarts.
 
+const CHASER_JOB_INSERT_SQL = `INSERT INTO chaser_queue
+       (id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone, vendor_email,
+        vendor_contact_person, rfq_title, channel, status, fire_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
+     ON CONFLICT (id) DO NOTHING`;
+
+function chaserJobParams(job) {
+  return [
+    job.id, job.rfqNumber, job.rfqId, job.vendorId, job.vendorName,
+    job.vendorPhone || null, job.vendorEmail || null, job.vendorContactPerson || null,
+    job.rfqTitle || null, job.channel, job.fireAt,
+  ];
+}
+
 /**
  * Write a new pending chaser job.
  * @param {object} job  { id, rfqNumber, rfqId, vendorId, vendorName, vendorPhone, vendorEmail,
@@ -1603,23 +2391,30 @@ async function upsertPaymentLinkInDB(link) {
  */
 async function insertChaserJobInDB(job) {
   if (!pool.hasStorage()) return null;
-  const {
-    id, rfqNumber, rfqId, vendorId, vendorName,
-    vendorPhone, vendorEmail, vendorContactPerson,
-    rfqTitle, channel, fireAt,
-  } = job;
-  await pool.query(
-    `INSERT INTO chaser_queue
-       (id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone, vendor_email,
-        vendor_contact_person, rfq_title, channel, status, fire_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
-     ON CONFLICT (id) DO NOTHING`,
-    [id, rfqNumber, rfqId, vendorId, vendorName,
-     vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
-     rfqTitle || null, channel, fireAt],
-    { d1: true }
-  );
+  await pool.query(CHASER_JOB_INSERT_SQL, chaserJobParams(job), { d1: true });
   return job;
+}
+
+/**
+ * Write several pending chaser jobs in one D1 batch. Scheduling one RFQ used to send one write per
+ * vendor channel. Each D1 write counts as a Worker subrequest, and a large RFQ could reach the
+ * subrequest limit. A batch is one subrequest whatever its row count.
+ * @param {object[]} jobs Same shape as insertChaserJobInDB.
+ * @returns {Promise<object[]>} The jobs that were written.
+ */
+async function insertChaserJobsInDB(jobs) {
+  if (!pool.hasStorage() || !Array.isArray(jobs) || jobs.length === 0) return [];
+  const d1 = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
+  if (!d1) {
+    const saved = [];
+    for (const job of jobs) saved.push(await insertChaserJobInDB(job));
+    return saved;
+  }
+  await d1Bridge.batchD1(
+    d1,
+    jobs.map((job) => ({ text: CHASER_JOB_INSERT_SQL, params: chaserJobParams(job) }))
+  );
+  return jobs;
 }
 
 /** Mark a chaser job as fired. */
@@ -1632,14 +2427,43 @@ async function markChaserJobFiredInDB(id) {
   );
 }
 
-/** Mark a chaser job as failed with an error message. */
-async function markChaserJobFailedInDB(id, errorMessage) {
-  if (!pool.hasStorage()) return;
-  await pool.query(
-    `UPDATE chaser_queue SET status='failed', error=$2, fired_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
-    [id, errorMessage || 'unknown'],
+/** Record a failed attempt and schedule bounded retry work while attempts remain. */
+async function markChaserJobFailedInDB(id, errorMessage, attempts = 1) {
+  if (!pool.hasStorage()) return null;
+  const attemptNumber = Math.max(1, Number(attempts) || 1);
+  const retryDelayMs = Math.min(
+    RFQ_CHASER_RETRY_BASE_MS * (2 ** (attemptNumber - 1)),
+    RFQ_CHASER_RETRY_MAX_MS
+  );
+  const retryAt = new Date(Date.now() + retryDelayMs).toISOString();
+  const safeError = String(errorMessage || 'unknown').slice(0, RFQ_CHASER_ERROR_MAX_LENGTH);
+  const result = await pool.query(
+    `UPDATE chaser_queue
+     SET status = CASE WHEN attempts >= $3 THEN 'failed' ELSE 'pending' END,
+         fire_at = CASE WHEN attempts >= $3 THEN fire_at ELSE $4 END,
+         error = $2,
+         fired_at = CASE WHEN attempts >= $3 THEN CURRENT_TIMESTAMP ELSE NULL END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1 AND status = 'processing'
+     RETURNING id, status, fire_at, attempts`,
+    [id, safeError, RFQ_CHASER_MAX_ATTEMPTS, retryAt],
     { d1: true }
   );
+  const retryState = result.rows?.[0] || null;
+  if (retryState?.status === 'pending') {
+    logger.warn('RFQ chaser delivery failed; retry scheduled', {
+      chaserJobId: id,
+      attempts: retryState.attempts,
+      nextAttemptAt: retryState.fire_at,
+    }, 'RFQ_CHASER');
+  } else if (retryState?.status === 'failed') {
+    logger.error('RFQ chaser delivery exhausted its retry budget', {
+      chaserJobId: id,
+      attempts: retryState.attempts,
+      maxAttempts: RFQ_CHASER_MAX_ATTEMPTS,
+    }, 'RFQ_CHASER');
+  }
+  return retryState;
 }
 
 /** Cancel all pending chaser jobs for an RFQ (called on RFQ delete/close). */
@@ -1691,10 +2515,10 @@ async function getPendingChaserJobsFromDB(limit = 100) {
  */
 async function claimDueChaserJobsFromDB(now, staleBefore, limit = 25) {
   if (!pool.hasStorage()) return [];
-  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), RFQ_COMPARISON_QUEUE_MAX_LIMIT);
   const result = await pool.query(
     `UPDATE chaser_queue
-     SET status='processing', updated_at=$1
+     SET status='processing', attempts=attempts + 1, updated_at=$1
      WHERE id IN (
        SELECT id FROM chaser_queue
        WHERE (status='pending' AND fire_at <= $1)
@@ -1702,12 +2526,136 @@ async function claimDueChaserJobsFromDB(now, staleBefore, limit = 25) {
        ORDER BY fire_at ASC
        LIMIT $3
      )
+       AND ((status='pending' AND fire_at <= $1)
+         OR (status='processing' AND updated_at <= $2))
      RETURNING id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
-               vendor_email, vendor_contact_person, rfq_title, channel, fire_at`,
+               vendor_email, vendor_contact_person, rfq_title, channel, fire_at, attempts`,
     [now, staleBefore, safeLimit],
     { d1: true }
   );
   return result.rows || [];
+}
+
+// ── Auto-closure comparison notification queue ──────────────────────────────
+// The five-minute buyer comparison notice must survive Worker isolate sleep
+// and process restarts, so it is stored as a durable job and dispatched by Cron.
+
+async function insertRFQComparisonJobInDB({ id, rfqId, rfqNumber, fireAt }) {
+  if (!pool.hasStorage()) return null;
+  await pool.query(
+    `INSERT INTO rfq_comparison_queue (id, rfq_id, rfq_number, status, fire_at)
+     VALUES ($1, $2, $3, 'pending', $4)
+     ON CONFLICT (rfq_id) DO NOTHING`,
+    [id, rfqId, rfqNumber, fireAt],
+    { d1: true }
+  );
+  return { id, rfqId, rfqNumber, fireAt };
+}
+
+async function getPendingRFQComparisonJobsFromDB(limit = 100) {
+  if (!pool.hasStorage()) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const limitValue = hasLimit ? Math.min(Number(limit), 1000) : 1000;
+  const result = await pool.query(
+    `SELECT id, rfq_id, rfq_number, fire_at
+     FROM rfq_comparison_queue
+     WHERE status='pending'
+     ORDER BY fire_at ASC
+     LIMIT $1`,
+    [limitValue],
+    {
+      d1: true,
+      d1Text: `SELECT id, rfq_id, rfq_number, fire_at
+     FROM rfq_comparison_queue
+     WHERE status='pending'
+     ORDER BY fire_at ASC
+     LIMIT $1`,
+    }
+  );
+  return result.rows || [];
+}
+
+async function claimDueRFQComparisonJobsFromDB(now, staleBefore, limit = 25, jobId = null) {
+  if (!pool.hasStorage()) return [];
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const jobIdClause = jobId ? ' AND id=$4' : '';
+  const params = jobId
+    ? [now, staleBefore, safeLimit, jobId]
+    : [now, staleBefore, safeLimit];
+  const result = await pool.query(
+    `UPDATE rfq_comparison_queue
+     SET status='processing', attempts=attempts+1, updated_at=$1
+     WHERE id IN (
+       SELECT id FROM rfq_comparison_queue
+       WHERE ((status='pending' AND fire_at <= $1)
+          OR (status='processing' AND updated_at <= $2))${jobIdClause}
+       ORDER BY fire_at ASC
+       LIMIT $3
+     )
+     RETURNING id, rfq_id, rfq_number, fire_at, attempts, email_completed_at, sms_completed_at`,
+    params,
+    {
+      d1: true,
+      d1Text: `UPDATE rfq_comparison_queue
+     SET status='processing', attempts=attempts+1, updated_at=$1
+     WHERE id IN (
+       SELECT id FROM rfq_comparison_queue
+       WHERE ((status='pending' AND fire_at <= $1)
+          OR (status='processing' AND updated_at <= $2))${jobIdClause}
+       ORDER BY fire_at ASC
+       LIMIT $3
+     )
+     RETURNING id, rfq_id, rfq_number, fire_at, attempts, email_completed_at, sms_completed_at`,
+    }
+  );
+  return result.rows || [];
+}
+
+async function markRFQComparisonJobCompleteInDB(id) {
+  if (!pool.hasStorage()) return;
+  const completedAt = new Date().toISOString();
+  await pool.query(
+    `UPDATE rfq_comparison_queue
+     SET status='complete', completed_at=$2, updated_at=$2, last_error=NULL
+     WHERE id=$1`,
+    [id, completedAt],
+    { d1: true }
+  );
+}
+
+async function markRFQComparisonChannelCompleteInDB(id, channel) {
+  if (!pool.hasStorage()) return;
+  const completionColumn = channel === 'email'
+    ? 'email_completed_at'
+    : channel === 'sms'
+      ? 'sms_completed_at'
+      : null;
+  if (!completionColumn) throw new Error(`Unsupported RFQ comparison channel: ${channel}`);
+  const updatedAt = new Date().toISOString();
+  await pool.query(
+    `UPDATE rfq_comparison_queue
+     SET ${completionColumn}=COALESCE(${completionColumn}, $2),
+         updated_at=$2
+     WHERE id=$1`,
+    [id, updatedAt],
+    { d1: true }
+  );
+}
+
+async function markRFQComparisonJobFailedInDB(id, errorMessage) {
+  if (!pool.hasStorage()) return;
+  const safeError = String(errorMessage || 'unknown').slice(0, RFQ_COMPARISON_ERROR_MAX_LENGTH);
+  const retryAt = new Date(Date.now() + RFQ_COMPARISON_RETRY_DELAY_MS).toISOString();
+  await pool.query(
+    `UPDATE rfq_comparison_queue
+     SET status=CASE WHEN attempts < $4 THEN 'pending' ELSE 'failed' END,
+         fire_at=CASE WHEN attempts < $4 THEN $2 ELSE fire_at END,
+         last_error=$3,
+         updated_at=$2
+     WHERE id=$1`,
+    [id, retryAt, safeError, RFQ_COMPARISON_MAX_ATTEMPTS],
+    { d1: true }
+  );
 }
 
 // ── RFQ Unlocks & Vendor Credit Transactions ─────────────────────────────────
@@ -1769,22 +2717,26 @@ async function getVendorUnlocksFromDB(vendorId, limit = 50) {
   return result && result.rows ? result.rows : [];
 }
 
-async function recordCreditTransactionInDB({ id, vendorId, rfqId, transactionType, amount, balanceAfter, idempotencyKey }) {
+async function recordCreditTransactionInDB({ id, vendorId, rfqId, transactionType, amount, balanceAfter, idempotencyKey, queryClient }) {
   if (!pool.hasStorage()) return null;
-  const result = await pool.query(
+  const runQuery = queryClient?.query ? queryClient.query.bind(queryClient) : pool.query;
+  const queryArgs = [
     `INSERT INTO vendor_credit_transactions (id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (idempotency_key) DO NOTHING
      RETURNING *`,
     [id, vendorId, rfqId || null, transactionType, amount, balanceAfter, idempotencyKey || null],
-    {
+  ];
+  if (!queryClient) {
+    queryArgs.push({
       d1: true,
       d1Text: `INSERT INTO vendor_credit_transactions (id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
      ON CONFLICT (idempotency_key) DO NOTHING
      RETURNING *`,
-    }
-  );
+    });
+  }
+  const result = await runQuery(...queryArgs);
   queryCache.invalidate('vendor_credits');
   return result && result.rows ? result.rows[0] : null;
 }
@@ -1834,9 +2786,11 @@ async function recordBuyerCreditTransactionInDB({
   description,
   idempotencyKey,
   createdAt,
+  queryClient,
 }) {
   if (!pool.hasStorage()) return null;
-  const result = await pool.query(
+  const runQuery = queryClient?.query ? queryClient.query.bind(queryClient) : pool.query;
+  const queryArgs = [
     `INSERT INTO buyer_credit_transactions (
       id, buyer_id, rfq_id, transaction_type, credit_source,
       credits_added, credits_consumed, previous_balance, updated_balance,
@@ -1860,7 +2814,9 @@ async function recordBuyerCreditTransactionInDB({
       idempotencyKey || null,
       createdAt || null,
     ],
-    {
+  ];
+  if (!queryClient) {
+    queryArgs.push({
       d1: true,
       d1Text: `INSERT INTO buyer_credit_transactions (
         id, buyer_id, rfq_id, transaction_type, credit_source,
@@ -1869,10 +2825,19 @@ async function recordBuyerCreditTransactionInDB({
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
       ON CONFLICT (idempotency_key) DO UPDATE SET updated_balance = EXCLUDED.updated_balance
       RETURNING *`,
-    }
-  );
+    });
+  }
+  const result = await runQuery(...queryArgs);
   queryCache.invalidate('buyer_credits');
   return result && result.rows ? result.rows[0] : null;
+}
+
+async function addBuyerCreditsInDB(options) {
+  return buyerCreditQueries.addBuyerCreditsInDB(options);
+}
+
+async function unlockVendorRfqDurablyInDB(options) {
+  return vendorRfqUnlockQueries.unlockVendorRfqInDB(options);
 }
 
 async function getBuyerCreditTransactionsFromDB(buyerId, limit = 50) {
@@ -1920,10 +2885,10 @@ async function getPublicVendorsPageFromDB({
   const params = [];
   // Rule: public listing NEVER exposes private buyer rosters.
   const pgConditions = [
-    `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`,
+    `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`,
   ];
   const d1Conditions = [
-    `json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`,
+    `lower(json_extract(raw,'$.buyerId')) IS NULL AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`,
   ];
 
   if (search) {
@@ -2102,11 +3067,16 @@ module.exports = {
   getVendorsPageFromDB,
   countVendorsCreatedBetween,
   countPublicVendorsMatchingCategories,
+  getPublicVendorsByMajorCategoryFromDB,
+  getPublicVendorsByMinorCategoryFromDB,
   getPublicVendorsMatchingCategories,
   getPublicVendorsPerCategoryFromDB,
   getVendorByEmailFromDB,
   getVendorsByBuyerFromDB,
   getVendorByIdFromDB,
+  getVendorSnapshotByIdFromDB,
+  getVendorSnapshotByEmailFromDB,
+  updateVendorIfUnchangedInDB,
   createBulkImportSessionInDB,
   getBulkImportSessionFromDB,
   incrementBulkImportSessionInDB,
@@ -2117,21 +3087,35 @@ module.exports = {
   getRFQsByBuyerFromDB,
   getRFQByNumberFromDB,
   getRFQByIdFromDB,
+  getRFQSnapshotByIdFromDB,
+  updateRFQIfUnchangedInDB,
   upsertRFQInDB,
+  closeExpiredRFQsInDB,
+  extendRFQOnceInDB,
   deleteRFQInDB,
   getEvaluationsFromDB,
+  getEvaluationsForVendorFromDB,
   upsertEvaluationInDB,
   getVendorCatalogueFromDB,
+  getVendorCatalogueByVendorFromDB,
+  getCatalogueProductByIdFromDB,
   upsertCatalogueProductInDB,
   deleteCatalogueProductInDB,
   getBuyerAccountsFromDB,
   getBuyerAccountByEmailFromDB,
+  getBuyerAccountByIdFromDB,
+  getBuyerAccountSnapshotByIdFromDB,
+  getBuyerAccountSnapshotByEmailFromDB,
+  updateBuyerAccountIfUnchangedInDB,
   upsertBuyerAccountInDB,
   deleteBuyerAccountInDB,
   setActiveBuyerAccountInDB,
+  setActiveBuyerAccountDurablyInDB,
+  deleteBuyerAccountAndPromoteActiveInDB,
   getAIFeedFromDB,
   upsertAIFeedItemInDB,
   getAuditLogsFromDB,
+  appendAuditLogInDB: auditLogQueries.appendAuditLogInDB,
   upsertAuditLogInDB,
   getNotificationsFromDB,
   insertNotificationInDB,
@@ -2141,25 +3125,39 @@ module.exports = {
   getZohoOAuthTokenFromDB,
   upsertZohoOAuthTokenInDB,
   getPaymentLinksFromDB,
+  getPaymentLinksByStatusFromDB,
   getPaymentLinksByVendorFromDB,
   getPaymentLinksByBuyerFromDB,
   getPaymentLinkByIdFromDB,
   getPaymentLinkByZohoIdFromDB,
   upsertPaymentLinkInDB,
   insertChaserJobInDB,
+  insertChaserJobsInDB,
   markChaserJobFiredInDB,
   markChaserJobFailedInDB,
   cancelChaserJobsForRFQInDB,
   getPendingChaserJobsFromDB,
   claimDueChaserJobsFromDB,
+  insertRFQComparisonJobInDB,
+  getPendingRFQComparisonJobsFromDB,
+  claimDueRFQComparisonJobsFromDB,
+  markRFQComparisonJobCompleteInDB,
+  markRFQComparisonChannelCompleteInDB,
+  markRFQComparisonJobFailedInDB,
   unlockRFQInDB,
   getRFQUnlockFromDB,
   getVendorUnlocksFromDB,
   recordCreditTransactionInDB,
+  unlockVendorRfqDurablyInDB,
+  recordVendorQuoteCreditInDB: vendorQuoteCreditQueries.recordVendorQuoteCreditInDB,
+  makeD1VendorQuoteCreditStatements: vendorQuoteCreditQueries.makeD1VendorQuoteCreditStatements,
+  submitVendorQuoteInDB: vendorQuoteSubmissionQueries.submitVendorQuoteInDB,
+  makeD1VendorQuoteSubmissionStatements: vendorQuoteSubmissionQueries.makeD1VendorQuoteSubmissionStatements,
   getVendorCreditTransactionsFromDB,
   recordBuyerCreditTransactionInDB,
+  addBuyerCreditsInDB,
   getBuyerCreditTransactionsFromDB,
+  createRFQWithCreditInDB: buyerRfqCreationQueries.createRFQWithCreditInDB,
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
 };
-

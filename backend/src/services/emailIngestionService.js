@@ -20,7 +20,8 @@
 // ==============================================================================
 
 const { logger } = require('./loggerService');
-const { EMAIL_INGESTION_CONFIG, EMAIL_INGESTION_STATUS, EMAIL_GATEWAY_CONFIG } = require('../config/constants');
+const { EMAIL_INGESTION_CONFIG, EMAIL_INGESTION_STATUS } = require('../config/constants');
+const { sanitizeTextForModel } = require('./documentTextSanitizer');
 
 /** True when the file name looks like a message container this module handles. */
 function isEmailFileName(fileName) {
@@ -273,12 +274,13 @@ function decodeAndNormalizeEmailSubject(rawSubject) {
 }
 
 /**
- * Resolves the final RFQ title from an email subject line.
- * If the subject is empty or missing, safely falls back to the generic default title.
+ * Resolves the RFQ title from an email subject line.
+ * An empty or missing subject returns `fallback` (blank by default), so the caller
+ * decides what an untitled email is called. No generic title is invented here.
  */
-function resolveEmailRfqTitle(rawSubject, fallback = EMAIL_GATEWAY_CONFIG.DEFAULT_FALLBACK_RFQ_TITLE) {
+function resolveEmailRfqTitle(rawSubject, fallback = '') {
   const normalized = decodeAndNormalizeEmailSubject(rawSubject);
-  return normalized || fallback || 'Request for Quotation';
+  return normalized || fallback || '';
 }
 
 /**
@@ -350,10 +352,10 @@ function buildDocumentText(message) {
   message.attachments
     .filter((attachment) => attachment.role === 'text')
     .forEach((attachment) => {
-      const decoded = attachment.content
-        .toString('utf8')
-        .slice(0, EMAIL_INGESTION_CONFIG.MAX_TEXT_ATTACHMENT_CHARS)
-        .trim();
+      const decoded = sanitizeTextForModel(
+        attachment.content.toString('utf8'),
+        EMAIL_INGESTION_CONFIG.MAX_TEXT_ATTACHMENT_CHARS
+      ).text.trim();
       if (decoded) sections.push(`\nATTACHMENT: ${attachment.fileName}\n${decoded}`);
     });
 

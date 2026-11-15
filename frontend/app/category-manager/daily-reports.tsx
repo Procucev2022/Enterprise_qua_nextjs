@@ -2,18 +2,14 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  FileSpreadsheet,
   Download,
-  Calendar,
   Search,
   Filter,
   CheckCircle2,
   AlertCircle,
   RefreshCw,
-  Layers,
   ChevronLeft,
   ChevronRight,
-  TrendingUp,
   FileCheck,
   Building2,
   Truck,
@@ -26,7 +22,11 @@ import {
   exportReportToExcel,
   exportReportToCsv,
 } from '@/lib/reportsClient';
-import { RFQ_MODES, RFQ_MODE_LABELS } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
+
+// Shown in place of any cell the report does not contain. Report values are
+// never filled in from a default.
+const EMPTY_CELL = UI_STRINGS.dataLoad.emptyCell;
 
 interface DailyReportsProps {
   initialCategory?: ReportCategoryKey;
@@ -103,9 +103,6 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
     if (result.success) {
       const sanitizedRows = (result.data || []).map((row: any) => {
         const enriched = { ...row };
-        if ('CompanyLocation' in enriched && !enriched.CompanyLocation) {
-          enriched.CompanyLocation = enriched.SellerLocation || enriched.DeliveryLocation || 'All India';
-        }
         if ('LastLogin' in enriched && !enriched.LastLogin) {
           enriched.LastLogin = enriched.LoginDateTime || enriched.LastLoginDate || '';
         }
@@ -498,22 +495,19 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
                       {tableHeaders.map((header) => {
                         const val = row[header];
                         const isMode = header === 'SourcingMode';
-                        const isLoc = header === 'CompanyLocation';
                         const isLogin = header === 'LastLogin';
-                        const displayVal =
-                          isLoc && !val
-                            ? (row.SellerLocation || row.DeliveryLocation || 'All India')
-                            : isLogin
-                            ? (val || row.LoginDateTime || row.LastLoginDate || 'Never')
-                            : val;
+                        const displayVal = isLogin ? val || row.LoginDateTime || row.LastLoginDate : val;
+                        const hasValue = displayVal !== undefined && displayVal !== null && String(displayVal).trim() !== '';
                         return (
                           <td key={header} className="px-3.5 py-2.5 whitespace-nowrap text-xs">
-                            {isMode ? (
+                            {isMode && hasValue ? (
                               <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                                {displayVal || 'Mode 0'}
+                                {String(displayVal)}
                               </span>
+                            ) : hasValue ? (
+                              String(displayVal)
                             ) : (
-                              String(displayVal ?? '')
+                              EMPTY_CELL
                             )}
                           </td>
                         );

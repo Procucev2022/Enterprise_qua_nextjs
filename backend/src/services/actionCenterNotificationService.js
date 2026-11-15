@@ -4,10 +4,30 @@
  */
 
 const { logger } = require('./loggerService');
+const pool = require('../db/pool');
 const mailerService = require('./mailerService');
 const smsService = require('./smsService');
 const paymentDuesQueries = require('../db/paymentDuesQueries');
 const internalTaskQueries = require('../db/internalTaskQueries');
+const { SYSTEM_ACTOR_EMAIL, INTERNAL_TASK_CATEGORIES } = require('../config/constants');
+
+// Messages and labels stay in this module until they move to backend/src/config/constants.js.
+const ACTION_CENTER_MESSAGES = Object.freeze({
+  NOT_SPECIFIED: 'Not specified',
+  EMAIL_PROVIDER_UNAVAILABLE: 'Email delivery is unavailable: the mailer service has no deliver function.',
+  EMAIL_NOT_SENT: 'Email was not sent.',
+  SMS_NOT_SENT: 'SMS delivery failed.',
+  QUERY_FAILED: 'Action Center communication history could not be loaded from the database.',
+});
+
+// Activity and follow-up tasks use the COMMUNICATION category. The task type names the channel.
+// Each value must be listed in INTERNAL_TASK_CATEGORY_TYPES.COMMUNICATION (constants.js).
+const ACTION_CENTER_TASK_TYPE_BY_CHANNEL = Object.freeze({
+  EMAIL: 'Email',
+  SMS: 'SMS',
+  BOTH: 'Email',
+});
+const ACTION_CENTER_FOLLOWUP_TASK_TYPE = 'Existing Follow-up';
 
 /**
  * Escapes HTML characters in user-provided content to prevent HTML/XSS injection.
@@ -33,8 +53,10 @@ function sanitizeActionUrl(rawUrl, fallbackUrl) {
       return parsed.toString();
     }
   } catch {
-    // Malformed URL, use safe fallback
+    logger.warn('Malformed action notification URL; using the configured fallback', {}, 'ACTION_CENTER');
+    return fallbackUrl;
   }
+  logger.warn('Unsupported action notification URL protocol; using the configured fallback', {}, 'ACTION_CENTER');
   return fallbackUrl;
 }
 
@@ -42,12 +64,12 @@ function sanitizeActionUrl(rawUrl, fallbackUrl) {
  * Renders standard responsive HTML email template for Action Center alerts.
  */
 function renderActionCenterEmailHtml({
-  recipientName = 'Valued Partner',
+  recipientName,
   subject = 'Action Center Notification',
   message = '',
   linkUrl = '',
   entityType = 'action_center',
-  senderName = 'Category Management Team',
+  senderName,
 }) {
   const logoUrl =
     mailerService.getLogoUrl ? mailerService.getLogoUrl() : 'https://equa.procucev.com/procucev-logo.png';
@@ -55,11 +77,11 @@ function renderActionCenterEmailHtml({
     mailerService.getPublicFrontendUrl
       ? mailerService.getPublicFrontendUrl()
       : 'https://equa.procucev.com';
-  const safeActionUrl = sanitizeActionUrl(linkUrl, `${defaultFrontend}/category-manager/internal-tasks`);
-  const safeRecipient = escapeHtml(recipientName);
+  const safeActionUrl = sanitizeActionUrl(linkUrl, defaultFrontend);
+  const safeRecipient = escapeHtml(recipientName || ACTION_CENTER_MESSAGES.NOT_SPECIFIED);
   const safeSubject = escapeHtml(subject);
   const safeMessage = escapeHtml(message);
-  const safeSender = escapeHtml(senderName);
+  const safeSender = escapeHtml(senderName || ACTION_CENTER_MESSAGES.NOT_SPECIFIED);
   const safeFormattedEntity = escapeHtml(String(entityType).replace(/_/g, ' ').toUpperCase());
 
   return `<!DOCTYPE html>
@@ -119,7 +141,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
     channel = 'EMAIL',
     recipientEmail,
     recipientPhone,
-    recipientName = 'Partner',
+    recipientName,
     subject = 'Action Center Notification',
     message = '',
     linkUrl = '',
@@ -128,8 +150,11 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
     metadata = {},
   } = payload;
 
-  const senderName = actor.name || actor.email || 'Category Manager';
-  const senderEmail = actor.email || 'category.manager@procucev.com';
+  // HTTP callers are authenticated by the controller. System-initiated callers
+  // (workflow jobs, the outbox) pass no actor and are attributed to the system account.
+  const senderName = actor.name || actor.email || SYSTEM_ACTOR_EMAIL;
+  const senderEmail = actor.email || SYSTEM_ACTOR_EMAIL;
+  const greetingName = recipientName || ACTION_CENTER_MESSAGES.NOT_SPECIFIED;
   const results = {
     email: null,
     sms: null,
@@ -138,9 +163,98 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   const channelUpper = (channel || 'EMAIL').toUpperCase();
   const shouldSendEmail = (channelUpper === 'EMAIL' || channelUpper === 'BOTH') && Boolean(recipientEmail);
   const shouldSendSms = (channelUpper === 'SMS' || channelUpper === 'BOTH') && Boolean(recipientPhone);
+  const primaryRecipient = channelUpper === 'SMS'
+    ? (recipientPhone || recipientName || recipientEmail)
+    : (recipientEmail || recipientPhone || recipientName);
+  let persistedRecord = null;
+  let deliveryQueued = false;
+
+  if (pool.hasStorage() && (shouldSendEmail || shouldSendSms)) {
+    const deliveryMetadata = {
+      ...(metadata || {}),
+      entityType,
+      entityId,
+      recipientName,
+      recipientEmail,
+      recipientPhone,
+      deliveryEmailSubject: `[Procucev Alert] ${subject}`,
+      deliveryReplyTo: senderEmail,
+      deliveryRecipientEmail: recipientEmail || undefined,
+      deliveryRecipientPhone: recipientPhone || undefined,
+      deliveryRecipientName: recipientName,
+      deliveryEntityType: entityType,
+      deliveryLinkUrl: linkUrl,
+      deliverySenderName: senderName,
+      deliveryTemplate: shouldSendEmail ? 'action_center' : undefined,
+      deliveryChannels: {},
+      linkUrl,
+    };
+
+    persistedRecord = await paymentDuesQueries.recordCommunication({
+      accountId: entityId,
+      accountType: entityType,
+      channel: channelUpper,
+      recipient: primaryRecipient,
+      subject,
+      message,
+      notificationStatus: 'Notification Pending',
+      deliveryStatus: 'Pending',
+      acknowledgementStatus: 'Acknowledgement Pending',
+      communicatedBy: senderName,
+      notes: notes || '',
+      metadata: deliveryMetadata,
+    });
+    if (!persistedRecord?.id) {
+      const error = new Error('Action Center delivery could not be persisted before provider dispatch.');
+      error.code = 'PERSISTENCE_UNAVAILABLE';
+      throw error;
+    }
+
+    try {
+      const eventOutboxService = require('./eventOutboxService');
+      const dispatch = await eventOutboxService.dispatchDueEventOutboxJobs(1, [
+        `communication-delivery:${persistedRecord.id}`,
+      ]);
+      if (!dispatch.claimed) {
+        logger.warn('Action Center delivery remains queued for the scheduled dispatcher', {
+          communicationId: persistedRecord.id,
+          channel: channelUpper,
+          outboxClaimed: dispatch.claimed,
+        }, 'ACTION_CENTER_COMM');
+      }
+    } catch (error) {
+      logger.error('Action Center immediate outbox dispatch failed; scheduled retry remains enabled', {
+        error,
+        communicationId: persistedRecord.id,
+        channel: channelUpper,
+      }, 'ACTION_CENTER_COMM');
+    }
+
+    persistedRecord = await paymentDuesQueries.getCommunicationById(persistedRecord.id) || persistedRecord;
+    const channelResults = persistedRecord.metadata?.deliveryChannels || {};
+    deliveryQueued = persistedRecord.deliveryStatus === 'Pending';
+    if (shouldSendEmail) {
+      results.email = {
+        success: channelResults.email?.success === true,
+        queued: deliveryQueued && channelResults.email?.success !== true,
+        messageId: channelResults.email?.messageId || null,
+        recipient: recipientEmail,
+        error: channelResults.email?.error || (deliveryQueued && !channelResults.email?.success ? 'Delivery is queued for retry.' : undefined),
+      };
+    }
+    if (shouldSendSms) {
+      results.sms = {
+        success: channelResults.sms?.success === true,
+        queued: deliveryQueued && channelResults.sms?.success !== true,
+        messageId: channelResults.sms?.messageId || null,
+        recipient: recipientPhone,
+        error: channelResults.sms?.error || (deliveryQueued && !channelResults.sms?.success ? 'Delivery is queued for retry.' : undefined),
+      };
+    }
+  }
 
   // 1. Dispatch Email if requested
-  if (shouldSendEmail) {
+  if (!persistedRecord && shouldSendEmail) {
     try {
       const htmlBody = renderActionCenterEmailHtml({
         recipientName,
@@ -155,26 +269,36 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
         to: recipientEmail,
         subject: `[Procucev Alert] ${subject}`,
         html: htmlBody,
-        text: `${subject}\n\nDear ${recipientName},\n\n${message}\n\nAction Link: ${linkUrl || 'https://equa.procucev.com'}\n\nSent by: ${senderName}`,
-        replyTo: senderEmail || undefined,
+        text: [
+          subject,
+          `Dear ${greetingName},`,
+          message,
+          linkUrl ? `Action Link: ${linkUrl}` : null,
+          `Sent by: ${senderName}`,
+        ].filter((line) => line !== null).join('\n\n'),
+        replyTo: senderEmail,
       };
 
-      if (typeof mailerService.deliver === 'function') {
-        const deliverRes = await mailerService.deliver(emailPayload, 'ACTION_CENTER_NOTIFICATION');
-        const isSent = Boolean(
-          deliverRes?.sent === true ||
-          deliverRes?.success === true ||
-          (deliverRes && deliverRes.sent !== false && !deliverRes.reason && !deliverRes.error)
-        );
+      if (typeof mailerService.deliver !== 'function') {
+        // Fail closed: without a deliver function nothing can be sent.
         results.email = {
-          success: isSent,
-          messageId: deliverRes?.messageId || null,
-          error: isSent ? undefined : (deliverRes?.reason || deliverRes?.error || 'Email was not sent.'),
-          dispatchedAt: new Date().toISOString(),
+          success: false,
+          status: 'failed',
+          error: ACTION_CENTER_MESSAGES.EMAIL_PROVIDER_UNAVAILABLE,
           recipient: recipientEmail,
         };
       } else {
-        results.email = { success: true, mock: true, recipient: recipientEmail };
+        const deliverRes = await mailerService.deliver(emailPayload, 'ACTION_CENTER_NOTIFICATION');
+        // Only an explicit provider acceptance counts as sent.
+        const isSent = deliverRes?.sent === true || deliverRes?.success === true;
+        results.email = {
+          success: isSent,
+          status: deliverRes?.status || (isSent ? 'sent' : 'failed'),
+          messageId: deliverRes?.messageId || null,
+          error: isSent ? undefined : (deliverRes?.reason || deliverRes?.error || ACTION_CENTER_MESSAGES.EMAIL_NOT_SENT),
+          dispatchedAt: new Date().toISOString(),
+          recipient: recipientEmail,
+        };
       }
 
       logger.info(
@@ -193,7 +317,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   }
 
   // 2. Dispatch SMS if requested
-  if (shouldSendSms) {
+  if (!persistedRecord && shouldSendSms) {
     try {
       const smsRes = await smsService.sendActionCenterSms({
         mobile: recipientPhone,
@@ -205,12 +329,13 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
 
       results.sms = {
         success: Boolean(smsRes.success),
+        status: smsRes.status || (smsRes.success ? 'sent' : 'failed'),
         messageId: smsRes.messageId || null,
         recipient: recipientPhone,
         throttled: Boolean(smsRes.throttled),
         renderedMessage: smsRes.renderedMessage || null,
         isTruncated: Boolean(smsRes.isTruncated),
-        error: smsRes.error || (smsRes.success ? undefined : 'SMS delivery failed.'),
+        error: smsRes.error || (smsRes.success ? undefined : ACTION_CENTER_MESSAGES.SMS_NOT_SENT),
       };
 
       logger.info(
@@ -246,14 +371,12 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
     overallSuccess = true;
   }
 
-  const deliveryStatus = overallSuccess ? 'Sent' : partialSuccess ? 'Partial' : 'Failed';
+  const deliveryStatus = deliveryQueued
+    ? 'Pending'
+    : overallSuccess ? 'Sent' : partialSuccess ? 'Partial' : 'Failed';
 
   // 4. Persist communication record
-  const primaryRecipient =
-    channelUpper === 'SMS'
-      ? (recipientPhone || recipientName || recipientEmail)
-      : (recipientEmail || recipientPhone || recipientName);
-  const record = await paymentDuesQueries.recordCommunication({
+  const record = persistedRecord || await paymentDuesQueries.recordCommunication({
     accountId: entityId,
     accountType: entityType,
     channel: channelUpper,
@@ -285,11 +408,12 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   let completedTask = null;
   try {
     const channelLabel = channelUpper === 'BOTH' ? 'Email & SMS' : channelUpper;
-    completedTask = await internalTaskQueries.createInternalTask(
+    completedTask = deliveryQueued ? null : await internalTaskQueries.createInternalTask(
       {
-        title: `[${channelLabel} Dispatched] ${subject || recipientName}`,
-        description: `Notification dispatched to ${primaryRecipient}.\nMessage: ${message}`,
-        category: 'COMMUNICATION',
+        title: `[${channelLabel} ${deliveryStatus}] ${subject || greetingName}`,
+        description: `Notification delivery ${deliveryStatus} for ${primaryRecipient}.\nMessage: ${message}`,
+        taskCategory: INTERNAL_TASK_CATEGORIES.COMMUNICATION,
+        taskType: ACTION_CENTER_TASK_TYPE_BY_CHANNEL[channelUpper],
         priority: 'Low',
         status: 'Completed',
         assignedToUserId: actor.id || null,
@@ -325,7 +449,8 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
         {
           title: scheduleFollowup.title || `[Follow-up] ${subject || recipientName}`,
           description: scheduleFollowup.notes || (message ? `Follow-up on ${channelUpper} sent to ${primaryRecipient}.\nOriginal message: ${message}` : 'Follow up on communication dispatch.'),
-          category: 'FOLLOW_UP',
+          taskCategory: INTERNAL_TASK_CATEGORIES.COMMUNICATION,
+          taskType: ACTION_CENTER_FOLLOWUP_TASK_TYPE,
           priority: scheduleFollowup.priority || 'Medium',
           status: 'Pending',
           assignedToUserId: scheduleFollowup.assigneeId || actor.id || null,
@@ -352,7 +477,8 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   }
 
   return {
-    success: overallSuccess,
+    success: overallSuccess || deliveryQueued,
+    queued: deliveryQueued,
     partialSuccess,
     communication: record,
     emailResult: results.email,
@@ -381,10 +507,14 @@ async function getActionCenterCommunications(filter = {}) {
     isCrossAccount: !entityId,
   });
 
-  const total = Number(result?.total || 0);
+  // A missing result means the query did not run. Surface that instead of an empty history.
+  if (!result || typeof result !== 'object') {
+    throw Object.assign(new Error(ACTION_CENTER_MESSAGES.QUERY_FAILED), { code: 'COMMUNICATIONS_QUERY_EMPTY' });
+  }
+  const total = Number(result.total || 0);
 
   return {
-    items: result?.items || [],
+    items: result.items || [],
     pagination: {
       total,
       page: p,

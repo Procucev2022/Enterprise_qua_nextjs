@@ -1,5 +1,4 @@
 import {
-  DEFAULT_TASK_TYPES,
   fetchTaskTypes,
   createNewTaskType,
   fetchInternalTasks,
@@ -18,8 +17,9 @@ import {
   checkTaskReminders,
   exportTasksToCsv,
 } from '@/lib/internalTaskClient';
-import { DEFAULT_INTERNAL_MEMBERS } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 
 describe('internalTaskClient', () => {
   const originalFetch = global.fetch;
@@ -29,8 +29,9 @@ describe('internalTaskClient', () => {
     jest.spyOn(authClient, 'getToken').mockReturnValue('mock-jwt-token');
   });
 
-  afterAll(() => {
+  afterEach(() => {
     global.fetch = originalFetch;
+    jest.restoreAllMocks();
   });
 
   test('fetchTaskTypes returns task types list on success and handles failures', async () => {
@@ -40,16 +41,16 @@ describe('internalTaskClient', () => {
     });
 
     const types = await fetchTaskTypes();
-    expect(types).toHaveLength(1);
-    expect(types[0].id).toBe('itt_1');
+    expect(types.taskTypes).toHaveLength(1);
+    expect(types.taskTypes[0].id).toBe('itt_1');
 
     // Failure case (res.ok = false)
     global.fetch = jest.fn().mockResolvedValueOnce({ ok: false });
-    expect(await fetchTaskTypes()).toEqual(DEFAULT_TASK_TYPES);
+    expect((await fetchTaskTypes()).taskTypes).toEqual([]);
 
     // Exception case
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network error'));
-    expect(await fetchTaskTypes()).toEqual(DEFAULT_TASK_TYPES);
+    expect((await fetchTaskTypes()).taskTypes).toEqual([]);
   });
 
   test('createNewTaskType creates a new task type and handles failures', async () => {
@@ -97,11 +98,11 @@ describe('internalTaskClient', () => {
 
     // Failure
     global.fetch = jest.fn().mockResolvedValueOnce({ ok: false });
-    expect(await fetchInternalTasks()).toEqual({ tasks: [], total: 0 });
+    expect(await fetchInternalTasks()).toMatchObject({ tasks: [], total: 0 });
 
     // Exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Fetch failed'));
-    expect(await fetchInternalTasks()).toEqual({ tasks: [], total: 0 });
+    expect(await fetchInternalTasks()).toMatchObject({ tasks: [], total: 0 });
   });
 
   test('fetchTaskSummary returns metrics and fallbacks on error', async () => {
@@ -111,16 +112,16 @@ describe('internalTaskClient', () => {
     });
 
     const summary = await fetchTaskSummary();
-    expect(summary.total).toBe(10);
+    expect(summary.summary?.total).toBe(10);
 
     // Failure
     global.fetch = jest.fn().mockResolvedValueOnce({ ok: false });
     const fallback = await fetchTaskSummary();
-    expect(fallback.total).toBe(0);
+    expect(fallback.summary).toBeNull();
 
     // Exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Summary error'));
-    expect((await fetchTaskSummary()).total).toBe(0);
+    expect((await fetchTaskSummary()).summary).toBeNull();
   });
 
   test('fetchTaskById returns task detail or null', async () => {
@@ -195,13 +196,13 @@ describe('internalTaskClient', () => {
     });
 
     const entities = await searchRelatedEntities('RFQ', 'RFQ-01');
-    expect(entities).toHaveLength(1);
+    expect(entities.entities).toHaveLength(1);
 
     global.fetch = jest.fn().mockResolvedValueOnce({ ok: false });
-    expect(await searchRelatedEntities('VENDOR')).toEqual([]);
+    expect((await searchRelatedEntities('VENDOR')).entities).toEqual([]);
 
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Err'));
-    expect(await searchRelatedEntities('BUYER')).toEqual([]);
+    expect((await searchRelatedEntities('BUYER')).entities).toEqual([]);
   });
 
   test('getExportTasksUrl builds export URL with query parameters', () => {
@@ -243,7 +244,7 @@ describe('internalTaskClient', () => {
       ok: true,
       json: async () => ({ taskTypes: 'invalid' }),
     });
-    expect(await fetchTaskTypes()).toEqual(DEFAULT_TASK_TYPES);
+    expect((await fetchTaskTypes()).taskTypes).toEqual([]);
 
     // taskType missing in create
     global.fetch = jest.fn().mockResolvedValueOnce({
@@ -260,6 +261,7 @@ describe('internalTaskClient', () => {
     expect(await fetchInternalTasks({ status: 'all', priority: 'all', taskTypeId: 'all', relatedEntityType: 'all', assignedTo: 'all' })).toEqual({
       tasks: [],
       total: 0,
+      error: formatString(UI_STRINGS.dataLoad.unexpectedResponse, { resource: UI_STRINGS.dataLoad.resources.internalTasks }),
     });
 
     // summary missing
@@ -267,7 +269,7 @@ describe('internalTaskClient', () => {
       ok: true,
       json: async () => ({}),
     });
-    expect((await fetchTaskSummary()).total).toBe(0);
+    expect((await fetchTaskSummary()).summary).toBeNull();
 
     // taskById missing
     global.fetch = jest.fn().mockResolvedValueOnce({
@@ -295,7 +297,7 @@ describe('internalTaskClient', () => {
       ok: true,
       json: async () => ({ entities: null }),
     });
-    expect(await searchRelatedEntities('BUYER')).toEqual([]);
+    expect((await searchRelatedEntities('BUYER')).entities).toEqual([]);
   });
 
   test('handles authHeaders when token is absent', async () => {
@@ -326,23 +328,23 @@ describe('internalTaskClient', () => {
     });
 
     const assignees = await fetchInternalAssignees();
-    expect(assignees).toHaveLength(2);
-    expect(assignees[0].name).toBe('Pavani');
+    expect(assignees.assignees).toHaveLength(2);
+    expect(assignees.assignees[0].name).toBe('Pavani');
 
     // res.ok = false fallback
     global.fetch = jest.fn().mockResolvedValueOnce({ ok: false });
-    expect(await fetchInternalAssignees()).toEqual(DEFAULT_INTERNAL_MEMBERS);
+    expect((await fetchInternalAssignees()).assignees).toEqual([]);
 
     // exception fallback
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network failure'));
-    expect(await fetchInternalAssignees()).toEqual(DEFAULT_INTERNAL_MEMBERS);
+    expect((await fetchInternalAssignees()).assignees).toEqual([]);
 
     // empty array fallback
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({ assignees: [] }),
     });
-    expect(await fetchInternalAssignees()).toEqual(DEFAULT_INTERNAL_MEMBERS);
+    expect((await fetchInternalAssignees()).assignees).toEqual([]);
   });
 
   test('fetchTaskSummary supports assignedTo query parameter', async () => {
@@ -354,7 +356,7 @@ describe('internalTaskClient', () => {
     });
 
     const sum = await fetchTaskSummary({ assignedTo: 'Pavani' });
-    expect(sum.total).toBe(4);
+    expect(sum.summary?.total).toBe(4);
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/internal-tasks/summary?assignedTo=Pavani',
       expect.any(Object)
@@ -433,6 +435,7 @@ describe('internalTaskClient', () => {
 
 
   test('approveCreditTask and rejectCreditTask handle approve/reject workflows', async () => {
+    const errorLog = jest.spyOn(logger, 'error');
     // Approve success
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
@@ -453,7 +456,8 @@ describe('internalTaskClient', () => {
 
     // Approve exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network drop'));
-    expect((await approveCreditTask('tsk_1')).success).toBe(false);
+    const appException = await approveCreditTask('tsk_1');
+    expect(appException).toEqual({ success: false, error: 'Network drop' });
 
     // Reject success
     global.fetch = jest.fn().mockResolvedValueOnce({
@@ -473,10 +477,24 @@ describe('internalTaskClient', () => {
 
     // Reject exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Server error'));
-    expect((await rejectCreditTask('tsk_2')).success).toBe(false);
+    const rejectException = await rejectCreditTask('tsk_2');
+    expect(rejectException).toEqual({ success: false, error: 'Server error' });
+    expect(errorLog).toHaveBeenNthCalledWith(
+      1,
+      'Credit task approval request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Network drop' }),
+      'INTERNAL_TASK_CLIENT'
+    );
+    expect(errorLog).toHaveBeenNthCalledWith(
+      2,
+      'Credit task rejection request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Server error' }),
+      'INTERNAL_TASK_CLIENT'
+    );
   });
 
   test('addTaskActivity logs comment and handles errors', async () => {
+    const errorLog = jest.spyOn(logger, 'error');
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -495,9 +513,15 @@ describe('internalTaskClient', () => {
     // Exception branch
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network drop'));
     expect((await addTaskActivity('tsk_1', 'error note')).success).toBe(false);
+    expect(errorLog).toHaveBeenCalledWith(
+      'Task activity submission request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Network drop' }),
+      'INTERNAL_TASK_CLIENT'
+    );
   });
 
   test('checkTaskReminders checks deadlines and alerts', async () => {
+    const errorLog = jest.spyOn(logger, 'error');
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({ success: true, dispatched: 3 }),
@@ -512,7 +536,21 @@ describe('internalTaskClient', () => {
 
     // Exception
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Err'));
-    expect((await checkTaskReminders()).success).toBe(false);
+    expect(await checkTaskReminders()).toEqual({ success: false, error: 'Err' });
+    expect(errorLog).toHaveBeenCalledWith(
+      'Task reminder check request failed',
+      expect.objectContaining({ errorName: 'Error', errorMessage: 'Err' }),
+      'INTERNAL_TASK_CLIENT'
+    );
+
+    // Unknown transport rejections must resolve with a useful fallback.
+    global.fetch = jest.fn().mockRejectedValueOnce(null);
+    expect(await checkTaskReminders()).toEqual({ success: false, error: 'Failed to check reminders.' });
+    expect(errorLog).toHaveBeenLastCalledWith(
+      'Task reminder check request failed',
+      expect.objectContaining({ errorName: 'UnknownError', errorMessage: 'Failed to check reminders.' }),
+      'INTERNAL_TASK_CLIENT'
+    );
   });
 
 

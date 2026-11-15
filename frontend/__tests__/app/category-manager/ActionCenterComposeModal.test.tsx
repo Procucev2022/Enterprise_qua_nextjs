@@ -3,8 +3,9 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ActionCenterComposeModal from '@/app/category-manager/components/ActionCenterComposeModal';
 import * as actionCenterCommClient from '@/lib/actionCenterCommClient';
 import { fetchDocuments } from '@/lib/documentVaultClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
-import { DEFAULT_INTERNAL_MEMBERS } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { fetchInternalAssignees } from '@/lib/internalTaskClient';
+import type { InternalTeamMember } from '@/lib/types';
 
 jest.mock('@/lib/actionCenterCommClient', () => ({
   dispatchActionCenterCommunication: jest.fn(),
@@ -14,16 +15,43 @@ jest.mock('@/lib/documentVaultClient', () => ({
   fetchDocuments: jest.fn().mockReturnValue(new Promise(() => {})),
 }));
 
+jest.mock('@/lib/internalTaskClient', () => ({
+  fetchInternalAssignees: jest.fn(),
+}));
+
+const TEAM_MEMBERS: InternalTeamMember[] = [
+  { id: 'member-1', name: 'Asha Rao', role: 'Sourcing Lead', email: 'asha@team.test' },
+  { id: 'member-2', name: 'Ben Kim', role: 'Operations Lead', email: 'ben@team.test' },
+];
+
 describe('ActionCenterComposeModal', () => {
   const strings = UI_STRINGS.actionCenter.communicationModal;
   const mockOnClose = jest.fn();
   const mockOnSuccess = jest.fn();
   const mockDispatch = actionCenterCommClient.dispatchActionCenterCommunication as jest.Mock;
   const mockFetchDocuments = fetchDocuments as jest.Mock;
+  const mockFetchInternalAssignees = fetchInternalAssignees as jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Clears queued mockResolvedValueOnce values so one test's response cannot reach the next test.
+    mockDispatch.mockReset();
+    mockFetchInternalAssignees.mockResolvedValue({ assignees: TEAM_MEMBERS });
   });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  // Waits for the assignee list to load, then picks the given member from the dropdown.
+  const chooseFollowupAssignee = async (container: HTMLElement, memberId: string): Promise<void> => {
+    await waitFor(() => {
+      expect(container.querySelector(`#compose-followup-assignee option[value="${memberId}"]`)).not.toBeNull();
+    });
+    fireEvent.change(container.querySelector('#compose-followup-assignee') as HTMLSelectElement, {
+      target: { value: memberId },
+    });
+  };
 
   it('renders null when isOpen is false', () => {
     const { container } = render(
@@ -193,7 +221,7 @@ describe('ActionCenterComposeModal', () => {
     expect(mockDispatch).not.toHaveBeenCalled();
   });
 
-  it('configures schedule follow-up section with date, priority, assignee, and notes', () => {
+  it('configures schedule follow-up section with date, priority, assignee, and notes', async () => {
     const { container } = render(
       <ActionCenterComposeModal
         isOpen={true}
@@ -217,15 +245,18 @@ describe('ActionCenterComposeModal', () => {
     const assigneeSelect = container.querySelector('#compose-followup-assignee') as HTMLSelectElement;
     const notesInput = container.querySelector('#compose-followup-notes') as HTMLInputElement;
 
+    // No assignee is preselected; the placeholder asks the user to choose one.
+    expect(assigneeSelect.value).toBe('');
+    expect(screen.getByRole('option', { name: UI_STRINGS.actionCenter.tasks.selectAssignee })).toBeInTheDocument();
+
     fireEvent.change(dateInput, { target: { value: '2026-11-15' } });
     fireEvent.change(prioritySelect, { target: { value: 'High' } });
-    if (DEFAULT_INTERNAL_MEMBERS.length > 1) {
-      fireEvent.change(assigneeSelect, { target: { value: DEFAULT_INTERNAL_MEMBERS[1].id } });
-    }
+    await chooseFollowupAssignee(container, TEAM_MEMBERS[1].id);
     fireEvent.change(notesInput, { target: { value: 'Check buyer response on Monday' } });
 
     expect(dateInput.value).toBe('2026-11-15');
     expect(prioritySelect.value).toBe('High');
+    expect(assigneeSelect.value).toBe(TEAM_MEMBERS[1].id);
     expect(notesInput.value).toBe('Check buyer response on Monday');
   });
 
@@ -254,6 +285,7 @@ describe('ActionCenterComposeModal', () => {
     fireEvent.click(screen.getByLabelText(strings.scheduleFollowupCheckbox));
     const dateInput = container.querySelector('#compose-followup-date') as HTMLInputElement;
     fireEvent.change(dateInput, { target: { value: '2026-11-20' } });
+    await chooseFollowupAssignee(container, TEAM_MEMBERS[0].id);
 
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
@@ -274,6 +306,8 @@ describe('ActionCenterComposeModal', () => {
         scheduleFollowup: expect.objectContaining({
           dueDate: '2026-11-20',
           priority: 'Medium',
+          assigneeId: TEAM_MEMBERS[0].id,
+          assigneeName: TEAM_MEMBERS[0].name,
         }),
       })
     );
@@ -288,6 +322,33 @@ describe('ActionCenterComposeModal', () => {
     });
     expect(mockOnClose).toHaveBeenCalledTimes(1);
     jest.useRealTimers();
+  });
+
+  it('explains when a communication is queued for durable delivery retry', async () => {
+    mockDispatch.mockResolvedValueOnce({
+      success: true,
+      queued: true,
+      communication: { id: 'comm-queued', channel: 'EMAIL', deliveryStatus: 'Pending' },
+      emailResult: { success: false, queued: true, error: 'Delivery is queued for retry.' },
+    });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="ticket"
+        entityId="tkt-queued"
+        defaultRecipientEmail="queued@example.com"
+        defaultMessage="A durable retry should run."
+      />
+    );
+
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(
+        strings.queuedToast.replace('{channel}', strings.channelEmail)
+      );
+    });
   });
 
   it('handles submission when channel is BOTH and SMS', async () => {
@@ -312,22 +373,32 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(mockDispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: 'BOTH',
-          recipientEmail: 'accounts@vendor.com',
-          recipientPhone: '9876543210',
-        })
-      );
+    await act(async () => {
+      await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(mockDispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: 'BOTH',
+            recipientEmail: 'accounts@vendor.com',
+            recipientPhone: '9876543210',
+          })
+        );
+      },
+      { timeout: 10000 }
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('status')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
-  it('handles submission when channel is SMS with fallback assigneeName', async () => {
+  it('sends the assignee name the user chose from the API list when the channel is SMS', async () => {
     mockDispatch.mockResolvedValueOnce({
       success: true,
       communication: { id: 'comm-sms', channel: 'SMS' },
@@ -345,31 +416,40 @@ describe('ActionCenterComposeModal', () => {
       />
     );
 
-    // Toggle follow-up without assignedMember match
     fireEvent.click(screen.getByLabelText(strings.scheduleFollowupCheckbox));
     const dateInput = container.querySelector('#compose-followup-date') as HTMLInputElement;
     fireEvent.change(dateInput, { target: { value: '2026-12-10' } });
-    const assigneeSelect = container.querySelector('#compose-followup-assignee') as HTMLSelectElement;
-    fireEvent.change(assigneeSelect, { target: { value: 'non-existing-member-id' } });
+    await chooseFollowupAssignee(container, TEAM_MEMBERS[1].id);
 
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(mockDispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: 'SMS',
-          recipientPhone: '9876543210',
-          scheduleFollowup: expect.objectContaining({
-            assigneeName: 'Assignee',
-          }),
-        })
-      );
+    await act(async () => {
+      await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(mockDispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: 'SMS',
+            recipientPhone: '9876543210',
+            scheduleFollowup: expect.objectContaining({
+              assigneeId: TEAM_MEMBERS[1].id,
+              assigneeName: TEAM_MEMBERS[1].name,
+            }),
+          })
+        );
+      },
+      { timeout: 10000 }
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('status')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('handles submission error from API result', async () => {
@@ -393,9 +473,16 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
     expect(screen.getByText('Telecom gateway rejected SMS')).toBeInTheDocument();
   });
 
@@ -416,9 +503,16 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
     expect(screen.getByText(strings.errorToast)).toBeInTheDocument();
   });
 
@@ -463,6 +557,54 @@ describe('ActionCenterComposeModal', () => {
     expect(mockDispatch).not.toHaveBeenCalled();
   });
 
+  it('shows the assignee load error and keeps the assignee list empty', async () => {
+    const loadError = formatString(UI_STRINGS.dataLoad.failedWithStatus, {
+      resource: UI_STRINGS.dataLoad.resources.assignees,
+      status: 503,
+    });
+    mockFetchInternalAssignees.mockResolvedValueOnce({ assignees: [], error: loadError });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="internal_task"
+        entityId="tsk-assignee-error"
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText(strings.scheduleFollowupCheckbox));
+
+    await waitFor(() => {
+      expect(screen.getByText(loadError)).toBeInTheDocument();
+    });
+    const assigneeSelect = container.querySelector('#compose-followup-assignee') as HTMLSelectElement;
+    expect(assigneeSelect.value).toBe('');
+    expect(assigneeSelect.options).toHaveLength(1);
+  });
+
+  it('blocks a scheduled follow-up until the user chooses an assignee', () => {
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="internal_task"
+        entityId="tsk-no-assignee"
+        defaultRecipientEmail="owner@example.com"
+        defaultMessage="Follow up needed"
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText(strings.scheduleFollowupCheckbox));
+    fireEvent.change(container.querySelector('#compose-followup-date') as HTMLInputElement, {
+      target: { value: '2026-11-30' },
+    });
+    fireEvent.submit(container.querySelector('form')!);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.actionCenter.tasks.selectAssignee);
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
   it('displays partial delivery banner when one channel succeeds and one fails', async () => {
     mockDispatch.mockResolvedValueOnce({
       success: false,
@@ -486,10 +628,17 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/Partial delivery: Email: Sent \| SMS: Failed \(Network timeout\)/i)).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByText(/Partial delivery: Email: Sent \| SMS: Failed \(Network timeout\)/i)).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('displays partial delivery banner when SMS succeeds and Email fails without error detail', async () => {
@@ -515,10 +664,17 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/Partial delivery: Email: Failed \(Unsent\) \| SMS: Sent/i)).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByText(/Partial delivery: Email: Failed \(Unsent\) \| SMS: Sent/i)).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('displays per-channel error message when all channels fail', async () => {
@@ -544,10 +700,17 @@ describe('ActionCenterComposeModal', () => {
     const form = container.querySelector('form')!;
     fireEvent.submit(form);
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/SMTP connection failed \| Recipient rate limited/i)).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
     });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByText(/SMTP connection failed \| Recipient rate limited/i)).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
   });
 
   it('submits form with EMAIL channel and calls onSuccess and triggers onClose after delay', async () => {
@@ -895,9 +1058,10 @@ describe('ActionCenterComposeModal', () => {
     const select = container.querySelector('#compose-scenario') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'buyer_conversion_followup' } });
 
+    // The record id is never used as a company name. With no recipient name the token stays blank.
     await waitFor(() => {
       const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
-      expect(subjectInput.value).toContain('Follow-up: Procurement Optimization & Commercial Plan for byr-fallback-tokens');
+      expect(subjectInput.value).toBe('Follow-up: Procurement Optimization & Commercial Plan for ');
     });
 
     // Verify auto-attached document appears
@@ -937,6 +1101,7 @@ describe('ActionCenterComposeModal', () => {
 
     const dateInput = container.querySelector('#compose-followup-date') as HTMLInputElement;
     fireEvent.change(dateInput, { target: { value: '2026-12-01' } });
+    await chooseFollowupAssignee(container, TEAM_MEMBERS[0].id);
 
     const form = container.querySelector('form')!;
     fireEvent.submit(form);

@@ -19,12 +19,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle, History, Clock } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import {
   bulkImportVendorRows,
   downloadVendorUploadTemplate,
   isAllowedVendorUploadFile,
   MAX_VENDOR_UPLOAD_FILE_BYTES,
   parseVendorUploadFile,
+  sendBulkVendorInvitations,
 } from '@/lib/vendorUploadClient';
 import type { VendorUploadImportResponse, VendorUploadRow } from '@/lib/types';
 
@@ -45,6 +47,7 @@ interface UploadHistoryEntry {
   duplicates: number;
   failed: number;
   onboardingFailed?: number;
+  onboardingSkipped?: number;
   records?: Array<{
     vendorCode?: string;
     name: string;
@@ -77,6 +80,9 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   const [previewFilter, setPreviewFilter] = useState<'all' | 'valid' | 'invalid'>('all');
   const [importProgress, setImportProgress] = useState<VendorUploadImportResponse | null>(null);
   const [importResult, setImportResult] = useState<VendorUploadImportResponse | null>(null);
+  const [isSendingInvitations, setIsSendingInvitations] = useState(false);
+  const [invitationSummary, setInvitationSummary] = useState<string | null>(null);
+  const [invitationProgress, setInvitationProgress] = useState({ completed: 0, total: 0 });
 
   useEffect(() => {
     try {
@@ -112,6 +118,9 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     setPreviewFilter('all');
     setImportProgress(null);
     setImportResult(null);
+    setIsSendingInvitations(false);
+    setInvitationSummary(null);
+    setInvitationProgress({ completed: 0, total: 0 });
   }
 
   function handleClose() {
@@ -168,7 +177,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   async function handleImport() {
     if (rows.length === 0) return;
     setStep('importing');
-    setImportProgress({ total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, onboardingFailed: 0, results: [] });
+    setImportProgress({ total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, onboardingFailed: 0, onboardingSkipped: 0, results: [] });
     const result = await bulkImportVendorRows(rows, (soFar) => setImportProgress(soFar));
     setImportResult(result);
     setStep('result');
@@ -183,6 +192,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       duplicates: result.duplicates,
       failed: result.failed,
       onboardingFailed: result.onboardingFailed,
+      onboardingSkipped: result.onboardingSkipped,
       records: rows.slice(0, 100).map((r) => ({
         vendorCode: r.vendor.vendorCode,
         name: r.vendor.name,
@@ -203,6 +213,57 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     if (result.imported > 0) {
       await refreshFromDB();
       onImportComplete?.();
+    }
+  }
+
+  async function handleSendInvitations(importResult: VendorUploadImportResponse) {
+    const vendorIds = importResult.results
+      .filter((result) => (
+        result.status === 'imported'
+        && ['skipped', 'invitation_failed'].includes(result.onboardingEmailStatus || '')
+        && result.vendorId
+      ))
+      .map((result) => result.vendorId as string);
+    setIsSendingInvitations(true);
+    setInvitationSummary(null);
+    setInvitationProgress({ completed: 0, total: vendorIds.length });
+    try {
+      const result = await sendBulkVendorInvitations(vendorIds, (completed, total) => {
+        setInvitationProgress({ completed, total });
+      });
+      const statusByVendorId = new Map(result.results.map((item) => [item.vendorId, item.status]));
+      setImportResult((current) => current && ({
+        ...current,
+        results: current.results.map((row) => {
+          if (!row.vendorId || !statusByVendorId.has(row.vendorId)) return row;
+          const status = statusByVendorId.get(row.vendorId);
+          return {
+            ...row,
+            onboardingEmailStatus: status === 'sent' || status === 'already_sent'
+              ? 'invitation_sent'
+              : status === 'queued'
+                ? 'invitation_pending'
+                : 'invitation_failed',
+          };
+        }),
+      }));
+      setInvitationSummary(formatString(UI_STRINGS.vendorBulkImport.invitationSummary, {
+        sent: result.sentCount,
+        queued: result.queuedCount,
+        failed: result.failedCount,
+      }));
+      if (result.failedCount > 0) {
+        showToast(
+          UI_STRINGS.vendorBulkImport.invitationIssueTitle,
+          UI_STRINGS.vendorBulkImport.invitationRequestError,
+          'warning'
+        );
+      }
+    } catch {
+      setInvitationSummary(UI_STRINGS.vendorBulkImport.invitationRequestError);
+    } finally {
+      setIsSendingInvitations(false);
+      setInvitationProgress({ completed: 0, total: 0 });
     }
   }
 
@@ -305,6 +366,11 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                         {item.failed > 0 && (
                           <span className="px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
                             {item.failed} Failed
+                          </span>
+                        )}
+                        {Number(item.onboardingSkipped) > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300">
+                            {formatString(UI_STRINGS.vendorBulkImport.historyOnboardingSkipped, { count: Number(item.onboardingSkipped) })}
                           </span>
                         )}
                       </div>
@@ -538,15 +604,29 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
               <p className="font-bold">Importing vendors…</p>
               {importProgress && (
                 <p className="text-[11px] text-slate-450 dark:text-gray-500">
-                  {importProgress.total} of {rows.length} processed — {importProgress.imported} imported (
-                  {importProgress.missingEmail} missing email), {importProgress.duplicates} duplicate,{' '}
-                  {importProgress.failed} failed, {importProgress.onboardingFailed || 0} credential email(s) failed
+                  {formatString(UI_STRINGS.vendorBulkImport.progressSummary, {
+                    processed: importProgress.total,
+                    total: rows.length,
+                    imported: importProgress.imported,
+                    missingEmail: importProgress.missingEmail,
+                    duplicates: importProgress.duplicates,
+                    failed: importProgress.failed,
+                    onboardingFailed: importProgress.onboardingFailed || 0,
+                    onboardingSkipped: importProgress.onboardingSkipped || 0,
+                  })}
                 </p>
               )}
             </div>
           )}
 
           {step === 'result' && importResult && (() => {
+            const invitationVendorIds = importResult.results
+              .filter((result) => (
+                result.status === 'imported'
+                && ['skipped', 'invitation_failed'].includes(result.onboardingEmailStatus || '')
+                && Boolean(result.vendorId)
+              ))
+              .map((result) => result.vendorId as string);
             // Status is derived from the real import outcome so the headline can
             // never claim success when nothing was imported (e.g. every record
             // was a duplicate). "Completed" means every row imported; "Partially
@@ -598,10 +678,95 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                     {importResult.onboardingFailed} vendor account(s) were imported, but login setup or credential email delivery failed. Contact support to resend the invitations.
                   </p>
                 )}
+                {Number(importResult.onboardingSkipped) > 0 && (
+                  <p role="status" className="mt-2 rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs text-slate-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
+                    {formatString(UI_STRINGS.vendorBulkImport.onboardingSkippedSummary, { count: Number(importResult.onboardingSkipped) })}
+                  </p>
+                )}
+              {(invitationVendorIds.length > 0 || invitationSummary) && (
+                <div className="mt-2 space-y-2">
+                  {invitationVendorIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleSendInvitations(importResult)}
+                      disabled={isSendingInvitations}
+                      className="btn btn-secondary btn-sm font-bold"
+                    >
+                      {isSendingInvitations
+                        ? formatString(UI_STRINGS.vendorBulkImport.sendingInvitations, invitationProgress)
+                        : formatString(UI_STRINGS.vendorBulkImport.sendInvitationsButton, {
+                          count: invitationVendorIds.length,
+                        })}
+                    </button>
+                  )}
+                  {invitationSummary && (
+                    <p role="status" className="text-xs text-slate-600 dark:text-gray-300">
+                      {invitationSummary}
+                    </p>
+                  )}
+                </div>
+              )}
               </div>
+
+              {(() => {
+                const failedOrDuplicateRows = (importResult.results || []).filter(
+                  (r) => r.status !== 'imported'
+                );
+                if (failedOrDuplicateRows.length === 0) return null;
+                return (
+                  <div className="space-y-2 mt-2" data-testid="vendor-upload-error-list">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wide">
+                        Failed &amp; Duplicate Records ({failedOrDuplicateRows.length})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={downloadFailedRowsReport}
+                        className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1"
+                      >
+                        <Download size={12} /> Download Error CSV
+                      </button>
+                    </div>
+                    <div className="border border-rose-200 dark:border-rose-900/60 rounded-lg overflow-x-auto max-h-48 overflow-y-auto">
+                      <table className="w-full text-[11px] text-left">
+                        <thead className="sticky top-0 bg-rose-50 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 font-bold border-b border-rose-200 dark:border-rose-900/60">
+                          <tr>
+                            <th className="p-2">Row</th>
+                            <th className="p-2">Company Name</th>
+                            <th className="p-2">Email</th>
+                            <th className="p-2">Status</th>
+                            <th className="p-2">Error Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40">
+                          {failedOrDuplicateRows.map((r) => {
+                            const originalRow = rows.find((row) => row.rowNumber === r.rowNumber);
+                            const name = originalRow?.vendor.name || '—';
+                            const reason = (r.errors && r.errors.length > 0 ? r.errors.join('; ') : r.reason) || 'Could not be uploaded.';
+                            return (
+                              <tr key={r.rowNumber} className="bg-white dark:bg-gray-900">
+                                <td className="p-2 font-mono font-bold text-slate-700 dark:text-gray-300">{r.rowNumber}</td>
+                                <td className="p-2 font-semibold text-slate-800 dark:text-gray-200">{name}</td>
+                                <td className="p-2 font-mono text-slate-600 dark:text-gray-400">{r.email || '—'}</td>
+                                <td className="p-2">
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300">
+                                    {r.status}
+                                  </span>
+                                </td>
+                                <td className="p-2 text-rose-600 dark:text-rose-400 font-medium">{reason}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {(importResult.failed > 0 || importResult.duplicates > 0) && (
                 <button
+                  type="button"
                   onClick={downloadFailedRowsReport}
                   className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5"
                 >

@@ -3,7 +3,7 @@ jest.mock('../src/db/buyerProfileQueries', () => ({ findProfileByUserId: jest.fn
 jest.mock('../src/services/loggerService', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), audit: jest.fn() } }));
 jest.mock('../src/services/storeService', () => ({
   reset: jest.fn(), addAuditLog: jest.fn(), notifyBuyer: jest.fn(), getVendorById: jest.fn(),
-  updateVendor: jest.fn(), empanelIngestedVendor: jest.fn(),
+  getVendorByIdWithDBFallback: jest.fn(), updateVendorDurably: jest.fn(), empanelIngestedVendor: jest.fn(),
 }));
 jest.mock('../src/services/mailerService', () => ({}));
 jest.mock('../src/services/vendorCategorizationService', () => ({
@@ -22,6 +22,7 @@ const {
   VENDOR_INGESTION_HORIZON: HORIZON, VENDOR_INGESTION_AI_STATUS: AI_STATUS,
   VENDOR_MAPPING_STATUS: MAPPING_STATUS, VENDOR_MAPPING_SOURCE: MAPPING_SOURCE,
   VENDOR_INGESTION_CONFIG: CONFIG, VENDOR_INGESTION_MESSAGES: MESSAGES,
+  VENDOR_CATEGORY_MASTER_SOURCE: CATEGORY_SOURCE, DEFAULT_CATEGORY_TAXONOMY,
 } = require('../src/config/constants');
 
 const USER = { sub: 'buyer-user', email: 'buyer@example.test', orgId: 'stale-token-org' };
@@ -40,7 +41,7 @@ const MAPPING = {
   aiSuggestion: { majorCategory: 'Mechanical', minorCategories: ['Pumps'], confidence: 95, reason: 'Repeated pump purchases' },
 };
 const VENDOR_ROW = { vendorCode: 'V-001', companyName: 'Pump Supplier', email: 'supplier@example.test', gstin: '27ABCDE1234F1Z5' };
-const PO_ROW = { poNumber: 'PO-001', poDate: '2026-06-01', itemDescription: 'Industrial pump', quantity: 2, uom: 'Nos', spend: 2000, department: 'Maintenance', vendorCode: 'V-001' };
+const PO_ROW = { poNumber: 'PO-001', poDate: '2026-06-01', itemDescription: 'Industrial pump', specification: 'Centrifugal, 5 HP', quantity: 2, uom: 'Nos', spend: 2000, department: 'Maintenance', vendorCode: 'V-001' };
 const SUMMARY = { queued: 0, processing: 0, completed: 2, failed: 0, mapped: 2, pendingReview: 0, selfMapRequired: 0 };
 
 beforeEach(() => {
@@ -67,6 +68,8 @@ beforeEach(() => {
   queries.saveBuyerReview.mockImplementation(async (_id, _org, review) => ({ ...MAPPING, buyerMajorCategory: review.majorCategory, buyerMinorCategories: review.minorCategories, status: review.status }));
   queries.saveAiSuggestion.mockResolvedValue({ ...MAPPING });
   store.empanelIngestedVendor.mockReturnValue({ id: 'live-vendor-1' });
+  store.getVendorByIdWithDBFallback.mockResolvedValue(null);
+  store.updateVendorDurably.mockResolvedValue({ id: 'existing-vendor' });
 });
 
 afterEach(() => jest.useRealTimers());
@@ -252,6 +255,18 @@ describe('vendor and purchase order uploads', () => {
     queries.countPoLineItems.mockResolvedValue({ total: CONFIG.MAX_PO_ROWS + 1 });
     await expect(service.confirmPoDump(USER, SESSION.id, { rows: [PO_ROW] })).rejects.toMatchObject({ status: 413 });
   });
+
+  test('keeps a PO line that gives only the two mandatory fields inside the period without requiring specifications', async () => {
+    const result = await service.confirmPoDump(USER, SESSION.id, {
+      rows: [
+        { itemDescription: 'Industrial pump', vendorName: 'Pump Supplier' },
+        { shortText: 'Ball valve DN50', supplierName: 'Valve Corp' },
+        { materialDescription: 'Copper cable 4mm', vendorCode: 'V-999' },
+      ],
+    });
+    expect(result).toMatchObject({ validRows: 3, invalidRows: 0 });
+    expect(queries.bulkInsertPoLineItems.mock.calls[0][2][0]).toMatchObject({ inHorizon: true });
+  });
 });
 
 describe('vendor history matching and AI progress', () => {
@@ -269,10 +284,10 @@ describe('vendor history matching and AI progress', () => {
     await expect(service.runVendorPoJoin(USER, SESSION.id)).rejects.toMatchObject({ status: 409, message: MESSAGES.PO_DUMP_REQUIRED_FIRST });
   });
 
-  test('refuses classification without a buyer category master', async () => {
-    expect(await service.requireCategoryMaster(CONTEXT.organizationId)).toEqual(CATEGORY_MASTER);
+  test('uses the buyer category master when present, and the platform taxonomy when the buyer has none', async () => {
+    expect(await service.resolveCategoryMaster(CONTEXT.organizationId)).toEqual({ categoryMaster: CATEGORY_MASTER, source: CATEGORY_SOURCE.ORGANIZATION });
     queries.findOrganizationCategoryMaster.mockResolvedValue([]);
-    await expect(service.requireCategoryMaster(CONTEXT.organizationId)).rejects.toMatchObject({ status: 409, message: MESSAGES.CATEGORY_MASTER_EMPTY });
+    expect(await service.resolveCategoryMaster(CONTEXT.organizationId)).toEqual({ categoryMaster: DEFAULT_CATEGORY_TAXONOMY, source: CATEGORY_SOURCE.PLATFORM_DEFAULT });
   });
 
   test.each([SESSION_STATUS.DRAFT, SESSION_STATUS.VENDOR_MASTER_STORED])('requires the PO join before AI processing in %s', async (status) => {
@@ -370,12 +385,12 @@ describe('buyer category review and vendor empanelment', () => {
   test('skips contactless mappings and updates an existing scoped vendor without duplicating it', async () => {
     expect(await service.empanelApprovedVendor(CONTEXT, SESSION.id, null)).toBeNull();
     expect(await service.empanelApprovedVendor(CONTEXT, SESSION.id, { ...MAPPING, email: '' })).toBeNull();
-    store.getVendorById.mockReturnValue({ id: 'existing-vendor' });
-    store.updateVendor.mockReturnValue({ id: 'existing-vendor' });
+    store.getVendorByIdWithDBFallback.mockResolvedValue({ id: 'existing-vendor' });
+    store.updateVendorDurably.mockResolvedValue({ id: 'existing-vendor' });
     const mapping = { ...MAPPING, buyerMajorCategory: 'Mechanical', buyerMinorCategories: ['Valves'] };
     expect(await service.empanelApprovedVendor(CONTEXT, SESSION.id, mapping)).toEqual({ id: 'existing-vendor' });
-    expect(store.getVendorById).toHaveBeenCalledWith(mapping.email, 'all');
-    expect(store.updateVendor).toHaveBeenCalledWith('existing-vendor', expect.objectContaining({ minorCategories: ['Valves'], contactPerson: 'Supplier Contact', gstin: VENDOR_ROW.gstin }));
+    expect(store.getVendorByIdWithDBFallback).toHaveBeenCalledWith(mapping.email, 'all', { fresh: true });
+    expect(store.updateVendorDurably).toHaveBeenCalledWith('existing-vendor', expect.objectContaining({ minorCategories: ['Valves'], contactPerson: 'Supplier Contact', gstin: VENDOR_ROW.gstin }));
     expect(queries.attachVendorId).toHaveBeenCalledWith(MAPPING.id, CONTEXT.organizationId, 'existing-vendor');
   });
 

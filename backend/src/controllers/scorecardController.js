@@ -6,6 +6,7 @@
 // ==============================================================================
 
 const scorecardQueries = require('../db/scorecardQueries');
+const { PERSISTENCE_MESSAGES } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
 /**
@@ -34,6 +35,12 @@ async function getScorecard(req, res) {
     return res.json({ success: true, data });
   } catch (err) {
     logger.error('Failed to retrieve scorecard performance data', err, 'SCORECARD_CONTROLLER');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
+      return res.status(503).json({ success: false, error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE, retryable: true });
+    }
+    if (err?.code === 'VALIDATION_FAILED') {
+      return res.status(400).json({ success: false, error: err.message });
+    }
     return res.status(500).json({ success: false, error: 'Failed to retrieve scorecard performance analytics.' });
   }
 }
@@ -41,4 +48,3 @@ async function getScorecard(req, res) {
 module.exports = {
   getScorecard,
 };
-

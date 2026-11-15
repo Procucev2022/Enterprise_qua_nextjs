@@ -86,6 +86,7 @@ export interface QuoteComparison {
   submissionMethod?: 'email' | 'portal' | 'web_portal';
   submittedAt?: string;
   taxes?: number;
+  taxRate?: number;
   deliveryCharges?: number;
   deliveryDate?: string;
   lineItemQuotes?: LineItemQuote[];
@@ -110,7 +111,7 @@ export interface RFQQuoteAttachment {
 export type FollowUpChannel = 'call' | 'whatsapp' | 'sms';
 
 export interface VendorChannelCall {
-  status: 'completed' | 'connected' | 'in_progress' | 'voicemail' | 'failed' | 'scheduled';
+  status: 'completed' | 'connected' | 'in_progress' | 'voicemail' | 'failed' | 'scheduled' | 'not_dispatched';
   lastAttempt: string;
   duration?: string;
   summary?: string;
@@ -119,14 +120,14 @@ export interface VendorChannelCall {
 }
 
 export interface VendorChannelWhatsApp {
-  status: 'read' | 'delivered' | 'replied' | 'pending' | 'failed';
+  status: 'read' | 'delivered' | 'replied' | 'pending' | 'failed' | 'not_dispatched';
   lastAttempt: string;
   messagePreview?: string;
   linkClicked?: boolean;
 }
 
 export interface VendorChannelSMS {
-  status: 'delivered' | 'sent' | 'clicked' | 'failed' | 'pending';
+  status: 'delivered' | 'sent' | 'clicked' | 'failed' | 'pending' | 'not_dispatched';
   lastAttempt: string;
   deliveryReport?: string;
 }
@@ -146,10 +147,13 @@ export interface VendorFollowUpRecord {
   call: VendorChannelCall;
   whatsapp: VendorChannelWhatsApp;
   sms: VendorChannelSMS;
+  email?: VendorChannelEmail;
   email24h?: VendorChannelEmail;
+  emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
   lastInteraction: string;
-  attemptsCount: number;
+  /** Undefined when the server holds no outreach record for the vendor. It is never a substitute zero. */
+  attemptsCount?: number;
   bidStatus: 'Submitted' | 'In Progress' | 'Pending' | 'Declined';
 }
 
@@ -182,6 +186,46 @@ export interface RFQFollowUpBreakdown {
   vendors: VendorFollowUpRecord[];
   nextScheduledChaser?: string;
   autoChasingEnabled: boolean;
+}
+
+/**
+ * The next follow-up instant for each channel, as ISO-8601 text. Each value is null when the RFQ
+ * creation time cannot be read. See computeRFQFollowUpTimes in followUpSchedule.ts.
+ */
+export interface RFQNextFollowUpTimes {
+  call: string | null;
+  whatsapp: string | null;
+  sms: string | null;
+  email: string | null;
+}
+
+/** The categories a category search matched. `shown` is capped at the result limit, and `total` counts every match. */
+export interface CategorySearchResult {
+  shown: string[];
+  total: number;
+}
+
+/** Props for the category search field in the RFQ line item tables. */
+export interface CategorySearchInputProps {
+  /** Accessible name of the field, for example "Category". */
+  label: string;
+  /** Every category the field can choose from, in display order. */
+  options: string[];
+  /** The chosen category, or '' when none is chosen. */
+  value: string;
+  /** Called with the chosen category, or with '' when the choice is cleared. */
+  onChange: (category: string) => void;
+  /** Shown while the field is empty and no category is chosen. */
+  placeholder: string;
+  disabled?: boolean;
+  required?: boolean;
+  invalid?: boolean;
+  /** Minimum characters to type before suggestions appear. Default is 0. */
+  minChars?: number;
+  /** Optional custom container CSS classes */
+  className?: string;
+  /** Optional custom dropdown CSS classes */
+  dropdownClassName?: string;
 }
 
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry' | 'ai_extraction';
@@ -221,6 +265,7 @@ export interface ManualRFQForm {
   title: string;
   /** Header category, derived from the leading line item once one is classified. */
   majorCategory: string;
+  minorCategory?: string;
   /** `null` while unanswered. Optional for dispatch: a buyer need not publish a ceiling. */
   estimatedBudget: number | null;
   targetDeliveryDate: string;
@@ -229,7 +274,8 @@ export interface ManualRFQForm {
   lineItems: ManualRFQLineItem[];
   /** Stored server-side and downloadable. Never sent for AI extraction. */
   attachments: RFQAttachment[];
-  sourcingMode: SourcingMode;
+  /** `null` until the buyer chooses a sourcing mode. No mode is preselected. */
+  sourcingMode: SourcingMode | null;
 }
 
 /**
@@ -287,7 +333,7 @@ export type RFQTransportFailure =
 
 /** Outcome of creating an RFQ. On success the server's record is authoritative. */
 export type RFQMutationResult =
-  | { success: true; rfq: RFQItem }
+  | { success: true; rfq: RFQItem; remainingFreeRFQs?: number | null }
   | {
       success: false;
       reason: RFQTransportFailure;
@@ -317,6 +363,34 @@ export interface VendorPageMeta {
   pageSize: number;
   total: number;
   totalPages: number;
+}
+
+/** Category fields extracted from an RFQ line item or header for supplier matching. */
+export interface RfqCategoryLineItemInput {
+  majorCategory?: string | null;
+  minorCategory?: string | null;
+  category?: string | null;
+}
+
+/** RFQ header and line item category inputs consumed by Mode 3 supplier matching helpers. */
+export interface RfqCategoryFormInput extends RfqCategoryLineItemInput {
+  lineItems?: RfqCategoryLineItemInput[];
+  extractedEntities?: RfqCategoryLineItemInput[];
+  deliveryLocation?: string | null;
+  deliveryPincode?: string | null;
+}
+
+/** Query options for fetching paginated vendor directory candidates via `/api/vendors`. */
+export interface FetchAllVendorsOptions {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  category?: string;
+  majors?: string[];
+  minors?: string[];
+  publicOnly?: boolean;
+  state?: string;
+  city?: string;
 }
 
 /** Outcome of fetching one page of the full (unfiltered-by-category) vendor directory. */
@@ -387,6 +461,8 @@ export type PaymentLinkCreateResult =
 export interface RFQCreatePayload {
   title: string;
   category: string;
+  majorCategory?: string;
+  minorCategory?: string;
   sourcingMode: SourcingMode;
   status: string;
   source: RFQSource;
@@ -455,6 +531,30 @@ export interface RFQAttachment {
   uploadedAt: string;
 }
 
+export type AttachmentPreviewKind = 'email' | 'pdf' | 'image' | 'text' | 'download';
+
+export interface ParsedEmlPreview {
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  date?: string;
+  body: string;
+  embeddedAttachments: string[];
+  raw: string;
+}
+
+export interface AttachmentPreviewState {
+  file: RFQAttachment;
+  status: 'loading' | 'ready' | 'error';
+  previewKind: AttachmentPreviewKind;
+  resolvedMime: string;
+  objectUrl: string | null;
+  textContent: string | null;
+  emailPreview: ParsedEmlPreview | null;
+  errorMessage: string | null;
+}
+
 /**
  * The narrative summary stored against an RFQ.
  *
@@ -512,7 +612,10 @@ export interface RFQItem {
    * which is how the details page decides whether to show an "edited" timestamp.
    */
   updatedAt?: string;
+  minorCategory?: string;
+  minorCategories?: string[];
   extractedEntities: ExtractedEntity[];
+  lineItems?: any[];
   quotes: QuoteComparison[];
   chasingActive: boolean;
   chaserMethod?: 'WhatsApp' | 'Email' | 'SMS' | 'Call' | 'Multi-Channel';
@@ -546,7 +649,8 @@ export interface RFQItem {
   deadline?: string;
   closingDeadline?: string;
   isExtended?: boolean;
-  extensionHours?: 24 | 48;
+  /** Hours added by the one-time extension. Always a whole number of days times 24. */
+  extensionHours?: number;
   extendedAt?: string;
   extendedByEmail?: string | null;
   buyerDetailsHidden?: boolean;
@@ -561,7 +665,8 @@ export interface RFQItem {
 }
 
 export interface RFQExtensionPayload {
-  hours: 24 | 48;
+  /** Whole days to extend the closing deadline by, between the allowed minimum and maximum. */
+  days: number;
 }
 
 export type RFQExtensionResult =
@@ -597,6 +702,11 @@ export interface RFQInquiry {
 export interface RFQAssignedVendor {
   id?: string;
   name: string;
+  /** Ownership fields copied from the vendor record. isBuyerUploaded (vendor-summary) reads them. */
+  source?: string | null;
+  buyerId?: string | null;
+  buyerAccountId?: string | null;
+  addedByBuyerCompany?: string | null;
   email?: string | null;
   contactPerson?: string | null;
   phone?: string | null;
@@ -610,6 +720,8 @@ export interface RFQAssignedVendor {
   vendorCategory?: 'Client List' | 'Procucev Network';
   /** Sourcing category — shown for a Procucev entry, which carries no contact. */
   majorCategory?: string | null;
+  /** Minor categories the vendor covers. */
+  minorCategories?: string[] | null;
   /** Delivery/service location — shown for a Procucev entry. */
   location?: string | null;
   /** 360° match score (0–100) — shown for a Procucev entry. */
@@ -723,37 +835,68 @@ export interface VendorOpportunity {
   buyerDetailsHiddenUntil?: string;
   sourcingMode?: string;
   category?: string;
+  assignedVendors?: RFQAssignedVendor[];
 }
 
 export interface AuditLogEntry {
   id: string;
   timestamp: string;
-  user: string;
+  user?: string;
+  userEmail?: string;
   action: string;
   rfqNumber?: string;
   shaSignature: string;
-  status: 'VERIFIED' | 'TAMPER_CHECK_OK';
-  ipAddress: string;
+  previousHash?: string;
+  status?: 'VERIFIED' | 'TAMPER_CHECK_OK';
+  ipAddress?: string;
+}
+
+export type EnterpriseInquiryStatus = 'NEW' | 'CONTACTED' | 'IN_DISCUSSION' | 'CONTRACT_SIGNED' | 'CLOSED';
+
+export interface EnterpriseInquiry {
+  id: string;
+  companyName: string;
+  email: string;
+  mobile: string;
+  buyerAccountId?: string | null;
+  notes?: string;
+  status: EnterpriseInquiryStatus;
+  contactedBy?: string;
+  contactedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AuditVerificationIssue {
+  id: string | null;
+  index: number;
+  reason: string;
+}
+
+export interface AuditVerificationReport {
+  valid: boolean | null;
+  complete: boolean;
+  source: 'persisted' | 'in_memory';
+  expectedCount: number | null;
+  verifiedCount: number;
+  compromisedEntries: AuditVerificationIssue[];
+  timestamp?: string;
+  chainRevision?: number;
+  reason?: string;
 }
 
 export interface AzureServiceHealth {
   service: string;
-  status: 'ONLINE' | 'HEALTHY' | 'DEGRADED';
+  status: 'CHECKING' | 'ONLINE' | 'UNREACHABLE' | 'NOT_CONFIGURED';
   latency: string;
   uptime: string;
   details: string;
 }
 
+/** Read-only settings the server reports (GET /api/system-config). The server stores no editable setting. */
 export interface SystemConfig {
-  ollamaModel: 'Llama 3 (8B Instruct)' | 'Llama 3.1 (70B Quantized)' | 'Mistral NeMo 12B';
-  ollamaActive: boolean;
-  ocrExtractionThreshold: number;
-  whatsappAutoChaser: boolean;
-  voiceCallAutoChaser?: boolean;
-  smsAutoChaser?: boolean;
-  escalationIntervalHours: number;
-  azureDbBackupFrequency: 'Hourly' | 'Daily' | 'Continuous';
-  rbacEnforced: boolean;
+  aiModel: string;
+  aiTemperature: number;
 }
 
 export interface VendorModuleScore {
@@ -785,6 +928,55 @@ export interface QuestionEvaluationItem {
   remarks: string;
 }
 
+/** Pillar code on a supplier evaluation: M1 to M6, as on QuestionEvaluationItem.pillarId. */
+export type VendorEvaluationPillarId = QuestionEvaluationItem['pillarId'];
+
+/** One qualification pillar as the buyer evaluation summary shows it. A null value means the evaluation holds none. */
+export interface VendorEvaluationPillarView {
+  pillarId: VendorEvaluationPillarId;
+  name: string;
+  weight: number;
+  weightedScore: number | null;
+  remarks: string | null;
+}
+
+/** The supplier evaluation the buyer summary screen renders. Each null field is shown as not recorded. */
+export interface VendorEvaluationSummaryView {
+  isBuyerUploaded: boolean;
+  vendorId: string | null;
+  vendorName: string | null;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  category: string | null;
+  submissionDate: string | null;
+  status: VendorEvaluationRecord['status'] | null;
+  overallScore: number | null;
+  systemAction: string | null;
+  pillars: VendorEvaluationPillarView[];
+  questions: QuestionEvaluationItem[];
+  documents: VendorEvaluationDocument[];
+}
+
+/** One supplier in the buyer summary's supplier picker. Null fields are not on record for that supplier. */
+export interface VendorEvaluationSelectOption {
+  id: string;
+  name: string | null;
+  category: string | null;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  isBuyerUploaded: boolean;
+  overallScore: number | null;
+}
+
+/** Props of the buyer evaluation summary screen. */
+export interface VendorEvaluationSummaryProps {
+  evaluationRecord?: VendorEvaluationRecord | null;
+  vendorEvaluation?: VendorEvaluationRecord | null;
+  onBack?: () => void;
+}
+
 export interface VendorEvaluationRecord {
   id: string;
   vendorId: string;
@@ -810,6 +1002,16 @@ export interface VendorEvaluationRecord {
   capaNotes?: string;
   systemAction: string;
   responses?: Record<string, string | number>;
+}
+
+/** Outcome of asking the server for a vendor evaluation. */
+export interface VendorEvaluationRequestResult {
+  success: boolean;
+  message?: string;
+  /** True when a saved evaluation already existed, so no request was sent to the vendor. */
+  evaluationExists?: boolean;
+  /** The saved evaluation to display in place of a new request. */
+  evaluation?: VendorEvaluationRecord;
 }
 
 export interface MajorMinorCategory {
@@ -916,6 +1118,8 @@ export interface BuyerProfileSaveResult extends BuyerProfileResult {
 export interface CategoryTaxonomyResult {
   success: boolean;
   data: MajorMinorCategory[];
+  minorCategories?: string[];
+  totalMinors?: number;
   error?: string;
 }
 
@@ -971,16 +1175,28 @@ export interface VendorEntry {
   status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
   score?: number | null;
   evaluated?: boolean;
+  evaluationRequested?: boolean;
+  evaluationRequestedAt?: string;
+  evaluationRequestedBy?: string;
   hasRecord?: boolean;
+  storeRecord?: VendorEvaluationRecord | null;
   matchReason?: string;
   proximity?: string;
   proximityMatch?: boolean;
 
   // Database Availability & Onboarding Credentials
   isExistingInDatabase?: boolean;
-  onboardingEmailStatus?: 'sent' | 'pending' | 'delivered' | 'failed' | 'account_exists';
+  onboardingEmailStatus?:
+    | 'sent'
+    | 'pending'
+    | 'delivered'
+    | 'failed'
+    | 'account_exists'
+    | 'skipped'
+    | 'invitation_pending'
+    | 'invitation_sent'
+    | 'invitation_failed';
   onboardingEmailDispatchedAt?: string;
-  tempPassword?: string;
   firstLoginCompleted?: boolean;
   reminderCadence?: 'every_3_days';
   nextReminderDate?: string;
@@ -1074,12 +1290,33 @@ export interface VendorUploadRow {
 export interface VendorUploadRowResult {
   rowNumber: number;
   status: 'imported' | 'duplicate' | 'failed';
+  vendorId?: string;
   email?: string;
   errors?: string[];
   reason?: string;
   missingEmail?: boolean;
   onboardingEmailStatus?: VendorEntry['onboardingEmailStatus'];
   onboardingError?: string;
+}
+
+export interface VendorBulkInvitationResult {
+  vendorId: string;
+  status:
+    | 'sent'
+    | 'queued'
+    | 'already_sent'
+    | 'not_found'
+    | 'not_eligible'
+    | 'missing_email'
+    | 'identity_missing'
+    | 'failed';
+}
+
+export interface VendorBulkInvitationResponse {
+  sentCount: number;
+  queuedCount: number;
+  failedCount: number;
+  results: VendorBulkInvitationResult[];
 }
 
 /** Aggregate response from one bulk-import chunk request. */
@@ -1093,6 +1330,7 @@ export interface VendorUploadImportResponse {
   duplicates: number;
   failed: number;
   onboardingFailed?: number;
+  onboardingSkipped?: number;
   results: VendorUploadRowResult[];
 }
 
@@ -1160,6 +1398,9 @@ export interface PurchaseOrderLineItemRecord {
   unitPrice: number;
   totalSpend: number;
   department?: string;
+  category?: string;
+  minorCategory?: string;
+  categoryStatus?: 'MAPPED' | 'UNMAPPED';
 }
 
 export interface HistoricalPurchaseVendorRecord {
@@ -1181,7 +1422,6 @@ export interface HistoricalPurchaseVendorRecord {
   secondSetMinorCategories: string[]; // 2nd Set: Minor Categories
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
   isExistingInDatabase?: boolean;
-  tempPassword?: string;
 }
 
 export interface IngestionFailedEmail {
@@ -1197,8 +1437,10 @@ export interface IngestionSummary {
   totalProcessed: number;
   mappedCount: number;
   mappedEmailsSent: number;
+  mappedEmailsQueued: number;
   unmappedCount: number;
   unmappedEmailsSent: number;
+  unmappedEmailsQueued: number;
   failedEmailCount: number;
   failedEmails: IngestionFailedEmail[];
   skippedCount?: number;
@@ -1593,8 +1835,8 @@ export interface VendorAiClassificationLogEntry {
 export interface VendorIngestionCategoryMaster {
   categories: MajorMinorCategory[];
   total: number;
-  isEmpty: boolean;
-  reason: string | null;
+  /** ORGANIZATION when the buyer's own master is used, PLATFORM_DEFAULT when the platform taxonomy is. */
+  source: 'ORGANIZATION' | 'PLATFORM_DEFAULT';
 }
 
 /** Everything the wizard needs to rehydrate. `session` is null on first visit. */
@@ -1705,7 +1947,6 @@ export interface VendorOnboardingEmailPayload {
   isExistingInDatabase: boolean;
   subject: string;
   username: string;
-  tempPassword: string;
   authInstructions: string;
   profileUpdateInstructions: string;
   categoryUpdateInstructions: string;
@@ -1826,26 +2067,49 @@ export interface BuyerAccount {
   historicalVendorsCount?: number;
 }
 
+/** Database connection health, read from the top level of GET /api/db/status. */
 export interface DBHealthStatus {
-  connected: boolean;
-  isConnected?: boolean;
-  isConfigured?: boolean;
+  isConfigured: boolean;
+  isConnected: boolean;
+  provider?: string;
   providerLabel?: string;
+  poolStatus?: string;
+  database?: string;
   latencyMs?: number;
-  poolStatus?: {
-    totalCount?: number;
-    idleCount: number;
-    waitingCount: number;
-  };
-  tablesCount?: number;
-  totalRecords?: {
+  userCount?: number;
+  vendorCount?: number;
+  rfqCount?: number;
+  errorMessage?: string;
+  timestamp?: string;
+  /** Records this server process holds in memory. It is a cache, not a separate count of the database. */
+  loadedRecords?: {
+    isLoadedFromDatabase?: boolean;
     buyerAccounts?: number;
     vendors?: number;
     rfqs?: number;
-    evaluations?: number;
-    auditLogs?: number;
   };
-  uptime?: string;
+}
+
+/** Body of GET /api/db/status on success, or the error body when the request fails. */
+export interface DBStatusResponse extends DBHealthStatus {
+  success?: boolean;
+  error?: string;
+}
+
+/** One line in the support chat widget. `notice` is text from the app itself, not from support. */
+export interface SupportChatMessage {
+  id: string;
+  sender: 'user' | 'support' | 'notice';
+  text: string;
+  timestamp: string;
+}
+
+/** Body of POST /api/support-chat. `reply` is set only when the support service answered. */
+export interface SupportChatResponse {
+  success: boolean;
+  status?: string;
+  reply?: string | null;
+  error?: string;
 }
 
 export interface EncryptedPayload {
@@ -1891,6 +2155,11 @@ export interface UserSession {
   mobile?: string;
   passwordChangeRequired?: boolean;
   onboardingRequired?: boolean;
+  /**
+   * Buyers only. True once the buyer's organization has stored its vendor master.
+   * The sign-in page opens the initial setup popup only while this is false.
+   */
+  vendorMasterUploaded?: boolean;
   authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
 }
 
@@ -1933,6 +2202,8 @@ export interface RFQIngestionClassification {
 export interface RFQIngestionDraft {
   title: string;
   category: string;
+  majorCategory?: string;
+  minorCategory?: string;
   targetDeliveryDate: string;
   /**
    * Overall value read off the document: a stated grand total, else the sum of
@@ -2054,6 +2325,8 @@ export interface RFQExtractionRequest {
 export interface RFQExtractionMeta {
   model: string;
   deliveryDate?: string | null;
+  majorCategory?: string | null;
+  minorCategory?: string | null;
 }
 
 export interface RFQExtractionResult {
@@ -2110,17 +2383,25 @@ export interface RFQPortfolioSummary {
   followUps: RFQPortfolioFollowUps;
 }
 
+/** Result of one OTP channel as the server reports it. Only "sent" means a provider accepted the message. */
+export type OtpChannelStatus = 'sent' | 'pending' | 'failed';
+
+/** Per-channel outcome of an OTP request. */
+export interface OtpDeliveryReport {
+  email?: OtpChannelStatus;
+  sms?: OtpChannelStatus;
+}
+
 export interface AuthResponse {
   success: boolean;
   message?: string;
   token?: string;
   user?: UserSession;
   error?: string;
-  demoCode?: string;
-  demoEmailCode?: string;
-  demoMobileCode?: string;
   expiresInSeconds?: number;
   passwordChangeRequired?: boolean;
+  /** Present on a successful OTP request: the email and SMS channel outcomes. */
+  delivery?: OtpDeliveryReport;
 }
 
 export interface LoginCredentials {
@@ -2476,11 +2757,12 @@ export interface ActionCenterCommunicationRecord {
 
 export interface ActionCenterCommunicationResult {
   success: boolean;
+  queued?: boolean;
   message?: string;
   error?: string;
   communication?: ActionCenterCommunicationRecord;
-  emailResult?: { success: boolean; recipient?: string; error?: string };
-  smsResult?: { success: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
+  emailResult?: { success: boolean; queued?: boolean; recipient?: string; error?: string };
+  smsResult?: { success: boolean; queued?: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
   completedTask?: { id: string; [key: string]: unknown } | null;
   followupTask?: { id: string; [key: string]: unknown } | null;
   followupError?: string | null;

@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const approvalController = require('../controllers/approvalController');
-const { optionalAuthenticate } = require('../middleware/auth');
+const { authenticate, requireRole } = require('../middleware/auth');
 
-router.get('/summary', optionalAuthenticate, approvalController.getSummary);
-router.get('/', optionalAuthenticate, approvalController.getApprovals);
-router.post('/:id/action', optionalAuthenticate, approvalController.processAction);
+const requireApprovalAccess = [authenticate, requireRole('admin', 'category_manager')];
+
+router.get('/summary', ...requireApprovalAccess, approvalController.getSummary);
+router.get('/', ...requireApprovalAccess, approvalController.getApprovals);
+router.post('/:id/action', ...requireApprovalAccess, approvalController.processAction);
 
 module.exports = router;

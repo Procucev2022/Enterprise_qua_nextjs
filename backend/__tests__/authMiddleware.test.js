@@ -7,6 +7,8 @@ const {
 } = require('../src/middleware/auth');
 const vendorDirectorySessionQueries = require('../src/db/vendorDirectorySessionQueries');
 const authService = require('../src/services/authService');
+const { AUTH_MESSAGES } = require('../src/config/constants');
+const { logger } = require('../src/services/loggerService');
 const { getTestToken } = require('./testHelpers');
 
 function mockRes() {
@@ -42,6 +44,25 @@ describe('auth middleware', () => {
       await authenticate({ headers: { authorization: 'Bearer not-a-real-token' } }, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
       expect(next).not.toHaveBeenCalled();
+    });
+
+    test('returns a retryable service error when session revocation storage is unavailable', async () => {
+      const sessionCheck = jest.spyOn(authService, 'assertSessionActive').mockResolvedValue({
+        valid: false,
+        error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE,
+      });
+      const res = mockRes();
+      const next = jest.fn();
+
+      await authenticate({ headers: { authorization: 'Bearer a.b.c' } }, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        retryable: true,
+        error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE,
+      }));
+      expect(next).not.toHaveBeenCalled();
+      sessionCheck.mockRestore();
     });
 
     test('attaches req.user and calls next() for a valid token', async () => {
@@ -87,6 +108,26 @@ describe('auth middleware', () => {
       await optionalAuthenticate(req, res, next);
       expect(next).toHaveBeenCalled();
       expect(req.user).toBeUndefined();
+    });
+
+    test('logs revocation lookup errors while continuing anonymously', async () => {
+      const failure = new Error('revocation database unavailable');
+      const checkSession = jest.spyOn(authService, 'assertSessionActive').mockRejectedValue(failure);
+      const logWarning = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const req = { id: 'request-otp-1', headers: { authorization: 'Bearer a.b.c' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await optionalAuthenticate(req, res, next);
+
+      expect(logWarning).toHaveBeenCalledWith(expect.stringContaining('could not validate'), expect.objectContaining({
+        error: failure,
+        requestId: 'request-otp-1',
+      }), 'AUTH_MIDDLEWARE');
+      expect(req.user).toBeUndefined();
+      expect(next).toHaveBeenCalled();
+      checkSession.mockRestore();
+      logWarning.mockRestore();
     });
   });
 
@@ -178,6 +219,20 @@ describe('auth middleware', () => {
       expect(res.status).toHaveBeenCalledWith(401);
     });
 
+    test('returns a retryable service error when configured session storage is unavailable', async () => {
+      const storageError = Object.assign(new Error('D1 unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' });
+      jest.spyOn(vendorDirectorySessionQueries, 'findSessionById').mockRejectedValue(storageError);
+      const req = { user: { id: 'u1', role: 'category_manager', scope: 'vendor_directory', sessionId: 's1' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await requireVendorDirectorySession(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ retryable: true }));
+      expect(next).not.toHaveBeenCalled();
+    });
+
 
     test('rejects when user UUID does not match session user (403)', async () => {
       jest.spyOn(vendorDirectorySessionQueries, 'findSessionById').mockResolvedValue(validSession);
@@ -264,6 +319,24 @@ describe('auth middleware', () => {
 
       expect(next).toHaveBeenCalled();
       expect(req.directorySession).toEqual(validSession);
+    });
+
+    test('returns a retryable service error when activity persistence fails', async () => {
+      jest.spyOn(vendorDirectorySessionQueries, 'findSessionById').mockResolvedValue(validSession);
+      jest.spyOn(vendorDirectorySessionQueries, 'updateSessionActivity').mockRejectedValue(
+        Object.assign(new Error('D1 unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' })
+      );
+      const req = {
+        user: { id: 'user-cm-1', role: 'category_manager', scope: 'vendor_directory', sessionId: 'session-cm-1' },
+      };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await requireVendorDirectorySession(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ retryable: true }));
+      expect(next).not.toHaveBeenCalled();
     });
   });
 });

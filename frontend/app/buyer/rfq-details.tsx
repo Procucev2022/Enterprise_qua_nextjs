@@ -1,14 +1,23 @@
 'use client';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
+import { normalizeAttachmentBlob, parseEmlContent, readBlobAsText } from '@/lib/attachmentPreview';
 import {
   SOURCING_MODES,
   PRESENCE_POLL_INTERVAL_MS,
-  ALLOWED_EXTENSION_HOURS,
-  DEFAULT_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_DAYS,
+  EXTENSION_HOURS_PER_DAY,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
   calculateExtendedDeadline,
+  extensionDaysFromHours,
+  formatExtensionDayCount,
+  parseExtensionDays,
+  resolveRfqClosingDeadline,
+  stepExtensionDays,
   formatCurrency,
   formatFileSize,
   formatIndianDate,
@@ -18,12 +27,15 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
 import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
+import AttachmentPreviewModal from '@/app/components/AttachmentPreviewModal';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
-import { getMinorCategories } from '@/lib/categoryTaxonomy';
+import { getMinorCategories, hasMajorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import type {
+  AttachmentPreviewState,
   ExtractedEntity,
+  ParsedEmlPreview,
   QuoteComparison,
   RFQAttachment,
   RFQInquiry,
@@ -59,8 +71,8 @@ import {
   Lock,
   CheckCircle2,
   Check,
-  Square,
-  CheckSquare,
+  Minus,
+  Plus,
   Building2,
   MessageSquare,
   Reply,
@@ -96,6 +108,81 @@ const SOURCE_LABELS: Record<RFQSource, string> = {
 /** Line-item columns the buyer can order the table by. */
 type SortKey = 'item' | 'category' | 'quantity' | 'targetDate';
 type SortDirection = 'asc' | 'desc';
+
+/**
+ * Resolves major and minor category for a vendor, ensuring inverted taxonomy
+ * in imported records (e.g. majorCategory="clamps", minorCategories=["Raw Material", "Steels"])
+ * is realigned with standard taxonomy, and matching against RFQ line items.
+ */
+export function resolveVendorCategories(
+  v: any,
+  found: any,
+  isProc: boolean,
+  activeRfq: RFQItem | null | undefined,
+  idx: number,
+  rfqEntities: ExtractedEntity[]
+): { majorCategory: string; minorCategory: string } {
+  let major =
+    (typeof v === 'object' && v?.majorCategory) ||
+    found?.majorCategory ||
+    (typeof v === 'object' && v?.category) ||
+    (found as any)?.category ||
+    (isProc ? activeRfq?.category || null : null) ||
+    'General';
+
+  const ownMinors: string[] = [];
+  if (typeof v === 'object' && typeof v?.minorCategory === 'string' && v.minorCategory.trim()) {
+    ownMinors.push(v.minorCategory.trim());
+  }
+  if (typeof v === 'object' && Array.isArray(v?.minorCategories)) {
+    v.minorCategories.forEach((m: any) => { if (typeof m === 'string' && m.trim()) ownMinors.push(m.trim()); });
+  }
+  if (typeof (found as any)?.minorCategory === 'string' && (found as any).minorCategory.trim()) {
+    ownMinors.push((found as any).minorCategory.trim());
+  }
+  if (Array.isArray(found?.minorCategories)) {
+    found.minorCategories.forEach((m: any) => { if (typeof m === 'string' && m.trim()) ownMinors.push(m.trim()); });
+  }
+
+  // Realignment: if major is not recognized in standard taxonomy, but one of ownMinors IS a recognized major category
+  if (!hasMajorCategory(major)) {
+    const recognizedMajor = ownMinors.find((m) => hasMajorCategory(m));
+    if (recognizedMajor) major = recognizedMajor;
+  }
+
+  const vMajorClean = major.trim().toLowerCase();
+  const matchingLineItems = rfqEntities.filter((e) => {
+    const itemMajor = (e.majorCategory || (e as any).major || '').trim().toLowerCase();
+    return itemMajor && (itemMajor === vMajorClean || vMajorClean.includes(itemMajor) || itemMajor.includes(vMajorClean));
+  });
+
+  const lineItemMinors: string[] = [];
+  matchingLineItems.forEach((e) => {
+    const m = (e.minorCategory || e.category || '').trim();
+    if (m && !lineItemMinors.some((x) => x.toLowerCase() === m.toLowerCase())) {
+      lineItemMinors.push(m);
+    }
+  });
+
+  const trueOwnMinors = ownMinors.filter((m) => m.toLowerCase() !== major.toLowerCase());
+  const taxonomyMinors = major ? getMinorCategories(major) : [];
+
+  let minor = '';
+  if (trueOwnMinors.length > 0) {
+    const matched = trueOwnMinors.find((om) =>
+      rfqEntities.some((e) => (e.minorCategory || e.category || '').trim().toLowerCase() === om.toLowerCase())
+    );
+    minor = matched || trueOwnMinors[0];
+  } else if (lineItemMinors.length > 0) {
+    minor = lineItemMinors[idx % lineItemMinors.length];
+  } else if (taxonomyMinors.length > 0) {
+    minor = taxonomyMinors[idx % taxonomyMinors.length];
+  } else {
+    minor = 'General';
+  }
+
+  return { majorCategory: major, minorCategory: minor };
+}
 
 export interface RFQDetailsProps {
   /** The RFQ to render, or null when the number in the URL matches nothing. */
@@ -385,7 +472,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
-  const [extensionHours, setExtensionHours] = useState<24 | 48>(DEFAULT_EXTENSION_HOURS);
+  // The day count typed in the extension dialog, and its parsed value (null while blank, fractional or out of range).
+  const [extensionDaysInput, setExtensionDaysInput] = useState<string>(String(DEFAULT_EXTENSION_DAYS));
+  const extensionDays = parseExtensionDays(extensionDaysInput);
   const [isExtending, setIsExtending] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   // Category-manager assigned-suppliers tab: 'procucev' | 'own'.
@@ -445,20 +534,25 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     }
   };
 
+  const openExtendModal = () => {
+    setExtensionDaysInput(String(DEFAULT_EXTENSION_DAYS));
+    setExtendModalOpen(true);
+  };
+
   const handleExtendRFQ = async () => {
-    if (!activeRfq || isExtending) return;
+    if (!activeRfq || isExtending || extensionDays === null) return;
     setIsExtending(true);
     try {
-      const result = await extendRFQ(activeRfq.id, extensionHours);
+      const result = await extendRFQ(activeRfq.id, extensionDays);
       if (result.success) {
         setLocalRfq(result.rfq);
-        const deadlineStr = result.rfq.closingDeadline || result.rfq.deadline || '';
-        const formattedDeadline = deadlineStr ? formatIndianDateTime(deadlineStr) : '';
+        const closingIso = resolveRfqClosingDeadline(result.rfq);
+        const formattedDeadline = closingIso ? formatIndianDateTime(closingIso) : '';
         showToast(
           DETAILS.extensionSuccessTitle,
           formatString(DETAILS.extensionSuccessMessage, {
             rfqNumber: activeRfq.rfqNumber,
-            hours: extensionHours,
+            duration: formatExtensionDayCount(extensionDays),
             newDeadline: formattedDeadline,
           }),
           'success'
@@ -547,7 +641,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           if (vCat === 'Client List') {
             return false;
           }
-          if (isBuyerUploaded(matchedAssigned)) {
+          if (
+            isBuyerUploaded({
+              source: matchedAssigned.source ?? undefined,
+              buyerId: matchedAssigned.buyerId ?? undefined,
+              buyerAccountId: matchedAssigned.buyerAccountId ?? undefined,
+              addedByBuyerCompany: matchedAssigned.addedByBuyerCompany ?? undefined,
+            })
+          ) {
             return false;
           }
         }
@@ -568,7 +669,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
       // 5. Check if the provided object or ID qualifies as buyer uploaded
       if (extra && isBuyerUploaded(extra)) return false;
-      if (vendorId && isBuyerUploaded({ id: vendorId })) return false;
 
       // 6. If extra explicitly has Procucev sources
       const src = String(extra?.source || '').toLowerCase().trim();
@@ -595,7 +695,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
     // ─── If Vendor View: Strictly ONLY show this vendor's direct conversation with the buyer ───
     if (isVendor) {
-      const vName = currentUserSession?.name || 'Vendor Partner';
+      // The vendor's own name from the session. Empty when the session has none, so no inquiry is matched by a made-up name.
+      const vName = currentUserSession?.name || '';
       const vEmail = currentUserSession?.email || null;
       const vId = currentUserSession?.id || null;
 
@@ -604,7 +705,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         (inq) =>
           (vEmail && inq.vendorEmail && inq.vendorEmail.toLowerCase() === vEmail.toLowerCase()) ||
           (vId && inq.vendorId && inq.vendorId === vId) ||
-          (inq.vendorName && inq.vendorName.toLowerCase() === vName.toLowerCase())
+          (vName && inq.vendorName && inq.vendorName.toLowerCase() === vName.toLowerCase())
       );
 
       const msgs: Array<{
@@ -624,7 +725,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             msgs.push({
               id: `msg-${inq.id}-v`,
               senderRole: 'vendor',
-              senderName: inq.vendorName || vName,
+              senderName: inq.vendorName || vName || DETAILS.nameNotRecorded,
               senderEmail: inq.vendorEmail,
               message: inq.message,
               timestamp: inq.createdAt || new Date().toISOString(),
@@ -634,7 +735,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             msgs.push({
               id: `msg-${inq.id}-b`,
               senderRole: 'buyer',
-              senderName: inq.repliedBy || 'Buyer Procurement Team',
+              senderName: inq.repliedBy || DETAILS.nameNotRecorded,
               message: inq.reply,
               timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
             });
@@ -698,7 +799,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   {
                     id: `msg-${inq.id}-buyer`,
                     senderRole: 'buyer' as const,
-                    senderName: inq.repliedBy || 'Procurement Team',
+                    senderName: inq.repliedBy || DETAILS.nameNotRecorded,
                     message: inq.reply,
                     timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
                   },
@@ -728,7 +829,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     const assigned = Array.isArray(activeRfq.assignedVendors) ? activeRfq.assignedVendors : [];
     assigned.forEach((v: any) => {
       const vId = typeof v === 'string' ? v : v.id || v.email || v.name;
-      const vName = typeof v === 'string' ? v : v.name || 'Assigned Vendor';
+      const vName = typeof v === 'string' ? v : v.name || DETAILS.nameNotRecorded;
       const vEmail = typeof v === 'string' ? null : v.email;
       const vContact = typeof v === 'string' ? null : v.contactPerson;
       const vPhone = typeof v === 'string' ? null : v.phone;
@@ -808,7 +909,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     let mounted = true;
     const fetchPresence = async () => {
       const identifiers = vendorChannels.flatMap((c) =>
-        [c.vendorEmail, c.vendorId, c.vendorName].filter(Boolean) as string[]
+        [c.vendorEmail, c.vendorId].filter(Boolean) as string[]
       );
       if (identifiers.length === 0) return;
       const res = await getVendorPresence(identifiers);
@@ -872,127 +973,53 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     setIsSendingChatMessage(true);
     try {
       if (isVendor) {
-        // Vendor submitting question / clarification to Buyer
-        const vendorName = currentUserSession?.name || 'Vendor Partner';
-        const vendorEmail = currentUserSession?.email || null;
-
+        // Vendor submitting question / clarification to Buyer. The thread changes only
+        // after the server returns the stored inquiry, so a failed send adds nothing.
         const res = await submitRFQInquiry(activeRfq.id || activeRfq.rfqNumber, {
           message: textToSend,
-          vendorName,
-          vendorEmail,
+          vendorName: currentUserSession?.name || undefined,
+          vendorEmail: currentUserSession?.email || null,
         });
-
-        if (res.success && res.rfq) {
+        if (!res.success) {
+          showToast(DETAILS.sendFailedTitle, res.error || DETAILS.sendFailedMessage, 'warning');
+          return;
+        }
+        if (res.rfq) {
           setLocalRfq(res.rfq);
           if (onUpdate) onUpdate(res.rfq);
-        } else {
-          const newMsg = {
-            id: `msg-${Date.now()}`,
-            senderRole: 'vendor' as const,
-            senderName: vendorName,
-            senderEmail: vendorEmail,
-            message: textToSend,
-            timestamp: new Date().toISOString(),
-          };
-          const existingInqs = Array.isArray(activeRfq.inquiries) ? activeRfq.inquiries : [];
-          const updatedInqs = [...existingInqs];
-          if (activeChannel?.inquiryId) {
-            const idx = updatedInqs.findIndex((i) => i.id === activeChannel.inquiryId);
-            if (idx !== -1) {
-              updatedInqs[idx] = {
-                ...updatedInqs[idx],
-                message: textToSend,
-                status: 'open',
-                messages: [...(updatedInqs[idx].messages || []), newMsg],
-              };
-            }
-          } else {
-            updatedInqs.push({
-              id: `inq-${Date.now()}`,
-              rfqNumber: activeRfq.rfqNumber,
-              rfqId: activeRfq.id,
-              vendorName,
-              vendorEmail,
-              message: textToSend,
-              createdAt: new Date().toISOString(),
-              status: 'open',
-              messages: [newMsg],
-            });
-          }
-          const updatedRfq = { ...activeRfq, inquiries: updatedInqs };
-          setLocalRfq(updatedRfq);
-          if (onUpdate) onUpdate(updatedRfq);
         }
 
         setChatInputText('');
         await refreshFromDB();
-        showToast('Clarification Sent', 'Your query has been dispatched to the procurement officer.', 'success');
+        showToast(DETAILS.clarificationSentTitle, DETAILS.clarificationSentToBuyer, 'success');
       } else {
         // Buyer replying to Vendor
-        const senderName = currentUserSession?.name || 'Procurement Team';
-        const senderEmail = currentUserSession?.email || 'buyer@enterprise.internal';
-
         if (!activeChannel) return;
 
         if (activeChannel.inquiryId) {
           const res = await replyToRFQInquiry(activeRfq.id || activeRfq.rfqNumber, activeChannel.inquiryId, {
             reply: textToSend,
-            repliedBy: senderName,
+            repliedBy: currentUserSession?.name,
           });
-          if (res.success && res.rfq) {
+          if (!res.success) {
+            showToast(DETAILS.sendFailedTitle, res.error || DETAILS.sendFailedMessage, 'warning');
+            return;
+          }
+          if (res.rfq) {
             setLocalRfq(res.rfq);
             if (onUpdate) onUpdate(res.rfq);
-          } else {
-            const updatedInquiries = (activeRfq.inquiries || []).map((inq) => {
-              if (inq.id === activeChannel.inquiryId) {
-                const prevMsgs = Array.isArray(inq.messages) && inq.messages.length > 0
-                  ? inq.messages
-                  : [
-                      {
-                        id: `msg-${inq.id}-orig`,
-                        senderRole: 'vendor' as const,
-                        senderName: inq.vendorName,
-                        senderEmail: inq.vendorEmail,
-                        message: inq.message,
-                        timestamp: inq.createdAt || new Date().toISOString(),
-                      },
-                    ];
-                const newMsg = {
-                  id: `msg-${Date.now()}`,
-                  senderRole: 'buyer' as const,
-                  senderName,
-                  senderEmail,
-                  message: textToSend,
-                  timestamp: new Date().toISOString(),
-                };
-                return {
-                  ...inq,
-                  reply: textToSend,
-                  repliedAt: new Date().toISOString(),
-                  repliedBy: senderName,
-                  status: 'answered' as const,
-                  messages: [...prevMsgs, newMsg],
-                };
-              }
-              return inq;
-            });
-            const updatedRfq = { ...activeRfq, inquiries: updatedInquiries };
-            setLocalRfq(updatedRfq);
-            if (onUpdate) onUpdate(updatedRfq);
           }
         } else {
-          const newInquiryId = `inq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          // A new thread stores the sender's name, so a session without one cannot send it.
+          const senderName = currentUserSession?.name || currentUserSession?.email || null;
+          if (!senderName) {
+            showToast(DETAILS.sessionIdentityMissingTitle, DETAILS.sessionIdentityMissingMessage, 'warning');
+            return;
+          }
+          // The stored inquiry id is the server's. Only the request payload carries these random ids.
           const timestamp = new Date().toISOString();
-          const newMsg = {
-            id: `msg-${Date.now()}`,
-            senderRole: 'buyer' as const,
-            senderName,
-            senderEmail,
-            message: textToSend,
-            timestamp,
-          };
           const newInquiry: RFQInquiry = {
-            id: newInquiryId,
+            id: globalThis.crypto.randomUUID(),
             rfqNumber: activeRfq.rfqNumber,
             rfqId: activeRfq.id,
             vendorId: activeChannel.vendorId,
@@ -1004,26 +1031,38 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             repliedAt: timestamp,
             repliedBy: senderName,
             status: 'answered',
-            messages: [newMsg],
+            messages: [
+              {
+                id: globalThis.crypto.randomUUID(),
+                senderRole: 'buyer',
+                senderName,
+                // senderEmail intentionally omitted: buyer email must not be
+                // exposed to vendor-side views via the inquiry message thread.
+                message: textToSend,
+                timestamp,
+              },
+            ],
           };
           const updatedInquiries = [...(activeRfq.inquiries || []), newInquiry];
-          const updatedRfq = { ...activeRfq, inquiries: updatedInquiries };
           const res = await updateRFQ(activeRfq.id, { inquiries: updatedInquiries });
-          if (res.success && res.rfq) {
-            setLocalRfq(res.rfq);
-            if (onUpdate) onUpdate(res.rfq);
-          } else {
-            setLocalRfq(updatedRfq);
-            if (onUpdate) onUpdate(updatedRfq);
+          if (!res.success) {
+            showToast(DETAILS.sendFailedTitle, res.error || DETAILS.sendFailedMessage, 'warning');
+            return;
           }
+          setLocalRfq(res.rfq);
+          if (onUpdate) onUpdate(res.rfq);
         }
 
         setChatInputText('');
         await refreshFromDB();
-        showToast('Clarification Sent', `Clarification dispatched to ${activeChannel.vendorName}.`, 'success');
+        showToast(
+          DETAILS.clarificationSentTitle,
+          formatString(DETAILS.clarificationDispatchedTemplate, { vendorName: activeChannel.vendorName }),
+          'success'
+        );
       }
-    } catch (err: any) {
-      showToast('Dispatch Failed', err?.message || 'Could not send message.', 'warning');
+    } catch (err: unknown) {
+      showToast(DETAILS.sendFailedTitle, err instanceof Error && err.message ? err.message : DETAILS.sendFailedMessage, 'warning');
     } finally {
       setIsSendingChatMessage(false);
     }
@@ -1035,61 +1074,161 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     try {
       const res = await replyToRFQInquiry(activeRfq.id || activeRfq.rfqNumber, replyModalInquiry.id, {
         reply: replyMessage.trim(),
-        repliedBy: currentUserSession?.name || 'Procurement Officer',
+        repliedBy: currentUserSession?.name,
       });
-      if (res.success && res.rfq) {
+      if (!res.success) {
+        // The dialog stays open with the reply text so the buyer can send it again.
+        showToast(DETAILS.replyFailedTitle, res.error || DETAILS.replyFailedMessage, 'warning');
+        return;
+      }
+      if (res.rfq) {
         setLocalRfq(res.rfq);
         if (onUpdate) onUpdate(res.rfq);
-      } else {
-        const updatedInquiries = (activeRfq.inquiries || []).map((inq) =>
-          inq.id === replyModalInquiry.id
-            ? {
-                ...inq,
-                reply: replyMessage.trim(),
-                repliedAt: new Date().toISOString(),
-                status: 'answered' as const,
-                repliedBy: currentUserSession?.name || 'Procurement Officer',
-              }
-            : inq
-        );
-        const updatedRfq = { ...activeRfq, inquiries: updatedInquiries };
-        setLocalRfq(updatedRfq);
-        if (onUpdate) onUpdate(updatedRfq);
       }
       await refreshFromDB();
       setReplyModalInquiry(null);
       setReplyMessage('');
-      showToast('Clarification Answered', `Response sent to ${replyModalInquiry.vendorName}.`, 'success');
-    } catch (err: any) {
-      showToast('Reply Failed', err?.message || 'Failed to dispatch reply.', 'warning');
+      showToast(
+        DETAILS.clarificationAnsweredTitle,
+        formatString(DETAILS.replyDispatchedTemplate, { vendorName: replyModalInquiry.vendorName }),
+        'success'
+      );
+    } catch (err: unknown) {
+      showToast(DETAILS.replyFailedTitle, err instanceof Error && err.message ? err.message : DETAILS.replyFailedMessage, 'warning');
     } finally {
       setIsSubmittingReply(false);
     }
   };
 
+  const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | null>(null);
+  const previewRequestIdRef = useRef(0);
+  const activeObjectUrlRef = useRef<string | null>(null);
+
+  const revokeActivePreviewUrl = useCallback(() => {
+    if (activeObjectUrlRef.current) {
+      if (typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(activeObjectUrlRef.current);
+      }
+      activeObjectUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      revokeActivePreviewUrl();
+    };
+  }, [revokeActivePreviewUrl]);
+
+  const handleCloseAttachmentPreview = useCallback(() => {
+    previewRequestIdRef.current += 1;
+    revokeActivePreviewUrl();
+    setAttachmentPreview(null);
+  }, [revokeActivePreviewUrl]);
+
   // GET /api/rfqs/attachments/:id requires authentication, and this app's
   // session token lives only in localStorage (never a cookie) — a plain
-  // `<a href>` navigation carries no Authorization header, so it always 401s
-  // regardless of whether the user is logged in. Fetching it manually with
-  // the header and opening the resulting blob preserves the original inline
-  // PDF/image preview behavior while actually authenticating the request.
+  // `<a href>` navigation carries no Authorization header, so it always 401s.
+  // Calling window.open asynchronously after fetch() is also blocked by browser
+  // popup blockers and fails on .eml / Office files. Instead, open a declarative
+  // React preview modal synchronously and bind a blob URL once loaded so both
+  // inline previews (.eml/.pdf/images/text) and synchronous Download / New Tab
+  // links work reliably across every browser.
   const handleViewAttachment = async (file: RFQAttachment) => {
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+    revokeActivePreviewUrl();
+
+    const declaredMime = file.mimeType || (file as RFQAttachment & { type?: string }).type || '';
+    setAttachmentPreview({
+      file,
+      status: 'loading',
+      previewKind: 'download',
+      resolvedMime: declaredMime,
+      objectUrl: null,
+      textContent: null,
+      emailPreview: null,
+      errorMessage: null,
+    });
+
     try {
       const token = authClient.getToken();
       const res = await fetch(rfqAttachmentUrl(file.id), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) {
-        throw new Error('Could not load the attachment.');
+        const errorBody = typeof res.json === 'function' ? await res.json().catch(() => null) : null;
+        const serverError =
+          errorBody && typeof errorBody === 'object' && typeof (errorBody as { error?: unknown }).error === 'string'
+            ? (errorBody as { error: string }).error
+            : '';
+        throw new Error(serverError || DETAILS.attachmentLoadFailed);
       }
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      window.open(objectUrl, '_blank', 'noopener,noreferrer');
-      // The opened tab has its own reference to the blob; safe to release
-      // this one once the browser has had a chance to load it.
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-    } catch (err: any) {
-      showToast('Could Not Open Attachment', err?.message || 'Could not load the attachment.', 'warning');
+
+      const rawBlob = await res.blob();
+      const responseContentType = typeof res.headers?.get === 'function' ? res.headers.get('content-type') : null;
+      const normalized = normalizeAttachmentBlob(rawBlob, file.fileName, responseContentType, declaredMime);
+
+      let emailPreview: ParsedEmlPreview | null = null;
+      let textContent: string | null = null;
+      if (normalized.previewKind === 'email') {
+        const rawText = await readBlobAsText(normalized.blob);
+        emailPreview = parseEmlContent(rawText);
+      } else if (normalized.previewKind === 'text') {
+        textContent = await readBlobAsText(normalized.blob);
+      }
+
+      if (previewRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(normalized.blob);
+      activeObjectUrlRef.current = objectUrl;
+      logger.info(
+        'Opened supporting document preview',
+        {
+          attachmentId: file.id,
+          fileName: file.fileName,
+          previewKind: normalized.previewKind,
+          resolvedMime: normalized.resolvedMime,
+        },
+        'RFQ_DETAILS'
+      );
+
+      setAttachmentPreview({
+        file,
+        status: 'ready',
+        previewKind: normalized.previewKind,
+        resolvedMime: normalized.resolvedMime,
+        objectUrl,
+        textContent,
+        emailPreview,
+        errorMessage: null,
+      });
+    } catch (err: unknown) {
+      if (previewRequestIdRef.current !== requestId) {
+        return;
+      }
+      const message = err instanceof Error && err.message ? err.message : DETAILS.attachmentLoadFailed;
+      logger.warn(
+        'Failed to open supporting document preview',
+        {
+          attachmentId: file.id,
+          fileName: file.fileName,
+          error: message,
+        },
+        'RFQ_DETAILS'
+      );
+      setAttachmentPreview({
+        file,
+        status: 'error',
+        previewKind: 'download',
+        resolvedMime: declaredMime,
+        objectUrl: null,
+        textContent: null,
+        emailPreview: null,
+        errorMessage: message,
+      });
+      showToast(DETAILS.attachmentOpenFailedTitle, message, 'warning');
     }
   };
 
@@ -1251,7 +1390,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold uppercase tracking-wider">
             {DETAILS.documentTypeBadge}
           </span>
-          {mode && (
+          {mode && !isVendor && (
             <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold ${mode.badgeColor}`}>
               {mode.code}
             </span>
@@ -1277,17 +1416,17 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 {activeRfq.isExtended ? (
                   <span
                     className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60"
-                    title={formatString(DETAILS.alreadyExtendedTooltip, { hours: activeRfq.extensionHours || 24 })}
+                    title={formatString(DETAILS.alreadyExtendedTooltip, { duration: formatExtensionDayCount(extensionDaysFromHours(activeRfq.extensionHours)) })}
                   >
                     <Clock size={12} className="text-amber-600 dark:text-amber-400" />
-                    {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })}
+                    {formatString(DETAILS.extendedBadge, { duration: formatExtensionDayCount(extensionDaysFromHours(activeRfq.extensionHours)) })}
                   </span>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setExtendModalOpen(true)}
+                    onClick={openExtendModal}
                     className="btn btn-xs font-bold inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-xs"
-                    title={formatString(DETAILS.extendRfqAria, { rfqNumber: activeRfq.rfqNumber })}
+                    title={formatString(DETAILS.extendRfqAria, { rfqNumber: activeRfq.rfqNumber, min: EXTENSION_MIN_DAYS, max: EXTENSION_MAX_DAYS })}
                   >
                     <Clock size={12} /> {DETAILS.extendRfqAction}
                   </button>
@@ -1423,13 +1562,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span>
               <span className="inline-flex items-center gap-1.5 mono">
                 <Clock size={12} className="text-slate-400 shrink-0" />
-                {activeRfq.closingDeadline || activeRfq.deadline
-                  ? formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline)
-                  : DETAILS.unsetValue}
+                {formatIndianDateTime(resolveRfqClosingDeadline(activeRfq) ?? undefined) || DETAILS.unsetValue}
               </span>
               {activeRfq.isExtended && (
                 <span className="block text-[10px] font-semibold text-amber-700 dark:text-amber-400 mt-0.5">
-                  {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })} — {DETAILS.revisedDeadlineNote}
+                  {formatString(DETAILS.extendedBadge, { duration: formatExtensionDayCount(extensionDaysFromHours(activeRfq.extensionHours)) })} — {DETAILS.revisedDeadlineNote}
                 </span>
               )}
             </span>
@@ -1761,10 +1898,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   <button
                     type="button"
                     onClick={() => handleViewAttachment(file)}
+                    disabled={attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id}
                     aria-label={formatString(DETAILS.attachmentViewAria, { fileName: file.fileName })}
-                    className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto"
+                    className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto disabled:opacity-60"
                   >
-                    <ExternalLink size={11} /> {DETAILS.attachmentViewAction}
+                    <ExternalLink size={11} />{' '}
+                    {attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id
+                      ? DETAILS.attachmentViewingAction
+                      : DETAILS.attachmentViewAction}
                   </button>
                 </li>
               ))}
@@ -1796,16 +1937,25 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           }
         }
 
+        // Collect all RFQ line items and their categories
+        const rfqEntities = [
+          ...((activeRfq?.extractedEntities as ExtractedEntity[]) || []),
+          ...(((activeRfq as any)?.lineItems as ExtractedEntity[]) || []),
+        ];
+
+        const allRfqMinors: string[] = [];
+        rfqEntities.forEach((e) => {
+          const m = (e.minorCategory || e.category || '').trim();
+          if (m && !allRfqMinors.some((x) => x.toLowerCase() === m.toLowerCase())) {
+            allRfqMinors.push(m);
+          }
+        });
+
         const normalizedAssigned = rawAssigned.map((v: any, idx: number) => {
           if (typeof v === 'string') {
             const found = (buyerVendors || []).find((bv) => bv.id === v || bv.name === v || bv.email === v);
             const isProc = checkIsProcucevVendor(v, found?.name || v, found?.email || null, found);
-            const foundMajor = found?.majorCategory || (isProc ? activeRfq?.category || null : null) || 'General';
-            const rawFoundMinor =
-              (found as any)?.minorCategory ||
-              (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : null);
-            const taxonomyMinors = foundMajor ? getMinorCategories(foundMajor) : [];
-            const resolvedMinor = rawFoundMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
+            const { majorCategory, minorCategory } = resolveVendorCategories(v, found, isProc, activeRfq, idx, rfqEntities);
             return {
               id: v || `vendor-${idx}`,
               name: found?.name || v,
@@ -1813,8 +1963,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               email: found?.email || null,
               phone: found?.phone || null,
               isProcucev: isProc,
-              majorCategory: foundMajor,
-              minorCategory: resolvedMinor,
+              majorCategory,
+              minorCategory,
               location: found?.location || null,
               matchScore: null,
             };
@@ -1832,8 +1982,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
               (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
           );
-          const resolvedCategory =
-            v.majorCategory || found?.majorCategory || (v as any).category || (found as any)?.category || (isProc ? activeRfq?.category || null : null) || 'General';
+          const { majorCategory, minorCategory } = resolveVendorCategories(v, found, isProc, activeRfq, idx, rfqEntities);
           const resolvedLocation =
             v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
           let resolvedScore: number | null =
@@ -1846,27 +1995,15 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             resolvedScore = Math.round(Math.min(5, found.rating) * 20);
           }
 
-          const rawMinor =
-            v.minorCategory ||
-            (Array.isArray(v.minorCategories) && v.minorCategories.length > 0 ? v.minorCategories[0] : (typeof v.minorCategories === 'string' ? v.minorCategories : null)) ||
-            (found as any)?.minorCategory ||
-            (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : (typeof (found as any)?.minorCategories === 'string' ? (found as any).minorCategories : null)) ||
-            (activeRfq as any)?.minorCategory ||
-            activeRfq?.extractedEntities?.[0]?.minorCategory ||
-            null;
-
-          const taxonomyMinors = resolvedCategory ? getMinorCategories(resolvedCategory) : [];
-          const resolvedMinor = rawMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
-
           return {
             id: v.id || `vendor-${idx}`,
-            name: v.name || found?.name || v.contactPerson || v.email || 'Enterprise Supplier',
+            name: v.name || found?.name || v.contactPerson || v.email || DETAILS.nameNotRecorded,
             contactPerson: v.contactPerson || found?.contactPerson || null,
             email: v.email || found?.email || null,
             phone: v.phone || found?.phone || null,
             isProcucev: isProc,
-            majorCategory: resolvedCategory,
-            minorCategory: resolvedMinor,
+            majorCategory,
+            minorCategory,
             location: resolvedLocation,
             matchScore: resolvedScore,
           };
@@ -1883,7 +2020,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         // the buyer's own vendors everywhere, and for ALL vendors in the
         // category-manager view (an internal oversight role, no double-blind).
         const renderFullCard = (v: any) => {
-          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : 'Enterprise Supplier';
+          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : DETAILS.nameNotRecorded;
           return (
             <div
               key={v.id}
@@ -1909,7 +2046,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <div className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-gray-950/50 border border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
-                    MAJOR CATEGORY
+                    {DETAILS.colMajor}
                   </div>
                   <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-full">
                     {v.majorCategory || 'General'}
@@ -1917,7 +2054,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
-                    MINOR CATEGORY
+                    {DETAILS.colMinor}
                   </div>
                   <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60 truncate max-w-full">
                     {v.minorCategory || 'General'}
@@ -1957,27 +2094,53 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
         // Confidential double-blind card (name + category + location + score, no
         // contact). Used for Procucev vendors in the BUYER view only.
-        const renderConfidentialCard = (v: any) => (
-          <div
-            key={v.id}
-            data-testid="assigned-supplier-card"
-            className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
-          >
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                🔒 Double-Blind
-              </span>
+        const renderConfidentialCard = (v: any) => {
+          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : DETAILS.nameNotRecorded;
+          return (
+            <div
+              key={v.id}
+              data-testid="assigned-supplier-card"
+              className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-xs space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={v.name}>
+                  {cleanName}
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  🔒 Double-Blind
+                </span>
+              </div>
+
+              {/* Major & Minor Category Badges */}
+              <div className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-gray-950/50 border border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    {DETAILS.colMajor}
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-full">
+                    {v.majorCategory || 'General Industrial'}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    {DETAILS.colMinor}
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60 truncate max-w-full">
+                    {v.minorCategory || 'General'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
+                <span className="sr-only">Category:</span>
+                <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
+                <p className="font-semibold text-emerald-600 dark:text-emerald-400">
+                  {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
+                </p>
+              </div>
             </div>
-            <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-              <p className="truncate">Category: {v.majorCategory || 'General Industrial'}</p>
-              <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
-              <p className="font-semibold text-emerald-600 dark:text-emerald-400">
-                {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
-              </p>
-            </div>
-          </div>
-        );
+          );
+        };
 
         const emptyState = (
           <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-1">
@@ -1994,12 +2157,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             title="Assigned & Invited Suppliers"
             count={isCategoryManager ? visibleAssigned.length : displayAssigned.length}
             toolbar={
-              <button
-                onClick={() => setInviteModalOpen(true)}
-                className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
-              >
-                <UserPlus size={12} /> Invite Suppliers
-              </button>
+              isCategoryManager ? (
+                <button
+                  onClick={() => setInviteModalOpen(true)}
+                  className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <UserPlus size={12} /> Invite Suppliers
+                </button>
+              ) : null
             }
           >
             <div className="px-4 pb-4">
@@ -2019,11 +2184,25 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                           {activeRfq.followUpData.totalInvited} Outreach Dispatches
                         </span>
                       )}
-                      {typeof activeRfq?.followUpData?.respondedCount === 'number' && activeRfq.followUpData.respondedCount > 0 && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-2xs">
-                          {activeRfq.followUpData.respondedCount} Responded
-                        </span>
-                      )}
+                      {(() => {
+                        const quotesCount = Math.max(
+                          Array.isArray(activeRfq?.quotes) ? activeRfq.quotes.length : 0,
+                          activeRfq?.quotesCount || 0
+                        );
+                        const vendorRespondedCount = Array.isArray(activeRfq?.followUpData?.vendors)
+                          ? activeRfq.followUpData.vendors.filter((v: any) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
+                          : 0;
+                        const responded = Math.max(
+                          activeRfq?.followUpData?.respondedCount || 0,
+                          quotesCount,
+                          vendorRespondedCount
+                        );
+                        return responded > 0 ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-2xs">
+                            {responded} Responded
+                          </span>
+                        ) : null;
+                      })()}
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5" data-testid="v0-cm-vendor-cards">
                       {visibleAssigned.map((v: any) => renderFullCard(v))}
@@ -2400,6 +2579,105 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
+      {isVendor && quotes.length > 0 && (() => {
+        const myQuote = quotes[0];
+        return (
+          <Panel
+            title="Your Submitted Quotation"
+            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+          >
+            <div className="p-4 sm:p-5 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Unit Price</span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white text-sm mt-0.5 block">
+                    {formatCurrency(myQuote.unitPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40">
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block uppercase font-bold">Total Quote Price</span>
+                  <span className="font-mono font-black text-emerald-700 dark:text-emerald-300 text-base mt-0.5 block">
+                    {formatCurrency(myQuote.totalPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Lead Time</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.leadTimeDays != null ? `${myQuote.leadTimeDays} Days` : 'Standard'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Warranty</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.warrantyYears != null ? `${myQuote.warrantyYears} Years` : 'Standard'}
+                  </span>
+                </div>
+              </div>
+
+              {(myQuote.paymentTerms || myQuote.remarks) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {myQuote.paymentTerms && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Commercial & Payment Terms</span>
+                      <p className="text-slate-700 dark:text-gray-300 font-medium">{myQuote.paymentTerms}</p>
+                    </div>
+                  )}
+                  {myQuote.remarks && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Submission Remarks</span>
+                      <p className="text-slate-700 dark:text-gray-300">{myQuote.remarks}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {Array.isArray(myQuote.lineItemQuotes) && myQuote.lineItemQuotes.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider block">
+                    Line Item Price Breakdown
+                  </span>
+                  <div className="overflow-x-auto border border-slate-200 dark:border-gray-800 rounded-xl">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase text-slate-500 font-bold">
+                        <tr>
+                          <th className="px-3 py-2">Item Name</th>
+                          <th className="px-3 py-2 text-right">Unit Rate</th>
+                          <th className="px-3 py-2 text-right">Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                        {myQuote.lineItemQuotes.map((li: any, lIdx: number) => (
+                          <tr key={li.lineItemId || lIdx}>
+                            <td className="px-3 py-2 font-medium text-slate-800 dark:text-gray-200">{li.itemName || `Item ${lIdx + 1}`}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{formatCurrency(li.unitPrice)}</td>
+                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(li.totalPrice || li.unitPrice)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {Array.isArray(myQuote.attachments) && myQuote.attachments.length > 0 && (
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1.5">Submitted Bid Documents</span>
+                  <div className="flex flex-wrap gap-2">
+                    {myQuote.attachments.map((att: any, attIdx: number) => (
+                      <span key={att.id || attIdx} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-xs font-semibold border border-indigo-200 dark:border-indigo-800">
+                        <FileText size={12} />
+                        <span>{att.fileName || att.name || `Document-${attIdx + 1}`}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Panel>
+        );
+      })()}
+
       {/* Vendor Inquiries & Clarifications Chat Desk */}
       {!isV0 && (
         <Panel
@@ -2433,17 +2711,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                      Buyer: {activeRfq.buyerAccountName || 'Lead Procurement Manager'}
+                      {isVendor ? 'Buyer: Procurement Team' : `Buyer: ${activeRfq.buyerAccountName || 'Lead Procurement Manager'}`}
                     </h3>
                     <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                       Direct Line Active
                     </span>
                   </div>
                   <div className="text-[10px] text-slate-400 flex items-center gap-2 truncate">
-                    {(activeRfq.raisedByEmail || activeRfq.sourceEmail) && (
-                      <span className="mono truncate">{activeRfq.raisedByEmail || activeRfq.sourceEmail}</span>
-                    )}
-                    <span>•</span>
                     <span className="mono font-semibold text-slate-500 dark:text-gray-400">RFQ #{activeRfq.rfqNumber}</span>
                   </div>
                 </div>
@@ -2488,7 +2762,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                       >
                         <div className="flex items-center gap-1.5 text-[10px] text-slate-400 px-1">
                           <span className="font-bold text-slate-600 dark:text-gray-300 inline-flex items-center gap-1">
-                            {isMyMessage ? `${msg.senderName || 'You'} (Supplier)` : `${msg.senderName || activeRfq.buyerAccountName || 'Buyer Procurement Team'} (Buyer)`}
+                            {isMyMessage
+                              ? `${msg.senderName || 'You'} (Supplier)`
+                              : `${isVendor ? (msg.senderName && msg.senderName !== DETAILS.nameNotRecorded ? 'Procurement Team' : DETAILS.nameNotRecorded) : (msg.senderName || activeRfq.buyerAccountName || DETAILS.nameNotRecorded)} (Buyer)`}
                             {isMyMessage && activeChannel?.isProcucev && (
                               <span className="px-1.5 py-0.2 rounded-full text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-0.5 shadow-xs">
                                 <ShieldCheck size={9} className="text-emerald-600 dark:text-emerald-400" />
@@ -2563,14 +2839,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
               Assign or invite suppliers to this RFQ to enable instant 2-way real-time technical & commercial clarifications.
             </p>
-            <button
-              type="button"
-              onClick={() => setInviteModalOpen(true)}
-              className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1 mt-2"
-            >
-              <UserPlus size={12} />
-              <span>Invite Suppliers</span>
-            </button>
+            {isCategoryManager && (
+              <button
+                type="button"
+                onClick={() => setInviteModalOpen(true)}
+                className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1 mt-2"
+              >
+                <UserPlus size={12} />
+                <span>Invite Suppliers</span>
+              </button>
+            )}
           </div>
         ) : (
           /* ═══ BUYER VIEW: 2-COLUMN SPLIT DESK (LEFT VENDOR LIST, RIGHT CHAT WORKSPACE) ═══ */
@@ -2926,6 +3204,105 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
+      {isVendor && quotes.length > 0 && (() => {
+        const myQuote = quotes[0];
+        return (
+          <Panel
+            title="Your Submitted Quotation"
+            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+          >
+            <div className="p-4 sm:p-5 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Unit Price</span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white text-sm mt-0.5 block">
+                    {formatCurrency(myQuote.unitPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40">
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block uppercase font-bold">Total Quote Price</span>
+                  <span className="font-mono font-black text-emerald-700 dark:text-emerald-300 text-base mt-0.5 block">
+                    {formatCurrency(myQuote.totalPrice)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Lead Time</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.leadTimeDays != null ? `${myQuote.leadTimeDays} Days` : 'Standard'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Warranty</span>
+                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
+                    {myQuote.warrantyYears != null ? `${myQuote.warrantyYears} Years` : 'Standard'}
+                  </span>
+                </div>
+              </div>
+
+              {(myQuote.paymentTerms || myQuote.remarks) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {myQuote.paymentTerms && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Commercial & Payment Terms</span>
+                      <p className="text-slate-700 dark:text-gray-300 font-medium">{myQuote.paymentTerms}</p>
+                    </div>
+                  )}
+                  {myQuote.remarks && (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Submission Remarks</span>
+                      <p className="text-slate-700 dark:text-gray-300">{myQuote.remarks}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {Array.isArray(myQuote.lineItemQuotes) && myQuote.lineItemQuotes.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider block">
+                    Line Item Price Breakdown
+                  </span>
+                  <div className="overflow-x-auto border border-slate-200 dark:border-gray-800 rounded-xl">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase text-slate-500 font-bold">
+                        <tr>
+                          <th className="px-3 py-2">Item Name</th>
+                          <th className="px-3 py-2 text-right">Unit Rate</th>
+                          <th className="px-3 py-2 text-right">Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                        {myQuote.lineItemQuotes.map((li: any, lIdx: number) => (
+                          <tr key={li.lineItemId || lIdx}>
+                            <td className="px-3 py-2 font-medium text-slate-800 dark:text-gray-200">{li.itemName || `Item ${lIdx + 1}`}</td>
+                            <td className="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{formatCurrency(li.unitPrice)}</td>
+                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(li.totalPrice || li.unitPrice)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {Array.isArray(myQuote.attachments) && myQuote.attachments.length > 0 && (
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1.5">Submitted Bid Documents</span>
+                  <div className="flex flex-wrap gap-2">
+                    {myQuote.attachments.map((att: any, attIdx: number) => (
+                      <span key={att.id || attIdx} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-xs font-semibold border border-indigo-200 dark:border-indigo-800">
+                        <FileText size={12} />
+                        <span>{att.fileName || att.name || `Document-${attIdx + 1}`}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Panel>
+        );
+      })()}
+
       {/* Buyer Reply Modal */}
       {replyModalInquiry && (
         <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
@@ -3018,20 +3395,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         />
       )}
 
-      {/* Buyer Private Vendor Invite Modal */}
-      {!isCategoryManager && !isVendor && inviteModalOpen && (
-        <BuyerInviteSuppliersModal
-          isOpen={inviteModalOpen}
-          onClose={() => setInviteModalOpen(false)}
-          rfq={activeRfq!}
-          onInvited={(updatedRfq) => {
-            setLocalRfq(updatedRfq);
-            if (onUpdate) onUpdate(updatedRfq);
-            setInviteModalOpen(false);
-            showToast('Suppliers Added', `Invited suppliers have been assigned to RFQ ${updatedRfq.rfqNumber}.`, 'success');
-          }}
-        />
-      )}
 
       {/* Extend RFQ Modal */}
       {extendModalOpen && activeRfq && (
@@ -3072,49 +3435,72 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.currentDeadlineLabel}</span>
                 <span className="mono font-semibold text-slate-700 dark:text-gray-300">
-                  {formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline || activeRfq.createdAt)}
+                  {formatIndianDateTime(resolveRfqClosingDeadline(activeRfq) ?? undefined)}
                 </span>
               </div>
               <div className="flex justify-between items-center pt-2 border-t border-slate-200 dark:border-gray-700">
                 <span className="text-amber-600 dark:text-amber-400 font-semibold">{DETAILS.revisedDeadlineLabel}</span>
                 <span className="mono font-bold text-amber-600 dark:text-amber-400">
-                  {formatIndianDateTime(
-                    calculateExtendedDeadline(activeRfq.closingDeadline || activeRfq.deadline, extensionHours)
-                  )}
+                  {extensionDays === null
+                    ? formatString(DETAILS.revisedDeadlineUnavailable, { min: EXTENSION_MIN_DAYS, max: EXTENSION_MAX_DAYS })
+                    : formatIndianDateTime(calculateExtendedDeadline(resolveRfqClosingDeadline(activeRfq), extensionDays))}
                 </span>
               </div>
             </div>
 
-            {/* Duration Selector */}
+            {/* Duration: whole days, chosen by the buyer. The calendar above and the hint below update as it changes. */}
             <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300">
-                {DETAILS.selectExtensionDurationLabel}
+              <label htmlFor="extend-rfq-days" className="block text-xs font-semibold text-slate-700 dark:text-gray-300">
+                {DETAILS.extensionDaysLabel}
               </label>
-              <div className="grid grid-cols-2 gap-3">
-                {ALLOWED_EXTENSION_HOURS.map((hours) => {
-                  const isSelected = extensionHours === hours;
-                  const label = hours === 24 ? DETAILS.oneDayLabel : DETAILS.twoDaysLabel;
-                  return (
-                    <button
-                      key={hours}
-                      type="button"
-                      onClick={() => setExtensionHours(hours)}
-                      disabled={isExtending}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        isSelected
-                          ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/30'
-                          : 'border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-sm">+{hours}h</span>
-                        {isSelected && <Check size={14} className="text-amber-600 dark:text-amber-400" />}
-                      </div>
-                      <span className="text-[11px] text-slate-500 dark:text-gray-400 block mt-1">{label}</span>
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExtensionDaysInput(String(stepExtensionDays(extensionDaysInput, -1)))}
+                  disabled={isExtending || extensionDays === EXTENSION_MIN_DAYS}
+                  aria-label={DETAILS.extensionDaysDecreaseAria}
+                  className="p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300 disabled:opacity-40"
+                >
+                  <Minus size={14} />
+                </button>
+                <input
+                  id="extend-rfq-days"
+                  type="number"
+                  inputMode="numeric"
+                  min={EXTENSION_MIN_DAYS}
+                  max={EXTENSION_MAX_DAYS}
+                  step={1}
+                  value={extensionDaysInput}
+                  onChange={(event) => setExtensionDaysInput(event.target.value)}
+                  disabled={isExtending}
+                  aria-invalid={extensionDays === null}
+                  aria-describedby="extend-rfq-days-help"
+                  className={`w-24 text-center font-bold text-sm rounded-lg border px-2 py-2 bg-white dark:bg-gray-800 ${
+                    extensionDays === null
+                      ? 'border-rose-400 text-rose-700 dark:text-rose-300'
+                      : 'border-amber-500 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/30'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setExtensionDaysInput(String(stepExtensionDays(extensionDaysInput, 1)))}
+                  disabled={isExtending || extensionDays === EXTENSION_MAX_DAYS}
+                  aria-label={DETAILS.extensionDaysIncreaseAria}
+                  className="p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300 disabled:opacity-40"
+                >
+                  <Plus size={14} />
+                </button>
               </div>
+              <p
+                id="extend-rfq-days-help"
+                className={`text-[11px] ${
+                  extensionDays === null ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-500 dark:text-gray-400'
+                }`}
+              >
+                {extensionDays === null
+                  ? formatString(DETAILS.extensionDaysInvalid, { min: EXTENSION_MIN_DAYS, max: EXTENSION_MAX_DAYS })
+                  : formatString(DETAILS.extensionHoursPreview, { hours: extensionDays * EXTENSION_HOURS_PER_DAY })}
+              </p>
             </div>
 
             {/* One-time Warning Alert */}
@@ -3136,290 +3522,31 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <button
                 type="button"
                 onClick={handleExtendRFQ}
-                disabled={isExtending}
+                disabled={isExtending || extensionDays === null}
                 className="btn btn-sm text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs inline-flex items-center gap-1.5 disabled:opacity-50"
               >
                 <Clock size={12} />
                 <span>
                   {isExtending
                     ? DETAILS.extendingAction
-                    : formatString(DETAILS.confirmExtensionAction, { hours: extensionHours })}
+                    : extensionDays === null
+                      ? DETAILS.confirmExtensionDisabledAction
+                      : formatString(DETAILS.confirmExtensionAction, { duration: formatExtensionDayCount(extensionDays) })}
                 </span>
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-interface BuyerInviteSuppliersModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  rfq: RFQItem;
-  onInvited: (updatedRfq: RFQItem) => void;
-}
-
-function BuyerInviteSuppliersModal({ isOpen, onClose, rfq, onInvited }: BuyerInviteSuppliersModalProps) {
-  const { buyerVendors, showToast, refreshFromDB } = useApp();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  if (!isOpen) return null;
-
-  // Strictly buyer-uploaded private roster vendors — NO Procucev network marketplace vendors
-  const allMyPrivateVendors = (buyerVendors || []).filter((v) => isBuyerUploaded(v));
-
-  const rawExistingAssigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-  const alreadyAssignedIds = new Set(
-    rawExistingAssigned.map((v: any) => (typeof v === 'string' ? v : v.id || v.email || v.name))
-  );
-
-  const term = searchQuery.trim().toLowerCase();
-  const filteredVendors = allMyPrivateVendors.filter((v) => {
-    if (!term) return true;
-    return (
-      (v.name || '').toLowerCase().includes(term) ||
-      (v.email || '').toLowerCase().includes(term) ||
-      (v.majorCategory || '').toLowerCase().includes(term) ||
-      (v.contactPerson || '').toLowerCase().includes(term)
-    );
-  });
-
-  const unassignedFiltered = filteredVendors.filter((v) => !alreadyAssignedIds.has(v.id));
-  const isAllSelected = unassignedFiltered.length > 0 && unassignedFiltered.every((v) => selectedVendorIds.includes(v.id));
-
-  const toggleSelectAll = () => {
-    if (isAllSelected) {
-      setSelectedVendorIds((prev) => prev.filter((id) => !unassignedFiltered.some((v) => v.id === id)));
-    } else {
-      const newIds = Array.from(new Set([...selectedVendorIds, ...unassignedFiltered.map((v) => v.id)]));
-      setSelectedVendorIds(newIds);
-    }
-  };
-
-  const toggleVendor = (vendorId: string) => {
-    if (alreadyAssignedIds.has(vendorId)) return;
-    setSelectedVendorIds((prev) =>
-      prev.includes(vendorId) ? prev.filter((id) => id !== vendorId) : [...prev, vendorId]
-    );
-  };
-
-  const handleSave = async () => {
-    if (selectedVendorIds.length === 0) {
-      setSaveError('Please select at least one supplier to assign.');
-      return;
-    }
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      const newVendorsToAdd = allMyPrivateVendors
-        .filter((v) => selectedVendorIds.includes(v.id) && !alreadyAssignedIds.has(v.id))
-        .map((v) => ({
-          id: v.id,
-          name: v.name || 'Enterprise Vendor',
-          email: v.email || null,
-          contactPerson: v.contactPerson || null,
-          phone: v.phone || null,
-        }));
-
-      const normalizedCurrent = rawExistingAssigned.map((v: any) => {
-        if (typeof v === 'string') {
-          const found = allMyPrivateVendors.find((bv) => bv.id === v || bv.name === v || bv.email === v);
-          return {
-            id: v,
-            name: found?.name || v,
-            email: found?.email || null,
-            contactPerson: found?.contactPerson || null,
-            phone: found?.phone || null,
-          };
-        }
-        return v;
-      });
-
-      const merged = [...normalizedCurrent, ...newVendorsToAdd];
-      const result = await updateRFQ(rfq.id, { assignedVendors: merged });
-      if (result.success) {
-        const finalRfq: RFQItem = {
-          ...result.rfq,
-          assignedVendors:
-            Array.isArray(result.rfq.assignedVendors) && result.rfq.assignedVendors.length >= merged.length
-              ? result.rfq.assignedVendors
-              : merged,
-        };
-        onInvited(finalRfq);
-        await refreshFromDB();
-      } else {
-        throw new Error(result.error || 'Failed to assign suppliers to RFQ.');
-      }
-    } catch (err: any) {
-      setSaveError(err?.message || 'Failed to update RFQ suppliers.');
-      showToast('Assignment Failed', err?.message || 'Failed to update RFQ suppliers.', 'warning');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800 shrink-0">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/70 text-blue-600 dark:text-blue-400">
-              <Building2 size={20} />
-            </div>
-            <div>
-              <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                <span>Invite Approved Suppliers</span>
-                <span className="badge badge-blue text-[9px] font-bold">
-                  {allMyPrivateVendors.length} Private Suppliers
-                </span>
-              </h3>
-              <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                Select suppliers from your private approved roster to invite for <span className="font-mono font-bold text-slate-700 dark:text-gray-300">{rfq.rfqNumber}</span>.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            disabled={isSaving}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        {saveError && (
-          <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 text-xs flex items-center gap-2 shrink-0">
-            <AlertCircle size={14} className="shrink-0" />
-            <span>{saveError}</span>
-          </div>
-        )}
-
-        {allMyPrivateVendors.length === 0 ? (
-          <div className="p-8 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-2 my-auto">
-            <Users size={28} className="mx-auto text-slate-400 opacity-60" />
-            <h4 className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Suppliers Available</h4>
-            <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
-              You haven&apos;t uploaded any approved private suppliers yet. Add suppliers in the Vendor Directory or PO History ingestion to invite them.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3 flex-1 overflow-hidden flex flex-col min-h-0">
-            {/* Toolbar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
-              <div className="relative flex-1">
-                <Search size={12} className="absolute left-2.5 top-2 text-slate-400" />
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by supplier name, email, or category..."
-                  className="w-full text-xs pl-7 pr-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                />
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {unassignedFiltered.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={toggleSelectAll}
-                    className="btn btn-secondary btn-xs text-[10px] font-bold inline-flex items-center gap-1"
-                  >
-                    {isAllSelected ? <Square size={11} /> : <CheckSquare size={11} />}
-                    <span>{isAllSelected ? 'Deselect All' : 'Select All'}</span>
-                  </button>
-                )}
-                <span className="text-[10px] text-slate-500 font-semibold mono">
-                  {selectedVendorIds.length} selected
-                </span>
-              </div>
-            </div>
-
-            {/* List */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[160px]">
-              {filteredVendors.map((vendor, idx) => {
-                const isAssigned = alreadyAssignedIds.has(vendor.id);
-                const isSelected = selectedVendorIds.includes(vendor.id);
-
-                return (
-                  <div
-                    key={vendor.id || idx}
-                    onClick={() => toggleVendor(vendor.id)}
-                    className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
-                      isAssigned
-                        ? 'bg-slate-50/50 dark:bg-gray-950/20 border-slate-200/60 dark:border-gray-800/60 opacity-60 cursor-not-allowed'
-                        : isSelected
-                        ? 'bg-blue-50/40 dark:bg-blue-950/30 border-blue-400 dark:border-blue-600 ring-1 ring-blue-400/40 cursor-pointer'
-                        : 'bg-white dark:bg-gray-900 border-slate-200 dark:border-gray-800 hover:bg-slate-50 dark:hover:bg-gray-850 cursor-pointer'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border text-[10px] ${
-                          isAssigned
-                            ? 'bg-slate-200 dark:bg-gray-700 border-slate-300 dark:border-gray-600 text-slate-500'
-                            : isSelected
-                            ? 'bg-blue-600 border-blue-600 text-white'
-                            : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                        }`}
-                      >
-                        {(isAssigned || isSelected) && <Check size={11} />}
-                      </div>
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                            {idx + 1}. {vendor.name}
-                          </span>
-                          {vendor.majorCategory && (
-                            <span className="px-1.5 py-0.2 rounded text-[8px] font-semibold bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300">
-                              {vendor.majorCategory}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center gap-2 truncate">
-                          {vendor.contactPerson && <span>{vendor.contactPerson}</span>}
-                          {vendor.email && <span className="mono">{vendor.email}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0">
-                      {isAssigned ? (
-                        <span className="px-2 py-0.5 rounded text-[8px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200 dark:border-gray-700">
-                          Already Assigned
-                        </span>
-                      ) : (
-                        <span className="badge badge-emerald text-[8px] font-bold">
-                          Private Approved
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Footer */}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800 shrink-0">
-          <button onClick={onClose} disabled={isSaving} className="btn btn-ghost btn-sm">
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={isSaving || selectedVendorIds.length === 0}
-            className="btn btn-primary btn-sm px-4 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
-          >
-            <UserPlus size={13} />
-            <span>{isSaving ? 'Assigning...' : `Assign ${selectedVendorIds.length > 0 ? `${selectedVendorIds.length} ` : ''}Suppliers`}</span>
-          </button>
-        </div>
-      </div>
+      {attachmentPreview && (
+        <AttachmentPreviewModal
+          key={attachmentPreview.file.id}
+          preview={attachmentPreview}
+          onClose={handleCloseAttachmentPreview}
+          onRetry={handleViewAttachment}
+        />
+      )}
     </div>
   );
 }

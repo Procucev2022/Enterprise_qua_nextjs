@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ScorecardDashboard from '@/app/category-manager/components/ScorecardDashboard';
 import * as scorecardClient from '@/lib/scorecardClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/scorecardClient', () => ({
   fetchScorecardData: jest.fn(),
@@ -246,7 +246,7 @@ const mockScorecardData = {
 describe('ScorecardDashboard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(mockScorecardData);
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({ data: mockScorecardData });
   });
 
   it('renders scorecard summary pillars and team leaderboard table with ranks', async () => {
@@ -475,7 +475,7 @@ describe('ScorecardDashboard', () => {
   });
 
   it('handles fallback label and undefined or NaN numeric values', async () => {
-    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({ data: {
       period: 'this_month',
       project: 'all',
       pillar: 'all',
@@ -491,7 +491,7 @@ describe('ScorecardDashboard', () => {
           taskCompletionRate: NaN,
           ticketsCompleted: 0,
           ticketsAssigned: 0,
-          ticketResolutionRate: undefined as any,
+          ticketResolutionRate: undefined as unknown as number,
           registrations: 0,
           registrationsTarget: 0,
           registrationRate: null,
@@ -570,7 +570,7 @@ describe('ScorecardDashboard', () => {
           performanceStatus: 'Needs Focus' as const,
         },
       ],
-    });
+    } });
 
     render(<ScorecardDashboard />);
 
@@ -607,8 +607,7 @@ describe('ScorecardDashboard', () => {
 
   it('handles empty scorecard data or empty rows', async () => {
     (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({
-      ...mockScorecardData,
-      teamScores: [],
+      data: { ...mockScorecardData, teamScores: [] },
     });
 
     render(<ScorecardDashboard />);
@@ -628,22 +627,31 @@ describe('ScorecardDashboard', () => {
     render(<ScorecardDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText(UI_STRINGS.actionCenter.scorecard.noDataFound)).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.scorecard })
+        )
+      ).toBeInTheDocument();
     });
   });
 
-  it('handles error state when fetch returns null', async () => {
-    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(null);
+  it('shows the client error and no scorecard when the result carries no data', async () => {
+    const loadError = formatString(UI_STRINGS.dataLoad.failedWithStatus, {
+      resource: UI_STRINGS.dataLoad.resources.scorecard,
+      status: 500,
+    });
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({ data: null, error: loadError });
 
     render(<ScorecardDashboard />);
 
     await waitFor(() => {
-      expect(screen.queryByText('Pavani "Chief" Reddy')).not.toBeInTheDocument();
+      expect(screen.getByText(loadError)).toBeInTheDocument();
     });
+    expect(screen.queryByText('Pavani "Chief" Reddy')).not.toBeInTheDocument();
   });
 
   it('refreshes scorecard data when Refresh button is clicked', async () => {
-    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(mockScorecardData);
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({ data: mockScorecardData });
 
     render(<ScorecardDashboard />);
 
@@ -660,7 +668,7 @@ describe('ScorecardDashboard', () => {
   });
 
   it('opens and closes column settings modal using Gear button', async () => {
-    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(mockScorecardData);
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({ data: mockScorecardData });
 
     render(<ScorecardDashboard />);
 
@@ -689,7 +697,7 @@ describe('ScorecardDashboard', () => {
   });
 
   it('sorts scorecard table ascending and descending', async () => {
-    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(mockScorecardData);
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue({ data: mockScorecardData });
 
     render(<ScorecardDashboard />);
 

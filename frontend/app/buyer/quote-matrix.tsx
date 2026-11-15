@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { formatCurrency, formatIndianDate } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import type { RFQItem, QuoteComparison } from '@/lib/types';
+import type { RFQItem, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
@@ -24,6 +24,8 @@ import {
   Search,
   Lock,
   Mail,
+  MessageSquare,
+  Smartphone,
   Download,
 } from 'lucide-react';
 
@@ -245,33 +247,97 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           </div>
         </div>
 
-        {/* Multi-Channel Follow-Up Status Strip */}
-        {currentRFQ.followUpData && (
-          <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                AI FOLLOW-UP STATUS:
-              </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-                📞 Calls: {currentRFQ.followUpData.callStats.connected}/{currentRFQ.followUpData.callStats.total} Connected (Avg {currentRFQ.followUpData.callStats.avgDuration})
-              </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                💬 WhatsApp: {currentRFQ.followUpData.whatsappStats.read}/{currentRFQ.followUpData.whatsappStats.total} Read ({currentRFQ.followUpData.whatsappStats.replied} Bids In)
-              </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800">
-                📱 SMS: {currentRFQ.followUpData.smsStats.delivered}/{currentRFQ.followUpData.smsStats.total} Delivered
-              </span>
-            </div>
+        {/* Multi-Channel Follow-Up Status Strip (WhatsApp, SMS, Email) */}
+        {currentRFQ.followUpData && (() => {
+          const followUp = currentRFQ.followUpData;
+          const vCount = Math.max(
+            currentRFQ.assignedVendors?.length || 0,
+            currentRFQ.procucevVendorCount || 0,
+            followUp?.totalInvited || 0,
+            followUp?.whatsappStats?.total || 0,
+            followUp?.smsStats?.total || 0,
+            followUp?.emailStats?.total || 0,
+            Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
+          );
+          const isDispatched = currentRFQ.status !== 'Parsing' && vCount > 0;
+          const createdAtMs = currentRFQ.createdAt ? new Date(currentRFQ.createdAt).getTime() : Date.now();
+          const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
+          const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
+          const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
+          const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
 
-            <button
-              onClick={() => openRFQDeepDive(currentRFQ)}
-              className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
-            >
-              <Search size={12} />
-              <span>Vendor Follow-Up Details ({currentRFQ.followUpData.respondedCount}/{currentRFQ.followUpData.totalInvited} Responded) ↗</span>
-            </button>
-          </div>
-        )}
+          const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
+          const rawWaRead = Math.max(
+            followUp?.whatsappStats?.read || 0,
+            followUp?.whatsappStats?.delivered || 0,
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
+          );
+          const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
+
+          const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
+          const rawSmsDelivered = Math.max(
+            followUp?.smsStats?.delivered || 0,
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
+          );
+          const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
+
+          const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
+          const rawEmailDelivered = Math.max(
+            followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.email?.status === 'delivered' || v?.email24h?.status === 'delivered' || v?.emailSent).length : 0
+          );
+          const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
+
+          const quotesCount = Math.max(
+            Array.isArray(currentRFQ.quotes) ? currentRFQ.quotes.length : 0,
+            currentRFQ.quotesCount || 0
+          );
+          const vendorRespondedCount = Array.isArray(followUp?.vendors)
+            ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
+            : 0;
+          const responded = Math.max(
+            followUp?.respondedCount || 0,
+            quotesCount,
+            vendorRespondedCount
+          );
+          const totalInvited = Math.max(
+            followUp?.totalInvited || 0,
+            vCount,
+            waTotal,
+            smsTotal,
+            emailTotal
+          );
+
+          return (
+            <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
+                  AI FOLLOW-UP STATUS:
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+                  <MessageSquare size={11} className="shrink-0" />
+                  <span>WA {waRead}/{waTotal}</span>
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 flex items-center gap-1">
+                  <Smartphone size={11} className="shrink-0" />
+                  <span>SMS {smsDelivered}/{smsTotal}</span>
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                  <Mail size={11} className="shrink-0" />
+                  <span>Email {emailDelivered}/{emailTotal}</span>
+                </span>
+              </div>
+
+              <button
+                onClick={() => openRFQDeepDive(currentRFQ)}
+                className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
+              >
+                <Search size={12} />
+                <span>Vendor Follow-Up Details ({responded}/{totalInvited} Responded) ↗</span>
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
@@ -304,7 +370,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           </div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-700/60 shadow-sm">
             <Clock size={13} />
-            <span>Unseals on: {currentRFQ.quotesHiddenUntil ? new Date(currentRFQ.quotesHiddenUntil).toLocaleString() : 'After 48 hours'} (or upon RFQ closure)</span>
+            <span>Unseals on: {currentRFQ.quotesHiddenUntil ? new Date(currentRFQ.quotesHiddenUntil).toLocaleString() : UI_STRINGS.rfqDetails.unsetValue} (or upon RFQ closure)</span>
           </div>
           <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
             📱 An SMS comparison acknowledgment and final evaluation email will automatically be sent to your phone and inbox upon RFQ closure.
@@ -313,9 +379,9 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       ) : quotes.length === 0 ? (
         <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
           <AlertCircle size={30} className="mx-auto text-amber-500" />
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white">Quotes Pending for this RFQ</h3>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">{UI_STRINGS.screens.quoteMatrix.quotesPendingTitle}</h3>
           <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">
-            Suppliers have been invited and autonomous AI quote chasing is currently active. Switch to RFQ-2026-00421 to view the full comparative evaluation matrix.
+            {UI_STRINGS.screens.quoteMatrix.quotesPendingBody}
           </p>
         </div>
       ) : (
@@ -401,7 +467,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       >
                         <div className="flex items-baseline gap-2">
                           <span className="text-lg font-black text-slate-900 dark:text-white mono">
-                            {formatCurrency(q.unitPrice)}
+                            {formatCurrency(q.unitPrice || (q.totalPrice ? Math.round(q.totalPrice / ((currentRFQ as any).quantity || 1)) : 0))}
                           </span>
                           {isL1 && (
                             <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
@@ -409,7 +475,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                             </span>
                           )}
                         </div>
-                        <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: {formatCurrency(q.totalPrice)}</span>
+                        <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: {formatCurrency(q.totalPrice || (q as any)?.totalAmount || q.unitPrice)}</span>
                       </td>
                     );
                   })}
@@ -636,12 +702,15 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                     const items = quote.lineItemQuotes || [];
                     const matched =
                       items.find((li) => li.lineItemId === item.id) ||
-                      items.find((li) => (li.itemName || '').trim().toLowerCase() === (item.itemName || '').trim().toLowerCase());
+                      items.find((li) => (li.itemName || '').trim().toLowerCase() === (item.itemName || '').trim().toLowerCase()) ||
+                      items[itemIdx];
                     const effectivePrice =
                       matched && typeof matched.unitPrice === 'number' && matched.unitPrice > 0
                         ? matched.unitPrice
                         : typeof quote.unitPrice === 'number' && quote.unitPrice > 0
                         ? quote.unitPrice
+                        : typeof quote.totalPrice === 'number' && quote.totalPrice > 0
+                        ? Math.round(quote.totalPrice / (item.quantity || 1))
                         : null;
                     return { quote, matched, effectivePrice };
                   });
@@ -664,8 +733,8 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       {prices.map(({ quote, matched, effectivePrice }) => {
                         const isL1 = effectivePrice !== null && lowestPrice !== null && effectivePrice === lowestPrice;
                         const lineTotal = matched ? matched.totalPrice || matched.unitPrice * (item.quantity || 1) : null;
-                        const taxRate = (quote as any).taxRate || (quote.taxes ? 18 : 18);
-                        const estTax = lineTotal ? Math.round((lineTotal * taxRate) / 100) : null;
+                        const taxRate = typeof quote.taxRate === 'number' ? quote.taxRate : null;
+                        const estTax = lineTotal !== null && taxRate !== null ? Math.round((lineTotal * taxRate) / 100) : null;
                         const leadTime = matched?.leadTimeDays ?? quote.leadTimeDays;
 
                         return (
@@ -698,8 +767,8 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                                   </span>
                                 </div>
                                 <div className="text-[9px] text-slate-400 dark:text-gray-500 flex items-center justify-between border-t border-slate-100 dark:border-gray-800/60 pt-0.5">
-                                  <span>GST ({taxRate}%):</span>
-                                  <span className="mono">+{formatCurrency(estTax || 0)}</span>
+                                  <span>{taxRate !== null ? `GST (${taxRate}%):` : 'GST:'}</span>
+                                  <span className="mono">{estTax !== null ? `+${formatCurrency(estTax)}` : UI_STRINGS.rfqDetails.unsetValue}</span>
                                 </div>
                                 <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
                                   <span>Delivery:</span>

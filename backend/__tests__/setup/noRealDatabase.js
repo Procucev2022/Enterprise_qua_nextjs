@@ -40,13 +40,24 @@ jest.doMock('fs', () => ({
 }));
 
 afterAll(() => {
-  if (fs.existsSync(inquiryTestFile)) fs.unlinkSync(inquiryTestFile);
-  fs.rmdirSync(inquiryTestDirectory);
+  try {
+    if (fs.existsSync(inquiryTestFile)) fs.unlinkSync(inquiryTestFile);
+    if (fs.existsSync(inquiryTestDirectory)) {
+      if (typeof fs.rmSync === 'function') {
+        fs.rmSync(inquiryTestDirectory, { recursive: true, force: true });
+      } else {
+        fs.rmdirSync(inquiryTestDirectory);
+      }
+    }
+  } catch (error) {
+    // Ignore cleanup error if temp dir already cleaned up
+  }
 });
 
 const pool = require('../../src/db/pool');
 const authSessionQueries = require('../../src/db/authSessionQueries');
 const storeService = require('../../src/services/storeService');
+const rfqChaserScheduler = require('../../src/services/rfqChaserScheduler');
 const { resetD1HttpClientCache } = require('../../src/db/d1Bridge');
 
 beforeAll(async () => {
@@ -151,4 +162,18 @@ authSessionQueries.__real = realAuthSessionQueries;
 
 afterEach(() => {
   resetAuthSessionDouble();
+
+  // Many unit tests create RFQs, which register real Node timers for delayed
+  // vendor chasers. Clear those handles between tests so the suite does not
+  // leak timers or require Jest's forced worker shutdown.
+  const handles = new Set([
+    ...[...rfqChaserScheduler.pendingTimers.values()].flat(),
+    ...rfqChaserScheduler.activeScheduledTimers.values(),
+    ...rfqChaserScheduler.pendingComparisonTimers.values(),
+  ]);
+  handles.forEach((handle) => clearTimeout(handle));
+  rfqChaserScheduler.pendingTimers.clear();
+  rfqChaserScheduler.activeScheduledTimers.clear();
+  rfqChaserScheduler.pendingComparisonTimers.clear();
+  rfqChaserScheduler.completedMemoryComparisonJobs.clear();
 });

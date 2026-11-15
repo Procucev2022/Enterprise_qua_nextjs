@@ -52,7 +52,6 @@ import {
   TaskEntityType,
   TaskFilterParams,
   TaskSummary,
-  DEFAULT_TASK_TYPES,
   fetchInternalTasks,
   fetchTaskTypes,
   createNewTaskType,
@@ -61,18 +60,17 @@ import {
   createInternalTask,
   updateInternalTask,
   deleteInternalTask,
-  getExportTasksUrl,
   fetchInternalAssignees,
   completeInternalTask,
   approveCreditTask,
   rejectCreditTask,
   addTaskActivity,
   checkTaskReminders,
+  getExportTasksUrl,
   exportTasksToCsv,
   type InternalTeamMember,
 } from '@/lib/internalTaskClient';
 import {
-  DEFAULT_INTERNAL_MEMBERS,
   INTERNAL_TASK_CATEGORIES,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,
@@ -132,7 +130,9 @@ export default function InternalTasksDashboard() {
   // Data state
   const [tasks, setTasks] = useState<InternalTask[]>([]);
   const [totalTasks, setTotalTasks] = useState<number>(0);
-  const [assignees, setAssignees] = useState<InternalTeamMember[]>(DEFAULT_INTERNAL_MEMBERS);
+  const [assignees, setAssignees] = useState<InternalTeamMember[]>([]);
+  const [assigneesError, setAssigneesError] = useState<string | null>(null);
+  const [taskTypesError, setTaskTypesError] = useState<string | null>(null);
   const [sessionUser, setSessionUser] = useState<UserSession | null>(null);
   const [isMyTasksActive, setIsMyTasksActive] = useState<boolean>(false);
   const [isCustomAssignee, setIsCustomAssignee] = useState<boolean>(false);
@@ -141,19 +141,12 @@ export default function InternalTasksDashboard() {
   const [completionRemarks, setCompletionRemarks] = useState<string>('');
   const [completionConfirmed, setCompletionConfirmed] = useState<boolean>(false);
   const [isCompleting, setIsCompleting] = useState<boolean>(false);
-  const [taskTypes, setTaskTypes] = useState<TaskType[]>(DEFAULT_TASK_TYPES);
-  const [summary, setSummary] = useState<TaskSummary>({
-    total: 0,
-    newTasks: 0,
-    assigned: 0,
-    inProgress: 0,
-    pendingApproval: 0,
-    completed: 0,
-    rejected: 0,
-    cancelled: 0,
-    overdueCount: 0,
-    criticalCount: 0,
-  });
+  const [taskTypes, setTaskTypes] = useState<TaskType[]>([]);
+  // Null until the summary loads, and when it fails. No count is substituted.
+  const [summary, setSummary] = useState<TaskSummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  // Set when a sub-nav count (tickets, approvals, payment dues) could not be loaded. The badge is then hidden.
+  const [badgeSummaryError, setBadgeSummaryError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -307,29 +300,43 @@ export default function InternalTasksDashboard() {
   }, []);
 
   useEffect(() => {
+    // A failed count stays null, so its sub-nav badge is hidden rather than shown as zero.
+    // The first failure message is kept so the banner always names a real problem.
+    const surfaceBadgeError = (message: string) => setBadgeSummaryError((prev) => prev ?? message);
+    const badgeLoadFailed = (resource: string) =>
+      surfaceBadgeError(formatString(UI_STRINGS.dataLoad.networkFailed, { resource }));
+
     fetchTicketSummary()
       .then((res) => {
-        if (res) setTicketSummary(res);
+        setTicketSummary(res.summary);
+        if (res.error) surfaceBadgeError(res.error);
       })
-      .catch(() => {});
+      .catch(() => badgeLoadFailed(UI_STRINGS.dataLoad.resources.ticketSummary));
 
     fetchApprovalSummary()
       .then((res) => {
-        if (res) setApprovalSummary(res);
+        setApprovalSummary(res.summary);
+        if (res.error) surfaceBadgeError(res.error);
       })
-      .catch(() => {});
+      .catch(() => badgeLoadFailed(UI_STRINGS.dataLoad.resources.approvalSummary));
 
     fetchPaymentDuesSummary()
       .then((res) => {
-        if (res) setPaymentDuesSummary(res);
+        setPaymentDuesSummary(res.summary);
+        if (res.error) surfaceBadgeError(res.error);
       })
-      .catch(() => {});
+      .catch(() => badgeLoadFailed(UI_STRINGS.dataLoad.resources.paymentDuesSummary));
 
     fetchInternalAssignees()
       .then((res) => {
-        if (res && res.length > 0) setAssignees(res);
+        setAssignees(res.assignees);
+        setAssigneesError(res.error ?? null);
       })
-      .catch(() => {});
+      .catch(() => {
+        setAssigneesError(
+          formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.assignees })
+        );
+      });
 
     const currentUser = authClient.getSessionUser();
     if (currentUser) {
@@ -399,7 +406,7 @@ export default function InternalTasksDashboard() {
   const [newTaskType, setNewTaskType] = useState<string>('Phone Call');
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  const [newTaskTypeId, setNewTaskTypeId] = useState<string>(DEFAULT_TASK_TYPES[0]?.id || '');
+  const [newTaskTypeId, setNewTaskTypeId] = useState<string>('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('Medium');
   const [newStatus, setNewStatus] = useState<TaskStatus>('Pending');
   const [newAssignedToName, setNewAssignedToName] = useState('');
@@ -442,10 +449,11 @@ export default function InternalTasksDashboard() {
 
   // Load Task Types
   const loadTaskTypes = useCallback(async () => {
-    const types = await fetchTaskTypes();
-    if (types && types.length > 0) {
-      setTaskTypes(types);
-      setNewTaskTypeId((prev) => prev || types[0].id);
+    const res = await fetchTaskTypes();
+    setTaskTypes(res.taskTypes);
+    setTaskTypesError(res.error ?? null);
+    if (res.taskTypes.length > 0) {
+      setNewTaskTypeId((prev) => prev || res.taskTypes[0].id);
     }
   }, []);
 
@@ -458,8 +466,9 @@ export default function InternalTasksDashboard() {
       if (catVal && catVal !== 'all') {
         params.taskCategory = catVal;
       }
-      const sum = await fetchTaskSummary(params);
-      setSummary(sum);
+      const summaryResult = await fetchTaskSummary(params);
+      setSummary(summaryResult.summary);
+      setSummaryError(summaryResult.error ?? null);
     },
     [activeFilters.assignedTo, activeFilters.taskCategory]
   );
@@ -803,20 +812,23 @@ export default function InternalTasksDashboard() {
     setRescheduleTime(task.demo_time || '');
     setSelectedProposalStatus(task.proposal_status || 'Draft');
     if (task.id) {
+      // fetchTaskById resolves to null when the record cannot be read. The list row stays open and the user is told.
       Promise.resolve(fetchTaskById(task.id))
         .then((full) => {
-          if (full) {
-            setSelectedTaskDetails(full);
-            if (full.call_outcome) setSelectedCallOutcome(full.call_outcome);
-            if (full.demo_status) setDemoStatusVal(full.demo_status);
-            if (full.demo_date) setRescheduleDate(full.demo_date);
-            if (full.demo_time) setRescheduleTime(full.demo_time);
-            if (full.proposal_status) setSelectedProposalStatus(full.proposal_status);
+          if (!full) {
+            showToast(UI_STRINGS.actionCenter.tasks.taskDetailsLoadFailed);
+            return;
           }
+          setSelectedTaskDetails(full);
+          if (full.call_outcome) setSelectedCallOutcome(full.call_outcome);
+          if (full.demo_status) setDemoStatusVal(full.demo_status);
+          if (full.demo_date) setRescheduleDate(full.demo_date);
+          if (full.demo_time) setRescheduleTime(full.demo_time);
+          if (full.proposal_status) setSelectedProposalStatus(full.proposal_status);
         })
-        .catch(() => {});
+        .catch(() => showToast(UI_STRINGS.actionCenter.tasks.taskDetailsLoadFailed));
     }
-  }, []);
+  }, [showToast]);
 
   // Log Call Outcome handler
   const handleLogCallOutcome = async () => {
@@ -1043,6 +1055,8 @@ export default function InternalTasksDashboard() {
           ? formatString(UI_STRINGS.actionCenter.tasks.taskMarkedCompleted, { taskNumber: task.task_number || task.id })
           : formatString(UI_STRINGS.actionCenter.tasks.taskReopened, { taskNumber: task.task_number || task.id });
       showToast(msg);
+    } else {
+      showToast(UI_STRINGS.actionCenter.tasks.taskStatusUpdateFailed);
     }
   };
 
@@ -1152,7 +1166,8 @@ export default function InternalTasksDashboard() {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const due = new Date(dueDateStr);
+    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(dueDateStr);
+    const due = isDateOnly ? new Date(`${dueDateStr}T00:00:00`) : new Date(dueDateStr);
     due.setHours(0, 0, 0, 0);
     const diffTime = due.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -1182,7 +1197,7 @@ export default function InternalTasksDashboard() {
 
   return (
     <div
-      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-2.5 sm:p-3 md:p-4 space-y-3.5"
+      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-2.5 sm:p-3 md:p-4 space-y-3.5 w-full min-w-0 max-w-full overflow-x-hidden"
     >
       {/* Toast Notification */}
       {toastMessage && (
@@ -1196,10 +1211,10 @@ export default function InternalTasksDashboard() {
       <ActionCenterSubNav
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
-        tasksCount={summary.newTasks || summary.pending || 0}
-        ticketsCount={ticketSummary?.pending || 0}
-        approvalsCount={approvalSummary?.pending || 0}
-        paymentDuesCount={paymentDuesSummary?.totalLowCreditAccounts || 0}
+        tasksCount={summary ? summary.newTasks || summary.pending : undefined}
+        ticketsCount={ticketSummary ? ticketSummary.pending : undefined}
+        approvalsCount={approvalSummary ? approvalSummary.pending : undefined}
+        paymentDuesCount={paymentDuesSummary ? paymentDuesSummary.totalLowCreditAccounts : undefined}
       />
 
       {activeTab === 'tickets' && <TicketsDashboard />}
@@ -1207,10 +1222,22 @@ export default function InternalTasksDashboard() {
       {activeTab === 'scorecard' && <ScorecardDashboard />}
       {activeTab === 'buyers' && <BuyersDirectory initialBuyerId={selectedBuyerDossierId} />}
       {activeTab === 'sellers' && <SellersDirectory initialSellerId={selectedSellerDossierId} />}
-      {activeTab === 'registrations' && <RegistrationsDashboard />}
+      {activeTab === 'registrations' && (
+        <div className="w-full min-w-0 max-w-full overflow-x-hidden">
+          <RegistrationsDashboard />
+        </div>
+      )}
       {activeTab === 'payment_dues' && <PaymentDuesDashboard onSummaryChange={setPaymentDuesSummary} />}
-      {activeTab === 'document_vault' && <DocumentVaultDashboard />}
-      {activeTab === 'login_logs' && <LoginLogsDashboard />}
+      {activeTab === 'document_vault' && (
+        <div className="w-full min-w-0 max-w-full overflow-x-hidden">
+          <DocumentVaultDashboard />
+        </div>
+      )}
+      {activeTab === 'login_logs' && (
+        <div className="w-full min-w-0 max-w-full overflow-x-hidden">
+          <LoginLogsDashboard />
+        </div>
+      )}
 
       {activeTab === 'tasks' && (
         <>
@@ -1239,7 +1266,7 @@ export default function InternalTasksDashboard() {
               }`}>
                 Total Tasks
               </p>
-              <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary.total}</p>
+              <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary?.total ?? UI_STRINGS.dataLoad.emptyCell}</p>
               <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${
                 activeFilters.status === 'all' ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
               }`}>
@@ -1269,7 +1296,7 @@ export default function InternalTasksDashboard() {
                 New Tasks
               </p>
               <p className="text-base sm:text-lg font-bold text-blue-600 dark:text-blue-400 leading-none mt-1">
-                {summary.newTasks ?? summary.pending ?? 0}
+                {summary?.newTasks ?? summary?.pending ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Awaiting action
@@ -1298,7 +1325,7 @@ export default function InternalTasksDashboard() {
                 In Progress
               </p>
               <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
-                {summary.inProgress}
+                {summary?.inProgress ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Active work
@@ -1327,7 +1354,7 @@ export default function InternalTasksDashboard() {
                 Pending Approval
               </p>
               <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
-                {summary.pendingApproval ?? 0}
+                {summary?.pendingApproval ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Requires review
@@ -1356,7 +1383,7 @@ export default function InternalTasksDashboard() {
                 Completed
               </p>
               <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
-                {summary.completed}
+                {summary?.completed ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Resolved
@@ -1385,7 +1412,7 @@ export default function InternalTasksDashboard() {
                 Overdue
               </p>
               <p className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none mt-1">
-                {summary.overdueCount ?? 0}
+                {summary?.overdueCount ?? UI_STRINGS.dataLoad.emptyCell}
               </p>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
                 Past deadline
@@ -1396,192 +1423,197 @@ export default function InternalTasksDashboard() {
           {/* ============================================================== */}
           {/* TOOLBAR: 1.Search, 2.Category, 3.My Tasks, 4.All Users, 5.Filter, 6.Export CSV, 7.Reminders, 8.Send SMS/Email, 9.Create Task, 10.Refresh, 11.Gear */}
           {/* ============================================================== */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 shadow-xs flex flex-row items-center justify-between gap-1.5 overflow-x-auto no-scrollbar w-full">
-            {/* Left Controls: 1.Search, 2.Category, 3.My Tasks, 4.All Users */}
-            <div className="flex items-center gap-1.5 flex-1 min-w-0">
-              {/* 1. Search Bar */}
-              <div className="relative flex-1 min-w-[150px] max-w-xs">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2 py-1.5 shadow-xs flex flex-row items-center gap-1 xl:gap-1.5 w-full min-w-0 max-w-full box-border">
+            {/* 1. Search Bar (Takes all flexible remaining width) */}
+            <div className="relative flex-1 min-w-[140px]">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder="Search by title, ID, entity..."
+                className="w-full has-leading-icon has-trailing-icon h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
                     setCurrentPage(1);
                   }}
-                  placeholder="Search by title, ID, entity, instructions..."
-                  className="w-full pl-8 pr-7 py-1 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('');
-                      setCurrentPage(1);
-                    }}
-                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                    aria-label="Clear search"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                  aria-label="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
 
-              {/* 2. All Categories Dropdown */}
-              <select
-                value={activeFilters.taskCategory || 'all'}
-                onChange={(e) => handleCategoryChange(e.target.value)}
-                className="shrink-0 h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-                data-testid="toolbar-category-select"
-              >
-                <option value="all">All Categories</option>
-                {Object.values(INTERNAL_TASK_CATEGORIES).map((cat) => (
-                  <option key={cat} value={cat}>
-                    {INTERNAL_TASK_CATEGORY_LABELS[cat] || cat}
+            {/* 2. All Categories Dropdown */}
+            <select
+              value={activeFilters.taskCategory || 'all'}
+              onChange={(e) => handleCategoryChange(e.target.value)}
+              className="shrink-0 h-8 w-[125px] xl:w-[135px] px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer truncate"
+              data-testid="toolbar-category-select"
+            >
+              <option value="all">All Categories</option>
+              {Object.values(INTERNAL_TASK_CATEGORIES).map((cat) => (
+                <option key={cat} value={cat}>
+                  {INTERNAL_TASK_CATEGORY_LABELS[cat] || cat}
+                </option>
+              ))}
+            </select>
+
+            {/* 3. My Tasks Button */}
+            <button
+              type="button"
+              onClick={handleToggleMyTasks}
+              className={`shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border transition-all cursor-pointer whitespace-nowrap ${
+                isMyTasksActive
+                  ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
+                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
+              }`}
+              title={UI_STRINGS.actionCenter.tasks.myTasks}
+              data-testid="toolbar-my-tasks-btn"
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>{UI_STRINGS.actionCenter.tasks.myTasks}</span>
+            </button>
+
+            {/* 4. All Users Dropdown */}
+            <select
+              value={activeFilters.assignedTo || 'all'}
+              onChange={(e) => handleAssigneeChange(e.target.value)}
+              className="shrink-0 h-8 w-[95px] xl:w-[105px] px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer truncate"
+              aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
+              data-testid="toolbar-assignee-select"
+            >
+              <option value="all">{UI_STRINGS.actionCenter.tasks.allUsers}</option>
+              {sessionUser?.name && (
+                <option value={sessionUser.name}>
+                  {UI_STRINGS.actionCenter.tasks.myTasks} ({sessionUser.name})
+                </option>
+              )}
+              <option value="Unassigned">{UI_STRINGS.actionCenter.tasks.unassigned}</option>
+              <optgroup label="Internal Team Members">
+                {assignees.map((m) => (
+                  <option key={m.id || m.name} value={m.name}>
+                    {m.name} {m.role ? `• ${m.role}` : ''}
                   </option>
                 ))}
-              </select>
+              </optgroup>
+            </select>
 
-              {/* 3. My Tasks Button */}
-              <button
-                type="button"
-                onClick={handleToggleMyTasks}
-                className={`shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
-                  isMyTasksActive
-                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
-                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
-                }`}
-                title={UI_STRINGS.actionCenter.tasks.myTasks}
-                data-testid="toolbar-my-tasks-btn"
-              >
-                <User className="w-3.5 h-3.5" />
-                <span>{UI_STRINGS.actionCenter.tasks.myTasks}</span>
-              </button>
+            {/* 5. Filter Button */}
+            <button
+              type="button"
+              onClick={handleOpenFilterDrawer}
+              className={`shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border transition-all cursor-pointer whitespace-nowrap ${
+                activeFilterCount > 0
+                  ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-xs'
+                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
+              }`}
+            >
+              <Filter className="w-3.5 h-3.5" />
+              <span>Filter</span>
+              {activeFilterCount > 0 && (
+                <span className="w-3.5 h-3.5 rounded-full bg-blue-600 text-white text-[9px] flex items-center justify-center font-bold">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
 
-              {/* 4. All Users Dropdown */}
-              <select
-                value={activeFilters.assignedTo || 'all'}
-                onChange={(e) => handleAssigneeChange(e.target.value)}
-                className="shrink-0 h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-                aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
-                data-testid="toolbar-assignee-select"
-              >
-                <option value="all">{UI_STRINGS.actionCenter.tasks.allUsers}</option>
-                {sessionUser?.name && (
-                  <option value={sessionUser.name}>
-                    {UI_STRINGS.actionCenter.tasks.myTasks} ({sessionUser.name})
-                  </option>
-                )}
-                <option value="Unassigned">{UI_STRINGS.actionCenter.tasks.unassigned}</option>
-                <optgroup label="Internal Team Members">
-                  {assignees.map((m) => (
-                    <option key={m.id || m.name} value={m.name}>
-                      {m.name} {m.role ? `• ${m.role}` : ''}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
-            </div>
+            {/* 6. Export CSV Button */}
+            <a
+              href={clientCsvExportUri || exportUrl}
+              download="internal_tasks.csv"
+              className="shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer whitespace-nowrap"
+              data-testid="toolbar-export-csv-btn"
+              title="Export CSV"
+              aria-label="Export CSV"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-500" />
+              <span>Export<span className="hidden 2xl:inline"> CSV</span></span>
+            </a>
 
-            {/* Right Controls: 5.Filter, 6.Export CSV, 7.Reminders, 8.Send SMS/Email, 9.Create Task, 10.Refresh, 11.Gear */}
-            <div className="flex items-center gap-1.5 shrink-0">
-              {/* 5. Filter Button */}
-              <button
-                type="button"
-                onClick={handleOpenFilterDrawer}
-                className={`shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
-                  activeFilterCount > 0
-                    ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-xs'
-                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
-                }`}
-              >
-                <Filter className="w-3.5 h-3.5" />
-                <span>Filter</span>
-                {activeFilterCount > 0 && (
-                  <span className="w-3.5 h-3.5 rounded-full bg-blue-600 text-white text-[9px] flex items-center justify-center font-bold">
-                    {activeFilterCount}
-                  </span>
-                )}
-              </button>
+            {/* 7. Reminders Button */}
+            <button
+              type="button"
+              onClick={handleCheckReminders}
+              className="shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-xs cursor-pointer whitespace-nowrap"
+              title="Evaluate deadline triggers and dispatch overdue reminders"
+              data-testid="toolbar-check-reminders-btn"
+            >
+              <Bell className="w-3.5 h-3.5 text-amber-600" />
+              <span>Reminders</span>
+            </button>
 
-              {/* 6. Export CSV Button */}
-              <a
-                href={clientCsvExportUri || exportUrl}
-                download="internal_tasks.csv"
-                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
-                data-testid="toolbar-export-csv-btn"
-              >
-                <Download className="w-3.5 h-3.5 text-slate-500" />
-                <span>Export CSV</span>
-              </a>
+            {/* 8. Send SMS / Email Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedTaskDetails(null);
+                setIsComposeModalOpen(true);
+              }}
+              className="shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-xs cursor-pointer whitespace-nowrap"
+              title="Dispatch SMS or Email Notification"
+              aria-label="Send SMS / Email"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span><span className="hidden 2xl:inline">Send </span>SMS / Email</span>
+            </button>
 
-              {/* 7. Reminders Button */}
-              <button
-                type="button"
-                onClick={handleCheckReminders}
-                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-xs cursor-pointer"
-                title="Evaluate deadline triggers and dispatch overdue reminders"
-                data-testid="toolbar-check-reminders-btn"
-              >
-                <Bell className="w-3.5 h-3.5 text-amber-600" />
-                <span>Reminders</span>
-              </button>
+            {/* 9. Create Internal Task Button */}
+            <button
+              type="button"
+              onClick={handleOpenCreateModal}
+              className="shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs shadow-blue-600/20 transition-all cursor-pointer whitespace-nowrap"
+              title="Create Internal Task"
+              aria-label="Create Internal Task"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Create<span className="hidden 2xl:inline"> Internal</span> Task</span>
+            </button>
 
-              {/* 8. Send SMS / Email Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedTaskDetails(null);
-                  setIsComposeModalOpen(true);
-                }}
-                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-xs cursor-pointer"
-                title="Dispatch SMS or Email Notification"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>Send SMS / Email</span>
-              </button>
+            {/* 10. Refresh Button */}
+            <button
+              type="button"
+              onClick={() => {
+                loadTasks();
+                loadSummary();
+                showToast('Refreshed data.');
+              }}
+              aria-label="Refresh tasks"
+              className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 transition-colors cursor-pointer"
+              title="Refresh"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
 
-              {/* 9. Create Internal Task Button */}
-              <button
-                type="button"
-                onClick={handleOpenCreateModal}
-                className="shrink-0 h-8 inline-flex items-center gap-1 px-3 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs shadow-blue-600/20 transition-all cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Create Internal Task</span>
-              </button>
-
-              {/* 10. Refresh Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  loadTasks();
-                  loadSummary();
-                  showToast('Refreshed data.');
-                }}
-                aria-label="Refresh tasks"
-                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 transition-colors cursor-pointer"
-                title="Refresh"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-
-              {/* 11. Gear icon (Column Settings) */}
-              <button
-                type="button"
-                onClick={() => setShowTaskColumnSettings(true)}
-                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
-                title="Column Settings"
-                data-testid="toolbar-gear-btn"
-              >
-                <Settings className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            {/* 11. Gear icon (Column Settings) */}
+            <button
+              type="button"
+              onClick={() => setShowTaskColumnSettings(true)}
+              className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+              title="Column Settings"
+              aria-label="Column Settings"
+              data-testid="toolbar-gear-btn"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* ============================================================== */}
           {/* DATA TABLE VIEW / EMPTY STATE / LOADING                        */}
           {/* ============================================================== */}
+          {(assigneesError || taskTypesError || summaryError || badgeSummaryError) && (
+            <div role="alert" className="mb-3 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300">
+              {[assigneesError, taskTypesError, summaryError, badgeSummaryError].filter(Boolean).join(' ')}
+            </div>
+          )}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
             {errorMessage && (
               <div className="p-4 bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300 flex items-center justify-between">
@@ -1621,13 +1653,13 @@ export default function InternalTasksDashboard() {
               </div>
             ) : (
               <div className="overflow-x-auto scrollbar-thin">
-                <table className="w-full text-left text-xs">
+                <table className="w-full text-left text-xs min-w-[960px] border-collapse">
                   <thead className="bg-slate-50/80 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 font-semibold tracking-wide">
                     <tr>
-                      {isColVisible('done') && <th className="py-3 px-3.5 w-12 text-center">Done</th>}
+                      {isColVisible('done') && <th className="py-2.5 px-3 w-10 min-w-[40px] max-w-[40px] text-center">Done</th>}
                       {isColVisible('status') && (
                         <th
-                          className="py-3 px-3.5 w-28 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3 w-24 min-w-[95px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('status')}
                         >
                           Status
@@ -1636,7 +1668,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('task') && (
                         <th
-                          className="py-3 px-3.5 min-w-[200px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3 min-w-[180px] max-w-[280px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('task')}
                         >
                           Task Subject & ID
@@ -1645,7 +1677,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('category') && (
                         <th
-                          className="py-3 px-3.5 w-36 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3 w-32 min-w-[115px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('category')}
                         >
                           Category & Type
@@ -1653,11 +1685,11 @@ export default function InternalTasksDashboard() {
                         </th>
                       )}
                       {isColVisible('entity') && (
-                        <th className="py-3 px-3.5 min-w-[150px]">Related Entity</th>
+                        <th className="py-2.5 px-3 w-36 min-w-[125px]">Related Entity</th>
                       )}
                       {isColVisible('priority') && (
                         <th
-                          className="py-3 px-3.5 w-24 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3 w-20 min-w-[80px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('priority')}
                         >
                           Priority
@@ -1666,7 +1698,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('assignedTo') && (
                         <th
-                          className="py-3 px-3.5 min-w-[130px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3 w-32 min-w-[115px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('assignedTo')}
                         >
                           Assigned To
@@ -1675,7 +1707,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('dueDate') && (
                         <th
-                          className="py-3 px-3.5 w-32 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3 w-32 min-w-[115px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('dueDate')}
                         >
                           Due Date & Time
@@ -1683,7 +1715,7 @@ export default function InternalTasksDashboard() {
                         </th>
                       )}
                       {isColVisible('actions') && (
-                        <th className="py-3 px-3.5 text-right w-24">Actions</th>
+                        <th className="py-2.5 px-3 text-right w-20 min-w-[85px]">Actions</th>
                       )}
                     </tr>
                   </thead>
@@ -1700,7 +1732,7 @@ export default function InternalTasksDashboard() {
                         >
                           {/* Checkbox toggle */}
                           {isColVisible('done') && (
-                            <td className="py-3 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
+                            <td className="py-2.5 px-3 w-10 min-w-[40px] max-w-[40px] text-center" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
                                 checked={task.status === 'Completed'}
@@ -1712,9 +1744,9 @@ export default function InternalTasksDashboard() {
 
                           {/* Status Badge */}
                           {isColVisible('status') && (
-                            <td className="py-3 px-3.5">
+                            <td className="py-2.5 px-3 w-24 min-w-[95px] whitespace-nowrap">
                               <span
-                                className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                                className={`inline-flex px-2 py-0.5 text-[10px] font-bold rounded-full ${
                                   task.status === 'Completed'
                                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
                                     : task.status === 'Pending Approval'
@@ -1733,16 +1765,22 @@ export default function InternalTasksDashboard() {
 
                           {/* Task title, ID & description */}
                           {isColVisible('task') && (
-                            <td className="py-3 px-3.5">
-                              <div className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors">
+                            <td className="py-2.5 px-3 min-w-[180px] max-w-[280px]">
+                              <div
+                                className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors truncate"
+                                title={task.title}
+                              >
                                 {task.title}
                               </div>
                               <div className="flex items-center gap-2 mt-0.5">
-                                <span className="font-mono text-[10px] text-slate-400 font-medium">
+                                <span className="font-mono text-[10px] text-slate-400 font-medium shrink-0">
                                   {task.task_number || task.id}
                                 </span>
                                 {task.description && (
-                                  <span className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                                  <span
+                                    className="text-[11px] text-slate-500 dark:text-slate-400 truncate"
+                                    title={task.description}
+                                  >
                                     • {task.description}
                                   </span>
                                 )}
@@ -1752,11 +1790,17 @@ export default function InternalTasksDashboard() {
 
                           {/* Category & Task Type */}
                           {isColVisible('category') && (
-                            <td className="py-3 px-3.5">
-                              <div className="font-semibold text-slate-800 dark:text-slate-200">
+                            <td className="py-2.5 px-3 w-32 min-w-[115px]">
+                              <div
+                                className="font-semibold text-slate-800 dark:text-slate-200 truncate"
+                                title={task.task_type || task.task_type_name || 'General Task'}
+                              >
                                 {task.task_type || task.task_type_name || 'General Task'}
                               </div>
-                              <span className="text-[10px] text-slate-400 font-medium block">
+                              <span
+                                className="text-[10px] text-slate-400 font-medium block truncate"
+                                title={INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] || task.task_category || 'Operations'}
+                              >
                                 {INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] ||
                                   task.task_category ||
                                   'Operations'}
@@ -1766,10 +1810,10 @@ export default function InternalTasksDashboard() {
 
                           {/* Related Entity Badge */}
                           {isColVisible('entity') && (
-                            <td className="py-3 px-3.5">
+                            <td className="py-2.5 px-3 w-36 min-w-[125px]">
                               <div className="flex items-center gap-1.5">
                                 <span
-                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
+                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase shrink-0 ${
                                     task.related_entity_type === 'RFQ'
                                       ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
                                       : task.related_entity_type === 'BUYER'
@@ -1785,7 +1829,10 @@ export default function InternalTasksDashboard() {
                                 >
                                   {task.related_entity_type}
                                 </span>
-                                <span className="font-medium text-slate-800 dark:text-slate-200 line-clamp-1">
+                                <span
+                                  className="font-medium text-slate-800 dark:text-slate-200 truncate"
+                                  title={task.credit_account_name || task.related_entity_label || 'Direct Task'}
+                                >
                                   {task.credit_account_name || task.related_entity_label || 'Direct Task'}
                                 </span>
                               </div>
@@ -1794,9 +1841,9 @@ export default function InternalTasksDashboard() {
 
                           {/* Priority */}
                           {isColVisible('priority') && (
-                            <td className="py-3 px-3.5">
+                            <td className="py-2.5 px-3 w-20 min-w-[80px] whitespace-nowrap">
                               <span
-                                className={`px-2 py-0.5 text-[10px] font-bold rounded ${
+                                className={`inline-flex px-2 py-0.5 text-[10px] font-bold rounded ${
                                   task.priority === 'Critical'
                                     ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
                                     : task.priority === 'High'
@@ -1813,24 +1860,29 @@ export default function InternalTasksDashboard() {
 
                           {/* Assigned To */}
                           {isColVisible('assignedTo') && (
-                            <td className="py-3 px-3.5">
+                            <td className="py-2.5 px-3 w-32 min-w-[115px]">
                               <div className="flex items-center gap-1.5">
-                                <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] flex items-center justify-center font-bold text-slate-600 dark:text-slate-300">
+                                <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] flex items-center justify-center font-bold text-slate-600 dark:text-slate-300 shrink-0">
                                   {(task.assigned_to_name || 'U').slice(0, 1)}
                                 </div>
-                                <span className="font-medium">{task.assigned_to_name || 'Unassigned'}</span>
+                                <span
+                                  className="font-medium truncate"
+                                  title={task.assigned_to_name || 'Unassigned'}
+                                >
+                                  {task.assigned_to_name || 'Unassigned'}
+                                </span>
                               </div>
                             </td>
                           )}
 
                           {/* Due Date & Overdue Badge */}
                           {isColVisible('dueDate') && (
-                            <td className="py-3 px-3.5">
+                            <td className="py-2.5 px-3 w-32 min-w-[115px] whitespace-nowrap">
                               <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
                                 {task.due_date || '—'} {task.due_time ? `• ${task.due_time}` : ''}
                               </div>
                               <span
-                                className={`text-[10px] font-semibold ${
+                                className={`text-[10px] font-semibold block ${
                                   overdueInfo.isCompleted
                                     ? 'text-emerald-600'
                                     : overdueInfo.isOverdue
@@ -1845,36 +1897,36 @@ export default function InternalTasksDashboard() {
 
                           {/* Actions */}
                           {isColVisible('actions') && (
-                            <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedTaskDetails(task);
-                                  setIsComposeModalOpen(true);
-                                }}
-                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
-                                title="Dispatch SMS / Email for task"
-                                data-testid={`task-row-compose-${task.id}`}
-                              >
-                                <Send className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleOpenTaskDetails(task)}
-                                className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
-                                title="View details"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteTask(task.id, task.task_number)}
-                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
-                                title="Delete task"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </td>
+                            <td className="py-2.5 px-3 text-right w-20 min-w-[85px] whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedTaskDetails(task);
+                                    setIsComposeModalOpen(true);
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                                  title="Dispatch SMS / Email for task"
+                                  data-testid={`task-row-compose-${task.id}`}
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleOpenTaskDetails(task)}
+                                  className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                                  title="View details"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteTask(task.id, task.task_number)}
+                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                                  title="Delete task"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
                           )}
                         </tr>
                       );
@@ -2178,7 +2230,7 @@ export default function InternalTasksDashboard() {
                           type="text"
                           value={customTypeName}
                           onChange={(e) => setCustomTypeName(e.target.value)}
-                          placeholder="e.g. GST Exemption Verification"
+                          placeholder={UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder}
                           className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs"
                         />
                       </div>
@@ -2211,7 +2263,7 @@ export default function InternalTasksDashboard() {
                       type="text"
                       value={newTitle}
                       onChange={(e) => setNewTitle(e.target.value)}
-                      placeholder="e.g. Verify mechanical spare specifications"
+                      placeholder={UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder}
                       className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     />
                   </div>
@@ -2274,7 +2326,7 @@ export default function InternalTasksDashboard() {
                           type="text"
                           value={newCreditAccountName}
                           onChange={(e) => setNewCreditAccountName(e.target.value)}
-                          placeholder="e.g. Apex Infra Ltd"
+                          placeholder={UI_STRINGS.actionCenter.tasks.creditAccountNamePlaceholder}
                           className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs"
                           data-testid="create-credit-account-name-input"
                         />
@@ -2287,7 +2339,7 @@ export default function InternalTasksDashboard() {
                           type="text"
                           value={newCreditReason}
                           onChange={(e) => setNewCreditReason(e.target.value)}
-                          placeholder="e.g. Promotional onboarding grant approved by CM"
+                          placeholder={UI_STRINGS.actionCenter.tasks.creditReasonPlaceholder}
                           className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs"
                           data-testid="create-credit-reason-input"
                         />
@@ -2393,7 +2445,7 @@ export default function InternalTasksDashboard() {
                             setNewAssignedToName(e.target.value);
                             setNewAssignedToUserId('');
                           }}
-                          placeholder="e.g. Sudheer Kangala"
+                          placeholder={UI_STRINGS.actionCenter.tasks.customAssigneePlaceholder}
                           className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
                           data-testid="custom-assignee-input"
                         />

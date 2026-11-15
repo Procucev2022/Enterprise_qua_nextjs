@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import EmailGatewayPanel from '@/app/buyer/EmailGatewayPanel';
 import { useApp } from '@/lib/store';
 import { createRFQ, extractLineItemsFromDocument } from '@/lib/rfqClient';
+import { fetchEmailGatewayStatus } from '@/lib/emailGatewayClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem } from '@/lib/types';
 
@@ -11,20 +12,33 @@ jest.mock('@/lib/rfqClient', () => ({
   createRFQ: jest.fn(),
   extractLineItemsFromDocument: jest.fn(),
 }));
+jest.mock('@/lib/emailGatewayClient', () => ({
+  fetchEmailGatewayStatus: jest.fn(),
+}));
 
 const GATEWAY = UI_STRINGS.emailGateway;
+const BUYER_EMAIL = 'buyer.lead@example.com';
+const INTAKE_ADDRESS = 'rfq-intake@example.com';
+const PLANT_LOCATION = 'Plant 7, Chakan Industrial Area';
+const PINCODE = '410501';
 const mockShowToast = jest.fn();
 const mockAdoptCreatedRFQ = jest.fn();
 const mockCreateRFQ = createRFQ as jest.Mock;
 const mockExtract = extractLineItemsFromDocument as jest.Mock;
+const mockFetchGatewayStatus = fetchEmailGatewayStatus as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
   (useApp as jest.Mock).mockReturnValue({
     showToast: mockShowToast,
-    activeBuyerAccount: { corporateEmail: 'buyer.lead@lt-heavy.com' },
+    activeBuyerAccount: {
+      corporateEmail: BUYER_EMAIL,
+      primaryPlantLocation: PLANT_LOCATION,
+      pincode: PINCODE,
+    },
     adoptCreatedRFQ: mockAdoptCreatedRFQ,
   });
+  mockFetchGatewayStatus.mockResolvedValue({ success: true, data: { gatewayAddress: INTAKE_ADDRESS } });
   mockExtract.mockResolvedValue({
     success: true,
     data: {
@@ -62,12 +76,12 @@ beforeEach(() => {
 });
 
 describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
-  test('renders composer inputs with default empty subject and body', async () => {
+  test('renders the sender from the buyer account and the intake address from the gateway status', async () => {
     render(<EmailGatewayPanel />);
 
     await screen.findByTestId('gateway-panel');
-    expect(screen.getByDisplayValue('buyer.lead@lt-heavy.com')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('RFQ@procucev.com')).toBeInTheDocument();
+    expect(screen.getByDisplayValue(BUYER_EMAIL)).toBeInTheDocument();
+    expect(await screen.findByDisplayValue(INTAKE_ADDRESS)).toBeInTheDocument();
 
     const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
     const bodyInput = screen.getByPlaceholderText(/Paste or write line items/i);
@@ -80,7 +94,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
-    const senderInput = screen.getByPlaceholderText('project.procurement@lt-heavy.com');
+    const senderInput = screen.getByDisplayValue(BUYER_EMAIL);
     fireEvent.change(senderInput, { target: { value: 'custom.buyer@factory.com' } });
     expect(senderInput).toHaveValue('custom.buyer@factory.com');
 
@@ -93,7 +107,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     expect(bodyTextarea).toHaveValue('Generator 500kVA - 2 Units');
   });
 
-  test('submitting requisition creates RFQ, calls adoptCreatedRFQ, and resets fields', async () => {
+  test('submitting requisition creates RFQ from the account and gateway values, calls adoptCreatedRFQ, and resets fields', async () => {
     const mockOnCreated = jest.fn();
     render(<EmailGatewayPanel onRFQCreated={mockOnCreated} />);
     await screen.findByTestId('gateway-panel');
@@ -108,7 +122,14 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(mockCreateRFQ).toHaveBeenCalled();
+      expect(mockCreateRFQ).toHaveBeenCalledWith(expect.objectContaining({
+        sourceEmail: BUYER_EMAIL,
+        targetGatewayEmail: INTAKE_ADDRESS,
+        deliveryLocation: PLANT_LOCATION,
+        deliveryPincode: PINCODE,
+        budget: 1500000,
+        targetDeliveryDate: '2026-09-18',
+      }));
       expect(mockAdoptCreatedRFQ).toHaveBeenCalled();
       expect(mockOnCreated).toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(
@@ -122,7 +143,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     expect(bodyTextarea).toHaveValue('');
   });
 
-  test('submitting requisition when extracted data has partial fields (no category/budget/date)', async () => {
+  test('submits only what the requisition states when category, budget and date are missing', async () => {
     mockExtract.mockResolvedValueOnce({
       success: true,
       data: {
@@ -154,29 +175,17 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
 
     await waitFor(() => {
       expect(mockCreateRFQ).toHaveBeenCalledWith(expect.objectContaining({
-        category: 'Engineering Spares - Mechanical',
-        budget: 2500000,
-        targetDeliveryDate: '2026-09-18',
+        category: null,
+        budget: 0,
+        targetDeliveryDate: null,
       }));
     });
   });
 
-  test('submitting fallback requisition when AI extraction returns empty or fails', async () => {
+  test('creates nothing and reports the extraction reason when AI extraction fails', async () => {
     mockExtract.mockResolvedValueOnce({
       success: false,
-      data: null,
-    });
-    mockCreateRFQ.mockResolvedValueOnce({
-      success: true,
-      rfq: {
-        id: 'rfq-fallback-1',
-        rfqNumber: 'RFQ-2026-0999',
-        title: 'Non-Urgent Valves',
-        category: 'Engineering Spares - Mechanical',
-        sourcingMode: 'mode_1',
-        status: 'Parsing',
-        extractedEntities: [],
-      } as unknown as RFQItem,
+      reason: 'NOT_CONFIGURED',
     });
 
     render(<EmailGatewayPanel />);
@@ -186,17 +195,85 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     fireEvent.change(subjectInput, { target: { value: 'Non-Urgent Valves' } });
 
     const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
-    fireEvent.change(bodyTextarea, { target: { value: 'Fallback spec details' } });
+    fireEvent.change(bodyTextarea, { target: { value: 'Valve specs' } });
 
     const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(mockCreateRFQ).toHaveBeenCalledWith(expect.objectContaining({
-        title: 'Non-Urgent Valves',
-        status: 'Parsing',
-      }));
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Ingestion Failed',
+        UI_STRINGS.rfqExtraction.reasonMessages.NOT_CONFIGURED,
+        'warning'
+      );
     });
+    expect(mockCreateRFQ).not.toHaveBeenCalled();
+    expect(mockAdoptCreatedRFQ).not.toHaveBeenCalled();
+  });
+
+  test('creates nothing when extraction succeeds but finds no line items', async () => {
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        category: '',
+        estimatedBudget: null,
+        targetDeliveryDate: '',
+        extractedEntities: [],
+      },
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Unreadable Requisition' } });
+
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Thanks, regards' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Ingestion Failed',
+        UI_STRINGS.rfqExtraction.unreadableResponse,
+        'warning'
+      );
+    });
+    expect(mockCreateRFQ).not.toHaveBeenCalled();
+  });
+
+  test('shows the gateway status error and leaves the intake field empty when the status cannot be read', async () => {
+    mockFetchGatewayStatus.mockResolvedValueOnce({ success: false });
+
+    render(<EmailGatewayPanel />);
+
+    expect(await screen.findByText(GATEWAY.statusUnavailable)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(GATEWAY.notConfiguredLabel)).toHaveValue('');
+  });
+
+  test('creates the RFQ without a gateway address when the status reports none', async () => {
+    mockFetchGatewayStatus.mockResolvedValueOnce({ success: true, data: { gatewayAddress: null } });
+
+    render(<EmailGatewayPanel />);
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(GATEWAY.notConfiguredLabel)).toBeInTheDocument();
+    });
+
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'No Gateway Requisition' } });
+
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Pump 2 Units' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalledTimes(1);
+    });
+    expect(mockCreateRFQ.mock.calls[0][0].targetGatewayEmail).toBeUndefined();
   });
 
   test('handles createRFQ returning failure error without specific error message', async () => {
@@ -286,7 +363,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     expect(mockCreateRFQ).not.toHaveBeenCalled();
   });
 
-  test('handles activeBuyerAccount being undefined gracefully', async () => {
+  test('leaves the sender blank when there is no active buyer account', async () => {
     (useApp as jest.Mock).mockReturnValue({
       showToast: mockShowToast,
       activeBuyerAccount: null,
@@ -295,7 +372,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
 
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
-    expect(screen.getByDisplayValue('project.procurement@lt-heavy.com')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('name@company.com')).toHaveValue('');
   });
 
   test('submits RFQ with mode_1 when buyer has version_1 subscription', async () => {

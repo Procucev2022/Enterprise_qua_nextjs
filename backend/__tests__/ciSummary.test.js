@@ -42,6 +42,7 @@ test('reports counts from Jest artifacts and uses actual quality step outcomes',
     CI_FRONTEND_TESTS_STATUS: 'failure', CI_FRONTEND_COVERAGE_STATUS: 'success',
     CI_BUILD_STATUS: 'failure', CI_TYPECHECK_STATUS: 'cancelled',
     CI_LINT_STATUS: 'skipped', CI_MIGRATIONS_STATUS: 'success',
+    CI_SCHEMA_PARITY_STATUS: 'success', CI_SCHEMA_PARITY_TESTS_STATUS: 'success',
   });
   expect(markdown).toContain('Strict 90% per-file coverage gate: PASSED');
   expect(markdown).toContain('2 / 2 application files');
@@ -52,6 +53,8 @@ test('reports counts from Jest artifacts and uses actual quality step outcomes',
   expect(markdown).toContain('| TypeScript typecheck | CANCELLED |');
   expect(markdown).toContain('| Lint | SKIPPED |');
   expect(markdown).toContain('| Database migrations | PASSED |');
+  expect(markdown).toContain('| PostgreSQL / D1 schema parity | PASSED |');
+  expect(markdown).toContain('| Schema parity checker tests | PASSED |');
 });
 
 test.each(['statements', 'branches', 'functions', 'lines'])('flags a single file below 90%% %s despite a high overall report', (metric) => {
@@ -143,6 +146,10 @@ test('the workspace workflow verifies migrations and both project inventories, i
   expect(yaml).toContain('run: npm run check:coverage --prefix frontend');
   expect(yaml).toContain('run: npm run check:coverage\n');
   expect(yaml).toContain('CI_MIGRATIONS_STATUS: ${{ needs.backend-gate.outputs.migrations }}');
+  expect(yaml).toContain('run: node scripts/check-db-schema-parity.cjs');
+  expect(yaml).toContain('run: node --test scripts/check-db-schema-parity.test.cjs');
+  expect(yaml).toContain('CI_SCHEMA_PARITY_STATUS: ${{ needs.backend-gate.outputs.schema_parity }}');
+  expect(yaml).toContain('CI_SCHEMA_PARITY_TESTS_STATUS: ${{ needs.backend-gate.outputs.schema_parity_tests }}');
   expect(yaml).toMatch(/Upload Backend Coverage & Test Results\s+if: always\(\)/);
   expect(yaml).toMatch(/Upload Frontend Coverage & Test Results\s+if: always\(\)/);
 });

@@ -124,6 +124,10 @@ describe('Payment Dues low-credit monitoring for subscribers', () => {
       { id: 'v-low', name: 'Low Connect', subscriptionPlan: 'connect', rfqDownloadsUsed: 49, freeQuotationCredits: 0 },
     ]);
 
+    // A database is configured, and its communication table has no rows for these accounts.
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
     const result = await paymentDuesQueries.getLowCreditAccounts();
     const rows = result.data || result.accounts || result;
     const ids = rows.map((a) => a.accountId);
@@ -131,5 +135,15 @@ describe('Payment Dues low-credit monitoring for subscribers', () => {
     expect(ids).not.toContain('v-healthy');
     expect(ids).toContain('v-low');
     expect(rows.find((a) => a.accountId === 'v-low')).toMatchObject({ totalCredits: 50 });
+  });
+
+  test('refuses to list low-credit accounts when no database is configured', async () => {
+    jest.spyOn(paymentDuesQueries, 'fetchRawVendors').mockResolvedValue([
+      { id: 'v-low', name: 'Low Connect', subscriptionPlan: 'connect', rfqDownloadsUsed: 49, freeQuotationCredits: 0 },
+    ]);
+
+    await expect(paymentDuesQueries.getLowCreditAccounts()).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
   });
 });

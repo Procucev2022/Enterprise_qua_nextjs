@@ -20,7 +20,7 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const pool = require('../db/pool');
 const storeService = require('./storeService');
 const { logger } = require('./loggerService');
-const { BUYER_ACCOUNT_RESOLUTION } = require('../config/constants');
+const { BUYER_ACCOUNT_RESOLUTION, BUYER_FREE_TRIAL_RFQ_CREDITS } = require('../config/constants');
 
 const LOG_CATEGORY = 'BUYER_ACCOUNT';
 
@@ -38,9 +38,9 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
   // (created at registration, updated on a real Zoho payment). Matched by
   // login email since that's the one identifier both sides share. An account
   // that predates this — or was never registered through the app's own
-  // buyer-account creation flow — has no such record, so it defaults to the
-  // same free_trial/5 a brand new account starts with, rather than reporting
-  // nothing at all.
+  // buyer-account creation flow — has no such record, so it starts on the
+  // free_trial plan with the same credit allowance a brand new account gets
+  // (BUYER_FREE_TRIAL_RFQ_CREDITS), rather than reporting nothing at all.
   const legacyAccount = await storeService.getBuyerAccountByEmail(profile.contactEmail);
   return {
     id: profile.organizationId,
@@ -80,7 +80,7 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
     totalRFQsCreated: extras.totalRFQsCreated || 0,
     totalSpend: extras.totalSpend || 0,
     subscriptionPlan: legacyAccount?.subscriptionPlan || 'free_trial',
-    remainingFreeRFQs: legacyAccount?.remainingFreeRFQs !== undefined ? legacyAccount.remainingFreeRFQs : 5,
+    remainingFreeRFQs: legacyAccount?.remainingFreeRFQs !== undefined ? legacyAccount.remainingFreeRFQs : BUYER_FREE_TRIAL_RFQ_CREDITS,
     unlimitedRfqAccess: Boolean(profile?.unlimitedRfqAccess || legacyAccount?.unlimitedRfqAccess || legacyAccount?.unlimitedAccess),
   };
 }

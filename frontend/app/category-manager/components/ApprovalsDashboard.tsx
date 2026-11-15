@@ -39,10 +39,7 @@ import type {
   ApprovalTabKey,
   ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
-import {
-  APPROVAL_REQUEST_TYPES,
-  DEFAULT_APPROVAL_COLUMNS,
-} from '@/lib/constants';
+import { APPROVAL_REQUEST_TYPES, DEFAULT_APPROVAL_COLUMNS } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 
@@ -58,20 +55,18 @@ export function ApprovalsDashboard() {
   // Primary Data State
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [total, setTotal] = useState<number>(0);
-  const [summary, setSummary] = useState<ApprovalSummary>({
-    pending: 0,
-    approved: 0,
-    rejected: 0,
-    total: 0,
-  });
+  // Null until the summary loads. Cards show a dash in that state, never a zero.
+  const [summary, setSummary] = useState<ApprovalSummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Filter State
   const [isMyApprovalsActive, setIsMyApprovalsActive] = useState<boolean>(false);
 
-  // Toolbar Filters State
-  const [projectFilter, setProjectFilter] = useState<string>('all');
+  // Toolbar Filters State. The project filter is free text, sent as the `project` query value.
+  const [projectFilter, setProjectFilter] = useState<string>('');
   const [requestTypeFilter, setRequestTypeFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
@@ -93,6 +88,10 @@ export function ApprovalsDashboard() {
   const [selectedRequest, setSelectedRequest] = useState<ApprovalRequest | null>(null);
   const [pendingAction, setPendingAction] = useState<'APPROVE' | 'REJECT' | null>(null);
   const [actionRemarks, setActionRemarks] = useState<string>('');
+  // Blank until the user picks the approver, or until a request supplies its stored approver.
+  const [actionApprover, setActionApprover] = useState<string>('');
+  const [actionPassword, setActionPassword] = useState<string>('');
+  const [passwordError, setPasswordError] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
   // Summary Card Modal State
@@ -119,6 +118,26 @@ export function ApprovalsDashboard() {
     setTimeout(() => setToastMessage(null), 3500);
   }, []);
 
+  // Close Action Modal
+  const handleCloseActionModal = useCallback(() => {
+    setSelectedRequest(null);
+    setPendingAction(null);
+    setActionRemarks('');
+    setActionPassword('');
+    setPasswordError('');
+    setActionApprover('');
+  }, []);
+
+  // Open Action Modal
+  const openActionModal = useCallback((req: ApprovalRequest, action: 'APPROVE' | 'REJECT') => {
+    setSelectedRequest(req);
+    setPendingAction(action);
+    setActionRemarks('');
+    setActionPassword('');
+    setPasswordError('');
+    setActionApprover(req.assigned_approver || '');
+  }, []);
+
   // Restore column preferences from localStorage
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -136,13 +155,35 @@ export function ApprovalsDashboard() {
     }
   }, [sessionUser]);
 
-  // Load summary statistics
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedRequest && pendingAction) {
+          handleCloseActionModal();
+        } else if (detailsRequest) {
+          setDetailsRequest(null);
+        } else if (isColumnSettingsOpen) {
+          setIsColumnSettingsOpen(false);
+        } else if (summaryModalState.isOpen) {
+          setSummaryModalState((prev) => ({ ...prev, isOpen: false }));
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRequest, pendingAction, detailsRequest, isColumnSettingsOpen, summaryModalState.isOpen, handleCloseActionModal]);
+
+  // Load summary statistics. A failed load leaves the figures unset and shows the error.
   const loadSummary = useCallback(async () => {
     try {
-      const s = await fetchApprovalSummary();
-      setSummary(s);
+      const result = await fetchApprovalSummary();
+      setSummary(result.summary);
+      setSummaryError(result.error ?? null);
     } catch {
-      // safe fallback
+      setSummary(null);
+      setSummaryError(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvalSummary })
+      );
     }
   }, []);
 
@@ -153,7 +194,7 @@ export function ApprovalsDashboard() {
 
   const effectiveApprover = useMemo(() => {
     if (isMyApprovalsActive) {
-      return sessionUser?.name || sessionUser?.email || 'Srinu Sir';
+      return sessionUser?.name || sessionUser?.email || '';
     }
     return '';
   }, [isMyApprovalsActive, sessionUser]);
@@ -164,7 +205,7 @@ export function ApprovalsDashboard() {
     setCurrentPage(1);
   }, []);
 
-  // Load approvals list
+  // Load approvals list. A failed load clears the rows and shows the error in the table.
   const loadApprovals = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -172,7 +213,7 @@ export function ApprovalsDashboard() {
       const res = await fetchApprovals({
         module: requestTypeFilter === 'all' ? undefined : requestTypeFilter,
         status: effectiveStatus === 'all' ? undefined : effectiveStatus,
-        project: projectFilter === 'all' ? undefined : projectFilter,
+        project: projectFilter.trim() ? projectFilter.trim() : undefined,
         search: search.trim() ? search.trim() : undefined,
         assigned_approver: effectiveApprover || undefined,
         limit: pageSize,
@@ -182,8 +223,13 @@ export function ApprovalsDashboard() {
       });
       setApprovals(res.data);
       setTotal(res.total);
+      setListError(res.error ?? null);
     } catch {
-      showToast('Failed to load approval requests.');
+      setApprovals([]);
+      setTotal(0);
+      setListError(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvals })
+      );
     } finally {
       setIsLoading(false);
     }
@@ -197,7 +243,6 @@ export function ApprovalsDashboard() {
     effectiveApprover,
     sortField,
     sortOrder,
-    showToast,
   ]);
 
   useEffect(() => {
@@ -234,12 +279,16 @@ export function ApprovalsDashboard() {
     }
     setCurrentPage(1);
 
-    // Open matching modal with filtered records
+    // Open matching modal with filtered records. A failed load shows the reason and opens nothing.
     try {
       const res = await fetchApprovals({
         status: targetStatus === 'all' ? undefined : targetStatus,
         limit: 100,
       });
+      if (res.error) {
+        showToast(res.error);
+        return;
+      }
       setSummaryModalState({
         isOpen: true,
         title: `${strings.summaryModalTitlePrefix}${title}`,
@@ -251,9 +300,11 @@ export function ApprovalsDashboard() {
         records: res.data,
       });
     } catch {
-      // safe fallback
+      showToast(
+        formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.approvals })
+      );
     }
-  }, [strings]);
+  }, [strings, showToast]);
 
   // Handle Keyboard Navigation on Summary Cards
   const handleKeyDownCard = (e: React.KeyboardEvent, cardType: 'total' | 'pending' | 'approved' | 'rejected') => {
@@ -267,35 +318,65 @@ export function ApprovalsDashboard() {
   const handleActionConfirm = async () => {
     if (!selectedRequest || !pendingAction) return;
 
+    if (!actionApprover.trim()) {
+      setPasswordError(strings.approverRequired);
+      return;
+    }
+
+    if (!actionPassword.trim()) {
+      setPasswordError(strings.passwordRequiredError);
+      return;
+    }
+    setPasswordError('');
+
     setIsProcessing(true);
-    const res = await processApprovalAction(selectedRequest.id, pendingAction, actionRemarks);
+    const res = await processApprovalAction(
+      selectedRequest.id,
+      pendingAction,
+      actionRemarks,
+      actionPassword,
+      actionApprover.trim()
+    );
     setIsProcessing(false);
 
     if (res.success) {
+      const finalStatus = pendingAction === 'APPROVE' ? 'Approved' : 'Rejected';
       showToast(
-        `Request ${selectedRequest.request_number} marked as ${
-          pendingAction === 'APPROVE' ? 'Approved' : 'Rejected'
-        }.`
+        `Request ${selectedRequest.request_number} marked as ${finalStatus}.`
       );
-      setSelectedRequest(null);
-      setPendingAction(null);
-      setActionRemarks('');
+      // Immediately reflect database confirmed status in local state
+      setApprovals((prev) =>
+        prev.map((item) =>
+          item.id === selectedRequest.id
+            ? {
+                ...item,
+                status: finalStatus,
+                approver_name: actionApprover,
+                approver_remarks: actionRemarks,
+              }
+            : item
+        )
+      );
+      handleCloseActionModal();
       if (detailsRequest?.id === selectedRequest.id) {
-        setDetailsRequest(null);
+        setDetailsRequest((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: finalStatus,
+                approver_name: actionApprover,
+                approver_remarks: actionRemarks,
+              }
+            : null
+        );
       }
       void loadSummary();
       void loadApprovals();
     } else {
-      showToast(res.error || 'Failed to process approval.');
+      setPasswordError(res.error || strings.invalidPasswordError);
+      showToast(res.error || strings.databaseSyncError);
     }
   };
-
-  // Close Action Modal
-  const handleCloseActionModal = useCallback(() => {
-    setSelectedRequest(null);
-    setPendingAction(null);
-    setActionRemarks('');
-  }, []);
 
   // Sort Header Handler
   const handleSort = (field: string) => {
@@ -341,7 +422,7 @@ export function ApprovalsDashboard() {
       localStorage.setItem(userKey, JSON.stringify(columns));
     }
     setIsColumnSettingsOpen(false);
-    showToast('Column settings saved.');
+    showToast(strings.columnSettingsSaved);
   };
 
   // Export Filtered Records to CSV
@@ -478,6 +559,12 @@ export function ApprovalsDashboard() {
         </div>
       )}
 
+      {summaryError && (
+        <div role="alert" className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs font-medium text-rose-800 dark:text-rose-300">
+          {summaryError}
+        </div>
+      )}
+
       {/* 1. Summary Cards (4 compact cards in one horizontal row) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 w-full">
         {/* Total Requests */}
@@ -498,7 +585,9 @@ export function ApprovalsDashboard() {
           }`}>
             {strings.total}
           </p>
-          <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary.total}</p>
+          <p className="text-base sm:text-lg font-bold leading-none mt-1">
+            {summary ? summary.total : UI_STRINGS.dataLoad.emptyCell}
+          </p>
           <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${
             statusFilter === 'all' && !isMyApprovalsActive ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
           }`}>
@@ -523,7 +612,7 @@ export function ApprovalsDashboard() {
             {strings.pending}
           </p>
           <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
-            {summary.pending}
+            {summary ? summary.pending : UI_STRINGS.dataLoad.emptyCell}
           </p>
           <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
             {strings.pendingSubtitle}
@@ -547,7 +636,7 @@ export function ApprovalsDashboard() {
             {strings.approved}
           </p>
           <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
-            {summary.approved}
+            {summary ? summary.approved : UI_STRINGS.dataLoad.emptyCell}
           </p>
           <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
             {strings.approvedSubtitle}
@@ -571,7 +660,7 @@ export function ApprovalsDashboard() {
             {strings.rejected}
           </p>
           <p className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none mt-1">
-            {summary.rejected}
+            {summary ? summary.rejected : UI_STRINGS.dataLoad.emptyCell}
           </p>
           <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
             {strings.rejectedSubtitle}
@@ -580,10 +669,10 @@ export function ApprovalsDashboard() {
       </div>
 
       {/* 2. Single-Row Filter Toolbar (Clean Horizontal Row like Buyer Directory) */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar text-xs">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-2 shadow-sm flex flex-row items-center gap-1.5 sm:gap-2 text-xs w-full min-w-0 max-w-full box-border">
         {/* Search input (takes flexible width) */}
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+        <div className="relative flex-1 min-w-[180px] max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={search}
@@ -592,26 +681,22 @@ export function ApprovalsDashboard() {
               setCurrentPage(1);
             }}
             placeholder={strings.searchPlaceholder}
-            className="w-full pl-8 pr-3 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full has-leading-icon has-trailing-icon pr-3 py-1.5 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
 
-        {/* 1. All Projects dropdown */}
-        <select
+        {/* 1. Project filter. No project list is served by the API, so the value is typed. */}
+        <input
+          type="text"
           value={projectFilter}
           onChange={(e) => {
             setProjectFilter(e.target.value);
             setCurrentPage(1);
           }}
-          aria-label={strings.allProjects}
-          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
-        >
-          <option value="all">{strings.allProjects}</option>
-          <option value="Tata">Tata Steel</option>
-          <option value="JSW">JSW Steel</option>
-          <option value="Larsen">L&T Heavy Eng</option>
-          <option value="BHEL">BHEL</option>
-        </select>
+          placeholder={strings.projectFilterPlaceholder}
+          aria-label={strings.projectFilterPlaceholder}
+          className="!w-40 shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap"
+        />
 
         {/* 2. Request Type dropdown */}
         <select
@@ -844,6 +929,12 @@ export function ApprovalsDashboard() {
                     <span>{strings.loading}</span>
                   </td>
                 </tr>
+              ) : listError ? (
+                <tr>
+                  <td colSpan={visibleColumns.length} role="alert" className="py-10 text-center text-rose-700 dark:text-rose-300">
+                    <p className="font-semibold">{listError}</p>
+                  </td>
+                </tr>
               ) : approvals.length === 0 ? (
                 <tr>
                   <td colSpan={visibleColumns.length} className="py-10 text-center text-slate-400">
@@ -911,7 +1002,7 @@ export function ApprovalsDashboard() {
                       if (col.key === 'assigned_approver') {
                         return (
                           <td key={col.key} className="py-2 px-3 whitespace-nowrap font-medium text-slate-800 dark:text-slate-200">
-                            {req.assigned_approver || req.approver_name || 'Senior Director'}
+                            {req.assigned_approver || req.approver_name || UI_STRINGS.actionCenter.tasks.unassigned}
                           </td>
                         );
                       }
@@ -948,10 +1039,7 @@ export function ApprovalsDashboard() {
                               <>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedRequest(req);
-                                    setPendingAction('APPROVE');
-                                  }}
+                                  onClick={() => openActionModal(req, 'APPROVE')}
                                   className="px-2 py-0.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded flex items-center gap-0.5 transition"
                                   title={strings.approveBtn}
                                 >
@@ -960,10 +1048,7 @@ export function ApprovalsDashboard() {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedRequest(req);
-                                    setPendingAction('REJECT');
-                                  }}
+                                  onClick={() => openActionModal(req, 'REJECT')}
                                   className="px-2 py-0.5 text-[11px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded flex items-center gap-0.5 transition"
                                   title={strings.rejectBtn}
                                 >
@@ -987,11 +1072,13 @@ export function ApprovalsDashboard() {
         <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900 text-xs text-slate-500">
           <div className="flex items-center gap-3">
             <span>
-              {formatString(strings.paginationShowing, {
-                from: total === 0 ? 0 : (currentPage - 1) * pageSize + 1,
-                to: Math.min(currentPage * pageSize, total),
-                total,
-              })}
+              {listError
+                ? UI_STRINGS.dataLoad.emptyCell
+                : formatString(strings.paginationShowing, {
+                    from: total === 0 ? 0 : (currentPage - 1) * pageSize + 1,
+                    to: Math.min(currentPage * pageSize, total),
+                    total,
+                  })}
             </span>
           </div>
 
@@ -1040,8 +1127,16 @@ export function ApprovalsDashboard() {
 
       {/* 5. Column Settings Modal */}
       {isColumnSettingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-4 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in"
+          onClick={() => setIsColumnSettingsOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-4 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-3"
+          >
             <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <h3 className="font-bold text-slate-900 dark:text-white text-sm">
@@ -1145,8 +1240,16 @@ export function ApprovalsDashboard() {
 
       {/* 6. Approval Request Details Popup */}
       {detailsRequest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in"
+          onClick={() => setDetailsRequest(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <h3 className="font-bold text-slate-900 dark:text-white text-base">
@@ -1204,7 +1307,7 @@ export function ApprovalsDashboard() {
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <User size={13} className="text-indigo-500" />
                   <span className="font-semibold text-indigo-700 dark:text-indigo-300">
-                    {detailsRequest.assigned_approver || detailsRequest.approver_name || 'Srinu Sir'}
+                    {detailsRequest.assigned_approver || detailsRequest.approver_name || UI_STRINGS.actionCenter.tasks.unassigned}
                   </span>
                 </div>
               </div>
@@ -1294,7 +1397,7 @@ export function ApprovalsDashboard() {
                 </span>
                 <div className="p-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-800/60 rounded-lg text-indigo-900 dark:text-indigo-200">
                   <span className="font-semibold block text-[11px]">
-                    {detailsRequest.approver_name || 'Approver'}:
+                    {detailsRequest.approver_name || UI_STRINGS.dataLoad.emptyCell}:
                   </span>
                   <p className="mt-0.5">{detailsRequest.approver_remarks}</p>
                 </div>
@@ -1318,7 +1421,7 @@ export function ApprovalsDashboard() {
                         </span>
                       </div>
                       <span className="text-slate-600 dark:text-slate-300">
-                        {hist.actor_name} ({hist.actor_role || 'User'}): {hist.remarks || 'No notes'}
+                        {hist.actor_name} ({hist.actor_role || UI_STRINGS.dataLoad.emptyCell}): {hist.remarks || 'No notes'}
                       </span>
                     </div>
                   ))}
@@ -1342,10 +1445,7 @@ export function ApprovalsDashboard() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedRequest(detailsRequest);
-                      setPendingAction('REJECT');
-                    }}
+                    onClick={() => openActionModal(detailsRequest, 'REJECT')}
                     className="px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1"
                   >
                     <X size={12} />
@@ -1354,10 +1454,7 @@ export function ApprovalsDashboard() {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedRequest(detailsRequest);
-                      setPendingAction('APPROVE');
-                    }}
+                    onClick={() => openActionModal(detailsRequest, 'APPROVE')}
                     className="px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg flex items-center gap-1 shadow-2xs"
                   >
                     <Check size={12} />
@@ -1372,8 +1469,16 @@ export function ApprovalsDashboard() {
 
       {/* 7. Action Confirmation Modal (Approve / Reject Workflow) */}
       {selectedRequest && pendingAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in"
+          onClick={handleCloseActionModal}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
+          >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <h3 className="font-bold text-slate-900 dark:text-white text-base">
                 {pendingAction === 'APPROVE' ? strings.confirmApprovalTitle : strings.confirmRejectionTitle}
@@ -1411,6 +1516,42 @@ export function ApprovalsDashboard() {
                 <span className="text-slate-400">{strings.colRequestedBy}:</span>
                 <span className="font-medium text-slate-800 dark:text-slate-200">{selectedRequest.maker_name}</span>
               </div>
+            </div>
+
+            <div>
+              <label htmlFor="approval-approver-name" className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
+                {strings.approverLabel}
+              </label>
+              {/* No approver list is served by the API. The backend checks the name against its configured approvers. */}
+              <input
+                id="approval-approver-name"
+                type="text"
+                value={actionApprover}
+                onChange={(e) => setActionApprover(e.target.value)}
+                placeholder={strings.approverInputPlaceholder}
+                className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
+                {strings.passwordLabel} <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={actionPassword}
+                onChange={(e) => {
+                  setActionPassword(e.target.value);
+                  if (passwordError) setPasswordError('');
+                }}
+                placeholder={strings.passwordPlaceholder}
+                className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
+                  passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+              />
+              {passwordError && (
+                <p className="text-[11px] text-rose-500 mt-1 font-medium">{passwordError}</p>
+              )}
             </div>
 
             <div>

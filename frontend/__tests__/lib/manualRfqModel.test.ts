@@ -56,6 +56,7 @@ function completeForm(overrides: Partial<ManualRFQForm> = {}): ManualRFQForm {
     targetDeliveryDate: A_FUTURE_DATE,
     deliveryLocation: 'Navi Mumbai Plant, Gate 3',
     deliveryPincode: '400701',
+    sourcingMode: 'mode_1',
     lineItems: [completeItem()],
     ...overrides,
   };
@@ -98,9 +99,9 @@ describe('createEmptyManualRFQForm', () => {
     expect(createEmptyManualRFQForm().estimatedBudget).toBeNull();
   });
 
-  it('defaults to the first sourcing mode and no attachments', () => {
+  it('leaves the sourcing mode unchosen and carries no attachments', () => {
     const form = createEmptyManualRFQForm();
-    expect(form.sourcingMode).toBe('mode_1');
+    expect(form.sourcingMode).toBeNull();
     expect(form.attachments).toEqual([]);
   });
 });
@@ -117,16 +118,36 @@ describe('validateManualRFQLineItem', () => {
     expect(errors.itemName).toBe(MANUAL.itemNameRequired);
     expect(errors.quantity).toBe(MANUAL.quantityRequired);
     expect(errors.unit).toBe(MANUAL.unitRequired);
-    // Major/minor category are optional — a blank line item is not reported
-    // as an error for either.
-    expect(errors.majorCategory).toBeUndefined();
+    expect(errors.technicalSpecs).toBe(MANUAL.specsRequired);
+    // A major category is mandatory. Its minor cannot be chosen until a major is, so the
+    // major error stands in for the pair and the minor is not reported separately.
+    expect(errors.majorCategory).toBe(MANUAL.majorCategoryRequired);
     expect(errors.minorCategory).toBeUndefined();
   });
 
-  it('accepts a row with no category set', () => {
-    const errors = validateManualRFQLineItem(completeItem({ majorCategory: '', minorCategory: '' }));
-    expect(errors).toEqual({});
-    expect(isManualRFQLineItemComplete(completeItem({ majorCategory: '', minorCategory: '' }))).toBe(true);
+  it('rejects a row with no category set', () => {
+    const blank = completeItem({ majorCategory: '', minorCategory: '' });
+    expect(validateManualRFQLineItem(blank).majorCategory).toBe(MANUAL.majorCategoryRequired);
+    expect(isManualRFQLineItemComplete(blank)).toBe(false);
+  });
+
+  it('requires a minor category under a real major category', () => {
+    expect(validateManualRFQLineItem(completeItem({ minorCategory: '' })).minorCategory).toBe(
+      MANUAL.minorCategoryRequired
+    );
+  });
+
+  it('rejects a minor category that is not under the chosen major category', () => {
+    expect(
+      validateManualRFQLineItem(completeItem({ minorCategory: 'Not A Minor Category' })).minorCategory
+    ).toBe(MANUAL.minorCategoryNotUnderMajor);
+  });
+
+  it('accepts All Categories without a minor category, and refuses a minor under it', () => {
+    expect(validateManualRFQLineItem(completeItem({ majorCategory: 'All Categories', minorCategory: '' }))).toEqual({});
+    expect(
+      validateManualRFQLineItem(completeItem({ majorCategory: 'All Categories', minorCategory: 'Plumbing' })).minorCategory
+    ).toBe(MANUAL.minorNotApplicable);
   });
 
   it.each([[null], [0], [-5], [Number.NaN]])('rejects a quantity of %p', (quantity) => {
@@ -143,9 +164,10 @@ describe('validateManualRFQLineItem', () => {
     expect(errors.unit).toBeDefined();
   });
 
-  // A specification is genuinely optional; plenty of commodity items have none.
-  it('does not require a technical specification', () => {
-    expect(validateManualRFQLineItem(completeItem({ technicalSpecs: '' }))).toEqual({});
+  // Vendors quote against the specification, so a row without one cannot be dispatched.
+  it('requires a technical specification, not just whitespace', () => {
+    expect(validateManualRFQLineItem(completeItem({ technicalSpecs: '' })).technicalSpecs).toBe(MANUAL.specsRequired);
+    expect(validateManualRFQLineItem(completeItem({ technicalSpecs: '   ' })).technicalSpecs).toBe(MANUAL.specsRequired);
   });
 
   it('does not require or reject a per-row target date', () => {
@@ -179,10 +201,16 @@ describe('validateManualRFQForm', () => {
     expect(formErrors.targetDeliveryDate).toBe('Target date cannot be earlier than today.');
   });
 
-  // The title falls back to the leading line item, matching how the server
-  // derives one, so leaving it blank is legitimate.
-  it('allows a blank title', () => {
-    expect(validateManualRFQForm(completeForm({ title: '' })).isValid).toBe(true);
+  it('requires a title, not just whitespace', () => {
+    const { isValid, formErrors } = validateManualRFQForm(completeForm({ title: '   ' }));
+    expect(isValid).toBe(false);
+    expect(formErrors.title).toBe(MANUAL.titleRequired);
+  });
+
+  it('requires a target delivery date', () => {
+    const { isValid, formErrors } = validateManualRFQForm(completeForm({ targetDeliveryDate: '' }));
+    expect(isValid).toBe(false);
+    expect(formErrors.targetDeliveryDate).toBe(MANUAL.targetDateRequired);
   });
 
   it.each([['ab'], ['x'.repeat(201)]])('rejects a title of length %s', (title) => {
@@ -308,6 +336,27 @@ describe('toExtractedEntity', () => {
   });
 });
 
+describe('sourcing mode is chosen by the buyer', () => {
+  it('blocks a form with no sourcing mode chosen and names the field', () => {
+    const result = validateManualRFQForm(completeForm({ sourcingMode: null }));
+
+    expect(result.isValid).toBe(false);
+    expect(result.formErrors.sourcingMode).toBe(UI_STRINGS.manualRfq.sourcingModeRequired);
+  });
+
+  it('accepts a form once a mode is chosen', () => {
+    const result = validateManualRFQForm(completeForm({ sourcingMode: 'mode_2' }));
+
+    expect(result.formErrors.sourcingMode).toBeUndefined();
+  });
+
+  it('refuses to build a dispatch payload without a chosen mode', () => {
+    expect(() => toRFQCreatePayload(completeForm({ sourcingMode: null }))).toThrow(
+      UI_STRINGS.manualRfq.sourcingModeRequired
+    );
+  });
+});
+
 describe('toRFQCreatePayload', () => {
   it('builds the API body from a complete form', () => {
     const payload = toRFQCreatePayload(completeForm());
@@ -330,9 +379,9 @@ describe('toRFQCreatePayload', () => {
     expect(payload).not.toHaveProperty('id');
   });
 
-  it('falls back to the leading line item for a blank title', () => {
-    const payload = toRFQCreatePayload(completeForm({ title: '   ' }));
-    expect(payload.title).toBe('Centrifugal Water Pump');
+  it('sends the title the buyer entered, trimmed, and never substitutes a line item name', () => {
+    const payload = toRFQCreatePayload(completeForm({ title: '  Pump replacement  ' }));
+    expect(payload.title).toBe('Pump replacement');
   });
 
   it('falls back to the leading line item for a blank header category', () => {
@@ -340,8 +389,8 @@ describe('toRFQCreatePayload', () => {
     expect(payload.category).toBe('Engineering Spares - Mechanical');
   });
 
-  it('falls back to the leading line item date when no header date was given', () => {
-    const payload = toRFQCreatePayload(completeForm({ targetDeliveryDate: '' }));
+  it('sends the target delivery date the buyer entered', () => {
+    const payload = toRFQCreatePayload(completeForm({ targetDeliveryDate: A_FUTURE_DATE }));
     expect(payload.targetDeliveryDate).toBe(A_FUTURE_DATE);
   });
 
@@ -578,12 +627,12 @@ describe('fromExtractedEntity', () => {
     const errFakeMajor = validateManualRFQLineItem(
       completeItem({ majorCategory: 'FakeNonExistentMajor', minorCategory: '' })
     );
-    expect(errFakeMajor.majorCategory).toBe('Selected major category does not exist in category master.');
+    expect(errFakeMajor.majorCategory).toBe(MANUAL.majorCategoryUnknown);
 
     const errNoMajorWithMinor = validateManualRFQLineItem(
       completeItem({ majorCategory: '', minorCategory: 'Plumbing' })
     );
-    expect(errNoMajorWithMinor.minorCategory).toBe('Cannot select minor category without a valid major category.');
+    expect(errNoMajorWithMinor.minorCategory).toBe(MANUAL.minorWithoutMajor);
   });
 
   it('infers major category from known minor category during fromExtractedEntity', () => {

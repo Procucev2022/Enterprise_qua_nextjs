@@ -1,3 +1,4 @@
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   fetchSupplierCreditHistory,
   fetchSupplierCommunications,
@@ -61,15 +62,14 @@ describe('supplierProfileClient', () => {
     test('handles fetch rejection with error message', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
       const res = await fetchSupplierCreditHistory('v-123');
-      expect(res.success).toBe(false);
-      expect(res.error).toBe('Network error');
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }));
     });
 
     test('handles non-Error rejection with fallback message', async () => {
       global.fetch = jest.fn().mockRejectedValue('String rejection');
       const res = await fetchSupplierCreditHistory('v-123');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Failed to fetch credit history');
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }));
     });
   });
 
@@ -96,14 +96,14 @@ describe('supplierProfileClient', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Comms unreachable'));
       const res = await fetchSupplierCommunications('v-123');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Comms unreachable');
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }));
     });
 
     test('handles non-Error rejection fallback for communications', async () => {
       global.fetch = jest.fn().mockRejectedValue(null);
       const res = await fetchSupplierCommunications('v-123');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Failed to fetch communications');
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }));
     });
   });
 
@@ -128,14 +128,14 @@ describe('supplierProfileClient', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Post failed'));
       const res = await recordSupplierCommunication('v-123', { channel: 'SMS', message: 'Test' });
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Post failed');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
 
     test('handles non-Error rejection fallback for recording communication', async () => {
       global.fetch = jest.fn().mockRejectedValue(404);
       const res = await recordSupplierCommunication('v-123', { channel: 'SMS', message: 'Test' });
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Failed to record communication');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
   });
 
@@ -158,14 +158,14 @@ describe('supplierProfileClient', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Payments error'));
       const res = await fetchSupplierPaymentHistory('v-123');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Payments error');
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }));
     });
 
     test('handles non-Error rejection fallback for payment history', async () => {
       global.fetch = jest.fn().mockRejectedValue({});
       const res = await fetchSupplierPaymentHistory('v-123');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Failed to fetch payment history');
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.dataLoad.resources.supplierDetails }));
     });
   });
 
@@ -188,14 +188,14 @@ describe('supplierProfileClient', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Update failed'));
       const res = await updateSupplierCategories('v-123', ['IT']);
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Update failed');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
 
     test('handles non-Error rejection fallback for updating categories', async () => {
       global.fetch = jest.fn().mockRejectedValue(undefined);
       const res = await updateSupplierCategories('v-123', ['IT']);
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Failed to update categories');
+      expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
     });
   });
 
@@ -219,5 +219,55 @@ describe('supplierProfileClient', () => {
         })
       );
     });
+  });
+});
+
+describe('supplierProfileClient reply handling', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  test('reports a request failure when a 2xx reply body is not JSON', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token');
+      },
+    });
+
+    const res = await fetchSupplierCreditHistory('v-1');
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
+  });
+
+  test('uses the reply error text for a non-2xx response', async () => {
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse({ error: 'Vendor locked' }, { ok: false, status: 423 }));
+
+    const res = await fetchSupplierCreditHistory('v-1');
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe('Vendor locked');
+  });
+
+  test('reports the HTTP status when a non-2xx response carries no error text', async () => {
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, { ok: false, status: 500 }));
+
+    const res = await fetchSupplierCreditHistory('v-1');
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.requestFailedWithStatus, { status: 500 }));
+  });
+
+  test('reports a failure when a 2xx reply does not state success', async () => {
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse({ data: [] }));
+
+    const res = await fetchSupplierCommunications('v-1');
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(UI_STRINGS.dataLoad.requestNetworkFailed);
   });
 });

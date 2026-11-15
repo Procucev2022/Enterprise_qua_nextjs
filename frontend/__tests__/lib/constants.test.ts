@@ -7,11 +7,7 @@ import {
   CURRENCY,
   formatCurrency,
   formatFileSize,
-  MANUAL_LINE_ITEM_DEFAULTS,
-  INITIAL_SYSTEM_CONFIG,
-  INITIAL_AZURE_HEALTH,
-  BUYER_SUBSCRIPTION_PLANS,
-  VENDOR_SUBSCRIPTION_PLANS,
+  STORE_MESSAGES,
   AES_CONFIG,
   FORM_SCHEMAS,
   validateFormData,
@@ -22,15 +18,23 @@ import {
   RFQ_STATUSES,
   formatIndianDate,
   formatIndianDateTime,
+  parseRfqTimestamp,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
   entitledSourcingModes,
   normalizePoDate,
-  ALLOWED_EXTENSION_HOURS,
-  DEFAULT_EXTENSION_HOURS,
+  EXTENSION_HOURS_PER_DAY,
+  DEFAULT_EXTENSION_DAYS,
+  EXTENSION_MIN_DAYS,
+  EXTENSION_MAX_DAYS,
+  isWholeExtensionDays,
+  parseExtensionDays,
+  stepExtensionDays,
+  extensionDaysFromHours,
+  formatExtensionDayCount,
   calculateExtendedDeadline,
-  hasUnlimitedAccess,
-  UNLIMITED_ACCESS_EMAILS,
+  resolveRfqClosingDeadline,
+  RFQ_AUTO_CLOSE_HOURS,
 } from '@/lib/constants';
 
 
@@ -79,33 +83,27 @@ describe('lib/constants', () => {
     expect(mode3?.code).toBe('Mode 3');
   });
 
-  it('should export valid subscription plans', () => {
-    expect(Array.isArray(BUYER_SUBSCRIPTION_PLANS)).toBe(true);
-    expect(BUYER_SUBSCRIPTION_PLANS.length).toBeGreaterThan(0);
-    expect(Array.isArray(VENDOR_SUBSCRIPTION_PLANS)).toBe(true);
-    expect(VENDOR_SUBSCRIPTION_PLANS.length).toBeGreaterThan(0);
+  it('no longer exports seeded plans, placeholder system config, Azure rows, or allow-list bypasses', () => {
+    const constantsModule = require('@/lib/constants');
+    [
+      'INITIAL_SYSTEM_CONFIG',
+      'INITIAL_AZURE_HEALTH',
+      'BUYER_SUBSCRIPTION_PLANS',
+      'VENDOR_SUBSCRIPTION_PLANS',
+      'UNLIMITED_ACCESS_EMAILS',
+      'hasUnlimitedAccess',
+      'DEFAULT_INTERNAL_MEMBERS',
+      'DEFAULT_VENDOR_DIRECTORY_PASSKEY',
+    ].forEach((name) => {
+      expect(constantsModule).not.toHaveProperty(name);
+    });
   });
 
-  it('should export valid INITIAL_SYSTEM_CONFIG', () => {
-    expect(INITIAL_SYSTEM_CONFIG).toBeDefined();
-    expect(INITIAL_SYSTEM_CONFIG.ollamaModel).toBe('Llama 3 (8B Instruct)');
-    expect(INITIAL_SYSTEM_CONFIG.ollamaActive).toBe(true);
-    expect(INITIAL_SYSTEM_CONFIG.ocrExtractionThreshold).toBe(85);
-    expect(INITIAL_SYSTEM_CONFIG.escalationIntervalHours).toBe(24);
-    expect(INITIAL_SYSTEM_CONFIG.azureDbBackupFrequency).toBe('Daily');
-    expect(INITIAL_SYSTEM_CONFIG.rbacEnforced).toBe(true);
-  });
-
-  it('should export valid INITIAL_AZURE_HEALTH services', () => {
-    expect(Array.isArray(INITIAL_AZURE_HEALTH)).toBe(true);
-    expect(INITIAL_AZURE_HEALTH.length).toBeGreaterThanOrEqual(5);
-    
-    const services = INITIAL_AZURE_HEALTH.map(s => s.service);
-    expect(services.some(s => s.includes('PostgreSQL'))).toBe(true);
-    expect(services.some(s => s.includes('OpenAI'))).toBe(true);
-    expect(services.some(s => s.includes('Cosmos DB'))).toBe(true);
-    expect(services.some(s => s.includes('Communication Services'))).toBe(true);
-    expect(services.some(s => s.includes('Key Vault'))).toBe(true);
+  it('exports STORE_MESSAGES with the notices the store shows when a server call fails or confirms', () => {
+    expect(STORE_MESSAGES.chaserNotSentTitle).toBe('Chaser Not Sent');
+    expect(STORE_MESSAGES.aiFeedLoadFailed).toContain('AI activity feed');
+    expect(STORE_MESSAGES.vendorsRemovedMessage).toContain('{count}');
+    expect(STORE_MESSAGES.chaserSentMessage).toContain('{sent} of {total}');
   });
 
   it('should re-export validation schemas, regex patterns, and validation helpers', () => {
@@ -161,14 +159,6 @@ describe('CURRENCY and formatCurrency', () => {
     expect(formatCurrency(NaN)).toBe('₹0');
     expect(formatCurrency(Infinity)).toBe('₹0');
     expect(formatCurrency(undefined as unknown as number)).toBe('₹0');
-  });
-});
-
-describe('MANUAL_LINE_ITEM_DEFAULTS', () => {
-  // Mirrors DELIVERY_DATE_OFFSET_DAYS in RFQ_INGESTION_CONFIG on the backend so a
-  // keyed RFQ and an ingested one fall back to the same delivery date.
-  it('matches the backend delivery-date offset', () => {
-    expect(MANUAL_LINE_ITEM_DEFAULTS.TARGET_DATE_OFFSET_DAYS).toBe(5);
   });
 });
 
@@ -229,6 +219,15 @@ describe('formatIndianDateTime', () => {
   it('crosses midnight forward when the UTC time is late enough', () => {
     // 20:00 UTC on the 4th is 01:30 IST on the 5th.
     expect(formatIndianDateTime('2026-09-04T20:00:00.000Z')).toBe('05 Sept 2026, 01:30 am IST');
+  });
+
+  it('converts a UTC-stamped string into IST', () => {
+    expect(formatIndianDateTime('2026-11-10 03:17 UTC')).toBe('10 Nov 2026, 08:47 am IST');
+    expect(formatIndianDateTime('2026-11-10 03:17:00 UTC')).toBe('10 Nov 2026, 08:47 am IST');
+  });
+
+  it('preserves an already-formatted IST timestamp string', () => {
+    expect(formatIndianDateTime('10 Nov 2026, 08:47 am IST')).toBe('10 Nov 2026, 08:47 am IST');
   });
 
   it.each([[''], ['   '], [undefined]])('reports nothing for %p', (value) => {
@@ -429,52 +428,111 @@ describe('normalizePoDate', () => {
   });
 
   describe('RFQ Extension Constants & Helper', () => {
-    it('exports allowed extension hours and defaults', () => {
-      expect(ALLOWED_EXTENSION_HOURS).toEqual([24, 48]);
-      expect(DEFAULT_EXTENSION_HOURS).toBe(24);
+    it('exports the extension day range, the default, and the hours in a day', () => {
+      expect(EXTENSION_HOURS_PER_DAY).toBe(24);
+      expect(EXTENSION_MIN_DAYS).toBe(1);
+      expect(EXTENSION_MAX_DAYS).toBe(30);
+      expect(DEFAULT_EXTENSION_DAYS).toBe(1);
     });
 
     it('calculates deadline extension with valid existing deadline', () => {
       const futureDeadline = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-      const extended24 = calculateExtendedDeadline(futureDeadline, 24);
-      expect(new Date(extended24).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
+      const extendedOneDay = calculateExtendedDeadline(futureDeadline, 1);
+      expect(new Date(extendedOneDay).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
 
-      const extended48 = calculateExtendedDeadline(futureDeadline, 48);
-      expect(new Date(extended48).getTime()).toBe(new Date(futureDeadline).getTime() + 48 * 60 * 60 * 1000);
+      const extendedThreeDays = calculateExtendedDeadline(futureDeadline, 3);
+      expect(new Date(extendedThreeDays).getTime()).toBe(new Date(futureDeadline).getTime() + 72 * 60 * 60 * 1000);
     });
 
-    it('calculates deadline extension from baseCreatedAt when deadline is not provided', () => {
-      const createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
-      const extended = calculateExtendedDeadline(undefined, 24, createdAt);
-      expect(new Date(extended).getTime()).toBeGreaterThan(Date.now());
+    it('extends by one day when no day count is passed', () => {
+      const futureDeadline = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+      const extended = calculateExtendedDeadline(futureDeadline);
+      expect(new Date(extended).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
     });
 
-    it('calculates deadline extension from current time when neither deadline nor createdAt is provided', () => {
+    it('extends from now when the closing time has already passed', () => {
       const before = Date.now();
-      const extended = calculateExtendedDeadline(undefined, 24);
+      const extended = calculateExtendedDeadline('2020-01-01T00:00:00.000Z', 2);
       const extendedMs = new Date(extended).getTime();
-      expect(extendedMs).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000 - 1000);
-    });
-  });
-
-  describe('hasUnlimitedAccess', () => {
-    it('returns true for known unlimited email accounts', () => {
-      expect(hasUnlimitedAccess('procucevvendor@gmail.com')).toBe(true);
-      expect(hasUnlimitedAccess('sudheer.kangala@procucev.com')).toBe(true);
-      expect(hasUnlimitedAccess('  PROCUCEVVENDOR@GMAIL.COM  ')).toBe(true);
-      expect(hasUnlimitedAccess({ email: 'procucevvendor@gmail.com' })).toBe(true);
+      expect(extendedMs).toBeGreaterThanOrEqual(before + 2 * 24 * 60 * 60 * 1000);
+      expect(extendedMs).toBeLessThanOrEqual(Date.now() + 2 * 24 * 60 * 60 * 1000);
     });
 
-    it('returns false for regular emails or null/undefined', () => {
-      expect(hasUnlimitedAccess('vendor@regular.com')).toBe(false);
-      expect(hasUnlimitedAccess(null)).toBe(false);
-      expect(hasUnlimitedAccess(undefined)).toBe(false);
-      expect(hasUnlimitedAccess({ email: '' })).toBe(false);
+    it('extends from now when there is no closing time', () => {
+      const before = Date.now();
+      const extended = calculateExtendedDeadline(undefined, 1);
+      const extendedMs = new Date(extended).getTime();
+      expect(extendedMs).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000);
+      expect(extendedMs).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000);
     });
 
-    it('contains expected emails in UNLIMITED_ACCESS_EMAILS', () => {
-      expect(UNLIMITED_ACCESS_EMAILS.has('procucevvendor@gmail.com')).toBe(true);
-      expect(UNLIMITED_ACCESS_EMAILS.has('sudheer.kangala@procucev.com')).toBe(true);
+    it('uses the stored closing time when there is one', () => {
+      expect(resolveRfqClosingDeadline({
+        closingDeadline: '2026-11-16T02:19:00.000Z',
+        createdAt: '2026-11-14 02:19 UTC',
+      })).toBe('2026-11-16T02:19:00.000Z');
+    });
+
+    it('closes 48 hours after creation when no closing time is stored, whatever the target date is', () => {
+      // A record raised 14 Nov 2026 at 07:49 am IST with a target delivery date of 09 Dec 2026.
+      const rfq = { createdAt: '2026-11-14 02:19 UTC', deadline: '2026-12-09' };
+      const closing = resolveRfqClosingDeadline(rfq);
+
+      expect(RFQ_AUTO_CLOSE_HOURS).toBe(48);
+      expect(closing).toBe(new Date(Date.parse('2026-11-14T02:19:00Z') + 48 * 60 * 60 * 1000).toISOString());
+      expect(closing).toBe('2026-11-16T02:19:00.000Z');
+    });
+
+    it('returns null when neither a closing time nor a creation time can be read', () => {
+      expect(resolveRfqClosingDeadline({})).toBeNull();
+      expect(resolveRfqClosingDeadline({ createdAt: 'not-a-date', closingDeadline: 'not-a-date' })).toBeNull();
+    });
+
+    it('accepts only whole days inside the range', () => {
+      expect(isWholeExtensionDays(1)).toBe(true);
+      expect(isWholeExtensionDays(30)).toBe(true);
+      expect(isWholeExtensionDays('7')).toBe(true);
+      expect(isWholeExtensionDays(0)).toBe(false);
+      expect(isWholeExtensionDays(31)).toBe(false);
+      expect(isWholeExtensionDays(2.5)).toBe(false);
+      expect(isWholeExtensionDays('')).toBe(false);
+      expect(isWholeExtensionDays(null)).toBe(false);
+      expect(isWholeExtensionDays(undefined)).toBe(false);
+    });
+
+    it('parses a typed day count and returns null for anything that is not a valid whole-day count', () => {
+      expect(parseExtensionDays(' 3 ')).toBe(3);
+      expect(parseExtensionDays('30')).toBe(30);
+      expect(parseExtensionDays('')).toBeNull();
+      expect(parseExtensionDays('0')).toBeNull();
+      expect(parseExtensionDays('31')).toBeNull();
+      expect(parseExtensionDays('1.5')).toBeNull();
+      expect(parseExtensionDays('abc')).toBeNull();
+    });
+
+    it('steps the day count by one and keeps the result inside the range', () => {
+      expect(stepExtensionDays('3', 1)).toBe(4);
+      expect(stepExtensionDays('3', -1)).toBe(2);
+      expect(stepExtensionDays('1', -1)).toBe(1);
+      expect(stepExtensionDays('30', 1)).toBe(30);
+      expect(stepExtensionDays('45', 1)).toBe(30);
+      expect(stepExtensionDays('0', -1)).toBe(1);
+      expect(stepExtensionDays('2.7', 1)).toBe(3);
+      expect(stepExtensionDays('', 1)).toBe(2);
+      expect(stepExtensionDays('abc', -1)).toBe(1);
+    });
+
+    it('reads a stored extension in hours back as whole days', () => {
+      expect(extensionDaysFromHours(24)).toBe(1);
+      expect(extensionDaysFromHours(72)).toBe(3);
+      expect(extensionDaysFromHours(720)).toBe(30);
+      expect(extensionDaysFromHours(undefined)).toBe(1);
+      expect(extensionDaysFromHours(0)).toBe(1);
+    });
+
+    it('labels a day count in the singular for one day and the plural otherwise', () => {
+      expect(formatExtensionDayCount(1)).toBe('1 day');
+      expect(formatExtensionDayCount(3)).toBe('3 days');
     });
   });
 
@@ -563,14 +621,36 @@ describe('getVendorCreditBalance', () => {
     expect(VENDOR_PLAN_RFQ_QUOTA).toEqual({ connect: 50, select: 100 });
     expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 9, freeQuotationCredits: 0 })).toBe(91);
     expect(getVendorCreditBalance({ subscriptionPlan: 'connect', rfqDownloadsUsed: 10 })).toBe(40);
-    expect(getVendorCreditBalance({ subscriptionPlan: 'select' })).toBe(100);
+    expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 0 })).toBe(100);
     expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 150 })).toBe(0);
+    // Without the downloads count the balance is unknown, so no full quota is shown in its place.
+    expect(getVendorCreditBalance({ subscriptionPlan: 'select' })).toBeNull();
+    expect(getVendorCreditBalance({ subscriptionPlan: 'connect', rfqDownloadsUsed: Number.NaN })).toBeNull();
   });
 
-  it('falls back to the free-tier balance, the default 5 when none is stored, for vendors without a subscription', () => {
+  it('uses the stored free-tier balance for vendors without a subscription, and null when none is stored', () => {
     expect(getVendorCreditBalance({ subscriptionPlan: 'premium', freeQuotationCredits: 3 })).toBe(3);
     expect(getVendorCreditBalance({ freeQuotationCredits: -2 })).toBe(0);
-    expect(getVendorCreditBalance({})).toBe(5);
     expect(getVendorCreditBalance({ freeQuotationCredits: 0 })).toBe(0);
+    expect(getVendorCreditBalance({})).toBeNull();
+    expect(getVendorCreditBalance({ subscriptionPlan: 'premium' })).toBeNull();
+  });
+});
+
+describe('parseRfqTimestamp', () => {
+  it('reads an ISO instant and a zone-less MySQL DATETIME as the same UTC moment', () => {
+    expect(parseRfqTimestamp('2026-09-02T11:07:16.000Z')).toBe(parseRfqTimestamp('2026-09-02 11:07:16'));
+  });
+
+  it('reads a UTC-tagged string as UTC', () => {
+    expect(parseRfqTimestamp('2026-11-10 03:17 UTC')).toBe(Date.parse('2026-11-10T03:17:00.000Z'));
+  });
+
+  it('reads a date-only value as midnight UTC', () => {
+    expect(parseRfqTimestamp('2026-08-29')).toBe(Date.parse('2026-08-29T00:00:00.000Z'));
+  });
+
+  it.each([[undefined], [null], [''], ['   '], ['not a date']])('returns null for %p', (value) => {
+    expect(parseRfqTimestamp(value)).toBeNull();
   });
 });

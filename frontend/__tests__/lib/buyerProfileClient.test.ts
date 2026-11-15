@@ -16,6 +16,7 @@ import {
 import buyerProfileClient from '@/lib/buyerProfileClient';
 import { authClient } from '@/lib/authClient';
 import { BUYER_PROFILE_ENDPOINTS } from '@/lib/constants';
+import { logger } from '@/lib/logger';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { BuyerProfile } from '@/lib/types';
 
@@ -431,6 +432,15 @@ describe('buyerProfileClient', () => {
       expect(JSON.parse(init.body)).toEqual({ subject: 'Hi', message: 'Welcome' });
     });
 
+    test('returns a null template when the successful response omits data', async () => {
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: true }));
+
+      const res = await saveDispatchTemplate('self_map_required', { subject: '', message: '' });
+
+      expect(res.success).toBe(true);
+      expect(res.data).toBeNull();
+    });
+
     test('reports a failure response', async () => {
       global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: false, error: 'nope' }, { ok: false, status: 400 }));
 
@@ -463,9 +473,29 @@ describe('buyerProfileClient', () => {
 
     test('handles fetch failure gracefully', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+      const errorLog = jest.spyOn(logger, 'error');
       const res = await fetchBuyerCreditHistory('buyer-1');
       expect(res.success).toBe(false);
       expect(res.error).toBe('Network offline');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer credit history request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'Network offline' }),
+        'BUYER_PROFILE'
+      );
+    });
+
+    test('uses a safe fallback and logs when the transport rejects with a non-Error value', async () => {
+      global.fetch = jest.fn().mockRejectedValue('offline');
+      const errorLog = jest.spyOn(logger, 'error');
+
+      const res = await fetchBuyerCreditHistory('buyer-1');
+
+      expect(res).toEqual({ success: false, error: 'Failed to fetch credit history' });
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer credit history request failed',
+        expect.objectContaining({ errorName: 'UnknownError', errorMessage: 'Unknown request failure' }),
+        'BUYER_PROFILE'
+      );
     });
   });
 
@@ -475,16 +505,25 @@ describe('buyerProfileClient', () => {
         ok: true,
         json: async () => ({ success: true, message: 'Credit added' }),
       });
-      const res = await addBuyerCredit('buyer-1', { amount: 5, reason: 'Trial topup' });
+      const res = await addBuyerCredit('buyer-1', { amount: 5, reason: 'Trial topup' }, 'b714f6d8-83a1-4f34-9d89-72ebddb1186d');
       expect(res.success).toBe(true);
       expect(res.message).toBe('Credit added');
+      expect(global.fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        headers: expect.objectContaining({ 'Idempotency-Key': 'b714f6d8-83a1-4f34-9d89-72ebddb1186d' }),
+      }));
     });
 
     test('handles add-credit network error', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Server timeout'));
-      const res = await addBuyerCredit('buyer-1', { amount: 5 });
+      const errorLog = jest.spyOn(logger, 'error');
+      const res = await addBuyerCredit('buyer-1', { amount: 5 }, 'b714f6d8-83a1-4f34-9d89-72ebddb1186d');
       expect(res.success).toBe(false);
       expect(res.error).toBe('Server timeout');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer credit allocation request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'Server timeout' }),
+        'BUYER_PROFILE'
+      );
     });
   });
 
@@ -501,9 +540,15 @@ describe('buyerProfileClient', () => {
 
     test('handles categories update error', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Update failed'));
+      const errorLog = jest.spyOn(logger, 'error');
       const res = await updateBuyerCategories('buyer-1', ['IT']);
       expect(res.success).toBe(false);
       expect(res.error).toBe('Update failed');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer category update request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'Update failed' }),
+        'BUYER_PROFILE'
+      );
     });
   });
 
@@ -530,9 +575,15 @@ describe('buyerProfileClient', () => {
 
     test('handles communications fetch error', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Fetch comms failed'));
+      const errorLog = jest.spyOn(logger, 'error');
       const res = await fetchBuyerCommunications('buyer-1');
       expect(res.success).toBe(false);
       expect(res.error).toBe('Fetch comms failed');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer communications request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'Fetch comms failed' }),
+        'BUYER_PROFILE'
+      );
     });
   });
 
@@ -548,9 +599,15 @@ describe('buyerProfileClient', () => {
 
     test('handles record communication error', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Record failed'));
+      const errorLog = jest.spyOn(logger, 'error');
       const res = await recordBuyerCommunication('buyer-1', { channel: 'EMAIL', message: 'Hello' });
       expect(res.success).toBe(false);
       expect(res.error).toBe('Record failed');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer communication record request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'Record failed' }),
+        'BUYER_PROFILE'
+      );
     });
   });
 
@@ -567,9 +624,15 @@ describe('buyerProfileClient', () => {
 
     test('handles payment history fetch error', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Payment history failed'));
+      const errorLog = jest.spyOn(logger, 'error');
       const res = await fetchBuyerPaymentHistory('buyer-1');
       expect(res.success).toBe(false);
       expect(res.error).toBe('Payment history failed');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer payment history request failed',
+        expect.objectContaining({ errorName: 'Error', errorMessage: 'Payment history failed' }),
+        'BUYER_PROFILE'
+      );
     });
   });
 

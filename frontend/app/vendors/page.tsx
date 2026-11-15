@@ -48,6 +48,7 @@ export default function PublicVendorDirectoryPage() {
     categories: [],
     states: [],
   });
+  const [filterOptionsError, setFilterOptionsError] = useState<string | null>(null);
   const [vendors, setVendors] = useState<PublicVendor[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pageSize: 24, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(false);
@@ -79,10 +80,14 @@ export default function PublicVendorDirectoryPage() {
               categories: res.categories,
               states: res.states,
             });
+            setFilterOptionsError(null);
+          } else {
+            setFilterOptionsError(UI_STRINGS.vendorWorkspace.publicDirectory.filterOptionsUnavailable);
           }
         }
       } catch {
-        // graceful fallback to static defaults
+        // The lists stay empty and the message explains why. No substitute list is shown.
+        if (isMounted) setFilterOptionsError(UI_STRINGS.vendorWorkspace.publicDirectory.filterOptionsUnavailable);
       }
     }
     loadFilterOptions();
@@ -263,6 +268,7 @@ export default function PublicVendorDirectoryPage() {
               onClearFilters={clearFilters}
               categories={filterOptions.categories}
               states={filterOptions.states}
+              optionsError={filterOptionsError}
             />
           </aside>
 
@@ -281,8 +287,10 @@ export default function PublicVendorDirectoryPage() {
                   {hasActiveFilters && <span className="w-2 h-2 rounded-full bg-blue-600" />}
                 </button>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  {loading
+                    {loading
                     ? S.loadingText
+                    : error
+                    ? null
                     : formatString(S.totalFound, {
                       count: pagination.total.toLocaleString('en-IN'),
                     })}
@@ -388,6 +396,7 @@ export default function PublicVendorDirectoryPage() {
               onClearFilters={clearFilters}
               categories={filterOptions.categories}
               states={filterOptions.states}
+              optionsError={filterOptionsError}
               isMobile={true}
               onCloseMobile={() => setSidebarOpen(false)}
             />

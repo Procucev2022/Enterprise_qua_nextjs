@@ -124,8 +124,8 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
 
     // 7. System Config & Azure Health
     expect(storeService.getSystemConfig()).toBeDefined();
-    const cfg = storeService.updateSystemConfig({ activeMode: 'mode_1' });
-    expect(cfg.activeMode).toBe('mode_1');
+    expect(storeService.getSystemConfig()).toEqual({ aiModel: expect.any(String), aiTemperature: expect.any(Number) });
+    expect(storeService.updateSystemConfig).toBeUndefined();
     expect(storeService.getAzureHealth()).toBeDefined();
 
     // 8. Historical Data
@@ -133,11 +133,16 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(histRes.importedCount).toBe(1);
 
     // 9. Support Chat
-    expect(storeService.handleSupportChat('I am unsatisfied and want to connect with agent').isEscalated).toBe(true);
-    expect(storeService.handleSupportChat('tell me about subscription plans').reply).toContain('Procucev offers');
-    expect(storeService.handleSupportChat('how does mode 1 work?').reply).toContain('Mode 1');
-    expect(storeService.handleSupportChat('how to download rfq?').reply).toContain('Vendors can view');
-    expect(storeService.handleSupportChat('generic question').reply).toBeDefined();
+    // No assistant is connected: every question gets not_configured, never a canned reply or a ticket.
+    for (const question of ['I am unsatisfied and want to connect with agent', 'tell me about subscription plans', 'generic question']) {
+      expect(storeService.handleSupportChat(question)).toMatchObject({
+        success: false,
+        status: 'not_configured',
+        reply: null,
+        isEscalated: false,
+        ticketId: null,
+      });
+    }
 
     // 10. Vendor Catalogue. The three unowned demo SKUs are gone, so the
     // catalogue is empty until a vendor publishes something.
@@ -157,14 +162,15 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     // 11. Batch Chaser & PO Approval
     const allRFQs = storeService.getRFQs();
     if (allRFQs.length > 0) {
-      const chaserRes = storeService.triggerBatchChaser(allRFQs[0].id, ['call', 'whatsapp']);
-      expect(chaserRes.success).toBe(true);
+      const chaserRes = await storeService.triggerBatchChaser(allRFQs[0].id, ['call', 'whatsapp']);
+      expect(Array.isArray(chaserRes.results)).toBe(true);
+      expect(chaserRes.results.filter((r) => r.channel === 'call').every((r) => r.status === 'not_configured')).toBe(true);
 
       const poRes = storeService.approvePurchaseOrder(allRFQs[0].rfqNumber, 'v-001', 'Apex', 45000, 'Notes');
       expect(poRes.poNumber).toBeDefined();
       expect(poRes.success).toBe(true);
     }
-    expect(storeService.triggerBatchChaser('invalid-rfq')).toBeNull();
+    expect(await storeService.triggerBatchChaser('invalid-rfq')).toBeNull();
 
     // 12. Bootstrap Data
     const bootstrap = await storeService.getBootstrapData();

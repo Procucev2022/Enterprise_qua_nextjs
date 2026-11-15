@@ -4,6 +4,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const zohoPaymentService = require('../src/services/zohoPaymentService');
+const { logger } = require('../src/services/loggerService');
 const identityQueries = require('../src/db/identityQueries');
 const { authHeader, TEST_USERS } = require('./testHelpers');
 
@@ -105,6 +106,34 @@ describe('POST /api/buyer-accounts/:id/subscription-payment', () => {
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toMatch(/no mobile number on file/i);
     spy.mockRestore();
+  });
+
+  test('logs identity lookup failures and retains the missing-phone response fallback', async () => {
+    const accountSpy = jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue({
+      id: 'identity-lookup-failure-buyer',
+      corporateEmail: TEST_USERS.buyer.email,
+      mobileNumber: '',
+    });
+    const lookupError = new Error('identity database unavailable');
+    identityQueries.findUserByEmail.mockRejectedValueOnce(lookupError);
+    const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post(`/api/buyer-accounts/${buyerAccount.id}/subscription-payment`)
+      .set(authHeader('buyer'))
+      .send({ plan: 'version_1' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/no mobile number on file/i);
+    expect(zohoPaymentService.createPaymentLink).not.toHaveBeenCalled();
+    expect(errorLogSpy).toHaveBeenCalledWith(
+      'Identity profile lookup failed while resolving buyer payment contact phone; using the missing-phone fallback',
+      lookupError,
+      'BUYER_ACCOUNT_CONTROLLER'
+    );
+
+    errorLogSpy.mockRestore();
+    accountSpy.mockRestore();
   });
 
   test('creates a real payment link, persists it with payerType buyer, and returns the redirect URL', async () => {

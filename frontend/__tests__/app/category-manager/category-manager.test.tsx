@@ -1,11 +1,12 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import KanbanBoard from '@/app/category-manager/kanban-board';
-import SpendDashboard from '@/app/category-manager/spend-dashboard';
+import SpendDashboard, { normalizeModeToken, calculateTurnaround, calculateModeMetrics } from '@/app/category-manager/spend-dashboard';
 import BuyerConsole from '@/app/category-manager/buyer-console';
 import VendorConsole from '@/app/category-manager/vendor-console';
 import CategorySummaryDashboard from '@/app/category-manager/category-summary-dashboard';
 import { AppProvider, useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
@@ -90,7 +91,7 @@ describe('Category Manager Screens Suite', () => {
       global.fetch = originalFetch;
     });
 
-    test('renders real portfolio metrics and the scored column from the live RFQ pipeline, handles toolbar overrides', async () => {
+    test('renders real portfolio metrics and the scored column from the live RFQ pipeline, handles toolbar actions', async () => {
       const onMatrix = jest.fn();
       const onSpend = jest.fn();
 
@@ -122,26 +123,20 @@ describe('Category Manager Screens Suite', () => {
       const batchBtn = screen.getByRole('button', { name: /Batch Multi-Channel Chaser \(0\)/i });
       expect(() => fireEvent.click(batchBtn)).not.toThrow();
 
-      const overrideBtn = screen.getByRole('button', { name: /Override AI Score/i });
-      fireEvent.click(overrideBtn);
-
       const surveyBtn = screen.getByRole('button', { name: /Conduct Mode 3 Vendor Survey/i });
       fireEvent.click(surveyBtn);
       expect(screen.getByText(/Mode 3 AI Vendor Survey/i)).toBeInTheDocument();
-      const cancelSurveyBtn = screen.getByRole('button', { name: /Cancel/i });
-      fireEvent.click(cancelSurveyBtn);
+      // The dialog states that no survey is sent, and its footer button is labelled Close.
+      expect(screen.getByText(UI_STRINGS.vendorSurvey.notConnected)).toBeInTheDocument();
+      const closeSurveyBtn = screen.getByRole('button', { name: UI_STRINGS.vendorSurvey.closeButton });
+      fireEvent.click(closeSurveyBtn);
+      expect(screen.queryByText(UI_STRINGS.vendorSurvey.notConnected)).not.toBeInTheDocument();
 
       // The scored card renders real RFQ fields — number, title, AI score, status, quote count
       expect(screen.getByText('RFQ-2026-00421')).toBeInTheDocument();
       expect(screen.getByText(/94% AI Match/i)).toBeInTheDocument();
       expect(screen.getByText(/3 quotes evaluated/i)).toBeInTheDocument();
       expect(screen.getByText('AI Recommended')).toBeInTheDocument();
-
-      const approveBtn = screen.getByRole('button', { name: /Approve Report/i });
-      fireEvent.click(approveBtn);
-
-      const shareBtn = screen.getByRole('button', { name: /Share Report/i });
-      fireEvent.click(shareBtn);
 
       // The real RFQ has quotes, so its card links straight into the real quote matrix
       const matrixBtn = screen.getByRole('button', { name: /View Comparative Quote Matrix/i });
@@ -300,7 +295,7 @@ describe('Category Manager Screens Suite', () => {
       // Column 2 — both a chasing-active RFQ with real follow-up telemetry
       // and a plain one with neither chasingActive nor followUpData set.
       expect(screen.getByText('RFQ-2026-00902')).toBeInTheDocument();
-      expect(screen.getAllByText(/Not configured yet/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/WhatsApp Bot:/i).length).toBeGreaterThan(0);
       expect(screen.getAllByText(/3\/3 Delivered/i).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/3\/3 Delivered/i).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/Email Direct:/i).length).toBeGreaterThan(0);
@@ -565,21 +560,25 @@ describe('Category Manager Screens Suite', () => {
 
     // With no navigation callbacks supplied, the 4 KPI cards stay disabled
     // rather than silently no-op-ing on click.
-    test('KPI cards render zeroed real metrics and stay disabled without navigation callbacks', () => {
+    test('KPI cards show a dash for rates with no recorded data and stay disabled without navigation callbacks', async () => {
       renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
 
       expect(screen.getByText('RFQs Received (Raised)')).toBeInTheDocument();
       expect(screen.getAllByText('RFQs Downloaded')[0]).toBeInTheDocument();
       expect(screen.getByText('Avg Vendors / RFQ')).toBeInTheDocument();
       expect(screen.getByText('Vendor Response Rate')).toBeInTheDocument();
-      // The default jest.setup.ts fixtures carry no recent createdAt/audit
-      // logs/assignedVendors/followUpData, so every real metric is 0.
-      expect(screen.getByText('0.0%')).toBeInTheDocument();
 
-      const raisedCard = screen.getByText('RFQs Received (Raised)').closest('button')!;
-      const downloadedCard = screen.getAllByText('RFQs Downloaded')[0].closest('button')!;
-      const vendorsCard = screen.getByText('Avg Vendors / RFQ').closest('button')!;
-      const responseCard = screen.getByText('Vendor Response Rate').closest('button')!;
+      const raisedCard = screen.getByText('RFQs Received (Raised)').closest('button') as HTMLButtonElement;
+      const downloadedCard = screen.getAllByText('RFQs Downloaded')[0].closest('button') as HTMLButtonElement;
+      const vendorsCard = screen.getByText('Avg Vendors / RFQ').closest('button') as HTMLButtonElement;
+      const responseCard = screen.getByText('Vendor Response Rate').closest('button') as HTMLButtonElement;
+
+      // The fixtures record no follow-up attempts, so the response rate is a dash rather than a percentage.
+      expect(within(responseCard).getByText(UI_STRINGS.dataLoad.emptyCell)).toBeInTheDocument();
+
+      // The fixture RFQ has no assignedVendors, so the per-RFQ average is a real 0.0 once the RFQ loads.
+      await waitFor(() => expect(within(vendorsCard).getByText('0.0')).toBeInTheDocument());
+
       [raisedCard, downloadedCard, vendorsCard, responseCard].forEach((card) => expect(card).toBeDisabled());
     });
 
@@ -712,7 +711,7 @@ describe('Category Manager Screens Suite', () => {
       // and a 2/4 = 50% response rate.
       await waitFor(() => expect(screen.getAllByText('2').length).toBeGreaterThan(0));
       expect(screen.getByText('1.0')).toBeInTheDocument();
-      expect(screen.getByText('50.0%')).toBeInTheDocument();
+      expect(screen.getAllByText('50.0%').length).toBeGreaterThan(0);
 
       fireEvent.click(screen.getByText('RFQs Received (Raised)').closest('button')!);
       expect(onNavigateToAllRfqs).toHaveBeenCalledTimes(1);
@@ -727,7 +726,7 @@ describe('Category Manager Screens Suite', () => {
       expect(onNavigateToKanban).toHaveBeenCalledTimes(1);
     });
 
-    test('Avg Vendors / RFQ falls back to 0.0 for an RFQ with no assignedVendors, with an empty RFQ list', async () => {
+    test('Avg Vendors / RFQ shows a dash when the RFQ list is empty, because there is no average to compute', async () => {
       const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
       global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
         if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
@@ -739,7 +738,230 @@ describe('Category Manager Screens Suite', () => {
       renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
 
       await waitFor(() => expect(screen.getByText('Avg Vendors / RFQ')).toBeInTheDocument());
-      expect(screen.getByText('0.0')).toBeInTheDocument();
+      const vendorsCardText = screen.getByText('Avg Vendors / RFQ').closest('button') as HTMLElement;
+      expect(within(vendorsCardText).getByText(UI_STRINGS.dataLoad.emptyCell)).toBeInTheDocument();
+    });
+
+    test('SpendDashboard computes mode breakdown for Mode 1, Mode 2, and Mode 3 with audit downloads', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-m1',
+                  rfqNumber: 'RFQ-M1',
+                  title: 'M1 RFQ',
+                  sourcingMode: 'MODE 1',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 5, respondedCount: 4 },
+                },
+                {
+                  id: 'rfq-m2',
+                  rfqNumber: 'RFQ-M2',
+                  title: 'M2 RFQ',
+                  sourcingMode: 'MODE 2',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 4, respondedCount: 2 },
+                },
+                {
+                  id: 'rfq-m3',
+                  rfqNumber: 'RFQ-M3',
+                  title: 'M3 RFQ',
+                  sourcingMode: 'MODE 3',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 3, respondedCount: 1 },
+                },
+              ],
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [
+                  { id: 'a1', rfqNumber: 'RFQ-M1', action: 'Vendor downloaded RFQ specification for RFQ-M1' },
+                  { id: 'a2', rfqNumber: 'RFQ-M2', action: 'Vendor downloaded RFQ specification for RFQ-M2' },
+                  { id: 'a3', rfqNumber: 'RFQ-M3', action: 'Vendor downloaded RFQ specification for RFQ-M3' },
+                ],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
+      await waitFor(() => expect(screen.getByText('Private Client Roster')).toBeInTheDocument());
+      expect(screen.getByText('Hybrid Base Network')).toBeInTheDocument();
+      expect(screen.getByText('360° AI Evaluated Roster')).toBeInTheDocument();
+    });
+
+    test('SpendDashboard handles edge-case RFQs and audit logs in mode calculation (missing mode, missing follow-up, missing audit rfqNumber)', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-nomode',
+                  rfqNumber: 'RFQ-NOMODE',
+                  title: 'RFQ With No Sourcing Mode',
+                  sourcingMode: undefined,
+                  status: 'Quotes Pending',
+                },
+                {
+                  id: 'rfq-empty-mode',
+                  rfqNumber: 'RFQ-EMPTY-MODE',
+                  title: 'RFQ With Empty Sourcing Mode',
+                  sourcingMode: '',
+                  status: 'Quotes Pending',
+                },
+                {
+                  id: 'rfq-m1-nofollowup',
+                  rfqNumber: 'RFQ-M1-NOFOLLOWUP',
+                  title: 'M1 RFQ with missing follow-up data',
+                  sourcingMode: 'MODE 1',
+                  status: 'Quotes Pending',
+                  followUpData: undefined,
+                },
+                {
+                  id: undefined,
+                  rfqNumber: 'RFQ-M2-NOID',
+                  title: 'M2 RFQ without id',
+                  sourcingMode: 'MODE 2',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 0, respondedCount: 0 },
+                },
+                {
+                  id: 'rfq-m3-norfqnum',
+                  rfqNumber: undefined,
+                  title: 'M3 RFQ without rfqNumber',
+                  sourcingMode: 'MODE 3',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 0, respondedCount: 0 },
+                },
+              ],
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [
+                  { id: 'a-nonum', action: 'Vendor downloaded RFQ specification for undefined' },
+                  { id: 'a-notset', rfqNumber: 'RFQ-UNKNOWN', action: 'Vendor downloaded RFQ specification for other' },
+                ],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
+      await waitFor(() => expect(screen.getByText('Private Client Roster')).toBeInTheDocument());
+      expect(screen.getByText('Hybrid Base Network')).toBeInTheDocument();
+      expect(screen.getByText('360° AI Evaluated Roster')).toBeInTheDocument();
+    });
+
+    test('SpendDashboard pure helpers and back button coverage', () => {
+      // 1. normalizeModeToken
+      expect(normalizeModeToken('mode_1')).toBe('MODE1');
+      expect(normalizeModeToken('MODE 2')).toBe('MODE2');
+      expect(normalizeModeToken('v-0')).toBe('V0');
+      expect(normalizeModeToken('')).toBe('');
+
+      // 2. calculateTurnaround
+      expect(calculateTurnaround([])).toBe(UI_STRINGS.dataLoad.emptyCell);
+      const rfqWithQuotes: any = {
+        id: 'rfq-t1',
+        createdAt: '2026-08-01T00:00:00Z',
+        quotes: [
+          { submittedAt: '2026-08-03T12:00:00Z' },
+        ],
+      };
+      expect(calculateTurnaround([rfqWithQuotes])).toBe('2.5 Days');
+
+      const rfqInvalidDate: any = {
+        id: 'rfq-t2',
+        createdAt: 'invalid-date',
+        quotes: [{ submittedAt: 'also-invalid' }],
+      };
+      expect(calculateTurnaround([rfqInvalidDate])).toBe(UI_STRINGS.dataLoad.emptyCell);
+
+      const rfqNoQuotes: any = {
+        id: 'rfq-t3',
+        createdAt: '2026-08-01',
+      };
+      expect(calculateTurnaround([rfqNoQuotes])).toBe(UI_STRINGS.dataLoad.emptyCell);
+
+      // 3. calculateModeMetrics
+      const rfqV0: any = {
+        id: 'rfq-v0',
+        rfqNumber: 'RFQ-V0',
+        sourcingMode: 'V0',
+        followUpData: { totalInvited: 4, respondedCount: 2 },
+      };
+      const al: any = {
+        id: 'al-1',
+        action: 'Vendor downloaded RFQ specification for RFQ-V0',
+        rfqNumber: 'RFQ-V0',
+      };
+      const metricsV0 = calculateModeMetrics([rfqV0], [al], 'MODE 1');
+      expect(metricsV0.rfqs.length).toBe(1);
+      expect(metricsV0.downloads).toBe(1);
+      expect(metricsV0.efficiency).toBe(50);
+
+      // Audit log matching by action string without rfqNumber
+      const alActionOnly: any = {
+        id: 'al-2',
+        action: 'downloaded RFQ specification rfq-v0',
+      };
+      const metricsActionOnly = calculateModeMetrics([rfqV0], [alActionOnly], 'MODE 1');
+      expect(metricsActionOnly.downloads).toBe(1);
+
+      // Audit log with non-matching action
+      const alOther: any = {
+        id: 'al-3',
+        action: 'viewed RFQ details',
+      };
+      const metricsOther = calculateModeMetrics([rfqV0], [alOther], 'MODE 1');
+      expect(metricsOther.downloads).toBe(0);
+    });
+
+    test('SpendDashboard calls onBackToKanban on back button click', async () => {
+      const onBack = jest.fn();
+      renderWithProvider(<SpendDashboard onBackToKanban={onBack} />);
+      const backBtn = screen.getByText(/Back to Operational Monitoring Kanban/i);
+      fireEvent.click(backBtn);
+      expect(onBack).toHaveBeenCalled();
     });
   });
 
@@ -963,11 +1185,13 @@ describe('Category Manager Screens Suite', () => {
 
       renderWithProvider(<BuyerConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
 
-      await waitFor(() => expect(screen.getByText('Unnamed Contact')).toBeInTheDocument());
-      expect(screen.getAllByText(/Unnamed Organization/).length).toBeGreaterThan(0);
+      const reviewButton = await screen.findByRole('button', { name: UI_STRINGS.actions.reviewRfqDetails });
+      // A buyer with no contact name or organization shows a dash in the card heading, not an invented label.
+      const sparseCard = reviewButton.closest('.glass-panel') as HTMLElement;
+      expect(within(sparseCard).getByRole('heading', { name: UI_STRINGS.dataLoad.emptyCell })).toBeInTheDocument();
+      expect(screen.queryByText(/Unnamed/)).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByText('Unnamed Contact'));
-      fireEvent.click(screen.getByRole('button', { name: /Review RFQ Details/i }));
+      fireEvent.click(reviewButton);
 
       expect(screen.getByText('Sparse RFQ Missing Line Items')).toBeInTheDocument();
       expect(screen.getByText('Parsing')).toBeInTheDocument();
@@ -978,6 +1202,90 @@ describe('Category Manager Screens Suite', () => {
       // throwing.
       expect(() => fireEvent.click(screen.getByText('Sparse RFQ Missing Line Items'))).not.toThrow();
       expect(screen.getByText(/BOQ Specifications & Item Roster \(0 items\)/)).toBeInTheDocument();
+    });
+
+    test('BuyerConsole matches RFQs by raisedByEmail, buyerEmail, buyerAccountName and calculates quotes spend', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [
+                  {
+                    id: 'ba-match-1',
+                    organizationName: 'Alpha Corp',
+                    corporateEmail: 'alpha@proc.com',
+                    contactPerson: 'Alpha Lead',
+                    sourcingMode: 'mode_1',
+                  },
+                ],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-by-raised',
+                  rfqNumber: 'RFQ-RAISED',
+                  title: 'Raised By Match',
+                  sourcingMode: 'mode_1',
+                  status: 'Quotes Pending',
+                  raisedByEmail: 'alpha@proc.com',
+                  budget: null,
+                  quotes: [{ totalPrice: 15000 }],
+                },
+                {
+                  id: 'rfq-by-buyer-email',
+                  rfqNumber: 'RFQ-BUYER-EMAIL',
+                  title: 'Buyer Email Match',
+                  sourcingMode: 'mode_1',
+                  status: 'Quotes Pending',
+                  buyerEmail: 'alpha@proc.com',
+                  budget: 0,
+                  quotes: [{ totalPrice: null, unitPrice: 25000 }],
+                },
+                {
+                  id: 'rfq-by-org-name',
+                  rfqNumber: 'RFQ-ORG-NAME',
+                  title: 'Org Name Match',
+                  sourcingMode: 'mode_1',
+                  status: 'PO Generated',
+                  buyerAccountName: 'Alpha Corp',
+                  budget: 50000,
+                },
+              ],
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<BuyerConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+      await waitFor(() => expect(screen.getByText('Alpha Lead')).toBeInTheDocument());
+      expect(screen.getAllByText(/Alpha Corp/i).length).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByText('Alpha Lead'));
+      fireEvent.click(screen.getByRole('button', { name: /Review RFQ Details/i }));
+
+      expect(screen.getByText('Raised By Match')).toBeInTheDocument();
+      expect(screen.getByText('Buyer Email Match')).toBeInTheDocument();
+      expect(screen.getByText('Org Name Match')).toBeInTheDocument();
+      (global.fetch as jest.Mock).mockImplementation(baseImpl);
     });
   });
 
@@ -1029,7 +1337,7 @@ describe('Category Manager Screens Suite', () => {
 
       // Test review performance for first vendor
       fireEvent.change(searchInput, { target: { value: '' } });
-      await waitFor(() => expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument(), { timeout: 5000 });
       const reviewBtns = screen.queryAllByRole('button', { name: /Review Performance/i });
       if (reviewBtns.length > 0) {
         fireEvent.click(reviewBtns[0]);

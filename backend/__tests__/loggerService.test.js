@@ -98,6 +98,102 @@ describe('Backend LoggerService Unit Tests', () => {
     expect(fs.existsSync(path.join(testLogsDir, 'audit.log'))).toBe(true);
   });
 
+  test('keeps the audit actor in the audit file while masking it from stdout', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      process.env.NODE_ENV = 'production';
+      const auditEntry = testLogger.audit('Updated vendor profile', 'admin@enterprise.example', {
+        vendorId: 'vendor-audit-1',
+      });
+      const auditFileEntry = JSON.parse(
+        fs.readFileSync(path.join(testLogsDir, 'audit.log'), 'utf8').trim()
+      );
+
+      expect(auditEntry.userEmail).toBe('admin@enterprise.example');
+      expect(auditFileEntry.userEmail).toBe('admin@enterprise.example');
+      expect(consoleSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(consoleSpy.mock.calls)).toContain('a***@enterprise.example');
+      expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain('admin@enterprise.example');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('redacts contact details and credentials while preserving safe identifiers', () => {
+    const entry = testLogger.warn(
+      'SMS to +91 98765 43210 failed for buyer@example.com',
+      {
+        recipientEmail: 'buyer@example.com',
+        formattedNumber: '919876543210',
+        authorization: 'Bearer secret-value',
+        sessionId: 'session-secret-value',
+        privateKey: 'private-key-value',
+        inviteUrl: 'https://example.test/invite?email=buyer%40example.com&token=secret-value&rfq=RFQ-100',
+        rfqNumber: 'RFQ-100',
+        vendorId: 'v-1793740320475-u1ff',
+        messageId: '123456789012',
+      },
+      'DELIVERY'
+    );
+
+    const serialized = JSON.stringify(entry);
+    expect(entry.message).toContain('b***@example.com');
+    expect(entry.message).toContain('***10');
+    expect(entry.metadata.recipientEmail).toBe('b***@example.com');
+    expect(entry.metadata.formattedNumber).toBe('***10');
+    expect(entry.metadata.authorization).toBe('[REDACTED]');
+    expect(entry.metadata.sessionId).toBe('[REDACTED]');
+    expect(entry.metadata.privateKey).toBe('[REDACTED]');
+    expect(entry.metadata.inviteUrl).toContain('email=[REDACTED]');
+    expect(entry.metadata.inviteUrl).toContain('token=[REDACTED]');
+    expect(entry.metadata.inviteUrl).toContain('rfq=RFQ-100');
+    expect(entry.metadata.rfqNumber).toBe('RFQ-100');
+    expect(entry.metadata.vendorId).toBe('v-1793740320475-u1ff');
+    expect(entry.metadata.messageId).toBe('123456789012');
+    expect(serialized).not.toContain('buyer@example.com');
+    expect(serialized).not.toContain('919876543210');
+    expect(serialized).not.toContain('secret-value');
+    expect(serialized).not.toContain('private-key-value');
+  });
+
+  test('accepts client stack traces and redacts them before persistence', () => {
+    const entry = testLogger.error('Browser request failed', {
+      stackTrace: 'Error: request failed at buyer@example.com?token=private-token',
+      requestId: 'req-client-1',
+    }, 'CLIENT_ERROR');
+
+    expect(entry.stackTrace).toContain('b***@example.com');
+    expect(entry.stackTrace).toContain('token=[REDACTED]');
+    expect(entry.metadata.stackTrace).toBeUndefined();
+    expect(entry.metadata.requestId).toBe('req-client-1');
+    expect(JSON.stringify(entry)).not.toContain('private-token');
+    expect(JSON.stringify(entry)).not.toContain('buyer@example.com');
+  });
+
+  test('handles malformed contacts, nested errors, arrays, and cyclic metadata safely', () => {
+    const circular = { requestId: 'req-123' };
+    circular.parent = circular;
+    const entry = testLogger.error('Failed lookup for @example.com', {
+      malformedEmail: '@example.com',
+      phone: '123',
+      values: ['owner@example.com', '919876543210', null],
+      errorDetails: new Error('Gateway failed for owner@example.com'),
+      circular,
+      empty: null,
+    });
+
+    expect(entry.message).toContain('@example.com');
+    expect(entry.metadata.malformedEmail).toBe('[REDACTED]');
+    expect(entry.metadata.phone).toBe('123');
+    expect(entry.metadata.values).toEqual(['o***@example.com', '***10', null]);
+    expect(entry.metadata.errorDetails.errorMessage).toContain('o***@example.com');
+    expect(entry.metadata.circular.parent).toBe('[Circular]');
+    expect(entry.metadata.empty).toBeNull();
+  });
+
   test('respects maxBufferSize and evicts oldest items in memory ring buffer', () => {
     for (let i = 0; i < 15; i++) {
       testLogger.info(`Log message ${i}`);
@@ -163,6 +259,61 @@ describe('Backend LoggerService Unit Tests', () => {
     expect(purgeReport.diskFilesPurged).toBeGreaterThanOrEqual(1);
   });
 
+  test('purges expired disk entries automatically after the configured write threshold', () => {
+    const automaticLogger = new LoggerService({
+      logsDir: testLogsDir,
+      maxFileSizeBytes: 4096,
+      purgeAfterWrites: 2,
+      purgeCheckIntervalMs: Number.MAX_SAFE_INTEGER,
+      isLocalLoggingEnabled: true,
+    });
+    const oldEntry = {
+      timestamp: '2020-01-01 00:00:00.000 UTC',
+      level: 'INFO',
+      message: 'expired disk entry',
+    };
+    fs.writeFileSync(path.join(testLogsDir, 'app.log'), `${JSON.stringify(oldEntry)}\n`, 'utf8');
+    automaticLogger.lastPurgeAt = Date.now();
+
+    automaticLogger.info('first recent entry');
+    expect(fs.readFileSync(path.join(testLogsDir, 'app.log'), 'utf8')).toContain('expired disk entry');
+    automaticLogger.info('second recent entry');
+
+    const diskContents = fs.readFileSync(path.join(testLogsDir, 'app.log'), 'utf8');
+    expect(diskContents).not.toContain('expired disk entry');
+    expect(diskContents).toContain('second recent entry');
+  });
+
+  test('reports local log persistence failures outside tests and rate limits repeats', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const now = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    process.env.NODE_ENV = 'production';
+
+    try {
+      testLogger.reportDiskFailure('write log entry', new Error('disk unavailable'));
+      testLogger.reportDiskFailure('write log entry', new Error('disk unavailable'));
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toContain('disk unavailable');
+
+      nowSpy.mockReturnValue(now + 60 * 1000 + 1);
+      testLogger.reportDiskFailure('write log entry', new Error('disk unavailable again'));
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      nowSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('does not emit disk failure warnings from the test environment', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    testLogger.reportDiskFailure('write log entry', new Error('test disk failure'));
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   test('getLogStats returns counts and disk log file metadata', () => {
     testLogger.info('Info log');
     testLogger.error('Error log');
@@ -200,11 +351,10 @@ describe('Backend LoggerService Unit Tests', () => {
     expect(entry.level).toBe('INFO');
   });
 
-  test('streams logs to console and invokes persistToDatabase in non-test environment', async () => {
+  test('streams logs to console and does not persist to database in non-test environment', async () => {
     const prevNodeEnv = process.env.NODE_ENV;
     const pool = require('../src/db/pool');
     const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
-    const storageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -219,31 +369,104 @@ describe('Backend LoggerService Unit Tests', () => {
 
       testLogger.error('Dev error', new Error('Fail'));
       expect(consoleErrorSpy).toHaveBeenCalled();
-      expect(querySpy).toHaveBeenCalled();
+      // Application logs must NOT be stored in the database
+      expect(querySpy).not.toHaveBeenCalled();
 
-      // Test with storage false
-      storageSpy.mockReturnValue(false);
-      testLogger.error('Dev error without storage');
-
-      // Test with all error fields and waitUntil active
-      storageSpy.mockReturnValue(true);
-      const d1Bridge = require('../src/db/d1Bridge');
-      const waitSpy = jest.fn();
-      jest.spyOn(d1Bridge, 'getWaitUntil').mockReturnValue(waitSpy);
-
-      testLogger.error('Dev error with full fields', {
-        errorName: 'CustomErr',
-        url: '/api/test',
-        correlationId: 'c-1',
-        userEmail: 'u@test.com',
-      });
-      expect(waitSpy).toHaveBeenCalled();
+      // persistToDatabase returns a resolved promise and never queries the database
+      const res = await testLogger.persistToDatabase({ id: 'legacy-1', level: 'ERROR' });
+      expect(res).toBeUndefined();
+      expect(querySpy).not.toHaveBeenCalled();
     } finally {
       process.env.NODE_ENV = prevNodeEnv;
       querySpy.mockRestore();
-      storageSpy.mockRestore();
       consoleLogSpy.mockRestore();
       consoleWarnSpy.mockRestore();
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  test('isDbLoggingRateLimited and resetDbLoggingRateLimit helper methods behave correctly', () => {
+    LoggerService.resetDbLoggingRateLimit();
+    for (let i = 0; i < 5; i++) {
+      expect(LoggerService.isDbLoggingRateLimited()).toBe(false);
+    }
+    expect(LoggerService.isDbLoggingRateLimited()).toBe(true);
+    LoggerService.resetDbLoggingRateLimit();
+    expect(LoggerService.isDbLoggingRateLimited()).toBe(false);
+  });
+
+  test('records database log sink failures to disk and throttles fallback diagnostics', async () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const initialTime = Date.now();
+    let currentTime = initialTime;
+    const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => currentTime);
+
+    try {
+      process.env.NODE_ENV = 'production';
+      const sourceEntry = {
+        id: 'source-error-1',
+        level: 'ERROR',
+        category: 'AUTH',
+        message: 'Authentication record failed',
+        metadata: {},
+      };
+
+      testLogger.reportDatabaseFailure(new Error('Database sink failed for admin@example.com'), sourceEntry);
+      testLogger.reportDatabaseFailure(new Error('Database sink failed for admin@example.com'), sourceEntry);
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+      currentTime += 60 * 1000 + 1;
+      testLogger.reportDatabaseFailure(new Error('Database sink failed for admin@example.com'), sourceEntry);
+      currentTime += 60 * 1000 + 1;
+      testLogger.reportDatabaseFailure(new Error('Synchronous database sink failure'), sourceEntry);
+      currentTime += 60 * 1000 + 1;
+      testLogger.reportDatabaseFailure('Non-error database sink failure', {
+        ...sourceEntry,
+        level: undefined,
+        category: undefined,
+        correlationId: 'sink-correlation-1',
+      });
+
+      const diagnostics = fs.readFileSync(path.join(testLogsDir, 'error.log'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(4);
+      expect(diagnostics).toHaveLength(4);
+      expect(diagnostics[0]).toEqual(expect.objectContaining({
+        category: 'DATABASE_LOG_STORAGE',
+        metadata: expect.objectContaining({
+          operation: 'persist_critical_log',
+          sourceCategory: 'AUTH',
+          errorName: 'Error',
+        }),
+      }));
+      expect(diagnostics[0].metadata.errorMessage).toContain('a***@example.com');
+      expect(diagnostics[1].metadata.suppressedFailures).toBe(1);
+      expect(diagnostics[2].metadata.errorMessage).toBe('Synchronous database sink failure');
+      expect(diagnostics[3].metadata).toEqual(expect.objectContaining({
+        sourceLevel: 'UNKNOWN',
+        sourceCategory: 'SYSTEM',
+        errorMessage: 'Non-error database sink failure',
+      }));
+      expect(diagnostics[3].correlationId).toBe('sink-correlation-1');
+      expect(JSON.stringify(diagnostics)).not.toContain('admin@example.com');
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      consoleErrorSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+  });
+
+  test('does not report database sink fallback failures inside tests', () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      testLogger.reportDatabaseFailure(new Error('test database sink failure'), { category: 'TEST' });
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(testLogsDir, 'error.log'))).toBe(false);
+    } finally {
       consoleErrorSpy.mockRestore();
     }
   });
@@ -294,5 +517,58 @@ describe('Backend LoggerService Unit Tests', () => {
 
     // Bare persistToDatabase
     testLogger.persistToDatabase({ id: 'bare-1', level: 'ERROR', category: 'SYS', message: 'Bare error' });
+  });
+
+  test('isLocalEnvironment distinguishes between localhost and Cloudflare environments', () => {
+    const prevWorkers = process.env.CLOUDFLARE_WORKERS;
+    const prevPages = process.env.CF_PAGES;
+    const prevCfEnv = globalThis.__CF_ENV__;
+
+    try {
+      delete process.env.CLOUDFLARE_WORKERS;
+      delete process.env.CF_PAGES;
+      delete globalThis.__CF_ENV__;
+      expect(LoggerService.isLocalEnvironment()).toBe(true);
+
+      // Cloudflare Workers flag
+      process.env.CLOUDFLARE_WORKERS = 'true';
+      expect(LoggerService.isLocalEnvironment()).toBe(false);
+      delete process.env.CLOUDFLARE_WORKERS;
+
+      // Cloudflare Pages flag
+      process.env.CF_PAGES = '1';
+      expect(LoggerService.isLocalEnvironment()).toBe(false);
+      delete process.env.CF_PAGES;
+
+      // Global CF binding
+      globalThis.__CF_ENV__ = { D1: {} };
+      expect(LoggerService.isLocalEnvironment()).toBe(false);
+
+      // Cloudflare environment skips disk operations
+      const cfLogger = new LoggerService({
+        logsDir: testLogsDir,
+        isLocalLoggingEnabled: true,
+      });
+      // writeToDisk should be a no-op under Cloudflare
+      const writeSpy = jest.spyOn(fs, 'appendFileSync');
+      cfLogger.writeToDisk({ level: 'INFO', message: 'Worker log' });
+      expect(writeSpy).not.toHaveBeenCalled();
+      writeSpy.mockRestore();
+
+      // getLogStats and purgeExpiredLogs under Cloudflare
+      const stats = cfLogger.getLogStats();
+      expect(stats.diskLogFiles).toEqual([]);
+      const purge = cfLogger.purgeExpiredLogs();
+      expect(purge.diskFilesPurged).toBe(0);
+    } finally {
+      if (prevWorkers !== undefined) process.env.CLOUDFLARE_WORKERS = prevWorkers;
+      else delete process.env.CLOUDFLARE_WORKERS;
+
+      if (prevPages !== undefined) process.env.CF_PAGES = prevPages;
+      else delete process.env.CF_PAGES;
+
+      if (prevCfEnv !== undefined) globalThis.__CF_ENV__ = prevCfEnv;
+      else delete globalThis.__CF_ENV__;
+    }
   });
 });

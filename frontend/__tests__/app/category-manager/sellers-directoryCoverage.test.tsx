@@ -13,6 +13,7 @@ import SellersDirectory from '@/app/category-manager/sellers-directory';
 import { useApp } from '@/lib/store';
 import * as reportsClient from '@/lib/reportsClient';
 import * as rfqClient from '@/lib/rfqClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
 
 jest.mock('@/lib/store', () => ({
@@ -213,7 +214,7 @@ describe('SellersDirectory coverage companion', () => {
   });
 
   describe('vendor loading', () => {
-    test('shows zero KPIs, the default 85 average and the empty message when the store supplies no collections', async () => {
+    test('shows zero KPIs, a dash for the average score and the empty message when the store supplies no collections', async () => {
       setStore({});
 
       await renderDirectory();
@@ -221,7 +222,7 @@ describe('SellersDirectory coverage companion', () => {
       const total = within(cardOf('Total Suppliers'));
       expect(total.getByText('0')).toBeInTheDocument();
       expect(total.getByText('0 Verified active')).toBeInTheDocument();
-      expect(within(cardOf('Average 360° Score')).getByText('85')).toBeInTheDocument();
+      expect(within(cardOf('Average 360° Score')).getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
       expect(within(cardOf('Quoted Opportunities')).getByText('0')).toBeInTheDocument();
       expect(screen.getByText(NO_RESULTS_MESSAGE)).toBeInTheDocument();
       expect(screen.queryByText('Showing')).not.toBeInTheDocument();
@@ -360,7 +361,7 @@ describe('SellersDirectory coverage companion', () => {
 
   describe('filters and search', () => {
     test('source filter switches between network-only, uploaded-only and all suppliers', async () => {
-      setVendorResponse([{ id: 'n-1', name: 'Network Alpha Ltd' }]);
+      setVendorResponse([{ id: 'n-1', name: 'Network Alpha Ltd', source: 'procucev_network' }]);
       setStore({ buyerVendors: [{ id: 'u-1', name: 'Uploaded Beta Pvt' }] });
       await renderDirectory();
       const sourceSelect = screen.getByLabelText('Filter by source');
@@ -416,11 +417,13 @@ describe('SellersDirectory coverage companion', () => {
 
       await renderDirectory();
 
-      // Sorted, de-duplicated, and without the fallback labels given to uncategorised vendors.
+      // Sorted and de-duplicated, with blank entries skipped. A vendor with no category adds no option and shows a dash.
       expect(categoryOptionLabels()).toEqual(['All Categories', 'Chemicals', 'Logistics', 'Packaging', 'Textiles']);
-      expect(within(rowOf(/Uncategorised Client/)).getByText('Custom Client Category')).toBeInTheDocument();
-      expect(within(rowOf(/Generic Network/)).getByText('Industrial Supplies')).toBeInTheDocument();
+      expect(within(rowOf(/Uncategorised Client/)).getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
+      expect(within(rowOf(/Generic Network/)).getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
       expect(within(rowOf(/Logistics Network/)).getByText('Logistics')).toBeInTheDocument();
+      expect(screen.queryByText('Custom Client Category')).not.toBeInTheDocument();
+      expect(screen.queryByText('Industrial Supplies')).not.toBeInTheDocument();
     });
 
     test('builds the category dropdown from vendors alone when the taxonomy is not a list', async () => {
@@ -460,41 +463,36 @@ describe('SellersDirectory coverage companion', () => {
   });
 
   describe('network vendor mapping', () => {
-    test('labels a vendor that only has an email with safe defaults across the table and dossier', async () => {
-      setVendorResponse([{ email: 'bare@supplier.example' }]);
+    test('shows a dash for every field a vendor record does not supply, in the table and dossier', async () => {
+      setVendorResponse([{ email: 'bare@supplier.example', source: 'procucev_network' }]);
       await renderDirectory();
 
-      const row = within(rowOf(/Verified Supplier/));
-      expect(row.getByText('V')).toBeInTheDocument();
-      expect(row.getAllByText('India')).toHaveLength(2);
-      expect(row.getByText('Industrial Supplies')).toBeInTheDocument();
-      expect(row.getByText('Never')).toBeInTheDocument();
-      expect(row.getByText('4.5')).toBeInTheDocument();
-      expect(row.getByText('5 Credits')).toBeInTheDocument();
-      expect(row.getByText('ACTIVE')).toBeInTheDocument();
+      // The email column is hidden by default, so the row is found through its dossier action.
+      const row = within(screen.getByRole('button', { name: DOSSIER_BUTTON }).closest('tr') as HTMLElement);
+      expect(row.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
+      expect(row.queryByText('India')).not.toBeInTheDocument();
+      expect(row.queryByText('Industrial Supplies')).not.toBeInTheDocument();
+      expect(row.queryByText('4.5')).not.toBeInTheDocument();
+      expect(row.queryByText('ACTIVE')).not.toBeInTheDocument();
+      expect(row.queryByText('Never')).not.toBeInTheDocument();
       expect(within(cardOf('Network Suppliers')).getByText('1')).toBeInTheDocument();
 
-      openDossier(/Verified Supplier/);
+      fireEvent.click(row.getByRole('button', { name: DOSSIER_BUTTON }));
 
-      expect(screen.getByRole('heading', { name: 'Verified Supplier' })).toBeInTheDocument();
-      expect(screen.getByText(/360° AI Score: 88\/100/)).toBeInTheDocument();
-      expect(screen.getByText(/Rating: ★ 4\.5/)).toBeInTheDocument();
+      expect(screen.queryByText(/360° AI Score: 88/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Rating: ★ 4\.5/)).not.toBeInTheDocument();
       const contact = within(cardOf('Contact Details'));
-      expect(contact.getByText('Verified Supplier')).toBeInTheDocument();
       expect(contact.getByText('bare@supplier.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
-      expect(contact.getByText('Company Location: India')).toBeInTheDocument();
-      expect(contact.getByText('Delivery Location: India')).toBeInTheDocument();
-      expect(contact.getByText('Last Login: Never logged in')).toBeInTheDocument();
+      expect(contact.queryByText('Company Location: India')).not.toBeInTheDocument();
+      expect(contact.queryByText('Delivery Location: India')).not.toBeInTheDocument();
       const statutory = within(cardOf('Statutory & Verification'));
-      expect(statutory.getByText('27AAACG0000A1Z5')).toBeInTheDocument();
-      expect(statutory.getByText('AAACG0000A')).toBeInTheDocument();
-      expect(statutory.getByText('Preferred Partner')).toBeInTheDocument();
-      expect(statutory.getByText('ACTIVE')).toBeInTheDocument();
-      expect(screen.getByText('Major: Industrial Supplies')).toBeInTheDocument();
+      expect(statutory.queryByText('27AAACG0000A1Z5')).not.toBeInTheDocument();
+      expect(statutory.queryByText('Preferred Partner')).not.toBeInTheDocument();
+      expect(statutory.queryByText('ACTIVE')).not.toBeInTheDocument();
+      expect(screen.queryByText('Major: Industrial Supplies')).not.toBeInTheDocument();
     });
 
-    test('uses the vendor city, category, match score and a default rating, and styles unverified status differently', async () => {
+    test('uses the vendor city, category and match score, and styles unverified status differently', async () => {
       setVendorResponse([
         {
           id: 'c-1',
@@ -514,7 +512,7 @@ describe('SellersDirectory coverage companion', () => {
       const suspended = within(rowOf(/City Logistics/));
       expect(suspended.getAllByText('Nagpur')).toHaveLength(2);
       expect(suspended.getByText('Logistics')).toBeInTheDocument();
-      expect(suspended.getByText('4.5')).toBeInTheDocument();
+      expect(suspended.queryByText('4.5')).not.toBeInTheDocument();
       const suspendedBadge = suspended.getByText('SUSPENDED').parentElement;
       expect(suspendedBadge).toHaveClass('bg-slate-100');
       expect(suspendedBadge).not.toHaveClass('bg-emerald-50');
@@ -542,7 +540,7 @@ describe('SellersDirectory coverage companion', () => {
       await renderDirectory();
 
       expect(within(rowOf(/Array Dispatch/)).getByTitle('Mumbai, Delhi')).toHaveTextContent('Mumbai, Delhi');
-      expect(within(rowOf(/Object Dispatch/)).getByTitle('India')).toHaveTextContent('India');
+      expect(within(rowOf(/Object Dispatch/)).queryByTitle('India')).not.toBeInTheDocument();
       expect(within(rowOf(/Empty List Dispatch/)).getByTitle('Surat')).toHaveTextContent('Surat');
 
       openDossier(/Array Dispatch/);
@@ -553,7 +551,7 @@ describe('SellersDirectory coverage companion', () => {
       expect(within(cardOf('Contact Details')).getByText('Delivery Location: Surat')).toBeInTheDocument();
     });
 
-    test('shows Never for unusable login values and formats valid ones from every supported field', async () => {
+    test('shows a dash for unusable login values and formats valid ones from every supported field', async () => {
       setVendorResponse([
         { id: 'l-1', name: 'Bad Date Co', lastLogin: 'not-a-date' },
         { id: 'l-2', name: 'Blank Login Co', lastLogin: '   ' },
@@ -565,7 +563,7 @@ describe('SellersDirectory coverage companion', () => {
       await renderDirectory();
 
       [/Bad Date Co/, /Blank Login Co/, /Numeric Login Co/].forEach((name) => {
-        expect(within(rowOf(name)).getByText('Never')).toBeInTheDocument();
+        expect(within(rowOf(name)).getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
       });
       expect(within(rowOf(/Snake Case Co/)).getByText(formatIndianDateTime('2026-03-02T11:00:00.000Z'))).toBeInTheDocument();
       expect(within(rowOf(/Date Field Co/)).getByText(formatIndianDateTime('2026-04-01T08:15:00.000Z'))).toBeInTheDocument();
@@ -588,8 +586,7 @@ describe('SellersDirectory coverage companion', () => {
   });
 
   describe('uploaded vendor mapping', () => {
-    test('labels sparse uploaded vendors with client-list defaults and generates an id when none exists', async () => {
-      jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    test('shows a dash for each field a sparse uploaded vendor does not record and gives id-less vendors their own rows', async () => {
       setStore({
         buyerVendors: [
           { email: 'client@only.example' },
@@ -599,32 +596,34 @@ describe('SellersDirectory coverage companion', () => {
       });
       await renderDirectory();
 
-      const emailOnly = within(rowOf(/Verified Supplier/));
-      expect(emailOnly.getAllByText('India')).toHaveLength(2);
-      expect(emailOnly.getByText('Custom Client Category')).toBeInTheDocument();
-      expect(emailOnly.getByText('4.2')).toBeInTheDocument();
-      // No plan and no stored balance on the record: the default 5 free credits.
-      expect(emailOnly.getByText('5 Credits')).toBeInTheDocument();
-      expect(emailOnly.getByText('VERIFIED_CLIENT_LIST')).toBeInTheDocument();
-      expect(emailOnly.getByText('Never')).toBeInTheDocument();
+      // The two records without an id still render, and a named supplier keeps its own values.
+      expect(screen.getAllByText('Anonymous Client').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Named Client').length).toBeGreaterThan(0);
+      expect(within(rowOf(/Named Client/)).getByText('Named Client')).toBeInTheDocument();
+      expect(screen.queryByText('not-a-list')).not.toBeInTheDocument();
 
-      openDossier(/Verified Supplier/);
-      expect(screen.getByText(/360° AI Score: 85\/100/)).toBeInTheDocument();
-      expect(screen.getByText(/Rating: ★ 4\.2/)).toBeInTheDocument();
+      // The email-only record has no name, so its row is the one that is neither named row.
+      const emailOnlyRow = screen
+        .getAllByRole('row')
+        .find((row) => within(row).queryByRole('button', { name: DOSSIER_BUTTON }) && !/Named Client|Anonymous Client/.test(row.textContent ?? ''));
+      const emailOnly = within(emailOnlyRow as HTMLElement);
+      expect(emailOnly.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
+      expect(emailOnly.queryByText('India')).not.toBeInTheDocument();
+      expect(emailOnly.queryByText('Custom Client Category')).not.toBeInTheDocument();
+      expect(emailOnly.queryByText('5 Credits')).not.toBeInTheDocument();
+      expect(emailOnly.queryByText('Verified Supplier')).not.toBeInTheDocument();
+
+      fireEvent.click(emailOnly.getByRole('button', { name: DOSSIER_BUTTON }));
       const contact = within(cardOf('Contact Details'));
-      expect(contact.getByText('Key Accounts Desk')).toBeInTheDocument();
       expect(contact.getByText('client@only.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
-      const statutory = within(cardOf('Statutory & Verification'));
-      expect(statutory.getByText('27AAACB1111B1Z6')).toBeInTheDocument();
-      expect(statutory.getByText('AAACB1111B')).toBeInTheDocument();
-      expect(statutory.getByText('Verified Supplier')).toBeInTheDocument();
+      expect(contact.queryByText('Key Accounts Desk')).not.toBeInTheDocument();
+      expect(contact.queryByText('+91 98765 43210')).not.toBeInTheDocument();
+      expect(screen.queryByText('27AAACB1111B1Z6')).not.toBeInTheDocument();
       closeDossier();
 
       openDossier(/Named Client/);
-      expect(screen.getByText(/360° AI Score: 72\/100/)).toBeInTheDocument();
       expect(within(cardOf('Contact Details')).getByText('Named Client')).toBeInTheDocument();
-      expect(screen.getByText('Major: Custom Client Category')).toBeInTheDocument();
+      expect(screen.queryByText('Major: Custom Client Category')).not.toBeInTheDocument();
       expect(screen.queryByText('not-a-list')).not.toBeInTheDocument();
       closeDossier();
 
@@ -635,7 +634,7 @@ describe('SellersDirectory coverage companion', () => {
       closeDossier();
     });
 
-    test('scores uploaded vendors from quality score, then score, then the 85 default', async () => {
+    test('scores uploaded vendors from quality score, then score, and leaves unscored vendors out of the average', async () => {
       setStore({
         buyerVendors: [
           { id: 'q-1', name: 'Quality Scored', qualityScore: '91.6', score: 10 },
@@ -646,8 +645,8 @@ describe('SellersDirectory coverage companion', () => {
 
       await renderDirectory();
 
-      // round((92 + 64 + 85) / 3) = 80
-      expect(within(cardOf('Average 360° Score')).getByText('80')).toBeInTheDocument();
+      // round((91.6 + 64) / 2) = 78. The unscored supplier adds nothing, so no default score is substituted.
+      expect(within(cardOf('Average 360° Score')).getByText('78')).toBeInTheDocument();
     });
 
     test('resolves uploaded delivery locations from lists and ignores non-text values', async () => {
@@ -661,7 +660,9 @@ describe('SellersDirectory coverage companion', () => {
       await renderDirectory();
 
       expect(within(rowOf(/Array Client/)).getByTitle('Chennai, Madurai')).toHaveTextContent('Chennai, Madurai');
-      expect(within(rowOf(/Numeric Client/)).getByTitle('India')).toHaveTextContent('India');
+      // A non-text delivery value is ignored, so the delivery cell shows a dash instead of a location.
+      expect(within(rowOf(/Numeric Client/)).getAllByTitle(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
+      expect(screen.queryByTitle('India')).not.toBeInTheDocument();
     });
 
     test('drops an uploaded vendor whose id repeats a network vendor or an earlier uploaded vendor', async () => {
@@ -685,10 +686,10 @@ describe('SellersDirectory coverage companion', () => {
   });
 
   describe('KPI cards', () => {
-    test('counts verified, network and uploaded suppliers and falls back to 85 for a zero score', async () => {
+    test('counts verified, network and uploaded suppliers and averages only the recorded scores', async () => {
       setVendorResponse([
-        { id: 'k-1', name: 'Active Network', status: 'ACTIVE_VERIFIED', matchScore: 95 },
-        { id: 'k-2', name: 'Suspended Network', status: 'SUSPENDED', matchScore: 0 },
+        { id: 'k-1', name: 'Active Network', status: 'ACTIVE_VERIFIED', matchScore: 95, source: 'procucev_network' },
+        { id: 'k-2', name: 'Suspended Network', status: 'SUSPENDED', matchScore: 0, source: 'procucev_network' },
       ]);
       setStore({
         buyerVendors: [{ id: 'k-3', name: 'Uploaded Client' }],
@@ -702,11 +703,12 @@ describe('SellersDirectory coverage companion', () => {
 
       const total = within(cardOf('Total Suppliers'));
       expect(total.getByText('3')).toBeInTheDocument();
-      expect(total.getByText('2 Verified active')).toBeInTheDocument();
+      // Only a status naming ACTIVE or VERIFIED counts. The uploaded supplier has no status.
+      expect(total.getByText('1 Verified active')).toBeInTheDocument();
       expect(within(cardOf('Network Suppliers')).getByText('2')).toBeInTheDocument();
       expect(within(cardOf('Buyer Uploaded')).getByText('1')).toBeInTheDocument();
-      // round((95 + 85 + 85) / 3) = 88
-      expect(within(cardOf('Average 360° Score')).getByText('88')).toBeInTheDocument();
+      // round((95 + 0) / 2) = 48. The uploaded supplier has no score, so it is left out rather than set to 85.
+      expect(within(cardOf('Average 360° Score')).getByText('48')).toBeInTheDocument();
       expect(within(cardOf('Quoted Opportunities')).getByText('2')).toBeInTheDocument();
     });
   });
@@ -884,6 +886,7 @@ describe('SellersDirectory coverage companion', () => {
         {
           id: 'n-2',
           name: 'Named Network',
+          source: 'procucev_network',
           contactPerson: 'Asha Rao',
           phone: '+91 91111 11111',
           location: 'Pune',
@@ -904,31 +907,33 @@ describe('SellersDirectory coverage companion', () => {
       fireEvent.click(screen.getByRole('button', { name: /Export Directory/ }));
 
       expect(mockExportReport).toHaveBeenCalledTimes(1);
+      // Missing values export as a dash. A source is labelled only when the record holds one, and no score, credit or location is invented.
+      const emptyCell = UI_STRINGS.dataLoad.emptyCell;
       expect(mockExportReport.mock.calls[0][0]).toEqual([
         {
-          CompanyName: 'Verified Supplier',
-          ContactPerson: '',
+          CompanyName: emptyCell,
+          ContactPerson: emptyCell,
           Email: 'bare@supplier.example',
-          Phone: '',
-          CompanyLocation: 'India',
-          DeliveryLocation: 'India',
+          Phone: emptyCell,
+          CompanyLocation: emptyCell,
+          DeliveryLocation: emptyCell,
           LastLogin: formatIndianDateTime('2026-03-02T11:00:00.000Z'),
-          Source: 'Procucev Network',
-          MajorCategory: 'Industrial Supplies',
-          AIScore: 88,
-          StarRating: 4.5,
-          FreeQuotationCredits: 5,
-          RFQDownloadsUsed: 0,
-          Status: 'ACTIVE',
+          Source: emptyCell,
+          MajorCategory: emptyCell,
+          AIScore: emptyCell,
+          StarRating: emptyCell,
+          FreeQuotationCredits: emptyCell,
+          RFQDownloadsUsed: emptyCell,
+          Status: emptyCell,
         },
         {
           CompanyName: 'Named Network',
           ContactPerson: 'Asha Rao',
-          Email: '',
+          Email: emptyCell,
           Phone: '+91 91111 11111',
           CompanyLocation: 'Pune',
           DeliveryLocation: 'Pune, Nashik',
-          LastLogin: 'Never',
+          LastLogin: emptyCell,
           Source: 'Procucev Network',
           MajorCategory: 'Packaging',
           AIScore: 91,
@@ -941,17 +946,17 @@ describe('SellersDirectory coverage companion', () => {
           CompanyName: 'Uploaded Client',
           ContactPerson: 'Dev',
           Email: 'dev@client.example',
-          Phone: '',
-          CompanyLocation: 'India',
-          DeliveryLocation: 'India',
-          LastLogin: 'Never',
+          Phone: emptyCell,
+          CompanyLocation: emptyCell,
+          DeliveryLocation: emptyCell,
+          LastLogin: emptyCell,
           Source: 'Buyer Uploaded',
-          MajorCategory: 'Custom Client Category',
-          AIScore: 85,
-          StarRating: 4.2,
-          FreeQuotationCredits: 5,
-          RFQDownloadsUsed: 0,
-          Status: 'VERIFIED_CLIENT_LIST',
+          MajorCategory: emptyCell,
+          AIScore: emptyCell,
+          StarRating: emptyCell,
+          FreeQuotationCredits: emptyCell,
+          RFQDownloadsUsed: emptyCell,
+          Status: emptyCell,
         },
       ]);
     });

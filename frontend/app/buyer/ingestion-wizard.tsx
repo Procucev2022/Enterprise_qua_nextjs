@@ -36,13 +36,16 @@ import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, res
 import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
+  extractRfqCategoryFilters,
   extractRfqCategorySignals,
   matchVendorAgainstSignals,
-  rankProcucevVendorsForV3,
+  selectTopProcucevVendorsForMode3,
   selectVendorsForCategories,
   type RankedProcucevVendor,
 } from '@/lib/vendorMatching';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
+import RequiredMarker from '@/app/components/RequiredMarker';
+import CategorySearchInput from '@/app/components/CategorySearchInput';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -120,6 +123,13 @@ function withStoredValue(options: string[], value: string): string[] {
   return [trimmed, ...options];
 }
 
+/** Placeholder for a line item's category field: not needed for All Categories, and waits for a division otherwise. */
+function categoryFieldPlaceholder(major: string): string {
+  if (major === ALL_CATEGORIES_OPTION) return UI_STRINGS.categorySearch.notRequired;
+  if (!major) return MODAL.selectPlaceholder;
+  return UI_STRINGS.categorySearch.searchPlaceholder;
+}
+
 /**
  * Resolves the dynamically retrieved Procucev vendor count from the backend response.
  * For Version 0, Version 2, and Version 3, it displays the actual number of Procucev
@@ -128,9 +138,10 @@ function withStoredValue(options: string[], value: string): string[] {
 type ConfirmationVendor = string | {
   id?: string;
   name?: string;
-  source?: string;
-  addedByBuyerCompany?: boolean;
+  source?: string | null;
+  addedByBuyerCompany?: boolean | string | null;
   vendorCategory?: string;
+  [key: string]: any;
 };
 
 interface ConfirmationRFQ {
@@ -298,7 +309,6 @@ export default function IngestionWizard({
   const {
     addNewRFQ,
     adoptCreatedRFQ,
-    currentMode,
     setCurrentMode,
     showToast,
     activeSubscription: storeSubscription,
@@ -326,10 +336,8 @@ export default function IngestionWizard({
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode | string>('mode_1');
 
-  const [form, setForm] = useState<ManualRFQForm>(() => ({
-    ...createEmptyManualRFQForm(),
-    sourcingMode: currentMode || 'mode_2',
-  }));
+  // No sourcing mode is preselected. The buyer chooses one before the RFQ can be dispatched.
+  const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
   const isQuotaExhausted = !isPaidPlan && effectiveRemaining <= 0 && form.sourcingMode !== 'mode_0';
 
   // Auto-prefill delivery location and pincode from active buyer profile
@@ -416,7 +424,8 @@ export default function IngestionWizard({
   const [vendorFormGstin, setVendorFormGstin] = useState('');
   const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
-  const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [completedCategoryEmailVendors, setCompletedCategoryEmailVendors] = useState<string[]>([]);
+  const categoryUpdateIdempotencyKeys = useRef<Record<string, string>>({});
   const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
   const [mode2VendorSearch, setMode2VendorSearch] = useState('');
   const [mode2VendorCategoryFilterTab, setMode2VendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
@@ -432,19 +441,30 @@ export default function IngestionWizard({
         vendorName: vendor.name || vendor.contactPerson,
         rfqCategory: rfqCategorySignals.join(', ') || form.lineItems?.[0]?.majorCategory || 'Requested Category',
         rfqTitle: form.title || 'Procurement Requisition',
+        idempotencyKey: categoryUpdateIdempotencyKeys.current[vendorKey],
       });
       if (res.success) {
-        setSentCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        delete categoryUpdateIdempotencyKeys.current[vendorKey];
+        setCompletedCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        const isQueued = res.deliveryStatus === 'queued';
         showToast(
-          'Category Update Email Sent',
-          `An email has been sent to ${vendor.name || vendor.contactPerson || 'Vendor'} (${vendor.email}) requesting them to update their category to match this RFQ.`,
+          isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedTitle : UI_STRINGS.vendorCategoryUpdate.sentTitle,
+          formatString(
+            isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedMessage : UI_STRINGS.vendorCategoryUpdate.sentMessage,
+            { vendorName: vendor.name || vendor.contactPerson || 'Vendor', vendorEmail: vendor.email || '' }
+          ),
           'success'
         );
       } else {
-        showToast('Email Delivery Issue', res.error || 'Failed to dispatch email.', 'warning');
+        if (res.idempotencyKey) categoryUpdateIdempotencyKeys.current[vendorKey] = res.idempotencyKey;
+        showToast(UI_STRINGS.vendorCategoryUpdate.failureTitle, res.error || UI_STRINGS.vendorCategoryUpdate.failureMessage, 'warning');
       }
     } catch (err: any) {
-      showToast('Error', err?.message || 'Failed to send update email.', 'warning');
+      showToast(
+        UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+        err?.message || UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+        'warning'
+      );
     } finally {
       setSendingCategoryEmailVendors((prev) => prev.filter((id) => id !== vendorKey));
     }
@@ -624,33 +644,26 @@ export default function IngestionWizard({
       setProcucevV3Ranked([]);
       return;
     }
-    const { signals } = extractRfqCategorySignals(form);
-    const lineItemMinors = Array.from(
-      new Set(
-        (form.lineItems || [])
-          .map((it) => it.minorCategory?.trim())
-          
-          .filter(Boolean) as string[]
-      )
-    );
+    const { majors, minors } = extractRfqCategoryFilters(form);
     const seq = ++procucevV3FetchSeqRef.current;
     setProcucevV3Loading(true);
-    // Pull a generous page so the client-side 360° ranking has a real pool to
-    // order; the server narrows by category, the client picks the top 10.
+    // Pull an indexed public candidate pool covering every RFQ division and minor category;
+    // the server widens sparse minors with parent majors and the client selects the top 10.
     void fetchAllVendors({
       page: 1,
-      pageSize: 100,
+      pageSize: VENDOR_ASSIGNMENT_LIMITS.MODE3_CANDIDATE_POOL_SIZE,
       search: '',
       category: isAllCategories ? '' : selectedMajorCategory,
+      publicOnly: true,
+      ...(majors.length > 0 ? { majors } : {}),
+      ...(minors.length > 0 ? { minors } : {}),
     }).then((result) => {
       if (seq !== procucevV3FetchSeqRef.current) return;
       if (result.success) {
-        const ranked = rankProcucevVendorsForV3(
+        const ranked = selectTopProcucevVendorsForMode3(
           result.candidates,
-          signals,
-          { location: form.deliveryLocation, pincode: form.deliveryPincode },
-          10,
-          lineItemMinors
+          form,
+          VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_VENDORS_LIMIT
         );
         setProcucevV3Ranked(ranked);
         // Drop any prior selection that is no longer in the new top-10.
@@ -661,7 +674,7 @@ export default function IngestionWizard({
       setProcucevV3Loading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-rank only on the inputs that change the ranking
-  }, [form.sourcingMode, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode, JSON.stringify(form.lineItems.map((it) => [it.majorCategory, it.minorCategory]))]);
+  }, [form.sourcingMode, form.majorCategory, form.minorCategory, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode, JSON.stringify(form.lineItems.map((it) => [it.majorCategory, it.minorCategory]))]);
 
   const toggleProcucevV3 = (id: string) => {
     setSelectedProcucevV3Ids((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -921,17 +934,24 @@ export default function IngestionWizard({
         const derivedPincode = result.data.deliveryPincode || '';
         const derivedDate = result.data.targetDeliveryDate || extracted.find((e) => e.targetDate)?.targetDate || '';
         const extractedCategory = result.data.category || '';
+        const extractedMajor =
+          result.data.majorCategory ||
+          (hasMajorCategory(extractedCategory) ? extractedCategory : '') ||
+          (hasMajorCategory(derivedMajor) ? derivedMajor : '') ||
+          dominantMajorCategory(extracted) ||
+          '';
+        const extractedMinor =
+          result.data.minorCategory ||
+          (hasMinorCategory(extractedMajor, extractedCategory) ? extractedCategory : '') ||
+          (extracted.length > 0 && extracted[0].minorCategory ? extracted[0].minorCategory : '') ||
+          '';
 
         setForm((prev) => ({
           ...prev,
           title: prev.title || derivedTitle,
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
-          majorCategory:
-            prev.majorCategory ||
-            (hasMajorCategory(extractedCategory) ? extractedCategory : '') ||
-            (hasMajorCategory(derivedMajor) ? derivedMajor : '') ||
-            dominantMajorCategory(extracted) ||
-            '',
+          majorCategory: prev.majorCategory || extractedMajor,
+          minorCategory: prev.minorCategory || extractedMinor,
           deliveryLocation: prev.deliveryLocation || derivedLocation,
           deliveryPincode: prev.deliveryPincode || derivedPincode,
           targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
@@ -1111,16 +1131,18 @@ export default function IngestionWizard({
     }
 
     const validation = validateManualRFQForm(form);
-    if (!validation.isValid) {
+    // The mode check narrows the type for the dispatch below. Validation already reports an unchosen mode.
+    if (!validation.isValid || form.sourcingMode === null) {
       const missing: string[] = [];
-      if (validation.formErrors.title) missing.push('RFQ Title');
+      if (validation.formErrors.sourcingMode) missing.push(MODAL.sourcingModeLabel);
+      if (validation.formErrors.title) missing.push(MODAL.titleLabel);
       if (validation.formErrors.deliveryLocation) missing.push('Delivery Location');
       if (validation.formErrors.deliveryPincode) missing.push('Delivery Pincode');
-      if (validation.formErrors.targetDeliveryDate) missing.push('Target Delivery Date (cannot be in the past)');
+      if (validation.formErrors.targetDeliveryDate) missing.push(MODAL.targetDateMissingLabel);
       if (validation.formErrors.lineItems) missing.push('At least 1 complete line item');
       const lineItemErrCount = Object.keys(validation.lineItemErrors).length;
       if (lineItemErrCount > 0) {
-        missing.push(`${lineItemErrCount} line item(s) missing name, quantity, or unit`);
+        missing.push(formatString(MODAL.lineItemsIncompleteLabel, { count: lineItemErrCount }));
       }
       const errorMsg = missing.length > 0
         ? `Validation Error – Please complete: ${missing.join(', ')}.`
@@ -1153,6 +1175,7 @@ export default function IngestionWizard({
         /** Non-identifying fields the details view may show for a Procucev vendor. */
         majorCategory?: string | null;
         minorCategories?: string[] | null;
+        source?: string | null;
         location?: string | null;
         matchScore?: number | null;
       };
@@ -1161,7 +1184,7 @@ export default function IngestionWizard({
         name: v.name || 'Enterprise Vendor',
         email: v.email || null,
         contactPerson: v.contactPerson || v.name || null,
-        phone: v.phone || null,
+        phone: v.phone || (v as any).mobile || (v as any).mobileNumber || null,
         // Tag the entry so the confirmation modal and RFQ details view classify
         // it without needing the vendor's source: a buyer-uploaded vendor is the
         // buyer's own ('Client List'); anything else here is a Procucev vendor.
@@ -1191,7 +1214,7 @@ export default function IngestionWizard({
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
-        const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
+        const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -1200,7 +1223,7 @@ export default function IngestionWizard({
         const mismatchedVendors: typeof candidatePool = [];
 
         for (const v of candidatePool) {
-          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals).isMatch) {
+          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
             matchingVendors.push(v);
           } else {
             mismatchedVendors.push(v);
@@ -1215,29 +1238,34 @@ export default function IngestionWizard({
           );
         }
 
-        const finalMatching = dispatchSignals.length > 0
+        let finalMatching = dispatchSignals.length > 0
           ? selectVendorsForCategories(
               matchingVendors,
               dispatchSignals,
               VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode }
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
+              dispatchMinorOnly
             ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+
+        if (finalMatching.length === 0 && matchingVendors.length > 0) {
+          finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+        }
 
         if (finalMatching.length > 0) {
           mode1AssignedVendors = finalMatching.map(toAssignedVendorEntry);
         }
       }
 
-      // V3 (Autonomous): fold in the Procucev network vendors the buyer explicitly
-      // picked from the 360°-ranked top-10 panel, de-duplicated against the private
-      // roster already assembled above. These are honoured on top of the backend's
-      // own autonomous category match for mode_3.
-      if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
+      // V3 (Autonomous): fold in the Procucev network vendors from the 360°-ranked
+      // panel (explicitly selected or all matched candidates), de-duplicated against
+      // the private roster already assembled above.
+      if (form.sourcingMode === 'mode_3') {
         const alreadyAssigned = new Set((mode1AssignedVendors || []).map((v) => v.id));
-        const picked = procucevV3Ranked
-          .filter((r) => selectedProcucevV3Ids.includes(r.vendor.id) && !alreadyAssigned.has(r.vendor.id))
-          .map((r) => toProcucevAssignedEntry(r));
+        const poolToPick = selectedProcucevV3Ids.length > 0
+          ? procucevV3Ranked.filter((r) => selectedProcucevV3Ids.includes(r.vendor.id) && !alreadyAssigned.has(r.vendor.id))
+          : procucevV3Ranked.filter((r) => !alreadyAssigned.has(r.vendor.id));
+        const picked = poolToPick.map((r) => toProcucevAssignedEntry(r));
         if (picked.length > 0) {
           mode1AssignedVendors = [...(mode1AssignedVendors || []), ...picked];
         }
@@ -1249,22 +1277,16 @@ export default function IngestionWizard({
         return;
       }
 
-      // ALL_CATEGORIES_OPTION is a UI-only sentinel that opts a line item out
-      // of category-narrowed matching — never a real taxonomy value, so it
-      // must never reach the server as this item's majorCategory.
-      const sanitizedForm: ManualRFQForm = {
-        ...updatedForm,
-        lineItems: updatedForm.lineItems.map((item) =>
-          item.majorCategory === ALL_CATEGORIES_OPTION ? { ...item, majorCategory: '' } : item
-        ),
-      };
+      // All Categories is a complete choice that opts a line item out of category-narrowed
+      // matching. It is sent as chosen, and the server stores it as a blank category, which is
+      // how it was always stored. Every row must carry a major category, so a blank one is refused.
       const isAiExtracted = Boolean(
         extractionSummary &&
         extractionSummary.accepted > 0 &&
         uploadedFiles.length > 0
       );
       const rfqSource: RFQSource = isAiExtracted ? 'ai_extraction' : 'manual_entry';
-      const payload = toRFQCreatePayload(sanitizedForm, mode1AssignedVendors, rfqSource);
+      const payload = toRFQCreatePayload(updatedForm, mode1AssignedVendors, rfqSource);
       if (isAiExtracted && extractionSummary?.fileName) {
         payload.sourceFileName = extractionSummary.fileName;
       }
@@ -1276,27 +1298,28 @@ export default function IngestionWizard({
         return;
       }
 
-      adoptCreatedRFQ(result.rfq);
+      if (typeof result.remainingFreeRFQs === 'number') {
+        adoptCreatedRFQ(result.rfq, result.remainingFreeRFQs);
+      } else {
+        adoptCreatedRFQ(result.rfq);
+      }
       // For V3, the server's procucevVendorCount reflects only its own
       // auto-match and ignores the vendors the buyer explicitly picked from the
       // Top Procucev panel. Reconcile the confirmation count so it never
       // under-reports the suppliers actually dispatched: take the larger of the
       // server count and the buyer's selection.
-      let confirmation = result.rfq;
-      if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
-        const serverCount =
-          typeof result.rfq?.procucevVendorCount === 'number' ? result.rfq.procucevVendorCount : 0;
-        confirmation = {
-          ...result.rfq,
-          procucevVendorCount: Math.max(serverCount, selectedProcucevV3Ids.length),
-          // Carry the exact dispatched list (tagged Client List / Procucev
-          // Network) so the modal's private-vs-Procucev split is authoritative
-          // and does not depend on how the server echoes assignedVendors.
-          assignedVendors:
-            Array.isArray(result.rfq?.assignedVendors) && result.rfq.assignedVendors.length >= (mode1AssignedVendors || []).length
-              ? result.rfq.assignedVendors
-              : mode1AssignedVendors || result.rfq?.assignedVendors,
-        };
+      const combinedAssignedVendors =
+        Array.isArray(result.rfq?.assignedVendors) && result.rfq.assignedVendors.length >= (mode1AssignedVendors || []).length
+          ? result.rfq.assignedVendors
+          : (mode1AssignedVendors || result.rfq?.assignedVendors || []);
+
+      const confirmation = result.rfq ? { ...result.rfq, assignedVendors: combinedAssignedVendors } : null;
+      if (confirmation) {
+        if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
+          const serverCount =
+            typeof confirmation.procucevVendorCount === 'number' ? confirmation.procucevVendorCount : 0;
+          confirmation.procucevVendorCount = Math.max(serverCount, selectedProcucevV3Ids.length);
+        }
       }
       setConfirmationRfq(confirmation);
       setSubmitAttempted(false);
@@ -1314,10 +1337,7 @@ export default function IngestionWizard({
 
   /** Clears all form fields, line items, and uploaded documents */
   const handleClearForm = () => {
-    setForm({
-      ...createEmptyManualRFQForm(),
-      sourcingMode: currentMode || 'mode_2',
-    });
+    setForm(createEmptyManualRFQForm());
     setUploadedFiles([]);
     setExtractionSummary(null);
     setExtractionError(null);
@@ -1368,7 +1388,7 @@ export default function IngestionWizard({
               href="/buyer/subscription-center"
               onClick={(e) => {
                 e.preventDefault();
-                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                 setIsUpgradeModalOpen(true);
               }}
               className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs shadow-md hover:shadow-lg"
@@ -1569,10 +1589,14 @@ export default function IngestionWizard({
           <div className="xl:col-span-2">
             <label htmlFor="rfq-title" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.titleLabel}
+              <RequiredMarker />
             </label>
             <input
               id="rfq-title"
               type="text"
+              required
+              aria-required
+              aria-invalid={!!formErrors.title}
               value={form.title}
               onChange={(e) => patchForm('title', e.target.value)}
               placeholder={MODAL.titlePlaceholder}
@@ -1604,13 +1628,15 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.deliveryPincodeLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+              <RequiredMarker />
             </label>
             <div className="relative">
               <input
                 id="rfq-pincode"
                 type="text"
                 required
+                aria-required
+                aria-invalid={!!formErrors.deliveryPincode || !!pincodeError}
                 value={form.deliveryPincode}
                 onChange={(e) => patchForm('deliveryPincode', e.target.value)}
                 onBlur={handlePincodeBlur}
@@ -1643,12 +1669,14 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-location" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.deliveryLocationLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+              <RequiredMarker />
             </label>
             <input
               id="rfq-location"
               type="text"
               required
+              aria-required
+              aria-invalid={!!formErrors.deliveryLocation}
               value={form.deliveryLocation}
               onChange={(e) => patchForm('deliveryLocation', e.target.value)}
               placeholder={MODAL.deliveryLocationPlaceholder}
@@ -1662,14 +1690,18 @@ export default function IngestionWizard({
           <div>
             <label htmlFor="rfq-date" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
               {MODAL.targetDateLabel}
+              <RequiredMarker />
             </label>
             <input
               id="rfq-date"
               type="date"
+              required
+              aria-required
+              aria-invalid={!!formErrors.targetDeliveryDate}
               min={new Date().toISOString().slice(0, 10)}
               value={form.targetDeliveryDate}
               onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
+              className="date-input-whole-field w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
             <FieldError message={formErrors.targetDeliveryDate} />
           </div>
@@ -1722,12 +1754,12 @@ export default function IngestionWizard({
             <table className="w-full text-left min-w-[1080px] text-xs">
               <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
                 <tr>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
                   <th className="px-3 py-2.5 text-center font-bold">Action</th>
                 </tr>
               </thead>
@@ -1754,11 +1786,14 @@ export default function IngestionWizard({
                         <input
                           type="text"
                           aria-label={MODAL.colSpecs}
+                          aria-required
+                          aria-invalid={!!errors.technicalSpecs}
                           value={item.technicalSpecs}
                           onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
                           placeholder={MODAL.specsPlaceholder}
                           className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
+                        <FieldError message={errors.technicalSpecs} />
                       </td>
 
                       {/* Quantity */}
@@ -1796,6 +1831,8 @@ export default function IngestionWizard({
                       <td className="px-3 py-2.5 align-top">
                         <select
                           aria-label={MODAL.colMajor}
+                          aria-required
+                          aria-invalid={!!errors.majorCategory}
                           value={item.majorCategory}
                           onChange={(e) => {
                             const newMajor = e.target.value;
@@ -1815,27 +1852,17 @@ export default function IngestionWizard({
                         <FieldError message={errors.majorCategory} />
                       </td>
 
-                      {/* Minor Category */}
+                      {/* Category: a search field that lists the matching categories of the chosen division */}
                       <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMinor}
+                        <CategorySearchInput
+                          label={MODAL.colMinor}
+                          invalid={!!errors.minorCategory}
                           value={item.minorCategory}
-                          disabled={
-                            !item.majorCategory ||
-                            item.majorCategory === ALL_CATEGORIES_OPTION
-                          }
-                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">
-                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
-                          </option>
-                          {minorsFor(item.majorCategory).map((minor) => (
-                            <option key={minor} value={minor}>
-                              {minor}
-                            </option>
-                          ))}
-                        </select>
+                          options={withStoredValue(minorsFor(item.majorCategory), item.minorCategory)}
+                          onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
+                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
+                          placeholder={categoryFieldPlaceholder(item.majorCategory)}
+                        />
                         <FieldError message={errors.minorCategory} />
                       </td>
 
@@ -1889,7 +1916,7 @@ export default function IngestionWizard({
               id="sourcing-mode-select"
               data-testid="sourcing-mode-select"
               aria-label="Sourcing Mode"
-              value={form.sourcingMode}
+              value={form.sourcingMode ?? ''}
               onChange={(e) => {
                 const target = e.target.value as SourcingMode;
                 if (!entitledModes.includes(target)) {
@@ -1902,6 +1929,9 @@ export default function IngestionWizard({
               className="sr-only"
               tabIndex={-1}
             >
+              <option value="" disabled>
+                {MODAL.sourcingModePlaceholder}
+              </option>
               {SOURCING_MODES.map((mode) => (
                 <option
                   key={mode.id}
@@ -1965,6 +1995,8 @@ export default function IngestionWizard({
 
 
 
+        <FieldError message={formErrors.sourcingMode} />
+
         {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
         {form.sourcingMode === 'mode_1' && (
           <div className="mt-5 rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
@@ -2024,12 +2056,12 @@ export default function IngestionWizard({
                 );
               }
 
-              const { signals: mode1Signals } = extractRfqCategorySignals(form);
+              const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
               const matchingVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
                 : allMyVendors;
               const mismatchedVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
                 : [];
 
               let pool = allMyVendors;
@@ -2109,7 +2141,7 @@ export default function IngestionWizard({
                         onClick={() => {
                           const selectableIds = myVendors.filter((v) => {
                             if (mode1Signals.length === 0) return true;
-                            return matchVendorAgainstSignals(v, mode1Signals).isMatch;
+                            return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
                           }).map((v) => v.id);
 
                           if (allSelected) {
@@ -2162,7 +2194,7 @@ export default function IngestionWizard({
                         : [];
                       
                       const matchResult = mode1Signals.length > 0
-                        ? matchVendorAgainstSignals(vendor, mode1Signals)
+                        ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
                         : { isMatch: true };
                       const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
 
@@ -2266,12 +2298,12 @@ export default function IngestionWizard({
                                 {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                   <>
                                     <Loader2 size={11} className="animate-spin" />
-                                    <span>Sending Email...</span>
+                                    <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                   </>
-                                ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                   <>
                                     <CheckCircle2 size={11} />
-                                    <span>Update Email Sent ✓</span>
+                                    <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                   </>
                                 ) : (
                                   <>
@@ -2341,12 +2373,12 @@ export default function IngestionWizard({
                 );
               }
 
-              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
               const matchingVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
                 : allMyVendors;
               const mismatchedVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
                 : [];
 
               let pool = allMyVendors;
@@ -2495,7 +2527,7 @@ export default function IngestionWizard({
                           onClick={() => {
                             const selectableIds = myVendors.filter((v) => {
                               if (rfqSignals.length === 0) return true;
-                              return matchVendorAgainstSignals(v, rfqSignals).isMatch;
+                              return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
                             }).map((v) => v.id);
 
                             if (allSelected) {
@@ -2541,7 +2573,7 @@ export default function IngestionWizard({
                             : [];
 
                           const matchResult = rfqSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, rfqSignals)
+                            ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
                             : { isMatch: true };
                           const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
 
@@ -2656,12 +2688,12 @@ export default function IngestionWizard({
                                     {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <Loader2 size={11} className="animate-spin" />
-                                        <span>Sending Email...</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                       </>
-                                    ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                    ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <CheckCircle2 size={11} />
-                                        <span>Update Email Sent ✓</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                       </>
                                     ) : (
                                       <>
@@ -2720,7 +2752,7 @@ export default function IngestionWizard({
           <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
               const allMyVendors = buyerVendors.filter(isBuyerUploaded);
-              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
               const lineItemMinors = Array.from(
                 new Set(
                   (form.lineItems || [])
@@ -2733,15 +2765,15 @@ export default function IngestionWizard({
               let myVendors = allMyVendors;
               if (lineItemMinors.length > 0) {
                 const minorMatched = allMyVendors.filter((v) =>
-                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m]).isMatch)
+                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
                 );
                 if (minorMatched.length > 0) {
                   myVendors = minorMatched;
                 } else if (rfqSignals.length > 0) {
-                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
                 }
               } else if (rfqSignals.length > 0) {
-                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
               }
 
               return (
@@ -2966,7 +2998,7 @@ export default function IngestionWizard({
                                   const vendorMinors = Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0
                                     ? r.vendor.minorCategories.join(', ')
                                     : null;
-                                  const displayCat = r.matchedMinorCategory || vendorMinors || lineItemMinors[0] || r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial';
+                                  const displayCat = r.matchedMinorCategory || vendorMinors || (r.hasMinorMatch ? lineItemMinors[0] : null) || r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial';
                                   return (
                                     <span
                                       data-testid="procucev-v3-vendor-category"
@@ -3067,7 +3099,7 @@ export default function IngestionWizard({
               href="/buyer/subscription-center"
               onClick={(e) => {
                 e.preventDefault();
-                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setUpgradeModalTargetMode(form.sourcingMode === null || form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
                 setIsUpgradeModalOpen(true);
               }}
               className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg cursor-pointer"
@@ -3184,10 +3216,12 @@ export default function IngestionWizard({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                  Major Category <span className="text-rose-500">*</span>
+                <label htmlFor="ingestion-vendor-division" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
                 </label>
                 <select
+                  id="ingestion-vendor-division"
+                  aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
                   required
                   value={vendorFormMajorCategory}
                   onChange={(e) => {
@@ -3196,7 +3230,7 @@ export default function IngestionWizard({
                   }}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
                 >
-                  <option value="">Select Major Category...</option>
+                  <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholderIngestion}</option>
                   {taxonomyMajors().map((cat) => (
                     <option key={cat} value={cat}>
                       {cat}
@@ -3208,7 +3242,7 @@ export default function IngestionWizard({
               {vendorFormMajorCategory && minorsFor(vendorFormMajorCategory).length > 0 && (
                 <div>
                   <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Minor Category
+                    Category
                   </label>
                   <select
                     value={vendorFormMinorCategories[0] || ''}
@@ -3218,7 +3252,7 @@ export default function IngestionWizard({
                     }}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
                   >
-                    <option value="">Select Minor Category...</option>
+                    <option value="">Select Category...</option>
                     {minorsFor(vendorFormMajorCategory).map((minor) => (
                       <option key={minor} value={minor}>
                         {minor}

@@ -12,6 +12,11 @@
 // Alternatively provide credentials via environment variables:
 //   BUYER_EMAIL, BUYER_PHONE, BUYER_PASSWORD, BUYER_NAME, BUYER_ORG
 //   VENDOR_EMAIL, VENDOR_PHONE, VENDOR_PASSWORD, VENDOR_NAME, VENDOR_ORG
+//   VENDOR_MAJOR_CATEGORY (optional, or --vendor-major-category)
+//
+// There are no defaults. Email, password, name and organisation are required for
+// both accounts. The script never sets vendor ratings, scores, evaluation results
+// or the preferred-supplier status. Those come from the evaluation flow only.
 // ==============================================================================
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
@@ -19,6 +24,10 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const pool = require('../src/db/pool');
 const identityQueries = require('../src/db/identityQueries');
 const domainQueries = require('../src/db/domainQueries');
+
+function cleanText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -42,11 +51,13 @@ async function setupBuyer(config) {
   const email = (config.email || process.env.BUYER_EMAIL || '').trim().toLowerCase();
   const phone = (config.phone || process.env.BUYER_PHONE || '').trim();
   const password = config.password || process.env.BUYER_PASSWORD;
-  const name = config.name || process.env.BUYER_NAME || 'Sudheer Kangala';
-  const org = config.org || process.env.BUYER_ORG || 'Procucev';
+  const name = cleanText(config.name) || cleanText(process.env.BUYER_NAME);
+  const org = cleanText(config.org) || cleanText(process.env.BUYER_ORG);
 
-  if (!email || !password) {
-    throw new Error('Buyer email and password are required (--buyer-email, --buyer-password)');
+  if (!email || !password || !name || !org) {
+    throw new Error(
+      'Buyer email, password, name and organisation are required (--buyer-email, --buyer-password, --buyer-name, --buyer-org, or the BUYER_* environment variables)'
+    );
   }
 
   console.log(`Setting up Buyer Account: ${email}`);
@@ -133,11 +144,13 @@ async function setupVendor(config) {
   const email = (config.email || process.env.VENDOR_EMAIL || '').trim().toLowerCase();
   const phone = (config.phone || process.env.VENDOR_PHONE || '').trim();
   const password = config.password || process.env.VENDOR_PASSWORD;
-  const name = config.name || process.env.VENDOR_NAME || 'Procucev Vendor';
-  const org = config.org || process.env.VENDOR_ORG || 'Procucev Vendor Enterprise';
+  const name = cleanText(config.name) || cleanText(process.env.VENDOR_NAME);
+  const org = cleanText(config.org) || cleanText(process.env.VENDOR_ORG);
 
-  if (!email || !password) {
-    throw new Error('Vendor email and password are required (--vendor-email, --vendor-password)');
+  if (!email || !password || !name || !org) {
+    throw new Error(
+      'Vendor email, password, name and organisation are required (--vendor-email, --vendor-password, --vendor-name, --vendor-org, or the VENDOR_* environment variables)'
+    );
   }
 
   console.log(`Setting up Vendor Account: ${email}`);
@@ -171,9 +184,18 @@ async function setupVendor(config) {
     }
   }
 
-  // Ensure vendors domain row has database-level unlimited flags
+  // Ensure vendors domain row has database-level unlimited flags. Rating, score,
+  // evaluation and status are never written here. Existing values are kept as
+  // stored, and a new row leaves them empty until the evaluation flow sets them.
   const existingDomainVendor = await domainQueries.getVendorByEmailFromDB(email);
   const vendorId = existingDomainVendor?.id || `v-${Date.now()}`;
+  const majorCategory =
+    existingDomainVendor?.majorCategory || cleanText(config.majorCategory) || cleanText(process.env.VENDOR_MAJOR_CATEGORY) || null;
+  if (!majorCategory) {
+    console.log(
+      '  Vendor major category is not set, so this vendor will not match RFQs yet. Set --vendor-major-category or VENDOR_MAJOR_CATEGORY.'
+    );
+  }
 
   const vendorDomainData = {
     ...(existingDomainVendor || {}),
@@ -181,18 +203,13 @@ async function setupVendor(config) {
     name,
     email,
     phone,
-    majorCategory: existingDomainVendor?.majorCategory || 'Mechanical & Industrial',
+    majorCategory,
     subscriptionPlan: 'premium',
     unlimitedQuoteSubmissions: true,
     unlimitedRfqDownloads: true,
     unlimitedAccess: true,
-    status: 'PREFERRED ENTERPRISE SUPPLIER',
     source: 'procucev_network',
     freeQuotationCredits: 999999,
-    rfqDownloadsUsed: 0,
-    rating: existingDomainVendor?.rating || 4.8,
-    score: existingDomainVendor?.score || 95.0,
-    evaluated: true,
     hasRecord: true,
     isExistingInDatabase: true,
   };
@@ -235,6 +252,7 @@ async function main() {
     password: args['vendor-password'],
     name: args['vendor-name'],
     org: args['vendor-org'],
+    majorCategory: args['vendor-major-category'],
   });
 
   console.log('\nBoth Buyer and Vendor accounts successfully provisioned and verified.');
