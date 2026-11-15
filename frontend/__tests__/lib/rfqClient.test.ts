@@ -11,6 +11,7 @@ import {
   fetchAllRFQs,
   fetchVendorCandidates,
   fetchAllVendors,
+  withVendorFetchSignal,
   inviteVendorsToRFQ,
   updateRFQ,
   deleteRFQ,
@@ -2635,6 +2636,41 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
       global.fetch = jest.fn().mockRejectedValue('unknown throw');
       const dlThrow = await downloadAndUnlockRFQ('RFQ-1');
       expect(dlThrow.error).toBe('Network error downloading RFQ.');
+    });
+  });
+
+  describe('rfqClient.withVendorFetchSignal', () => {
+    const originalFetch = global.fetch;
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    test('forwards AbortSignal to fetch and returns ABORTED when cancelled', async () => {
+      const controller = new AbortController();
+      const abortErr = Object.assign(new Error('Aborted'), { name: 'AbortError' });
+      global.fetch = jest.fn().mockImplementation((_url, init) => {
+        expect(init.signal).toBe(controller.signal);
+        controller.abort();
+        return Promise.reject(abortErr);
+      });
+
+      const res = await withVendorFetchSignal(controller.signal, () =>
+        fetchAllVendors({ page: 1, pageSize: 20, search: 'l' })
+      );
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'ABORTED',
+        error: UI_STRINGS.auth.requestCancelled,
+      });
+
+      // Signal scope does not leak to subsequent calls outside withVendorFetchSignal
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 1 } }),
+      });
+      await fetchAllVendors({ page: 1, pageSize: 20 });
+      expect((global.fetch as jest.Mock).mock.calls[0][1].signal).toBeUndefined();
     });
   });
 });

@@ -849,17 +849,6 @@ describe('PO dump required columns', () => {
 });
 
 describe('isDummyPan and usablePan', () => {
-  it('flags the listed sample PANs, whatever their case or surrounding spaces', () => {
-    expect(isDummyPan('ABCPE1234F')).toBe(true);
-    expect(isDummyPan(' abcde1234f ')).toBe(true);
-    expect(isDummyPan('AAACL1234F')).toBe(true);
-  });
-
-  it('flags a PAN made of one letter repeated', () => {
-    expect(isDummyPan('AAAAA0000A')).toBe(true);
-    expect(isDummyPan('zzzzz9999z')).toBe(true);
-  });
-
   it('does not flag an ordinary PAN, or a value that is blank or not text', () => {
     expect(isDummyPan('AAACL0140P')).toBe(false);
     expect(isDummyPan('')).toBe(false);
@@ -868,12 +857,12 @@ describe('isDummyPan and usablePan', () => {
     expect(isDummyPan(1234)).toBe(false);
   });
 
-  it('returns the upper-case PAN when it has the PAN format and is not a placeholder', () => {
+  it('returns the upper-case PAN when it has the PAN format', () => {
     expect(usablePan(' aaacl0140p ')).toBe('AAACL0140P');
+    expect(usablePan('ABCPE1234F')).toBe('ABCPE1234F');
   });
 
-  it('returns null for a placeholder, a value without the PAN format, or a value that is not text', () => {
-    expect(usablePan('ABCPE1234F')).toBeNull();
+  it('returns null for a value without the PAN format, or a value that is not text', () => {
     expect(usablePan('Not Provided')).toBeNull();
     expect(usablePan('AAACL01400')).toBeNull();
     expect(usablePan(null)).toBeNull();

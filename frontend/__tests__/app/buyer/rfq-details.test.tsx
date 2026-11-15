@@ -1,6 +1,11 @@
 import React from 'react';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
-import RFQDetails, { daysUntil, lineItemsToCsv, resolveVendorCategories } from '@/app/buyer/rfq-details';
+import RFQDetails, {
+  buildSupplierCategoryFilters,
+  daysUntil,
+  lineItemsToCsv,
+  resolveVendorCategories,
+} from '@/app/buyer/rfq-details';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
@@ -1445,6 +1450,157 @@ function makeInquiry(overrides: any = {}): any {
         expect(within(cards).getByText('V0 Network Supplier')).toBeInTheDocument();
         expect(within(cards).getByText('v0@network.in')).toBeInTheDocument();
         expect(within(cards).getByText('+91 90000 30003')).toBeInTheDocument();
+      });
+
+      it('filters V0 assigned & invited suppliers by Division (Major Category) and Minor Category', () => {
+        renderAsCategoryManager(
+          buildRFQ({
+            sourcingMode: 'mode_0',
+            assignedVendors: [
+              {
+                id: 'v-it-soft',
+                name: 'A-Net Computers',
+                email: 'anet@it.test',
+                vendorCategory: 'Procucev Network',
+                majorCategory: 'IT',
+                minorCategories: ['Software'],
+              } as any,
+              {
+                id: 'v-it-lap',
+                name: 'Laptop World',
+                email: 'laptop@it.test',
+                vendorCategory: 'Procucev Network',
+                majorCategory: 'IT',
+                minorCategories: ['Laptop'],
+              } as any,
+              {
+                id: 'v-capex-dg',
+                name: 'Bharath Diesel Gensets',
+                email: 'dg@capex.test',
+                vendorCategory: 'Procucev Network',
+                majorCategory: 'CAPEX - Equipment & Machinery',
+                minorCategories: ['Diesel Gensets'],
+              } as any,
+            ],
+          })
+        );
+
+        const majorSelect = screen.getByTestId('cm-supplier-major-filter') as HTMLSelectElement;
+        const minorSelect = screen.getByTestId('cm-supplier-minor-filter') as HTMLSelectElement;
+        const grid = screen.getByTestId('v0-cm-vendor-cards');
+
+        expect(within(grid).getAllByTestId('assigned-supplier-card')).toHaveLength(3);
+        expect(screen.getByTestId('cm-supplier-filter-count')).toHaveTextContent(
+          formatString(DETAILS.showingSuppliersCount, { shown: 3, total: 3 })
+        );
+        expect(screen.queryByTestId('cm-supplier-clear-filters')).not.toBeInTheDocument();
+
+        // Filter by Division (Major Category) = IT -> cascades Minor dropdown to Software & Laptop only
+        fireEvent.change(majorSelect, { target: { value: 'IT' } });
+        expect(within(grid).getAllByTestId('assigned-supplier-card')).toHaveLength(2);
+        expect(within(grid).getByText('A-Net Computers')).toBeInTheDocument();
+        expect(within(grid).getByText('Laptop World')).toBeInTheDocument();
+        expect(within(grid).queryByText('Bharath Diesel Gensets')).not.toBeInTheDocument();
+        expect(within(minorSelect).queryByText(/Diesel Gensets/)).not.toBeInTheDocument();
+        expect(within(minorSelect).getByText(/Software \(1\)/)).toBeInTheDocument();
+        expect(within(minorSelect).getByText(/Laptop \(1\)/)).toBeInTheDocument();
+
+        // Narrow further by Minor Category = Software
+        fireEvent.change(minorSelect, { target: { value: 'Software' } });
+        expect(within(grid).getAllByTestId('assigned-supplier-card')).toHaveLength(1);
+        expect(within(grid).getByText('A-Net Computers')).toBeInTheDocument();
+        expect(within(grid).queryByText('Laptop World')).not.toBeInTheDocument();
+
+        // Switching Division clears previous incompatible minor filter automatically
+        fireEvent.change(majorSelect, { target: { value: 'CAPEX - Equipment & Machinery' } });
+        expect(within(grid).getAllByTestId('assigned-supplier-card')).toHaveLength(1);
+        expect(within(grid).getByText('Bharath Diesel Gensets')).toBeInTheDocument();
+
+        // Clear filter button resets both Division and Minor Category
+        fireEvent.click(screen.getByTestId('cm-supplier-clear-filters'));
+        expect(within(grid).getAllByTestId('assigned-supplier-card')).toHaveLength(3);
+        expect(majorSelect.value).toBe('all');
+        expect(minorSelect.value).toBe('all');
+      });
+
+      it('filters non-V0 Category Manager tabs by Major & Minor Category and gracefully resets unmatched tab filters', () => {
+        renderAsCategoryManager(
+          buildRFQ({
+            sourcingMode: 'mode_3',
+            assignedVendors: [
+              {
+                id: 'proc-it',
+                name: 'IT Cloud Systems',
+                vendorCategory: 'Procucev Network',
+                majorCategory: 'IT',
+                minorCategories: ['Software'],
+              } as any,
+              {
+                id: 'proc-elec',
+                name: 'Volt Switchgear',
+                vendorCategory: 'Procucev Network',
+                majorCategory: 'Electrical',
+                minorCategories: ['Cables'],
+              } as any,
+              {
+                id: 'own-mech',
+                name: 'Prime Bearings',
+                vendorCategory: 'Client List',
+                majorCategory: 'Mechanical',
+                minorCategories: ['Bearings'],
+              } as any,
+            ],
+          })
+        );
+
+        const tabs = screen.getByTestId('cm-supplier-tabs');
+        fireEvent.change(within(tabs).getByTestId('cm-supplier-minor-filter'), { target: { value: 'Cables' } });
+        expect(within(tabs).getByText('Volt Switchgear')).toBeInTheDocument();
+        expect(within(tabs).queryByText('IT Cloud Systems')).not.toBeInTheDocument();
+
+        // Switching to Buyer's Own tab where neither Cables nor Electrical exists resets cleanly to show own vendor
+        fireEvent.click(screen.getByTestId('cm-tab-own'));
+        expect(within(tabs).getByText('Prime Bearings')).toBeInTheDocument();
+        expect(within(tabs).getByTestId('cm-supplier-major-filter')).toHaveValue('all');
+        expect(within(tabs).getByTestId('cm-supplier-minor-filter')).toHaveValue('all');
+      });
+
+      it('does not render CM supplier category filters for Buyer role', () => {
+        renderDetails(
+          buildRFQ({
+            sourcingMode: 'mode_3',
+            assignedVendors: [
+              {
+                id: 'own-1',
+                name: 'Buyer Own Co',
+                vendorCategory: 'Client List',
+                majorCategory: 'IT',
+                minorCategories: ['Laptop'],
+              } as any,
+            ],
+          })
+        );
+        expect(screen.queryByTestId('cm-supplier-filters')).not.toBeInTheDocument();
+      });
+
+      it('buildSupplierCategoryFilters normalizes blanks to General, merges case duplicates, and counts accurately', () => {
+        const res = buildSupplierCategoryFilters(
+          [
+            { majorCategory: ' it ', minorCategory: 'Laptop' },
+            { majorCategory: 'IT', minorCategory: 'laptop' },
+            { majorCategory: '', minorCategory: null },
+          ],
+          'IT',
+          'nonexistent'
+        );
+        expect(res.majorOptions).toEqual([
+          { value: 'General', count: 1 },
+          { value: 'it', count: 2 },
+        ]);
+        expect(res.effectiveMajor).toBe('it');
+        expect(res.minorOptions).toEqual([{ value: 'Laptop', count: 2 }]);
+        expect(res.effectiveMinor).toBe('all');
+        expect(res.filteredSuppliers).toHaveLength(2);
       });
 
       it('still hides the suppliers panel from the BUYER on a V0 RFQ', () => {

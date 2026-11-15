@@ -373,42 +373,18 @@ describe('category filter', () => {
     expect(screen.queryByText(/Filtered by/)).not.toBeInTheDocument();
   });
 
-  test('category chips toggle a multi-category selection and show how many enquiries each holds', async () => {
+  test('category dropdown narrows enquiry selection and shows filtered count', async () => {
     installCategoryScenario();
     await renderForm();
 
-    // A chip signals that it is selected only through its highlight style, so that class is the observable state.
-    const allChip = screen.getByRole('button', { name: /^All Categories \(3\)$/ });
-    const electricalChip = screen.getByRole('button', { name: /^Electrical Systems/ });
-    const mechanicalChip = screen.getByRole('button', { name: /^Mechanical Spares/ });
-    expect(within(electricalChip).getByText('2')).toBeInTheDocument();
-    expect(within(mechanicalChip).getByText('1')).toBeInTheDocument();
-    expect(allChip).toHaveClass('bg-blue-600');
-    expect(electricalChip).not.toHaveClass('bg-blue-600');
+    const categorySelect = screen.getByRole('combobox', { name: /Filter enquiries by category/i });
+    fireEvent.change(categorySelect, { target: { value: ELECTRICAL } });
 
-    fireEvent.click(electricalChip);
-
-    expect(electricalChip).toHaveClass('bg-blue-600');
-    expect(allChip).not.toHaveClass('bg-blue-600');
-    expect(screen.getByRole('combobox', { name: /Filter enquiries by category/i })).toHaveValue(ELECTRICAL);
+    expect(categorySelect).toHaveValue(ELECTRICAL);
     expect(screen.getByText(/Showing/)).toHaveTextContent('Showing 2 of 3 enquiries');
     expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
 
-    fireEvent.click(mechanicalChip);
-
-    expect(screen.getByText('(Filtered by 2 categories)')).toBeInTheDocument();
-    expect(screen.getByText(/Showing/)).toHaveTextContent('Showing 3 of 3 enquiries');
-
-    fireEvent.click(electricalChip);
-
-    expect(electricalChip).not.toHaveClass('bg-blue-600');
-    expect(screen.getByText('(Filtered by 1 category)')).toBeInTheDocument();
-    expect(screen.getByText('Hydraulic Pump Set')).toBeInTheDocument();
-    expect(screen.queryByText('Switchgear Panel')).not.toBeInTheDocument();
-
-    fireEvent.click(allChip);
-
-    expect(allChip).toHaveClass('bg-blue-600');
+    fireEvent.change(categorySelect, { target: { value: 'all' } });
     expect(screen.queryByText(/Filtered by/)).not.toBeInTheDocument();
     expect(screen.getByText(/Showing/)).toHaveTextContent('Showing 3 of 3 enquiries');
   });
@@ -429,10 +405,10 @@ describe('category filter', () => {
     });
     await renderForm();
 
-    const mechanicalChip = screen.getByRole('button', { name: /^Mechanical Spares/ });
-    expect(within(mechanicalChip).getByText('1')).toBeInTheDocument();
+    const categorySelect = screen.getByRole('combobox', { name: /Filter enquiries by category/i });
+    expect(screen.getByRole('option', { name: MECHANICAL })).toBeInTheDocument();
 
-    fireEvent.click(mechanicalChip);
+    fireEvent.change(categorySelect, { target: { value: MECHANICAL } });
 
     expect(screen.getByText('Hydraulic Pump Set')).toBeInTheDocument();
     expect(screen.queryByText('Uncategorised Item')).not.toBeInTheDocument();
@@ -446,7 +422,8 @@ describe('category filter', () => {
     installCategoryScenario([orphan]);
     await renderForm();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Safety Equipment/ }));
+    const categorySelect = screen.getByRole('combobox', { name: /Filter enquiries by category/i });
+    fireEvent.change(categorySelect, { target: { value: 'Safety Equipment' } });
 
     expect(screen.getByText('No matching enquiries')).toBeInTheDocument();
     expect(

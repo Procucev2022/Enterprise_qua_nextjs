@@ -21,6 +21,7 @@ const { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aw
 const { GEMINI_CONFIG } = require('../config/constants');
 const { logger } = require('./loggerService');
 const r2Client = require('./r2Client');
+const r2NegativeCache = require('./r2NegativeCache');
 
 const STORAGE_DIR = 'extract-staging';
 const LOG_CATEGORY = 'EXTRACTION_STAGING';
@@ -66,7 +67,7 @@ async function stage(buffer, mimeType) {
 
   try {
     if (binding) {
-      await binding.put(key, buffer, { httpMetadata: { contentType: mimeType || 'application/octet-stream' } });
+      await r2NegativeCache.putToBinding(binding, key, buffer, { httpMetadata: { contentType: mimeType || 'application/octet-stream' } });
     } else {
       await client.send(
         new PutObjectCommand({
@@ -98,7 +99,7 @@ async function load(id) {
 
   try {
     if (binding) {
-      const object = await binding.get(key);
+      const object = await r2NegativeCache.getFromBinding(binding, key);
       if (!object) return null;
       return Buffer.from(await object.arrayBuffer());
     }
@@ -121,7 +122,7 @@ async function remove(id) {
 
   try {
     if (binding) {
-      await binding.delete(key);
+      await r2NegativeCache.deleteFromBinding(binding, key);
     } else {
       await client.send(new DeleteObjectCommand({ Bucket: r2Client.bucket(), Key: key }));
     }

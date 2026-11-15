@@ -295,22 +295,23 @@ class AuthClient {
   }
 
   /**
-   * Sign out, revoking the token server-side and clearing local state.
+   * Sign out, clearing local credentials immediately and revoking the token server-side.
    */
   public async logout(email?: string): Promise<void> {
+    const token = this.token;
+    const resolvedEmail = email || this.currentSession?.email;
+    this.setSession(null, null);
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ email: email || this.currentSession?.email }),
+        body: JSON.stringify({ email: resolvedEmail }),
       });
     } catch {
-      // Local state is still cleared below even if the server is unreachable.
-    } finally {
-      this.setSession(null, null);
+      // Local state was already cleared above even if the server is unreachable.
     }
   }
 }

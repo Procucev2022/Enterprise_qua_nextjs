@@ -1298,13 +1298,24 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
           attempt: job.attempts,
         }, 'EVENT_OUTBOX');
       }
-      logger.error(isDead ? 'Background event moved to the event-outbox dead-letter state' : 'Background event delivery failed and was rescheduled', {
-        error,
-        outboxId: job.id,
-        eventType: job.event_type,
-        attempt: job.attempts,
-        nextAttemptAt: isDead ? null : availableAt,
-      }, 'EVENT_OUTBOX');
+      if (isDead && error?.code === 'INVALID_PERSISTED_RECORD') {
+        logger.warn('Background event moved to the event-outbox dead-letter state due to missing or invalid persisted record', {
+          errorMessage: error.message,
+          errorCode: error.code,
+          outboxId: job.id,
+          eventType: job.event_type,
+          attempt: job.attempts,
+          nextAttemptAt: null,
+        }, 'EVENT_OUTBOX');
+      } else {
+        logger.error(isDead ? 'Background event moved to the event-outbox dead-letter state' : 'Background event delivery failed and was rescheduled', {
+          error,
+          outboxId: job.id,
+          eventType: job.event_type,
+          attempt: job.attempts,
+          nextAttemptAt: isDead ? null : availableAt,
+        }, 'EVENT_OUTBOX');
+      }
       if (isDead) dead += 1;
       else retried += 1;
     }

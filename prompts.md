@@ -5920,3 +5920,25 @@ We have not entered or provided my PAN number, but it is automatically appearing
 ```
 [Attached image: image/jpeg (media_1794716504084_2e13fa83.jpg)]
 ---
+
+### Prompt 222
+**Timestamp**: 2026-11-15T15:09:30+05:30
+```text
+After creating an RFQ, RFQ invitations are sent to vendors based on minor category, 
+
+enable a filter here in category manager login based on major dategory (division) & minor category, so that we can check which all vendors invitations are sent based on which major/minor category.
+```
+[Attached image: image/jpeg (media_1794717106292_cbecf1ae.jpg)]
+[Attached image: image/jpeg (media_1794717148756_056b6c3b.jpg)]
+[Attached image: image/jpeg (media_1794717193449_0fe9ca5f.jpg)]
+---
+
+### Prompt 223
+**Timestamp**: 2026-11-15T15:25:58+05:30
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-15T09_54_46.584Z.csv] 
+
+
+Analyse all errors in this logs csv file, please fix them.
+```
+---

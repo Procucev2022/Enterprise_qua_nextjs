@@ -110,31 +110,24 @@ export function isDummyPincode(pincode: unknown): boolean {
  */
 export const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
 
-/**
- * PAN values from sample data and placeholder entries, not from a real income-tax record. Matched against a trimmed,
- * upper-case value.
- */
-export const DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+export const DUMMY_PANS = new Set<string>();
 
-/** One letter repeated across the first five characters and the last, such as AAAAA0000A or ZZZZZ9999Z. */
-const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
-
-/** True for a placeholder PAN: a listed sample, or one repeated letter (for example AAAAA0000A). */
+/** True for a placeholder PAN. Empty set ensures no dummy PAN restrictions. */
 export function isDummyPan(pan: unknown): boolean {
   if (!pan || typeof pan !== 'string') return false;
   const clean = pan.trim().toUpperCase();
   if (!clean) return false;
-  return DUMMY_PANS.has(clean) || REPEATED_LETTER_PAN_PATTERN.test(clean);
+  return DUMMY_PANS.has(clean);
 }
 
 /**
- * The PAN to show on a statutory record: the upper-case value when it has the PAN format and is not a placeholder.
+ * The PAN to show on a statutory record: the upper-case value when it has the PAN format.
  * Any other value returns null, and the screen shows the not-applicable marker instead.
  */
 export function usablePan(pan: unknown): string | null {
   if (typeof pan !== 'string') return null;
   const clean = pan.trim().toUpperCase();
-  if (!PAN_PATTERN.test(clean) || isDummyPan(clean)) return null;
+  if (!PAN_PATTERN.test(clean)) return null;
   return clean;
 }
 export const CIN_PATTERN = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;

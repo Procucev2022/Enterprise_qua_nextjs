@@ -1074,6 +1074,14 @@ sellerDirectory: {
     lineItemSearchAria: 'Search the line items of this RFQ',
     allMinorCategories: 'All Categories',
     minorFilterAria: 'Filter line items by category',
+    supplierMajorFilterLabel: 'Division (Major)',
+    supplierMajorFilterAria: 'Filter invited suppliers by major category division',
+    allSupplierMajors: 'All Divisions',
+    supplierMinorFilterLabel: 'Minor Category',
+    supplierMinorFilterAria: 'Filter invited suppliers by minor category',
+    allSupplierMinors: 'All Minor Categories',
+    clearSupplierFiltersAction: 'Clear filter',
+    showingSuppliersCount: 'Showing {shown} of {total} invited suppliers',
     exportCsvAction: 'Export CSV',
     exportCsvAria: 'Download the line items of {rfqNumber} as CSV',
     colIndex: '#',
@@ -1419,6 +1427,7 @@ sellerDirectory: {
     // silently fabricating a valid session when the API could not be reached.
     networkUnreachable:
       'Cannot reach the Procucev API, so your credentials could not be verified. Check that the backend is running on the configured port and that you are online, then try again.',
+    requestCancelled: 'Request superseded by a newer search.',
     serverErrorFallback:
       'The server rejected the request but did not explain why. Please retry, and contact support if it persists.',
 

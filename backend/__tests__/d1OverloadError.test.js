@@ -20,4 +20,13 @@ describe('isD1OverloadError', () => {
     expect(isD1OverloadError(null)).toBe(false);
     expect(isD1OverloadError(undefined)).toBe(false);
   });
+
+  test('detects nested overload causes without infinite recursion', () => {
+    const wrapped = new Error('Storage temporarily unavailable.');
+    wrapped.cause = new Error('D1_ERROR: D1 DB is overloaded.');
+    expect(isD1OverloadError(wrapped)).toBe(true);
+    const circular = { message: 'outer' };
+    circular.cause = circular;
+    expect(isD1OverloadError(circular)).toBe(false);
+  });
 });

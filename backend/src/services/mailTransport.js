@@ -16,6 +16,8 @@
 // ==============================================================================
 
 const { logger } = require('./loggerService');
+const pool = require('../db/pool');
+const { getWaitUntil } = require('../db/d1Bridge');
 
 const DELIVERY_ERROR_KIND = {
   RATE_LIMITED: 'RATE_LIMITED',
@@ -27,15 +29,20 @@ const DELIVERY_ERROR_KIND = {
 const MAIL_TRANSPORT_CONFIG = {
   // Gmail usually names its own retry time; this is only used when it doesn't.
   DEFAULT_RATE_LIMIT_COOLDOWN_MS: 15 * 60 * 1000,
-  // A revoked/expired refresh token never recovers by itself. Re-checked
-  // periodically anyway so a rotated secret is picked up without a redeploy.
-  AUTH_REVOKED_COOLDOWN_MS: 30 * 60 * 1000,
+  // A revoked/expired refresh token never recovers by itself. Persisted across
+  // Worker isolates for a full day; rotating a Gmail refresh token changes the
+  // provider key fingerprint so the replacement is attempted immediately.
+  AUTH_REVOKED_COOLDOWN_MS: 24 * 60 * 60 * 1000,
   MAX_COOLDOWN_MS: 24 * 60 * 60 * 1000,
+  PERSISTED_CACHE_TTL_MS: 60 * 1000,
   HTTP_TIMEOUT_MS: 15000,
   DEFAULT_FROM_NAME: 'Procucev Enterprise',
 };
 
 const cooldowns = new Map();
+const pendingCooldownWrites = new Map();
+let lastPersistedLoadAt = 0;
+let persistedLoadPromise = null;
 
 function getEnv(key) {
   if (process.env && process.env[key] !== undefined && process.env[key] !== '') {
@@ -273,10 +280,133 @@ function getCooldown(providerKey) {
   return isCoolingDown(providerKey) ? cooldowns.get(providerKey) : null;
 }
 
-function startCooldown(providerKey, durationMs, reason, now = Date.now()) {
+function trackPendingWrite(providerKey, promise) {
+  const tracked = Promise.resolve(promise).finally(() => {
+    if (pendingCooldownWrites.get(providerKey) === tracked) {
+      pendingCooldownWrites.delete(providerKey);
+    }
+  });
+  pendingCooldownWrites.set(providerKey, tracked);
+  const waitUntil = getWaitUntil();
+  if (typeof waitUntil === 'function') {
+    try {
+      waitUntil(tracked);
+    } catch {
+      // Outside active Worker request lifecycle; caller may await flushPendingCooldownWrites().
+    }
+  }
+  return tracked;
+}
+
+async function persistCooldown(providerKey, entry) {
+  try {
+    await pool.query(
+      `INSERT INTO mail_provider_cooldowns (provider_key, until_ms, reason, updated_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (provider_key) DO UPDATE SET
+         until_ms = CASE
+           WHEN excluded.until_ms > mail_provider_cooldowns.until_ms THEN excluded.until_ms
+           ELSE mail_provider_cooldowns.until_ms
+         END,
+         reason = excluded.reason,
+         updated_at = CURRENT_TIMESTAMP`,
+      [String(providerKey), Math.trunc(Number(entry.until)), String(entry.reason || '').slice(0, 500)],
+      { d1: true }
+    );
+    return true;
+  } catch (err) {
+    logger.warn(
+      'Failed to persist mail provider cooldown; continuing with in-memory cooldown',
+      { providerKey, errorMessage: errorText(err).slice(0, 200) },
+      'MAIL_TRANSPORT'
+    );
+    return false;
+  }
+}
+
+async function deletePersistedCooldown(providerKey) {
+  try {
+    await pool.query(
+      'DELETE FROM mail_provider_cooldowns WHERE provider_key = $1',
+      [String(providerKey)],
+      { d1: true }
+    );
+    return true;
+  } catch (err) {
+    logger.warn(
+      'Failed to clear persisted mail provider cooldown',
+      { providerKey, errorMessage: errorText(err).slice(0, 200) },
+      'MAIL_TRANSPORT'
+    );
+    return false;
+  }
+}
+
+async function loadPersistedCooldowns(options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const force = Boolean(options.force);
+  if (!force && lastPersistedLoadAt > 0 && now - lastPersistedLoadAt < MAIL_TRANSPORT_CONFIG.PERSISTED_CACHE_TTL_MS) {
+    return false;
+  }
+  if (!pool.hasStorage()) {
+    lastPersistedLoadAt = now;
+    return false;
+  }
+  if (persistedLoadPromise) {
+    return persistedLoadPromise;
+  }
+  persistedLoadPromise = (async () => {
+    try {
+      const result = await pool.query(
+        `SELECT provider_key, until_ms, reason
+         FROM mail_provider_cooldowns
+         WHERE until_ms > $1`,
+        [Math.trunc(now)],
+        { d1: true }
+      );
+      const rows = (result && result.rows) || [];
+      for (const row of rows) {
+        const until = Number(row.until_ms);
+        const key = row.provider_key;
+        if (!key || !Number.isFinite(until) || until <= now) continue;
+        const existing = cooldowns.get(key);
+        if (!existing || existing.until < until) {
+          cooldowns.set(key, {
+            until,
+            reason: row.reason || 'persisted provider cooldown',
+            since: existing ? existing.since : now,
+          });
+        }
+      }
+      lastPersistedLoadAt = now;
+      return true;
+    } catch (err) {
+      lastPersistedLoadAt = now;
+      logger.warn(
+        'Failed to load persisted mail provider cooldowns; continuing with in-memory cooldowns',
+        { errorMessage: errorText(err).slice(0, 200) },
+        'MAIL_TRANSPORT'
+      );
+      return false;
+    } finally {
+      persistedLoadPromise = null;
+    }
+  })();
+  return persistedLoadPromise;
+}
+
+async function flushPendingCooldownWrites() {
+  if (pendingCooldownWrites.size === 0) return;
+  await Promise.all(Array.from(pendingCooldownWrites.values()));
+}
+
+function startCooldown(providerKey, durationMs, reason, now = Date.now(), options = {}) {
   const capped = Math.min(Math.max(Number(durationMs) || 0, 1000), MAIL_TRANSPORT_CONFIG.MAX_COOLDOWN_MS);
   const entry = { until: now + capped, reason, since: now };
   cooldowns.set(providerKey, entry);
+  if (options.persist !== false && pool.hasStorage()) {
+    trackPendingWrite(providerKey, persistCooldown(providerKey, entry));
+  }
   return entry;
 }
 
@@ -302,10 +432,16 @@ function noteProviderFailure(providerKey, err, now = Date.now()) {
 
 function clearCooldown(providerKey) {
   cooldowns.delete(providerKey);
+  if (pool.hasStorage()) {
+    trackPendingWrite(providerKey, deletePersistedCooldown(providerKey));
+  }
 }
 
 function resetCooldowns() {
   cooldowns.clear();
+  pendingCooldownWrites.clear();
+  lastPersistedLoadAt = 0;
+  persistedLoadPromise = null;
 }
 
 function listCooldowns(now = Date.now()) {
@@ -508,6 +644,8 @@ module.exports = {
   clearCooldown,
   resetCooldowns,
   listCooldowns,
+  loadPersistedCooldowns,
+  flushPendingCooldownWrites,
   fetchWithTimeout,
   configuredHttpProviders,
 };

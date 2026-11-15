@@ -14,7 +14,8 @@ function errorHandler(err, req, res, next) {
   const hasExplicitStatus = Number.isInteger(requestedStatus) && requestedStatus >= 400 && requestedStatus <= 599;
   // A D1 overload without its own status is a retryable outage, not an internal error.
   // The response text stays generic so database internals are not exposed.
-  const databaseOverloaded = !hasExplicitStatus && isD1OverloadError(err);
+  const overloadSignal = isD1OverloadError(err);
+  const databaseOverloaded = overloadSignal && (!hasExplicitStatus || Number(requestedStatus) === 503);
   let statusCode = 500;
   if (databaseOverloaded) statusCode = 503;
   else if (hasExplicitStatus) statusCode = requestedStatus;

@@ -3,6 +3,7 @@ const domainQueries = require('../src/db/domainQueries');
 const eventOutboxQueries = require('../src/db/eventOutboxQueries');
 const eventOutboxService = require('../src/services/eventOutboxService');
 const mailerService = require('../src/services/mailerService');
+const { logger } = require('../src/services/loggerService');
 const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 
 describe('durable RFQ quote notification delivery', () => {
@@ -106,5 +107,25 @@ describe('durable RFQ quote notification delivery', () => {
       status: 'pending',
       lastError: 'EMAIL_DELIVERY_NOT_ACCEPTED:Error',
     }));
+  });
+
+  test('logs orphaned INVALID_PERSISTED_RECORD dead-letters at warn level without ERROR log spam', async () => {
+    claim(payload);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(null);
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Background event moved to the event-outbox dead-letter state due to missing or invalid persisted record',
+      expect.objectContaining({
+        outboxId: 'rfq-quote-email:quote-1',
+        eventType: EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
+        errorCode: 'INVALID_PERSISTED_RECORD',
+        nextAttemptAt: null,
+      }),
+      'EVENT_OUTBOX'
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });

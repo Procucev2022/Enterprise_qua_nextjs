@@ -735,16 +735,22 @@ describe('AuthClient.changePassword', () => {
       expect(authClient.getToken()).toBe('new-token');
     });
 
-    test('logout with explicit email', async () => {
+    test('logout with explicit email clears local session synchronously before POST settles', async () => {
       authClient.setSession({ id: 'u1', email: 'session@test.com', role: 'buyer', name: 'B', orgId: 'o1', orgName: 'O' }, 'tok');
       let capturedEmail: string | undefined;
+      let capturedAuth: string | undefined;
+      let tokenDuringFetch: string | null = 'not-checked';
       global.fetch = jest.fn().mockImplementation(async (_, opts) => {
+        tokenDuringFetch = authClient.getToken();
         const body = JSON.parse(opts.body);
         capturedEmail = body.email;
+        capturedAuth = opts.headers?.Authorization;
         return { ok: true, json: async () => ({ success: true }) };
       });
 
       await authClient.logout('custom@test.com');
+      expect(tokenDuringFetch).toBeNull();
+      expect(capturedAuth).toBe('Bearer tok');
       expect(capturedEmail).toBe('custom@test.com');
       expect(authClient.getToken()).toBeNull();
     });

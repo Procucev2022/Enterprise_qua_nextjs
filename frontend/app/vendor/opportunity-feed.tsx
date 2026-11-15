@@ -88,6 +88,7 @@ export default function OpportunityFeed({
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
   // Unlimited access comes only from the backend subscription plan held in the store.
   const isUnlimited = vendorSubscription === 'unlimited';
+  const todayIso = new Date().toISOString().split('T')[0];
 
   // Issue 1: Dynamically validate credit balance. When seller has sufficient credits (> 0 or loading),
   // hide the Upgrade button and permit bid submission. Display Upgrade button only when credits are exhausted (0).
@@ -361,11 +362,13 @@ export default function OpportunityFeed({
 
   const [statusFilter, setStatusFilter] = React.useState<'all' | 'open' | 'submitted' | 'closed'>('all');
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false);
-  const [statusModalFilter, setStatusModalFilter] = React.useState<'all' | 'open' | 'closed' | null>(null);
+  const [statusModalFilter, setStatusModalFilter] = React.useState<'all' | 'open' | 'closed' | 'due_today' | null>(null);
   const [statusModalSearch, setStatusModalSearch] = React.useState('');
 
-  const handleStatFilterClick = (status: 'all' | 'open' | 'closed') => {
-    setStatusFilter(status);
+  const handleStatFilterClick = (status: 'all' | 'open' | 'closed' | 'due_today') => {
+    if (status !== 'due_today') {
+      setStatusFilter(status);
+    }
     setCurrentPage(1);
     setCurrentPageNet(1);
     setStatusModalSearch('');
@@ -380,27 +383,6 @@ export default function OpportunityFeed({
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [statusModalFilter]);
-
-  const statusModalRfqs = React.useMemo(() => {
-    if (!statusModalFilter) return [];
-    let list = vendorOpportunities;
-    if (statusModalFilter === 'open') {
-      list = list.filter((o) => o.status !== 'Closed' && o.status !== 'Expired');
-    } else if (statusModalFilter === 'closed') {
-      list = list.filter((o) => o.status === 'Closed' || o.status === 'Expired');
-    }
-    if (statusModalSearch.trim()) {
-      const q = statusModalSearch.toLowerCase().trim();
-      list = list.filter((o) => {
-        const title = (o.title || '').toLowerCase();
-        const rfqNum = (o.rfqNumber || '').toLowerCase();
-        const buyer = (o.buyer || '').toLowerCase();
-        const cat = `${o.majorCategory || ''} ${o.minorCategory || ''}`.toLowerCase();
-        return title.includes(q) || rfqNum.includes(q) || buyer.includes(q) || cat.includes(q);
-      });
-    }
-    return list;
-  }, [statusModalFilter, vendorOpportunities, statusModalSearch]);
 
   const handleResetFilters = () => {
     setSelectedBuyerDirect('all');
@@ -463,9 +445,9 @@ export default function OpportunityFeed({
     }
 
     const bCompany = myAddedByBuyerCompany || myVendorRecord?.addedByBuyerCompany;
-    if (bCompany && (opp.buyer === bCompany || rfqRecord?.buyerAccountName === bCompany)) return true;
+    if (bCompany && opp.buyer === bCompany) return true;
     const bId = myBuyerId || myVendorRecord?.buyerId || myVendorRecord?.buyerAccountId;
-    if (bId && (opp.buyerAccountId === bId || rfqRecord?.buyerAccountId === bId)) return true;
+    if (bId && opp.buyerAccountId === bId) return true;
     return false;
   }, [rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
 
@@ -737,10 +719,33 @@ export default function OpportunityFeed({
   const totalRfqsCount = vendorOpportunities.length;
   const openRfqsCount = vendorOpportunities.filter((o) => o.status !== 'Closed' && o.status !== 'Expired').length;
   const closedRfqsCount = vendorOpportunities.filter((o) => o.status === 'Closed' || o.status === 'Expired').length;
-  const todayIso = new Date().toISOString().split('T')[0];
   const dueTodayCount =
     vendorOpportunities.filter((o) => o.deadline && o.deadline.startsWith(todayIso)).length ||
     (pendingBidCount > 0 ? Math.min(pendingBidCount, 3) : 0);
+
+  const statusModalRfqs = React.useMemo(() => {
+    if (!statusModalFilter) return [];
+    let list = vendorOpportunities;
+    if (statusModalFilter === 'open') {
+      list = list.filter((o) => o.status !== 'Closed' && o.status !== 'Expired');
+    } else if (statusModalFilter === 'closed') {
+      list = list.filter((o) => o.status === 'Closed' || o.status === 'Expired');
+    } else if (statusModalFilter === 'due_today') {
+      const todayMatches = list.filter((o) => o.deadline && o.deadline.startsWith(todayIso));
+      list = todayMatches.length > 0 ? todayMatches : pendingBidOpportunities.slice(0, dueTodayCount || 3);
+    }
+    if (statusModalSearch.trim()) {
+      const q = statusModalSearch.toLowerCase().trim();
+      list = list.filter((o) => {
+        const title = (o.title || '').toLowerCase();
+        const rfqNum = (o.rfqNumber || '').toLowerCase();
+        const buyer = (o.buyer || '').toLowerCase();
+        const cat = `${o.majorCategory || ''} ${o.minorCategory || ''}`.toLowerCase();
+        return title.includes(q) || rfqNum.includes(q) || buyer.includes(q) || cat.includes(q);
+      });
+    }
+    return list;
+  }, [statusModalFilter, vendorOpportunities, statusModalSearch, todayIso, pendingBidOpportunities, dueTodayCount]);
 
   const renderPaginationControls = (
     currentP: number,
@@ -1074,7 +1079,16 @@ export default function OpportunityFeed({
         </button>
 
         {/* Card 4: Due Today Deadline RFQ */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-slate-200/80 dark:border-gray-800 shadow-xs flex items-center gap-3.5">
+        <button
+          type="button"
+          onClick={() => handleStatFilterClick('due_today')}
+          className={`bg-white dark:bg-gray-900 rounded-2xl p-4 border transition-all text-left flex items-center gap-3.5 cursor-pointer hover:shadow-md hover:scale-[1.01] ${
+            statusModalFilter === 'due_today'
+              ? 'border-orange-500 ring-2 ring-orange-500/30 shadow-sm'
+              : 'border-slate-200/80 dark:border-gray-800 shadow-xs'
+          }`}
+          title="Filter to Due Today RFQs and view popup list"
+        >
           <div className="w-11 h-11 rounded-xl bg-orange-50 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400 flex items-center justify-center shrink-0 border border-orange-100 dark:border-orange-900/40">
             <Calendar size={20} />
           </div>
@@ -1086,7 +1100,7 @@ export default function OpportunityFeed({
               {dueTodayCount}
             </span>
           </div>
-        </div>
+        </button>
 
         {/* Action: Submit Quote Now */}
         {pendingBidOpportunity && (
@@ -1869,6 +1883,8 @@ export default function OpportunityFeed({
                       ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400'
                       : statusModalFilter === 'closed'
                       ? 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
+                      : statusModalFilter === 'due_today'
+                      ? 'bg-orange-50 text-orange-600 dark:bg-orange-950/50 dark:text-orange-400'
                       : 'bg-blue-50 text-blue-600 dark:bg-blue-950/50 dark:text-blue-400'
                   }`}
                 >
@@ -1876,6 +1892,8 @@ export default function OpportunityFeed({
                     <Send size={18} />
                   ) : statusModalFilter === 'closed' ? (
                     <Clock size={18} />
+                  ) : statusModalFilter === 'due_today' ? (
+                    <Calendar size={18} />
                   ) : (
                     <FileText size={18} />
                   )}
@@ -1886,6 +1904,8 @@ export default function OpportunityFeed({
                       ? 'Open RFQs'
                       : statusModalFilter === 'closed'
                       ? 'Closed RFQs'
+                      : statusModalFilter === 'due_today'
+                      ? 'Due Today Deadline RFQs'
                       : 'Total RFQs'}
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-gray-400">
@@ -1893,6 +1913,8 @@ export default function OpportunityFeed({
                       ? 'Active RFQs currently accepting quotes and responses'
                       : statusModalFilter === 'closed'
                       ? 'RFQs that are closed or expired'
+                      : statusModalFilter === 'due_today'
+                      ? 'RFQs with quotation deadline due today or requiring urgent attention'
                       : 'All available RFQs across invitations and marketplace'}
                   </p>
                 </div>
@@ -1902,6 +1924,8 @@ export default function OpportunityFeed({
                       ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
                       : statusModalFilter === 'closed'
                       ? 'bg-slate-200 text-slate-700 dark:bg-gray-700 dark:text-gray-300'
+                      : statusModalFilter === 'due_today'
+                      ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/60 dark:text-orange-300'
                       : 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300'
                   }`}
                 >
@@ -2024,6 +2048,8 @@ export default function OpportunityFeed({
                   ? openRfqsCount
                   : statusModalFilter === 'closed'
                   ? closedRfqsCount
+                  : statusModalFilter === 'due_today'
+                  ? dueTodayCount
                   : totalRfqsCount}{' '}
                 RFQs
               </span>

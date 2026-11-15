@@ -318,6 +318,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const resolveOpportunityCategory = useCallback((opp: VendorOpportunity): string => {
     const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
     return (
+      opp.minorCategory ||
+      rfqRecord?.extractedEntities?.[0]?.minorCategory ||
       opp.majorCategory ||
       opp.category ||
       rfqRecord?.category ||
@@ -327,21 +329,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     ).trim();
   }, [rfqs]);
 
-  // Extract distinct categories available across opportunities
+  // Extract distinct minor categories available across opportunities
   const availableCategories = useMemo(() => {
     const set = new Set<string>();
     vendorOpportunities.forEach((opp) => {
-      const cat = (opp.majorCategory || opp.category || '').trim();
+      const cat = resolveOpportunityCategory(opp);
       if (cat) set.add(cat);
     });
     rfqs.forEach((rfq) => {
-      if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
       (rfq.extractedEntities || []).forEach((e) => {
-        if (e.majorCategory && e.majorCategory.trim()) set.add(e.majorCategory.trim());
+        const entCat = (e.minorCategory || e.majorCategory || '').trim();
+        if (entCat) set.add(entCat);
       });
+      if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
     });
     return Array.from(set).sort();
-  }, [vendorOpportunities, rfqs]);
+  }, [vendorOpportunities, rfqs, resolveOpportunityCategory]);
 
   // Compile RFQ Bidding summaries
   const myEnquiries = useMemo(() => {
@@ -1092,53 +1095,6 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </select>
             </label>
           </div>
-
-          {/* Quick Category Chips */}
-          {availableCategories.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[11px]">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mr-1">
-                Categories:
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedCategories([])}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                  selectedCategories.length === 0
-                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
-                    : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
-                }`}
-              >
-                All Categories ({totalReceivedCount})
-              </button>
-              {availableCategories.map((cat) => {
-                const isSelected = selectedCategories.includes(cat);
-                const count = vendorOpportunities.filter((opp) => {
-                  return resolveOpportunityCategory(opp).toLowerCase() === cat.toLowerCase();
-                }).length;
-                return (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => {
-                      setSelectedCategories((prev) =>
-                        prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
-                      );
-                    }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                      isSelected
-                        ? 'bg-blue-600 text-white shadow-2xs font-bold'
-                        : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    <span>{cat}</span>
-                    <span className={`text-[10px] px-1 py-0.2 rounded-full ${isSelected ? 'bg-blue-700 text-white' : 'bg-slate-200 dark:bg-gray-700 text-slate-500'}`}>
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
 
           <p aria-live="polite" className="text-xs font-medium text-slate-500 dark:text-gray-400">
             Showing <span className="font-bold text-slate-700 dark:text-gray-200">{filteredOpportunities.length}</span> of {totalReceivedCount} enquiries

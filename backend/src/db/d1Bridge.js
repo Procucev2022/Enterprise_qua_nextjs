@@ -246,10 +246,14 @@ function isRetryableD1Error(err) {
 // HTTP response into a database-busy response.
 const D1_OVERLOAD_ERROR_PATTERN = /D1 DB is overloaded|too many resources consumed/i;
 
-function isD1OverloadError(err) {
-  if (!err) return false;
+function isD1OverloadError(err, depth = 0) {
+  if (!err || depth > 4) return false;
   const msg = err.message || String(err);
-  return D1_OVERLOAD_ERROR_PATTERN.test(msg);
+  if (D1_OVERLOAD_ERROR_PATTERN.test(msg)) return true;
+  if (err && typeof err === 'object' && err.cause) {
+    return isD1OverloadError(err.cause, depth + 1);
+  }
+  return false;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

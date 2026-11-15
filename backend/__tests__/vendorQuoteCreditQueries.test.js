@@ -58,6 +58,10 @@ describe('atomic vendor quote credit persistence', () => {
   test('validates object parsing and quote credit eligibility', () => {
     expect(quoteCreditQueries.parseVendorRaw(JSON.stringify(baseVendor))).toEqual(baseVendor);
     expect(quoteCreditQueries.parseVendorRaw({ id: 'v' })).toEqual({ id: 'v' });
+    expect(quoteCreditQueries.parseVendorRaw(JSON.stringify({ ...baseVendor, pan: 'ABCPE1234F', tempPassword: 'tmp' }))).toEqual(baseVendor);
+    const objWithDummyPan = { ...baseVendor, panNumber: 'ABCPE1234F', tempPassword: 'tmp' };
+    expect(quoteCreditQueries.parseVendorRaw(objWithDummyPan)).toEqual(baseVendor);
+    expect(objWithDummyPan.panNumber).toBe('ABCPE1234F');
     expect(quoteCreditQueries.parseVendorRaw(null)).toEqual({});
     expect(quoteCreditQueries.parseVendorRaw('[]')).toEqual({});
     expect(() => quoteCreditQueries.parseVendorRaw('bad-json')).toThrow('Persisted vendor profile contains invalid JSON');

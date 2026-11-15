@@ -39,7 +39,7 @@ describe('vendor update: statutory identifiers are locked to the buyer', () => {
     next = jest.fn();
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'buyer-1', organizationName: 'Acme Ltd' });
     update = jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, changes) => ({ id, ...changes }));
-    jest.spyOn(logger, 'info').mockImplementation(() => {});
+    jest.spyOn(logger, 'info').mockImplementation(() => { });
   });
 
   afterEach(() => {

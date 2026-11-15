@@ -2019,6 +2019,15 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     const modalBackdrop = screen.getByRole('dialog', { name: /Total RFQs/i });
     fireEvent.click(modalBackdrop);
     expect(screen.queryByRole('dialog', { name: /Total RFQs/i })).not.toBeInTheDocument();
+
+    // 4. Click Due Today Deadline RFQ card
+    const dueTodayCard = screen.getByRole('button', { name: /Due Today Deadline RFQ/i });
+    fireEvent.click(dueTodayCard);
+    const dueTodayDialog = screen.getByRole('dialog', { name: /Due Today Deadline RFQs/i });
+    expect(dueTodayDialog).toBeInTheDocument();
+    expect(within(dueTodayDialog).getByText(/Due Today Deadline RFQs/i)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /Due Today Deadline RFQs/i })).not.toBeInTheDocument();
   });
 
   test('covers all branches of status modal search, fallbacks, category clearing, and network category options', async () => {
