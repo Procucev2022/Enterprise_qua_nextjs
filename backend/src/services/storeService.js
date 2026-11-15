@@ -37,6 +37,7 @@ const {
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   RFQ_MINOR_INVITE_LOOKUP,
   RFQ_MINOR_SHORTFALL_ALERT,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
   EXTENSION_HOURS_PER_DAY,
   clearDummyPanFields,
 } = require('../config/constants');
@@ -7505,10 +7506,15 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    */
   async _fetchMinorCandidatesFromDB(minors, fetchMatches) {
     const perMinor = this._minorLookupLimit();
+    const terms = minorSearchTerms(minors);
+    const exceedsSignalCap = terms.length > PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS;
     const combinedLimit = Math.min(perMinor * minors.length, RFQ_MINOR_INVITE_LOOKUP.MAX_ROWS);
-    const combined = await fetchMatches(minors, combinedLimit);
-    const rows = Array.isArray(combined) ? [...combined] : [];
-    if (minors.length < 2 || rows.length < combinedLimit) return rows;
+    const rows = [];
+    if (!exceedsSignalCap) {
+      const combined = await fetchMatches(minors, combinedLimit);
+      if (Array.isArray(combined)) rows.push(...combined);
+      if (minors.length < 2 || rows.length < combinedLimit) return rows;
+    }
     for (const minor of minors) {
       const minorRows = await fetchMatches([minor], perMinor);
       if (Array.isArray(minorRows)) rows.push(...minorRows);
@@ -7518,21 +7524,27 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
 
   /**
    * Network vendors filed under the parent major of each minor, read for the top-up. One lookup per
-   * distinct parent major, so a large major cannot crowd out a smaller one.
+   * distinct parent major, scaled by how many distinct minor categories share that major set.
    *
    * @param {string[]} minors
    * @returns {Promise<Object[]>}
    */
   async _fetchMajorFallbackFromDB(minors) {
     const perMinor = this._minorLookupLimit();
-    const seenMajorSets = new Set();
-    const rows = [];
+    const majorBuckets = new Map();
     for (const minor of minors) {
       const majors = this._majorCategoriesForMinors([minor]);
       const setKey = majors.slice().sort().join('|');
-      if (majors.length === 0 || seenMajorSets.has(setKey)) continue;
-      seenMajorSets.add(setKey);
-      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, perMinor);
+      if (majors.length === 0) continue;
+      if (!majorBuckets.has(setKey)) {
+        majorBuckets.set(setKey, { majors, minorKeys: new Set() });
+      }
+      majorBuckets.get(setKey).minorKeys.add(taxonomyKeyOf(minor));
+    }
+    const rows = [];
+    for (const { majors, minorKeys } of majorBuckets.values()) {
+      const majorLimit = Math.min(perMinor * minorKeys.size, RFQ_MINOR_INVITE_LOOKUP.MAX_ROWS);
+      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit);
       if (Array.isArray(majorRows)) rows.push(...majorRows);
     }
     return rows;
@@ -7885,6 +7897,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     }
 
     this._persistRFQ(updated);
+    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-v0-augmented-vendor-invites');
 
     logger.info(
       `V0 RFQ ${rfq.rfqNumber}: assigned ${updated.assignedVendors.length} Procucev vendors from DB match (${committedAdditions.length} added)`,
@@ -7912,7 +7925,11 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
 
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
     if (isV0) {
-      return await this.augmentV0AssignmentsFromDB(rfq, { deferChasers, notifyShortfall });
+      return await this.augmentV0AssignmentsFromDB(rfq, {
+        deferChasers,
+        notifyShortfall,
+        ...(rethrowOnDatabaseError ? { rethrowOnDatabaseError } : {}),
+      });
     }
 
     const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY || 5;

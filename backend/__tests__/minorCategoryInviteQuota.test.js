@@ -310,6 +310,34 @@ describe('network lookups for minor categories', () => {
 
     expect(await storeService._fetchMajorFallbackFromDB([MINOR])).toEqual([]);
   });
+
+  test('scales parent major fallback lookup limit by distinct minor count sharing that major', async () => {
+    const spy = jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
+
+    await storeService._fetchMajorFallbackFromDB([
+      'Laptop',
+      'Computer',
+      'Printers',
+      'Networking Equipment',
+      'UPS',
+    ]);
+
+    expect(spy).toHaveBeenCalledWith(expect.arrayContaining(['it']), PER_MINOR_LOOKUP * 4);
+    expect(spy).toHaveBeenCalledWith(expect.arrayContaining(['capex - equipment & machinery']), PER_MINOR_LOOKUP);
+  });
+
+  test('skips truncated combined lookup and queries each minor individually when search terms exceed MAX_SIGNALS', async () => {
+    const manyMinors = Array.from({ length: 30 }, (_, i) => `CustomMinor${i}s`);
+    const fetch = jest.fn(async (subset) => [{ id: `v-${subset[0]}` }]);
+
+    const rows = await storeService._fetchMinorCandidatesFromDB(manyMinors, fetch);
+
+    expect(fetch).toHaveBeenCalledTimes(30);
+    for (let i = 0; i < 30; i += 1) {
+      expect(fetch).toHaveBeenCalledWith([manyMinors[i]], PER_MINOR_LOOKUP);
+    }
+    expect(rows).toHaveLength(30);
+  });
 });
 
 describe('minor shortfall alert', () => {
@@ -516,6 +544,55 @@ describe('database top-up for a minor-level RFQ', () => {
     const created = createQuietRfq({ sourcingMode: 'mode_1', id: 'rfq-v1-fill', rfqNumber: 'RFQ-V1-FILL' }, BUYER_7);
 
     expect(idsOf(created.assignedVendors)).toEqual(['r-major']);
+  });
+
+  test('a V0 RFQ with four IT minors and one CAPEX minor falling back to parent majors invites 125 distinct vendors', async () => {
+    const itMajorVendors = Array.from({ length: 120 }, (_, i) =>
+      networkVendor(`it-maj-${i}`, { major: 'IT', rating: 5 - i * 0.01 })
+    );
+    const capexMajorVendors = Array.from({ length: 30 }, (_, i) =>
+      networkVendor(`capex-maj-${i}`, { major: 'CAPEX - Equipment & Machinery', rating: 5 - i * 0.01 })
+    );
+    jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([]);
+    jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockImplementation(async (majors, limit) => {
+      if (majors.includes('it')) return itMajorVendors.slice(0, limit);
+      if (majors.includes('capex - equipment & machinery')) return capexMajorVendors.slice(0, limit);
+      return [];
+    });
+
+    const created = createQuietRfq({
+      sourcingMode: 'mode_0',
+      id: 'rfq-multi-it-capex',
+      rfqNumber: 'RFQ-MULTI-IT-CAPEX',
+      category: 'IT',
+      extractedEntities: [
+        { minorCategory: 'Laptop', majorCategory: 'IT', quantity: 25, unit: 'Nos' },
+        { minorCategory: 'Computer', majorCategory: 'IT', quantity: 10, unit: 'Nos' },
+        { minorCategory: 'Printers', majorCategory: 'IT', quantity: 5, unit: 'Nos' },
+        { minorCategory: 'Networking Equipment', majorCategory: 'IT', quantity: 8, unit: 'Nos' },
+        { minorCategory: 'UPS', majorCategory: 'CAPEX - Equipment & Machinery', quantity: 6, unit: 'Nos' },
+      ],
+    });
+
+    const updated = await storeService.augmentV0AssignmentsFromDB(created, { notifyShortfall: true });
+
+    expect(updated.assignedVendors).toHaveLength(125);
+    expect(alertSpy).toHaveBeenCalledWith(created, [
+      { minorCategory: 'Laptop', majorCategory: 'IT', minorMatched: 0, majorFilled: 25, target: 25 },
+      { minorCategory: 'Computer', majorCategory: 'IT', minorMatched: 0, majorFilled: 25, target: 25 },
+      { minorCategory: 'Printers', majorCategory: 'IT', minorMatched: 0, majorFilled: 25, target: 25 },
+      { minorCategory: 'Networking Equipment', majorCategory: 'IT', minorMatched: 0, majorFilled: 25, target: 25 },
+      { minorCategory: 'UPS', majorCategory: 'CAPEX - Equipment & Machinery', minorMatched: 0, majorFilled: 25, target: 25 },
+    ]);
+  });
+
+  test('autoAssignVendorsFromDB forwards rethrowOnDatabaseError when delegating a V0 RFQ', async () => {
+    const created = createQuietRfq({ sourcingMode: 'mode_0', id: 'rfq-v0-rethrow', rfqNumber: 'RFQ-V0-RETHROW' });
+    const spy = jest.spyOn(storeService, 'augmentV0AssignmentsFromDB').mockResolvedValue(created);
+
+    await storeService.autoAssignVendorsFromDB(created, { deferChasers: true, notifyShortfall: true, rethrowOnDatabaseError: true });
+
+    expect(spy).toHaveBeenCalledWith(created, { deferChasers: true, notifyShortfall: true, rethrowOnDatabaseError: true });
   });
 });
 

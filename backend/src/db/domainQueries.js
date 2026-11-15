@@ -696,7 +696,7 @@ async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCate
   );
   // A term matches an element that starts with it, inside the JSON quotes, so the singular or
   // plural stem reaches the same vendors the exact minor check accepts.
-  const patterns = terms.map((term) => `%"${term}`);
+  const patterns = terms.map((term) => `%"${term}%`);
 
   // Postgres: one array parameter for the majors, then one quoted pattern per minor, then the limit.
   const pgParams = [majors, ...patterns, safeLimit];

@@ -5962,3 +5962,17 @@ Please find the details
 [Attached image: image/png (media_1794741929138_090e40bd.png)]
 [Attached image: image/jpeg (media_1794741954944_cac406c7.jpg)]
 ---
+
+### Prompt 226
+**Timestamp**: 2026-11-15T17:18:00+05:30
+```text
+invite 25 vendors for submitting quotations per each unique minor category per respective pincode. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at quateam@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com 
+
+But seems like vendors are not getting invited all together properly even if they are invited, they are getting invited based on respective minor properly. Please check all issues, seems like minor category is not even getting fetched properly. Please analyse & fix it properly. 
+
+in one case, it didn't sent the RFQ invitations to any vendors at all. 
+in one another case, it detected zero minor category vendors for all unique distinct category for that pincode , & sent to all major category vendors. Please check & fix 
+```
+[Attached image: image/png (media_1794742970605_68b1444c.jpg)]
+[Attached image: image/png (media_1794743095975_ea75bba6.jpg)]
+---

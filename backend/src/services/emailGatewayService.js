@@ -3159,7 +3159,10 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     if (typeof storeService.autoAssignVendorsFromDB === 'function') {
       try {
-        await storeService.autoAssignVendorsFromDB(created, { notifyShortfall: true });
+        const assignedRFQ = await storeService.autoAssignVendorsFromDB(created, { notifyShortfall: true });
+        if (assignedRFQ && typeof assignedRFQ === 'object') {
+          created = assignedRFQ;
+        }
       } catch (assignErr) {
         logger.warn('Failed to auto-assign vendors for email RFQ', { rfqNumber: created.rfqNumber, error: assignErr.message }, 'EMAIL_GATEWAY');
       }
