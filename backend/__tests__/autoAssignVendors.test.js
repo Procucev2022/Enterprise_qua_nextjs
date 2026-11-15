@@ -166,6 +166,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
         sourcingMode: 'mode_3',
       });
 
+      jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockRejectedValue(new Error('DB failure'));
       jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockRejectedValue(new Error('DB failure'));
       jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('Fallback DB failure'));
       // 'Hardware' is a taxonomy minor, so this RFQ is minor-level. With storage, its plan is never built from

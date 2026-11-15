@@ -50,7 +50,7 @@ const auditLogQueries = require('../db/auditLogQueries');
 const paymentActivationQueries = require('../db/paymentActivationQueries');
 const identityQueries = require('../db/identityQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const { getWaitUntil } = require('../db/d1Bridge');
+const { getWaitUntil, isD1Overloaded, isRetryableD1Error } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 // Called through the namespace so tests can stub the senders without rewiring
@@ -482,7 +482,11 @@ class StoreService {
       );
       return { hydrated: true, source: 'postgres' };
     } catch (err) {
-      logger.error('Failed to load domain records from the configured database', err, 'STORE_SERVICE');
+      if (isRetryableD1Error(err) || isD1Overloaded()) {
+        logger.warn('Failed to load domain records from the configured database', err, 'STORE_SERVICE');
+      } else {
+        logger.error('Failed to load domain records from the configured database', err, 'STORE_SERVICE');
+      }
       this.isHydratedFromDB = false;
       this._setDatabaseHealthRow({
         status: INFRASTRUCTURE_HEALTH.STATUS.UNREACHABLE,
@@ -7309,11 +7313,12 @@ class StoreService {
         { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, path }
       );
     } catch (queueError) {
-      logger.error(
-        'Failed to queue the RFQ vendor plan retry',
-        { rfqNumber: rfq.rfqNumber, path, error: queueError?.message },
-        'STORE_SERVICE'
-      );
+      const details = { rfqNumber: rfq.rfqNumber, path, error: queueError?.message };
+      if (isRetryableD1Error(queueError) || isD1Overloaded()) {
+        logger.warn('Failed to queue the RFQ vendor plan retry', details, 'STORE_SERVICE');
+      } else {
+        logger.error('Failed to queue the RFQ vendor plan retry', details, 'STORE_SERVICE');
+      }
     }
     return rfq;
   }
@@ -7431,8 +7436,8 @@ class StoreService {
     });
     if (procucevAssigned.length > 0) return procucevAssigned.length;
 
-    // No DB configured (dev/in-memory): the capped-subset count is all we have.
-    if (!pool.hasStorage()) return this.getProcucevVendorCount(rfq);
+    // No DB configured (dev/in-memory) or D1 transiently overloaded: avoid hammering D1 with count scans.
+    if (!pool.hasStorage() || isD1Overloaded()) return this.getProcucevVendorCount(rfq);
 
     // Every category string the RFQ carries — its header `category` plus each
     // line item's major/minor/category (an email/BOQ-ingested RFQ often tags
@@ -7466,17 +7471,21 @@ class StoreService {
     // so it is the honest "Procucev vendors available for this version" figure.
     // For V0 without categories, do NOT fallback to the directory-wide count!
     if (dbCount === 0 && !isV0) {
-      try {
-        const page = await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 0, publicOnly: true });
-        if (page && typeof page.total === 'number') {
-          dbCount = page.total;
+      if (this.vendorsTotal > 0) {
+        dbCount = this.vendorsTotal;
+      } else if (!isD1Overloaded()) {
+        try {
+          const page = await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 0, publicOnly: true });
+          if (page && typeof page.total === 'number') {
+            dbCount = page.total;
+          }
+        } catch (err) {
+          logger.warn(
+            'Procucev network total count DB query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
         }
-      } catch (err) {
-        logger.warn(
-          'Procucev network total count DB query failed',
-          { rfqNumber: rfq.rfqNumber, error: err.message },
-          'STORE_SERVICE'
-        );
       }
     }
 
@@ -8018,11 +8027,23 @@ class StoreService {
       if (pool.hasStorage()) {
         try {
           if (minorScoped) {
-            // Each minor is read on its own, plus the network vendors under its parent major for the top-up.
-            const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => domainQueries.getPublicVendorsMatchingCategories(
-              minorSearchTerms(subset),
-              rowLimit
-            ));
+            // Query the indexed minor lookup under the parent major(s) so D1 scans only those
+            // major categories via idx_vendors_major_category_created_at; fall back to the
+            // broader category lookup only for unmapped minors with no parent major.
+            const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => {
+              const lookupMajors = this._majorCategoriesForMinors(subset, { allMajors: true });
+              if (lookupMajors.length > 0 && typeof domainQueries.getPublicVendorsByMinorCategoryFromDB === 'function') {
+                return domainQueries.getPublicVendorsByMinorCategoryFromDB(
+                  minorSearchTerms(subset),
+                  lookupMajors,
+                  rowLimit
+                );
+              }
+              return domainQueries.getPublicVendorsMatchingCategories(
+                minorSearchTerms(subset),
+                rowLimit
+              );
+            });
             const majorRows = await this._fetchMajorFallbackFromDB(minors);
             dbMatches = [...minorRows, ...majorRows];
           } else {
@@ -11055,12 +11076,17 @@ class StoreService {
       try {
         return await read();
       } catch (error) {
-        logger.error('Configured vendor read failed while building bootstrap data', {
+        const details = {
           error,
           operation,
           buyerScopePresent: Boolean(scopedBuyerId),
           sessionEmailPresent: Boolean(sessionEmail),
-        }, 'STORE_SERVICE');
+        };
+        if (isRetryableD1Error(error) || isD1Overloaded()) {
+          logger.warn('Configured vendor read failed while building bootstrap data', details, 'STORE_SERVICE');
+        } else {
+          logger.error('Configured vendor read failed while building bootstrap data', details, 'STORE_SERVICE');
+        }
         throw error;
       }
     };

@@ -9,7 +9,7 @@ const rfqAttachmentService = require('../services/rfqAttachmentService');
 const quoteAttachmentService = require('../services/quoteAttachmentService');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { logger } = require('../services/loggerService');
-const { getWaitUntil } = require('../db/d1Bridge');
+const { getWaitUntil, isD1Overloaded } = require('../db/d1Bridge');
 const pool = require('../db/pool');
 const emailGatewayService = require('../services/emailGatewayService');
 const emailIngestionService = require('../services/emailIngestionService');
@@ -852,7 +852,7 @@ async function getRFQById(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const mode = String(rfq.sourcingMode || '');
-    if ((!Array.isArray(rfq.assignedVendors) || rfq.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
+    if ((!Array.isArray(rfq.assignedVendors) || rfq.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function' && !isD1Overloaded()) {
       try {
         rfq = await storeService.autoAssignVendorsFromDB(rfq);
       } catch (assignErr) {

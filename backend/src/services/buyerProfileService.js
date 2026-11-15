@@ -14,12 +14,14 @@
 
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const pool = require('../db/pool');
+const d1Bridge = require('../db/d1Bridge');
 const storeService = require('./storeService');
 const { logger } = require('./loggerService');
 const {
   AUTH_MESSAGES,
   BUYER_PROFILE_CONFIG,
   BUYER_PROFILE_MESSAGES,
+  DEFAULT_CATEGORY_TAXONOMY,
   VALIDATION_SCHEMAS,
   validatePayload,
   formatMessage,
@@ -77,6 +79,29 @@ function raiseLookupFailure(reason) {
 /**
  * Read the signed-in buyer's organisation profile.
  */
+function buildFallbackProfileFromBuyerAccount({ userId, email, buyerAcc }) {
+  const pickString = (...values) => values.find((v) => typeof v === 'string' && v.trim() !== '') || '';
+  const phone = pickString(buyerAcc.phone, buyerAcc.mobile);
+  return {
+    userId,
+    email,
+    organizationId: pickString(buyerAcc.organizationId, buyerAcc.id) || userId,
+    companyName: pickString(buyerAcc.organizationName, buyerAcc.companyName),
+    contactName: pickString(buyerAcc.contactPerson, buyerAcc.name),
+    contactEmail: email,
+    contactPhone: phone,
+    phone,
+    street: pickString(buyerAcc.street, buyerAcc.address1, buyerAcc.address),
+    city: pickString(buyerAcc.city),
+    state: pickString(buyerAcc.state),
+    pincode: pickString(buyerAcc.pincode, buyerAcc.zip_code, buyerAcc.zipCode),
+    country: pickString(buyerAcc.country) || 'India',
+    gstNumber: pickString(buyerAcc.gstin, buyerAcc.gstNumber, buyerAcc.gst).toUpperCase(),
+    panNumber: pickString(buyerAcc.pan, buyerAcc.panNumber).toUpperCase(),
+    categories: [],
+  };
+}
+
 async function getProfile(sessionUser) {
   assertIdentityConfigured();
   const { userId, email } = resolveBuyerIdentity(sessionUser);
@@ -87,6 +112,17 @@ async function getProfile(sessionUser) {
   try {
     result = await buyerProfileQueries.findProfileByUserId(userId);
   } catch (err) {
+    if ((d1Bridge.isRetryableD1Error(err) || d1Bridge.isD1Overloaded()) && email) {
+      const buyerAcc = await storeService.getBuyerAccountByEmail(email).catch(() => null);
+      if (buyerAcc) {
+        logger.warn(
+          'Serving fallback buyer profile from storeService during transient D1 overload',
+          { userId, email, error: err.message },
+          LOG_CATEGORY
+        );
+        return buildFallbackProfileFromBuyerAccount({ userId, email, buyerAcc });
+      }
+    }
     logger.error('Buyer organization profile read failed', err, LOG_CATEGORY);
     throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED, 503);
   }
@@ -472,6 +508,17 @@ async function getCategoryTaxonomy() {
     );
     return taxonomy;
   } catch (err) {
+    if (d1Bridge.isRetryableD1Error(err) || d1Bridge.isD1Overloaded()) {
+      logger.warn(
+        'D1 transiently overloaded during category taxonomy read; serving canonical DEFAULT_CATEGORY_TAXONOMY fallback',
+        { error: err.message },
+        LOG_CATEGORY
+      );
+      return DEFAULT_CATEGORY_TAXONOMY.map((entry) => ({
+        majorCategory: entry.majorCategory,
+        minorCategories: [...entry.minorCategories],
+      }));
+    }
     logger.error('Procurement category taxonomy read failed', err, LOG_CATEGORY);
     throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.TAXONOMY_LOAD_FAILED, 503);
   }

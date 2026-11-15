@@ -789,16 +789,33 @@ describe('storeService comprehensive branch boost tests', () => {
     test('logs and propagates configured-storage vendor read failures for controller fallback', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       storeService.isHydratedFromDB = false;
-      const databaseError = new Error('D1 DB is overloaded');
-      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(databaseError);
+      const overloadError = new Error('D1 DB is overloaded');
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValueOnce(overloadError);
+      const warnLogSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
       const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
-      await expect(storeService.getBootstrapData()).rejects.toBe(databaseError);
+      await expect(storeService.getBootstrapData()).rejects.toBe(overloadError);
+
+      expect(warnLogSpy).toHaveBeenCalledWith(
+        'Configured vendor read failed while building bootstrap data',
+        expect.objectContaining({
+          error: overloadError,
+          operation: 'public-vendor-page',
+          buyerScopePresent: false,
+          sessionEmailPresent: false,
+        }),
+        'STORE_SERVICE'
+      );
+      expect(errorLogSpy).not.toHaveBeenCalled();
+
+      const fatalError = new Error('connection refused');
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValueOnce(fatalError);
+      await expect(storeService.getBootstrapData()).rejects.toBe(fatalError);
 
       expect(errorLogSpy).toHaveBeenCalledWith(
         'Configured vendor read failed while building bootstrap data',
         expect.objectContaining({
-          error: databaseError,
+          error: fatalError,
           operation: 'public-vendor-page',
           buyerScopePresent: false,
           sessionEmailPresent: false,

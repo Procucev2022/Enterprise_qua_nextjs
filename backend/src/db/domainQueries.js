@@ -34,9 +34,126 @@ const {
   D1_NOTIFICATION_INSERT_BATCH_SIZE,
   DATABASE_QUERY_CACHE,
   PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
+  DEFAULT_CATEGORY_TAXONOMY,
+  MAJOR_CATEGORY_ALIASES,
   clearDummyPanFields,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
+
+const TAXONOMY_MAJOR_NAMES = new Set();
+const TAXONOMY_TERM_MAJORS = new Map();
+
+(function buildD1CategoryScopeMaps() {
+  const majorFamilies = new Map();
+  const addMajorToFamily = (canonicalLower, labelLower) => {
+    if (!majorFamilies.has(canonicalLower)) majorFamilies.set(canonicalLower, new Set([canonicalLower]));
+    majorFamilies.get(canonicalLower).add(labelLower);
+  };
+
+  for (const [alias, canonical] of Object.entries(MAJOR_CATEGORY_ALIASES)) {
+    addMajorToFamily(String(canonical).trim().toLowerCase(), String(alias).trim().toLowerCase());
+  }
+
+  for (const group of DEFAULT_CATEGORY_TAXONOMY) {
+    const canonicalLower = String(group.majorCategory).trim().toLowerCase();
+    addMajorToFamily(canonicalLower, canonicalLower);
+  }
+
+  for (const [canonicalLower, family] of majorFamilies.entries()) {
+    for (const majorLabel of family) {
+      TAXONOMY_MAJOR_NAMES.add(majorLabel);
+      if (!TAXONOMY_TERM_MAJORS.has(majorLabel)) TAXONOMY_TERM_MAJORS.set(majorLabel, new Set());
+      for (const famLabel of family) TAXONOMY_TERM_MAJORS.get(majorLabel).add(famLabel);
+    }
+    TAXONOMY_MAJOR_NAMES.add(canonicalLower);
+  }
+
+  const registerMinorKey = (termKey, family) => {
+    if (!TAXONOMY_TERM_MAJORS.has(termKey)) TAXONOMY_TERM_MAJORS.set(termKey, new Set());
+    const targetSet = TAXONOMY_TERM_MAJORS.get(termKey);
+    for (const famLabel of family) targetSet.add(famLabel);
+  };
+
+  for (const group of DEFAULT_CATEGORY_TAXONOMY) {
+    const canonicalLower = String(group.majorCategory).trim().toLowerCase();
+    const family = majorFamilies.get(canonicalLower);
+    for (const minor of group.minorCategories) {
+      const minorKey = String(minor).trim().toLowerCase();
+      registerMinorKey(minorKey, family);
+      if (minorKey.endsWith('es')) registerMinorKey(minorKey.slice(0, -2), family);
+      else if (minorKey.endsWith('s')) registerMinorKey(minorKey.slice(0, -1), family);
+    }
+  }
+}());
+
+function resolveTaxonomyScopeForSignals(signals) {
+  const scopedMajorsSet = new Set();
+  const minorOnlySignals = new Set();
+  let allSignalsCovered = signals.length > 0;
+
+  for (const sig of signals) {
+    const majors = TAXONOMY_TERM_MAJORS.get(sig);
+    if (!majors) {
+      allSignalsCovered = false;
+      continue;
+    }
+    for (const major of majors) scopedMajorsSet.add(major);
+    if (!TAXONOMY_MAJOR_NAMES.has(sig)) {
+      minorOnlySignals.add(sig);
+    }
+  }
+
+  return {
+    allSignalsCovered,
+    scopedMajors: Array.from(scopedMajorsSet),
+    minorOnlySignals,
+  };
+}
+
+function buildD1CategoryMatchFilter(cleaned) {
+  const { allSignalsCovered, scopedMajors, minorOnlySignals } = resolveTaxonomyScopeForSignals(cleaned);
+  const d1Params = [];
+  let majorPrefixClause = '';
+  if (allSignalsCovered) {
+    const majorPlaceholders = scopedMajors.map((major) => {
+      d1Params.push(major);
+      return `$${d1Params.length}`;
+    });
+    majorPrefixClause = `major_category COLLATE NOCASE IN (${majorPlaceholders.join(', ')}) AND `;
+  }
+
+  const d1OrGroups = [];
+  for (const sig of cleaned) {
+    if (sig.length <= 3 || minorOnlySignals.has(sig)) {
+      d1Params.push(sig);
+      const pExact = d1Params.length;
+      d1Params.push(`%"${sig}%`);
+      const pJson = d1Params.length;
+      d1OrGroups.push(`(
+        major_category = $${pExact} COLLATE NOCASE
+        OR raw LIKE $${pJson}
+      )`);
+    } else {
+      d1Params.push(`%${sig}%`);
+      const p = d1Params.length;
+      d1OrGroups.push(`(
+        major_category LIKE $${p}
+        OR raw LIKE $${p}
+      )`);
+    }
+  }
+
+  // Keep the NULL checks bare (no lower()) to match idx_vendors_public_created_at (migration 0032)
+  // and prevent SQLite from scanning the 0025 lower(json_extract(...)) expression indexes.
+  const publicD1 = `(source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+    AND json_extract(raw,'$.buyerId') IS NULL
+    AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+
+  return {
+    d1Params,
+    whereD1: `WHERE ${majorPrefixClause}(${d1OrGroups.join(' OR ')}) AND ${publicD1}`,
+  };
+}
 
 function getRetryableStaleCacheValue(cacheKey, error, operation) {
   if (
@@ -552,7 +669,6 @@ async function countPublicVendorsMatchingCategories(signals) {
 
   const params = [];
   const orGroups = [];
-  const d1OrGroups = [];
   for (const sig of cleaned) {
     if (sig.length <= 3) {
       params.push(sig);
@@ -565,10 +681,6 @@ async function countPublicVendorsMatchingCategories(signals) {
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${pJson}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
-      d1OrGroups.push(`(
-        major_category = $${pExact} COLLATE NOCASE
-        OR raw LIKE $${pJson}
-      )`);
     } else {
       params.push(`%${sig}%`);
       const p = params.length;
@@ -578,22 +690,13 @@ async function countPublicVendorsMatchingCategories(signals) {
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
-      const d1CategoryCondition = `(
-        major_category LIKE $${p}
-        OR raw LIKE $${p}
-      )`;
-      d1OrGroups.push(d1CategoryCondition);
     }
   }
 
   // Public-only: a vendor tagged to a specific buyer is never in the network pool.
   const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
-  const publicD1 = `(source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
-    AND lower(json_extract(raw,'$.buyerId')) IS NULL
-    AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`;
-
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
-  const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
+  const { d1Params, whereD1 } = buildD1CategoryMatchFilter(cleaned);
 
   const result = await pool.query(
     `SELECT COUNT(*)::int AS total FROM vendors ${wherePg}`,
@@ -601,6 +704,7 @@ async function countPublicVendorsMatchingCategories(signals) {
     {
       d1: true,
       d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}`,
+      d1Params,
       useCache: true,
       tag: 'vendors',
       ttlMs: 60000,
@@ -762,7 +866,6 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
 
   const params = [];
   const orGroups = [];
-  const d1OrGroups = [];
   for (const sig of cleaned) {
     if (sig.length <= 3) {
       params.push(sig);
@@ -775,10 +878,6 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${pJson}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
       )`);
-      d1OrGroups.push(`(
-        major_category = $${pExact} COLLATE NOCASE
-        OR raw LIKE $${pJson}
-      )`);
     } else {
       params.push(`%${sig}%`);
       const p = params.length;
@@ -788,30 +887,23 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
       )`);
-      const d1CategoryCondition = `(
-        major_category LIKE $${p}
-        OR raw LIKE $${p}
-      )`;
-      d1OrGroups.push(d1CategoryCondition);
     }
   }
 
   const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
-  const publicD1 = `(source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
-    AND lower(json_extract(raw,'$.buyerId')) IS NULL
-    AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`;
-
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
-  const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
+  const { d1Params, whereD1 } = buildD1CategoryMatchFilter(cleaned);
 
   const limitParam = params.length + 1;
+  const d1LimitParam = d1Params.length + 1;
   const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
   const result = await pool.query(
     `SELECT raw FROM vendors ${wherePg} ORDER BY created_at DESC LIMIT $${limitParam}`,
     [...params, safeLimit],
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors ${whereD1} ORDER BY created_at DESC LIMIT $${limitParam}`,
+      d1Text: `SELECT raw FROM vendors ${whereD1} ORDER BY created_at DESC LIMIT $${d1LimitParam}`,
+      d1Params: [...d1Params, safeLimit],
       useCache: true,
       tag: 'vendors',
       ttlMs: 60000,

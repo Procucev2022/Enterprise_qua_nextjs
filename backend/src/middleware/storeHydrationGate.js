@@ -59,12 +59,17 @@ function createStoreHydrationGate({
       })
       .catch((error) => {
         retryNotBefore = now() + STORE_HYDRATION_CONFIG.FAILURE_BACKOFF_MS;
-        logger.error('Lazy on-request hydration failed; rejecting store-backed request', {
+        const details = {
           error,
           requestId: req.requestId || req.id || null,
           method: req.method,
           path: req.path,
-        }, 'APP');
+        };
+        if (isOverloaded() && typeof logger.warn === 'function') {
+          logger.warn('Lazy on-request hydration failed; rejecting store-backed request', details, 'APP');
+        } else {
+          logger.error('Lazy on-request hydration failed; rejecting store-backed request', details, 'APP');
+        }
         throw error;
       })
       .finally(() => {

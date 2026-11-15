@@ -495,7 +495,7 @@ describe('database top-up for a minor-level RFQ', () => {
   });
 
   test('a mode_2 minor RFQ alerts on a network shortfall, and a mode_1 RFQ never does', async () => {
-    jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([networkVendor('n1', { minors: [MINOR] })]);
+    jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([networkVendor('n1', { minors: [MINOR] })]);
     const network = createQuietRfq({ sourcingMode: 'mode_2', id: 'rfq-alert-m2', rfqNumber: 'RFQ-ALERT-M2' });
 
     const updated = await storeService.autoAssignVendorsFromDB(network, { deferChasers: true, notifyShortfall: true });
@@ -513,7 +513,7 @@ describe('database top-up for a minor-level RFQ', () => {
 
   test('a mode_3 minor RFQ tops up from the network only and never reads the buyer roster', async () => {
     const rosterSpy = domainQueries.getVendorsByBuyerFromDB;
-    jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([networkVendor('n-3', { minors: [MINOR] })]);
+    jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([networkVendor('n-3', { minors: [MINOR] })]);
     const created = createQuietRfq({ sourcingMode: 'mode_3', id: 'rfq-alert-m3', rfqNumber: 'RFQ-ALERT-M3' });
 
     const updated = await storeService.autoAssignVendorsFromDB(created, { deferChasers: true });
@@ -531,7 +531,7 @@ describe('database top-up for a minor-level RFQ', () => {
       assignedVendors: [{ id: 'r-explicit', name: 'Vendor r-explicit', email: 'r-explicit@quota.test', source: 'buyer_uploaded' }],
     }, BUYER_7);
     expect(idsOf(created.assignedVendors)).toEqual(['r-explicit']);
-    jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([networkVendor('n-2', { minors: [MINOR] })]);
+    jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([networkVendor('n-2', { minors: [MINOR] })]);
 
     const updated = await storeService.autoAssignVendorsFromDB(created, { deferChasers: true });
 

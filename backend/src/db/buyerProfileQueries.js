@@ -22,9 +22,60 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
-const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient, batchD1, isD1Overloaded, isRetryableD1Error } = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
+
+const MAX_CACHED_PROFILES = 250;
+const lastKnownProfilesByUserId = new Map();
+const lastKnownProfilesByEmail = new Map();
+
+function cloneCachedProfile(profile) {
+  return {
+    ...profile,
+    categories: profile.categories.map((entry) => ({ ...entry })),
+  };
+}
+
+function trimProfileCache(map) {
+  while (map.size > MAX_CACHED_PROFILES) {
+    const oldestKey = map.keys().next().value;
+    map.delete(oldestKey);
+  }
+}
+
+function rememberProfile(profile) {
+  const snapshot = cloneCachedProfile(profile);
+  lastKnownProfilesByUserId.set(String(profile.userId), snapshot);
+  trimProfileCache(lastKnownProfilesByUserId);
+  const emailKey = String(profile.contactEmail || profile.email || '').trim().toLowerCase();
+  if (emailKey) {
+    lastKnownProfilesByEmail.set(emailKey, snapshot);
+    trimProfileCache(lastKnownProfilesByEmail);
+  }
+}
+
+function forgetProfile({ userId, email } = {}) {
+  if (userId) lastKnownProfilesByUserId.delete(String(userId));
+  const emailKey = String(email || '').trim().toLowerCase();
+  if (emailKey) lastKnownProfilesByEmail.delete(emailKey);
+}
+
+function getCachedProfile({ userId, email } = {}) {
+  if (userId && lastKnownProfilesByUserId.has(String(userId))) {
+    return cloneCachedProfile(lastKnownProfilesByUserId.get(String(userId)));
+  }
+  const emailKey = String(email || '').trim().toLowerCase();
+  if (emailKey && lastKnownProfilesByEmail.has(emailKey)) {
+    return cloneCachedProfile(lastKnownProfilesByEmail.get(emailKey));
+  }
+  return null;
+}
+
+function resetProfileFallbackCache() {
+  lastKnownProfilesByUserId.clear();
+  lastKnownProfilesByEmail.clear();
+}
 
 function hasD1() {
   return Boolean(getD1Binding() || getD1HttpClient());
@@ -202,22 +253,59 @@ async function loadCategories(organizationId, userId) {
  * "no such user" and "user has no organisation" onto different HTTP statuses and
  * different remediation advice.
  */
+async function hydrateFoundProfile(row, { swallowAllCategoryErrors = false } = {}) {
+  const profile = mapRowToProfile(row);
+  try {
+    profile.categories = await loadCategories(profile.organizationId, profile.userId);
+  } catch (catErr) {
+    if (!swallowAllCategoryErrors && !isRetryableD1Error(catErr) && !isD1Overloaded()) {
+      throw catErr;
+    }
+    const cached = getCachedProfile({ userId: profile.userId, email: profile.contactEmail });
+    profile.categories = cached ? cached.categories : [];
+  }
+  rememberProfile(profile);
+  return { found: true, profile };
+}
+
+function tryOverloadCachedProfile(err, lookup, operation, context = {}) {
+  if (!isRetryableD1Error(err) && !isD1Overloaded()) return null;
+  const cached = getCachedProfile(lookup);
+  if (!cached) return null;
+  logger.warn(`Serving cached buyer profile ${operation} during transient D1 overload`, {
+    ...context,
+    error: err.message,
+  }, 'BUYER_PROFILE_QUERIES');
+  return { found: true, profile: cached };
+}
+
 async function findProfileByUserId(userId) {
   if (!userId) return { found: false, reason: 'NO_USER_ID' };
 
-  const rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId], {
-    d1: true,
-    useCache: true,
-    tag: 'buyer_accounts',
-    ttlMs: 60000,
-  });
+  let rows;
+  try {
+    rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId], {
+      d1: true,
+      useCache: true,
+      tag: 'buyer_accounts',
+      ttlMs: 60000,
+    });
+  } catch (err) {
+    const cachedResult = tryOverloadCachedProfile(err, { userId }, 'read', { userId });
+    if (cachedResult) return cachedResult;
+    throw err;
+  }
 
-  if (rows.length === 0) return { found: false, reason: 'USER_NOT_FOUND' };
-  if (!rows[0].org_uuid) return { found: false, reason: 'ORG_NOT_LINKED' };
+  if (rows.length === 0) {
+    forgetProfile({ userId });
+    return { found: false, reason: 'USER_NOT_FOUND' };
+  }
+  if (!rows[0].org_uuid) {
+    forgetProfile({ userId });
+    return { found: false, reason: 'ORG_NOT_LINKED' };
+  }
 
-  const profile = mapRowToProfile(rows[0]);
-  profile.categories = await loadCategories(profile.organizationId, profile.userId);
-  return { found: true, profile };
+  return hydrateFoundProfile(rows[0]);
 }
 
 /**
@@ -242,10 +330,12 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
       idx++;
     }
     if (email) {
-      userConditions.push(`(lower(u.username) = lower($${idx}) or lower(u.email) = lower($${idx}) or lower(o.email) = lower($${idx}))`);
-      // Omit `or o.email` on D1 in this first pass so SQLite can use the index on user table directly
-      d1UserConditions.push(`(u.username = $${idx} COLLATE NOCASE or u.email = $${idx} COLLATE NOCASE)`);
-      userParams.push(email.trim());
+      const cleanEmail = email.trim().toLowerCase();
+      userConditions.push(`(lower(u.username) = $${idx} or lower(u.email) = $${idx} or lower(o.email) = $${idx})`);
+      // Query the indexed lower(u.username) expression directly on D1 so SQLite uses
+      // idx_user_username_lower_phone instead of scanning all user rows across unindexed u.email / COLLATE NOCASE.
+      d1UserConditions.push(`lower(u.username) = $${idx}`);
+      userParams.push(cleanEmail);
       idx++;
     }
     const query = `${PROFILE_SELECT} where ${userConditions.join(' or ')} limit 1`;
@@ -259,67 +349,63 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
         ttlMs: 60000,
       });
       if (rows && rows.length > 0) {
-        const profile = mapRowToProfile(rows[0]);
-        try {
-          profile.categories = await loadCategories(profile.organizationId, profile.userId);
-        } catch (_) {
-          profile.categories = [];
-        }
-        return { found: true, profile };
+        return hydrateFoundProfile(rows[0], { swallowAllCategoryErrors: true });
       }
     } catch (err) {
+      const cachedResult = tryOverloadCachedProfile(err, { userId, email }, 'lookup', { userId, email });
+      if (cachedResult) return cachedResult;
       return { found: false, reason: 'DB_ERROR', error: err.message };
     }
   }
 
-  // 2. Explicit fallback to organization-level identifiers (organizationId or organizationName or org email)
-  if (organizationId || organizationName || email) {
-    const orgConditions = [];
-    const d1OrgConditions = [];
-    const orgParams = [];
-    let idx = 1;
-    if (organizationId) {
-      orgConditions.push(`o.uuid = $${idx}`);
-      d1OrgConditions.push(`o.uuid = $${idx}`);
-      orgParams.push(organizationId);
-      idx++;
+  // 2. Explicit fallback to organization-level identifiers (organizationId or organizationName or org email).
+  // Skip unindexed fallback scans while D1 is already in an overload window to avoid worsening row-read pressure.
+  if (isD1Overloaded() && !organizationId && !organizationName) {
+    const cached = getCachedProfile({ userId, email });
+    return cached ? { found: true, profile: cached } : { found: false, reason: 'USER_NOT_FOUND' };
+  }
+  const orgConditions = [];
+  const d1OrgConditions = [];
+  const orgParams = [];
+  let idx = 1;
+  if (organizationId) {
+    orgConditions.push(`o.uuid = $${idx}`);
+    d1OrgConditions.push(`o.uuid = $${idx}`);
+    orgParams.push(organizationId);
+    idx++;
+  }
+  if (organizationName) {
+    orgConditions.push(`lower(o.organization_name) = lower($${idx})`);
+    d1OrgConditions.push(`o.organization_name = $${idx} COLLATE NOCASE`);
+    orgParams.push(organizationName.trim());
+    idx++;
+  }
+  if (email && !organizationId && !organizationName) {
+    orgConditions.push(`lower(o.email) = lower($${idx})`);
+    d1OrgConditions.push(`o.email = $${idx} COLLATE NOCASE`);
+    orgParams.push(email.trim());
+    idx++;
+  }
+  const query = `${PROFILE_SELECT} where ${orgConditions.join(' or ')} limit 1`;
+  const d1Text = `${PROFILE_SELECT} where ${d1OrgConditions.join(' or ')} limit 1`;
+  try {
+    const rows = await pool.rows(query, orgParams, {
+      d1: true,
+      d1Text,
+      useCache: true,
+      tag: 'buyer_accounts',
+      ttlMs: 60000,
+    });
+    if (rows && rows.length > 0) {
+      return hydrateFoundProfile(rows[0], { swallowAllCategoryErrors: true });
     }
-    if (organizationName) {
-      orgConditions.push(`lower(o.organization_name) = lower($${idx})`);
-      d1OrgConditions.push(`o.organization_name = $${idx} COLLATE NOCASE`);
-      orgParams.push(organizationName.trim());
-      idx++;
-    }
-    if (email && !organizationId && !organizationName) {
-      orgConditions.push(`lower(o.email) = lower($${idx})`);
-      d1OrgConditions.push(`o.email = $${idx} COLLATE NOCASE`);
-      orgParams.push(email.trim());
-      idx++;
-    }
-    const query = `${PROFILE_SELECT} where ${orgConditions.join(' or ')} limit 1`;
-    const d1Text = `${PROFILE_SELECT} where ${d1OrgConditions.join(' or ')} limit 1`;
-    try {
-      const rows = await pool.rows(query, orgParams, {
-        d1: true,
-        d1Text,
-        useCache: true,
-        tag: 'buyer_accounts',
-        ttlMs: 60000,
-      });
-      if (rows && rows.length > 0) {
-        const profile = mapRowToProfile(rows[0]);
-        try {
-          profile.categories = await loadCategories(profile.organizationId, profile.userId);
-        } catch (_) {
-          profile.categories = [];
-        }
-        return { found: true, profile };
-      }
-    } catch (err) {
-      return { found: false, reason: 'DB_ERROR', error: err.message };
-    }
+  } catch (err) {
+    const cachedResult = tryOverloadCachedProfile(err, { userId, email }, 'org fallback', { email, organizationId });
+    if (cachedResult) return cachedResult;
+    return { found: false, reason: 'DB_ERROR', error: err.message };
   }
 
+  forgetProfile({ userId, email });
   return { found: false, reason: 'USER_NOT_FOUND' };
 }
 
@@ -563,6 +649,7 @@ async function updateProfileInD1({ organizationId, userId, patch, categories, ac
       durationMs,
     }, 'BUYER_PROFILE_D1');
     queryCache.invalidate('buyer_accounts');
+    forgetProfile({ userId, email: actor });
     return { updated: true, fieldsUpdated: plan.fieldsUpdated, categoryCount: plan.categoryCount };
   } catch (err) {
     logger.error('Atomic D1 buyer profile update failed', {
@@ -639,6 +726,7 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
     }
 
     queryCache.invalidate('buyer_accounts');
+    forgetProfile({ userId, email: actor });
     return { updated: true, fieldsUpdated: assignments.length, categoryCount };
   });
 }
@@ -819,4 +907,5 @@ module.exports = {
   PROFILE_SELECT,
   getDispatchTemplates,
   upsertDispatchTemplate,
+  resetProfileFallbackCache,
 };

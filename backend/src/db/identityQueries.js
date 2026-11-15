@@ -192,7 +192,7 @@ async function findUserByEmail(email) {
     [cleanEmail],
     {
       d1: true,
-      d1Text: `${USER_SELECT} where u.username = $1 COLLATE NOCASE order by u.is_active desc, u.created_ts desc limit 1`,
+      d1Text: `${USER_SELECT} where lower(u.username) = $1 order by u.is_active desc, u.created_ts desc limit 1`,
       useCache: true,
       tag: 'user',
       ttlMs: 60000,
@@ -245,7 +245,7 @@ async function findUserByEmailAndPhone(email, phone) {
     [cleanEmail, normalizedPhone],
     {
       d1: true,
-      d1Text: `${USER_SELECT} where (u.username = $1 or u.username = $1 COLLATE NOCASE) and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
+      d1Text: `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
       useCache: true,
       tag: 'user',
       ttlMs: 60000,

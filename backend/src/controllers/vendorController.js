@@ -4,6 +4,7 @@ const vendorDossierExtensions = require('./vendorDossierExtensions');
 const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
+const { isD1Overloaded } = require('../db/d1Bridge');
 const identityQueries = require('../db/identityQueries');
 const eventOutboxService = require('../services/eventOutboxService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
@@ -503,7 +504,7 @@ async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize })
       minors.some((minor) => storeService.vendorCoversMinorCategory(v, minor))
     ).length;
 
-    if (minorMatchedCount < minorTarget && poolMap.size < poolLimit) {
+    if (minorMatchedCount < minorTarget && poolMap.size < poolLimit && lookupMajors.length === 0 && !isD1Overloaded()) {
       const legacyMinorRows = await domainQueries.getPublicVendorsMatchingCategories(searchTerms, minorTarget * 2);
       mergeUniquePublicVendors(poolMap, legacyMinorRows, poolLimit);
     }

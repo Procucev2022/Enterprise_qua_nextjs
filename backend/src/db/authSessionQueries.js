@@ -41,10 +41,20 @@ function throwPersistenceUnavailable(operation, cause) {
   const error = new Error(`Authentication session ${operation} failed because configured database persistence is unavailable.`);
   error.code = 'PERSISTENCE_UNAVAILABLE';
   error.cause = cause;
-  logger.error('Authentication session persistence failed; refusing isolate-local fallback', {
-    operation,
-    error: cause,
-  }, 'AUTH_SESSION');
+  const isOverloadOrRetryable = d1Bridge.isD1Overloaded()
+    || d1Bridge.isRetryableD1Error(cause)
+    || cause?.code === 'PERSISTENCE_UNAVAILABLE';
+  if (isOverloadOrRetryable) {
+    logger.warn('Authentication session persistence failed; refusing isolate-local fallback', {
+      operation,
+      error: cause,
+    }, 'AUTH_SESSION');
+  } else {
+    logger.error('Authentication session persistence failed; refusing isolate-local fallback', {
+      operation,
+      error: cause,
+    }, 'AUTH_SESSION');
+  }
   throw error;
 }
 

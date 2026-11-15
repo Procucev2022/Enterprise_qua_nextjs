@@ -2835,7 +2835,8 @@ describe('D1 streamlined vendor search queries', () => {
     const d1Query = query.mock.calls.map(([, , options]) => options?.d1Text).find(Boolean);
     expect(d1Query).not.toContain('vendors_search_fts');
     expect(d1Query).toContain("raw LIKE $1");
-    expect(d1Query).toContain("lower(json_extract(raw,'$.buyerId')) IS NULL");
+    expect(d1Query).toContain("json_extract(raw,'$.buyerId') IS NULL");
+    expect(d1Query).not.toContain("lower(json_extract(raw,'$.buyerId'))");
   });
 
   test('executes row-returning public category matching without FTS table', async () => {
@@ -2969,5 +2970,78 @@ describe('additional domainQueries branch coverage', () => {
 
     const second = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 });
     expect(second.total).toBe(42);
+  });
+
+  describe('D1 taxonomy-scoped category vendor queries', () => {
+    test('countPublicVendorsMatchingCategories scopes D1 query to major_category when all signals match taxonomy', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ total: 7 }] });
+
+      const count = await domainQueries.countPublicVendorsMatchingCategories(['Laptop', 'Bearings & Accessories']);
+
+      expect(count).toBe(7);
+      const [, , options] = querySpy.mock.calls[0];
+      expect(options.d1Text).toMatch(/major_category COLLATE NOCASE IN \(\$1(?:, \$\d+)*\) AND/);
+      expect(options.d1Text).toContain("json_extract(raw,'$.buyerId') IS NULL");
+      expect(options.d1Params).toContain('%"laptop%');
+      expect(options.d1Params).toContain('%"bearings & accessories%');
+    });
+
+    test('countPublicVendorsMatchingCategories handles major category signals and mixed uncovered signals on D1', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ total: 3 }] });
+
+      await domainQueries.countPublicVendorsMatchingCategories(['Electrical', 'IT']);
+      const majorOptions = querySpy.mock.calls[0][2];
+      expect(majorOptions.d1Text).toContain('major_category COLLATE NOCASE IN');
+      expect(majorOptions.d1Params).toContain('%electrical%');
+      expect(majorOptions.d1Params).toContain('it');
+
+      await domainQueries.countPublicVendorsMatchingCategories(['Laptop', 'Unmapped Custom Signal']);
+      const mixedOptions = querySpy.mock.calls[1][2];
+      expect(mixedOptions.d1Text).not.toContain('major_category COLLATE NOCASE IN');
+      expect(mixedOptions.d1Params).toContain('%unmapped custom signal%');
+    });
+
+    test('getPublicVendorsMatchingCategories builds taxonomy-scoped D1 query with limit bound last', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const vendor = { id: 'pv-tax-1', name: 'Tax Scoped Vendor', majorCategory: 'IT' };
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: vendor }] });
+
+      const rows = await domainQueries.getPublicVendorsMatchingCategories(['Laptop', 'Bearings & Accessories'], 15);
+
+      expect(rows).toEqual([vendor]);
+      const [, , options] = querySpy.mock.calls[0];
+      expect(options.d1Text).toMatch(/major_category COLLATE NOCASE IN \(\$1(?:, \$\d+)*\) AND/);
+      expect(options.d1Text).toMatch(/ORDER BY created_at DESC LIMIT \$\d+$/);
+      expect(options.d1Params[options.d1Params.length - 1]).toBe(15);
+
+      await domainQueries.getPublicVendorsMatchingCategories(['Laptop', 'Unmapped Custom Signal'], 12);
+      const mixedOptions = querySpy.mock.calls[1][2];
+      expect(mixedOptions.d1Text).not.toContain('major_category COLLATE NOCASE IN');
+      expect(mixedOptions.d1Params[mixedOptions.d1Params.length - 1]).toBe(12);
+    });
+
+    test('getPublicVendorsByMinorCategoryFromDB queries indexed major_category with minor clauses and public D1 filter', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const vendor = { id: 'pv-minor-1', name: 'Minor Laptop Supplier', majorCategory: 'IT', minorCategories: ['Laptop'] };
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: vendor }] });
+
+      const rows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(['Laptop', 'UPS'], ['IT'], 25);
+
+      expect(rows).toEqual([vendor]);
+      const [pgSql, pgParams, options] = querySpy.mock.calls[0];
+      expect(pgSql).toContain('LIMIT');
+      expect(pgParams[pgParams.length - 1]).toBe(25);
+      expect(options.d1Text).toContain('major_category COLLATE NOCASE IN ($1)');
+      expect(options.d1Text).toContain("json_extract(raw,'$.buyerId') IS NULL");
+      expect(options.d1Text).toContain("json_extract(raw,'$.buyerAccountId') IS NULL");
+
+      // Empty inputs short-circuit without hitting pool.query
+      querySpy.mockClear();
+      await expect(domainQueries.getPublicVendorsByMinorCategoryFromDB([], ['IT'], 25)).resolves.toEqual([]);
+      await expect(domainQueries.getPublicVendorsByMinorCategoryFromDB(['Laptop'], [], 25)).resolves.toEqual([]);
+      expect(querySpy).not.toHaveBeenCalled();
+    });
   });
 });

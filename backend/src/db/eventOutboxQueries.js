@@ -34,11 +34,16 @@ async function execute(operation, sql, params, options) {
   try {
     return await pool.query(sql, params, { d1: true, ...options });
   } catch (error) {
-    logger.error('Event-outbox database operation failed', {
+    const details = {
       error,
       operation,
       provider: getProviderLabel(),
-    }, 'EVENT_OUTBOX');
+    };
+    if (d1Bridge.isRetryableD1Error(error) || d1Bridge.isD1Overloaded()) {
+      logger.warn('Event-outbox database operation failed', details, 'EVENT_OUTBOX');
+    } else {
+      logger.error('Event-outbox database operation failed', details, 'EVENT_OUTBOX');
+    }
     throw error;
   }
 }

@@ -60,7 +60,16 @@ function pathMatchesPrefix(requestPath, prefix) {
 }
 
 function shouldSkipStoreHydration(requestPath = '/') {
-  return STORE_HYDRATION_CONFIG.SKIP_PATHS.some((prefix) => pathMatchesPrefix(requestPath, prefix));
+  const normalized = String(requestPath || '/');
+  if (
+    normalized !== '/graphql'
+    && !normalized.startsWith('/graphql/')
+    && normalized !== '/api'
+    && !normalized.startsWith('/api/')
+  ) {
+    return true;
+  }
+  return STORE_HYDRATION_CONFIG.SKIP_PATHS.some((prefix) => pathMatchesPrefix(normalized, prefix));
 }
 
 // Worker isolates may need storeService's legacy in-memory projection for a
