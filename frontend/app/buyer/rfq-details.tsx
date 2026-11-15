@@ -41,6 +41,9 @@ import type {
   RFQInquiry,
   RFQItem,
   RFQSource,
+  SupplierCategoryFilterResult,
+  SupplierCategoryOption,
+  SupplierFilterableCategory,
   VendorChatChannel,
 } from '@/lib/types';
 import {
@@ -92,6 +95,71 @@ const EDIT = UI_STRINGS.rfqEdit;
 
 /** Sentinel meaning "no minor-category filter applied". */
 const ALL_MINORS = 'all';
+
+/** Sentinel meaning "no major-category (division) filter applied" in CM supplier list. */
+const ALL_SUPPLIER_MAJORS = 'all';
+
+function normalizeSupplierCategoryLabel(raw: string | null | undefined): string {
+  return (raw || '').trim() || 'General';
+}
+
+function summarizeCategoryOptions<T>(
+  items: T[],
+  getLabel: (item: T) => string | null | undefined,
+  selected: string,
+  allSentinel: string
+): {
+  options: SupplierCategoryOption[];
+  effectiveSelected: string;
+  scopedItems: T[];
+} {
+  const buckets = new Map<string, SupplierCategoryOption>();
+  for (const item of items) {
+    const label = normalizeSupplierCategoryLabel(getLabel(item));
+    const existing = buckets.get(label.toLowerCase());
+    if (existing) {
+      existing.count += 1;
+    } else {
+      buckets.set(label.toLowerCase(), { value: label, count: 1 });
+    }
+  }
+  const options = Array.from(buckets.values()).sort((a, b) => a.value.localeCompare(b.value));
+  const matched =
+    selected !== allSentinel
+      ? options.find((opt) => opt.value.toLowerCase() === selected.trim().toLowerCase())?.value
+      : undefined;
+  const effectiveSelected = matched ?? allSentinel;
+  const scopedItems =
+    effectiveSelected === allSentinel
+      ? items
+      : items.filter((item) => normalizeSupplierCategoryLabel(getLabel(item)).toLowerCase() === effectiveSelected.toLowerCase());
+  return { options, effectiveSelected, scopedItems };
+}
+
+/**
+ * Computes sorted Division (major category) and Minor Category options with vendor counts,
+ * cascading the Minor Category options to the active Division when one is selected.
+ */
+export function buildSupplierCategoryFilters<T extends SupplierFilterableCategory>(
+  suppliers: T[],
+  selectedMajor: string,
+  selectedMinor: string
+): SupplierCategoryFilterResult<T> {
+  const majorSummary = summarizeCategoryOptions(suppliers, (s) => s.majorCategory, selectedMajor, ALL_SUPPLIER_MAJORS);
+  const minorSummary = summarizeCategoryOptions(
+    majorSummary.scopedItems,
+    (s) => s.minorCategory,
+    selectedMinor,
+    ALL_MINORS
+  );
+  return {
+    majorOptions: majorSummary.options,
+    minorOptions: minorSummary.options,
+    effectiveMajor: majorSummary.effectiveSelected,
+    effectiveMinor: minorSummary.effectiveSelected,
+    filteredSuppliers: minorSummary.scopedItems,
+  };
+}
 
 /** Confidence at or above this is reported as high rather than needing review. */
 const HIGH_CONFIDENCE = 90;
@@ -479,6 +547,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   // Category-manager assigned-suppliers tab: 'procucev' | 'own'.
   const [supplierTab, setSupplierTab] = useState<'procucev' | 'own'>('procucev');
+  const [supplierMajorFilter, setSupplierMajorFilter] = useState<string>(ALL_SUPPLIER_MAJORS);
+  const [supplierMinorFilter, setSupplierMinorFilter] = useState<string>(ALL_MINORS);
   const [itemSearch, setItemSearch] = useState('');
   const [minorFilter, setMinorFilter] = useState<string>(ALL_MINORS);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -2152,6 +2222,112 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         );
 
+        // Category Manager Division (Major Category) & Minor Category filter toolbar + grid.
+        const renderCmFilteredSuppliersGrid = (suppliers: typeof visibleAssigned, gridTestId?: string) => {
+          const { majorOptions, minorOptions, effectiveMajor, effectiveMinor, filteredSuppliers } =
+            buildSupplierCategoryFilters(suppliers, supplierMajorFilter, supplierMinorFilter);
+          const minorScopedTotal = minorOptions.reduce((sum, opt) => sum + opt.count, 0);
+          const hasActiveFilter = effectiveMajor !== ALL_SUPPLIER_MAJORS || effectiveMinor !== ALL_MINORS;
+
+          return (
+            <div className="space-y-3">
+              <div
+                data-testid="cm-supplier-filters"
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50/90 dark:bg-gray-950/50 border border-slate-200/80 dark:border-gray-800"
+              >
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <label
+                      htmlFor="cm-supplier-major-select"
+                      className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 whitespace-nowrap"
+                    >
+                      {DETAILS.supplierMajorFilterLabel}
+                    </label>
+                    <select
+                      id="cm-supplier-major-select"
+                      data-testid="cm-supplier-major-filter"
+                      aria-label={DETAILS.supplierMajorFilterAria}
+                      value={effectiveMajor}
+                      onChange={(e) => {
+                        setSupplierMajorFilter(e.target.value);
+                        setSupplierMinorFilter(ALL_MINORS);
+                      }}
+                      className="text-xs font-semibold rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 !py-1.5 !px-2.5 max-w-[14rem]"
+                    >
+                      <option value={ALL_SUPPLIER_MAJORS}>
+                        {`${DETAILS.allSupplierMajors} (${suppliers.length})`}
+                      </option>
+                      {majorOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {`${opt.value} (${opt.count})`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <label
+                      htmlFor="cm-supplier-minor-select"
+                      className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 whitespace-nowrap"
+                    >
+                      {DETAILS.supplierMinorFilterLabel}
+                    </label>
+                    <select
+                      id="cm-supplier-minor-select"
+                      data-testid="cm-supplier-minor-filter"
+                      aria-label={DETAILS.supplierMinorFilterAria}
+                      value={effectiveMinor}
+                      onChange={(e) => setSupplierMinorFilter(e.target.value)}
+                      className="text-xs font-semibold rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 !py-1.5 !px-2.5 max-w-[14rem]"
+                    >
+                      <option value={ALL_MINORS}>
+                        {`${DETAILS.allSupplierMinors} (${minorScopedTotal})`}
+                      </option>
+                      {minorOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {`${opt.value} (${opt.count})`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 justify-between sm:justify-end">
+                  <span
+                    data-testid="cm-supplier-filter-count"
+                    className="text-[11px] font-semibold text-slate-600 dark:text-gray-300"
+                  >
+                    {formatString(DETAILS.showingSuppliersCount, {
+                      shown: filteredSuppliers.length,
+                      total: suppliers.length,
+                    })}
+                  </span>
+                  {hasActiveFilter && (
+                    <button
+                      type="button"
+                      data-testid="cm-supplier-clear-filters"
+                      onClick={() => {
+                        setSupplierMajorFilter(ALL_SUPPLIER_MAJORS);
+                        setSupplierMinorFilter(ALL_MINORS);
+                      }}
+                      className="btn btn-ghost btn-xs font-bold inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400"
+                    >
+                      <X size={12} /> {DETAILS.clearSupplierFiltersAction}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5"
+                {...(gridTestId ? { 'data-testid': gridTestId } : {})}
+              >
+                {filteredSuppliers.map((v) => renderFullCard(v))}
+              </div>
+            </div>
+          );
+        };
+
         return (
           <Panel
             title="Assigned & Invited Suppliers"
@@ -2204,9 +2380,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         ) : null;
                       })()}
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5" data-testid="v0-cm-vendor-cards">
-                      {visibleAssigned.map((v: any) => renderFullCard(v))}
-                    </div>
+                    {renderCmFilteredSuppliersGrid(visibleAssigned, 'v0-cm-vendor-cards')}
                   </div>
                 ) : (
                   // ── Category Manager: two tabs, full details for every vendor ──
@@ -2251,11 +2425,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                           </div>
                         );
                       }
-                      return (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                          {tabVendors.map((v: any) => renderFullCard(v))}
-                        </div>
-                      );
+                      return renderCmFilteredSuppliersGrid(tabVendors);
                     })()}
                   </div>
                 )

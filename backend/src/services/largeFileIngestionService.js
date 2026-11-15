@@ -24,6 +24,7 @@ const { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aw
 const queries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const r2Client = require('./r2Client');
+const r2NegativeCache = require('./r2NegativeCache');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { logger } = require('./loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
@@ -48,7 +49,7 @@ async function uploadToR2(key, buffer) {
   if (binding) {
     // Native R2 binding — see r2Client.js's getBinding() for why this is
     // preferred over the S3Client path below on Workers.
-    await binding.put(key, buffer, { httpMetadata: { contentType: 'text/csv' } });
+    await r2NegativeCache.putToBinding(binding, key, buffer, { httpMetadata: { contentType: 'text/csv' } });
     return;
   }
   const client = r2Client.getClient();
@@ -63,7 +64,7 @@ async function downloadFromR2(key) {
   const binding = r2Client.getBinding();
   if (binding) {
     try {
-      const object = await binding.get(key);
+      const object = await r2NegativeCache.getFromBinding(binding, key);
       if (!object) return null;
       return Buffer.from(await object.arrayBuffer());
     } catch (err) {
@@ -87,7 +88,7 @@ async function deleteFromR2(key) {
   const binding = r2Client.getBinding();
   if (binding) {
     try {
-      await binding.delete(key);
+      await r2NegativeCache.deleteFromBinding(binding, key);
     } catch (err) {
       logger.warn('Failed to clean up R2 ingestion upload', { key, error: err.message }, 'LARGE_FILE_INGESTION');
     }

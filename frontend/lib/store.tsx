@@ -1030,10 +1030,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`/api/ai-feed${queryParam}`, { headers: authFetchHeaders() });
       const json = await res.json().catch(() => null);
       if (res.ok && json?.success && Array.isArray(json.data)) {
+        if (!authClient.getToken()) return;
         setAiFeed(json.data);
         setAiFeedError(null);
         setSessionCache('aiFeed', json.data);
         loadedEntitiesRef.current.aiFeed = true;
+        return;
+      }
+      if (
+        res.status === 401 ||
+        (typeof json?.error === 'string' && json.error.includes('Session has been logged out'))
+      ) {
+        logger.log('WARN', 'AI feed not loaded because the session ended', { status: res.status }, 'AI_FEED');
+        authClient.setSession(null, null);
+        setCurrentUserSession(null);
+        setAiFeed([]);
+        setAiFeedError(null);
+        setSessionCache('aiFeed', []);
+        loadedEntitiesRef.current.aiFeed = false;
         return;
       }
       if (res.status === 403) {

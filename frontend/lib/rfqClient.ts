@@ -2,6 +2,7 @@ import { authClient } from './authClient';
 import { logger } from './logger';
 import { resolveAttachmentMimeType } from './constants';
 import { UI_STRINGS, formatString } from './uiStrings';
+import { getPendingVendorFetchSignal, withVendorFetchSignal } from './vendorFetchSignal';
 import type {
   ExtractedEntity,
   FetchAllVendorsOptions,
@@ -683,9 +684,12 @@ export async function fetchVendorCandidates(rfqId: string, limit?: number): Prom
  * inviteVendorsToRFQ never validates category match server-side, so any real
  * vendor id already invites successfully.
  */
+export { withVendorFetchSignal };
+
 export async function fetchAllVendors(
   options: FetchAllVendorsOptions = {}
 ): Promise<RFQVendorPageResult> {
+  const activeSignal = getPendingVendorFetchSignal();
   const token = authClient.getToken();
   const {
     page = 1,
@@ -717,8 +721,16 @@ export async function fetchAllVendors(
   try {
     res = await fetch(`/api/vendors?${params.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
+      ...(activeSignal ? { signal: activeSignal } : {}),
     });
-  } catch {
+  } catch (err: unknown) {
+    const isAbortError =
+      activeSignal?.aborted === true ||
+      (err instanceof Error && err.name === 'AbortError') ||
+      (typeof err === 'object' && err !== null && (err as { name?: string }).name === 'AbortError');
+    if (isAbortError) {
+      return { success: false, reason: 'ABORTED', error: UI_STRINGS.auth.requestCancelled };
+    }
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 

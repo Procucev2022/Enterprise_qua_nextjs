@@ -365,6 +365,8 @@ describe('PostgreSQL migration runner', () => {
         '0032_public_vendor_listing_index_v2',
         '0033_vendor_major_category_index',
         '0034_organization_vendor_master_uploaded',
+        '0035_vendor_category_created_at_index',
+        '0036_mail_provider_cooldowns',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

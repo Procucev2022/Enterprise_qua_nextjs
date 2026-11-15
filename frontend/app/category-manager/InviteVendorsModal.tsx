@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { fetchAllVendors, fetchVendorCandidates, inviteVendorsToRFQ } from '@/lib/rfqClient';
+import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
@@ -209,23 +210,33 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   // page 1 whenever the (debounced) search term, category, state, or city filter changes.
   const lastFetchedKeyRef = useRef<string | null>(null);
   const fetchSeqRef = useRef(0);
+  const allVendorsAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => allVendorsAbortRef.current?.abort(), []);
 
   useEffect(() => {
-    if (!isOpen || !rfq || tab !== 'all') return;
+    if (!isOpen || !rfq || tab !== 'all') {
+      allVendorsAbortRef.current?.abort();
+      return;
+    }
     const key = `${debouncedSearch}|${categoryFilter}|${stateFilter}|${cityFilter}`;
     if (allVendors !== null && lastFetchedKeyRef.current === key) return;
     lastFetchedKeyRef.current = key;
+    allVendorsAbortRef.current?.abort();
+    const controller = new AbortController();
+    allVendorsAbortRef.current = controller;
     const seq = ++fetchSeqRef.current;
     setAllVendorsLoading(true);
     setAllVendorsError(null);
-    void fetchAllVendors({
-      page: 1,
-      pageSize: ALL_VENDORS_PAGE_SIZE,
-      search: debouncedSearch,
-      category: categoryFilter,
-      state: stateFilter,
-      city: cityFilter,
-    }).then((result) => {
+    void withVendorFetchSignal(controller.signal, () =>
+      fetchAllVendors({
+        page: 1,
+        pageSize: ALL_VENDORS_PAGE_SIZE,
+        search: debouncedSearch,
+        category: categoryFilter,
+        state: stateFilter,
+        city: cityFilter,
+      })
+    ).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setAllVendors(stampInvited(result.candidates));

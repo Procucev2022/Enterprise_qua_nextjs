@@ -26,6 +26,7 @@ const { PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { RFQ_ATTACHMENT_CONFIG } = require('../config/constants');
 const { logger } = require('./loggerService');
 const r2Client = require('./r2Client');
+const r2NegativeCache = require('./r2NegativeCache');
 
 /** Machine-readable outcomes the controller maps onto responses. */
 const ATTACHMENT_STATUS = {
@@ -127,11 +128,13 @@ async function saveAttachment({ fileName, mimeType, content } = {}, config = RFQ
     ...(access ? { rfqid: encodeURIComponent(access.rfqId), vendorid: encodeURIComponent(access.vendorId) } : {}),
   };
 
+  const key = resolveObjectKey(id, config);
+
   try {
     if (binding) {
       // Native R2 binding — see r2Client.js's getBinding() for why this is
       // preferred over the S3Client path below on Workers.
-      await binding.put(resolveObjectKey(id, config), Buffer.from(content, 'base64'), {
+      await r2NegativeCache.putToBinding(binding, key, Buffer.from(content, 'base64'), {
         httpMetadata: { contentType: mimeType },
         customMetadata,
       });
@@ -139,7 +142,7 @@ async function saveAttachment({ fileName, mimeType, content } = {}, config = RFQ
       await client.send(
         new PutObjectCommand({
           Bucket: r2Client.bucket(),
-          Key: resolveObjectKey(id, config),
+          Key: key,
           Body: Buffer.from(content, 'base64'),
           ContentType: mimeType,
           Metadata: customMetadata,
@@ -184,7 +187,7 @@ async function loadAttachment(id, config = RFQ_ATTACHMENT_CONFIG) {
 
   try {
     if (binding) {
-      const object = await binding.get(key);
+      const object = await r2NegativeCache.getFromBinding(binding, key);
       if (!object) return null;
       const content = Buffer.from(await object.arrayBuffer());
       // R2's own customMetadata is already a plain lowercase-keyed object —
@@ -233,6 +236,10 @@ async function loadAttachment(id, config = RFQ_ATTACHMENT_CONFIG) {
     }
     return result;
   } catch (err) {
+    if (r2NegativeCache.isMissingObjectError(err)) {
+      logger.warn(`RFQ attachment missing in storage: ${id}`, { key }, 'RFQ_ATTACHMENT');
+      return null;
+    }
     logger.error(`Failed to read RFQ attachment ${id}`, err, 'RFQ_ATTACHMENT');
     return null;
   }

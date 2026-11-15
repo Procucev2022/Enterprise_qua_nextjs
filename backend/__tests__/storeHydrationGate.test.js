@@ -271,4 +271,21 @@ describe('createStoreHydrationGate', () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
   });
+
+  test('bypasses full-store hydration for paginated GET /api/vendors SQL reads', () => {
+    const { gate, deps } = buildGate();
+    const next = jest.fn();
+    gate(makeRequest({ method: 'GET', path: '/api/vendors', query: { page: '1', pageSize: '20', category: 'IT' } }), makeResponse(), next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(deps.storeService.hydrateFromDB).not.toHaveBeenCalled();
+  });
+
+  test('still requires hydration for non-paginated GET /api/vendors', async () => {
+    const { gate, deps } = buildGate();
+    const next = jest.fn();
+    gate(makeRequest({ method: 'GET', path: '/api/vendors', query: {} }), makeResponse(), next);
+    await flushPromises();
+    expect(deps.storeService.hydrateFromDB).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
 });

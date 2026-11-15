@@ -1,4 +1,6 @@
 const mailTransport = require('../src/services/mailTransport');
+const pool = require('../src/db/pool');
+const { logger } = require('../src/services/loggerService');
 
 const { DELIVERY_ERROR_KIND } = mailTransport;
 
@@ -33,8 +35,10 @@ describe('mailTransport', () => {
   afterEach(() => {
     PROVIDER_ENV.forEach((key) => delete process.env[key]);
     delete globalThis.__CF_ENV__;
+    delete globalThis.__CF_WAIT_UNTIL__;
     global.fetch = originalFetch;
     mailTransport.resetCooldowns();
+    jest.restoreAllMocks();
     jest.useRealTimers();
   });
 
@@ -297,6 +301,114 @@ describe('mailTransport', () => {
       failing.text = jest.fn().mockRejectedValue(new Error('no body'));
       global.fetch = jest.fn().mockResolvedValueOnce(failing);
       await expect(provider('mailchannels').send({ to: 'a@b.com', subject: 's' }, 'a@procucev.com')).rejects.toMatchObject({ status: 401 });
+    });
+  });
+
+  describe('persistent cooldowns across isolates', () => {
+    test('loadPersistedCooldowns hydrates future DB cooldowns, respects cache TTL, and merges longer windows', async () => {
+      const now = Date.now();
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({
+        rows: [
+          { provider_key: 'gmail:quoteAlert:abc', until_ms: now + 60_000, reason: null },
+          { provider_key: 'gmail:buyer:expired', until_ms: now - 1_000, reason: 'expired' },
+          { provider_key: '', until_ms: now + 60_000, reason: 'missing key' },
+          { provider_key: 'gmail:buyer:active', until_ms: now + 120_000, reason: 'longer db window' },
+          { provider_key: 'gmail:vendor:shorter', until_ms: now + 10_000, reason: 'shorter db window' },
+        ],
+      });
+
+      mailTransport.startCooldown('gmail:buyer:active', 30_000, 'short memory window', now, { persist: false });
+      mailTransport.startCooldown('gmail:vendor:shorter', 90_000, 'longer memory window', now, { persist: false });
+
+      expect(await mailTransport.loadPersistedCooldowns({ now })).toBe(true);
+      expect(mailTransport.getCooldown('gmail:quoteAlert:abc')).toEqual(
+        expect.objectContaining({ until: now + 60_000, reason: 'persisted provider cooldown' })
+      );
+      expect(mailTransport.getCooldown('gmail:buyer:active')).toEqual({
+        until: now + 120_000,
+        reason: 'longer db window',
+        since: now,
+      });
+      expect(mailTransport.getCooldown('gmail:vendor:shorter').until).toBe(now + 90_000);
+      expect(mailTransport.getCooldown('gmail:buyer:expired')).toBeNull();
+
+      // Within cache TTL -> skips redundant DB query.
+      expect(await mailTransport.loadPersistedCooldowns({ now: now + 5_000 })).toBe(false);
+      expect(querySpy).toHaveBeenCalledTimes(1);
+
+      // Concurrent forced calls share one DB roundtrip.
+      let resolveSecond;
+      querySpy.mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+      const p1 = mailTransport.loadPersistedCooldowns({ now: now + 70_000, force: true });
+      const p2 = mailTransport.loadPersistedCooldowns({ now: now + 70_000, force: true });
+      expect(querySpy).toHaveBeenCalledTimes(2);
+      resolveSecond({ rows: undefined });
+      await expect(Promise.all([p1, p2])).resolves.toEqual([true, true]);
+    });
+
+    test('loadPersistedCooldowns degrades gracefully without storage or when DB query fails', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      expect(await mailTransport.loadPersistedCooldowns()).toBe(false);
+
+      pool.hasStorage.mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('no such table: mail_provider_cooldowns'));
+      expect(await mailTransport.loadPersistedCooldowns({ force: true })).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to load persisted mail provider cooldowns'),
+        expect.objectContaining({ errorMessage: expect.stringContaining('mail_provider_cooldowns') }),
+        'MAIL_TRANSPORT'
+      );
+    });
+
+    test('startCooldown and clearCooldown persist to DB, hand promises to waitUntil, and handle DB failures', async () => {
+      const waitUntil = jest.fn();
+      globalThis.__CF_WAIT_UNTIL__ = waitUntil;
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
+      const now = Date.now();
+      mailTransport.noteProviderFailure('gmail:quoteAlert:revoked', new Error('invalid_grant'), now);
+      expect(waitUntil).toHaveBeenCalledTimes(1);
+      await mailTransport.flushPendingCooldownWrites();
+      await mailTransport.flushPendingCooldownWrites();
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO mail_provider_cooldowns'),
+        ['gmail:quoteAlert:revoked', now + mailTransport.MAIL_TRANSPORT_CONFIG.AUTH_REVOKED_COOLDOWN_MS, expect.stringContaining('invalid_grant')],
+        { d1: true }
+      );
+
+      // waitUntil throwing does not fail cooldown persistence; DB errors log warnings cleanly.
+      globalThis.__CF_WAIT_UNTIL__ = () => { throw new Error('waitUntil rejected'); };
+      querySpy.mockRejectedValueOnce(new Error('D1 busy'));
+      mailTransport.startCooldown('gmail:quoteAlert:err', 10_000, undefined, now);
+      await mailTransport.flushPendingCooldownWrites();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to persist mail provider cooldown'),
+        expect.objectContaining({ providerKey: 'gmail:quoteAlert:err' }),
+        'MAIL_TRANSPORT'
+      );
+
+      // Clearing persists DELETE and tolerates DB error too.
+      globalThis.__CF_WAIT_UNTIL__ = jest.fn();
+      mailTransport.clearCooldown('gmail:quoteAlert:revoked');
+      await mailTransport.flushPendingCooldownWrites();
+      expect(querySpy).toHaveBeenCalledWith(
+        'DELETE FROM mail_provider_cooldowns WHERE provider_key = $1',
+        ['gmail:quoteAlert:revoked'],
+        { d1: true }
+      );
+
+      querySpy.mockRejectedValueOnce(new Error('delete failed'));
+      mailTransport.clearCooldown('gmail:quoteAlert:err');
+      await mailTransport.flushPendingCooldownWrites();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to clear persisted mail provider cooldown'),
+        expect.objectContaining({ providerKey: 'gmail:quoteAlert:err' }),
+        'MAIL_TRANSPORT'
+      );
     });
   });
 });

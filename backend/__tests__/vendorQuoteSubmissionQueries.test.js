@@ -681,4 +681,30 @@ describe('atomic vendor quote submission queries', () => {
     expect(built.statements[3].text).toContain('json(raw) = json($9)');
     expect(built.statements[4].text).toContain('json(raw) = json($2)');
   });
+
+  test('does not conflict on D1 when stored vendor JSON contains a legacy dummy PAN or tempPassword stripped on domain reads', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
+    const rawVendorWithDummyPan = JSON.stringify({
+      ...vendor(),
+      pan: 'ABCPE1234F',
+      panNumber: 'ABCPE1234F',
+      tempPassword: 'one-time-password',
+    });
+    const normalizedExpectedVendor = vendor();
+    const savedVendor = vendor({ freeQuotationCredits: 1, freeRfqDownloadCredits: 1, quotedRfqIds: [RFQ_ID], unlockedRfqIds: [RFQ_ID, 'RFQ-ATOMIC-QUOTE'] });
+    const savedRFQ = rfq({ status: 'In Evaluation', quotes: [{ vendorId: VENDOR_ID, unitPrice: 250 }], quotesCount: 1 });
+    jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue(d1Rows({
+      initialVendor: rawVendorWithDummyPan,
+      savedVendor,
+      savedRFQ,
+    }));
+
+    const result = await queries.submitVendorQuoteInDB(baseOptions({
+      expectedVendor: normalizedExpectedVendor,
+      expectedVendorRaw: rawVendorWithDummyPan,
+    }));
+
+    expect(result).toMatchObject({ vendor: savedVendor, rfq: savedRFQ, creditCharged: 1 });
+  });
 });

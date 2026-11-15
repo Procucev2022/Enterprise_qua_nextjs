@@ -326,6 +326,7 @@ export type NewRFQInput = Omit<
 /** Why an RFQ read or write did not succeed. */
 export type RFQTransportFailure =
   | 'NETWORK'
+  | 'ABORTED'
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
   | 'VALIDATION'
@@ -3548,4 +3549,25 @@ export interface ActionCenterSummaryPopupModalProps<T = Record<string, unknown>>
   searchPlaceholder?: string;
   searchKeys?: string[];
   initialPageSize?: number;
+}
+
+/** Category properties present on a resolved assigned/invited supplier entry. */
+export interface SupplierFilterableCategory {
+  majorCategory?: string | null;
+  minorCategory?: string | null;
+}
+
+/** One dropdown option in the Category Manager supplier category filter. */
+export interface SupplierCategoryOption {
+  value: string;
+  count: number;
+}
+
+/** Computed cascading Division (major) & Minor Category filter state for supplier lists. */
+export interface SupplierCategoryFilterResult<T> {
+  majorOptions: SupplierCategoryOption[];
+  minorOptions: SupplierCategoryOption[];
+  effectiveMajor: string;
+  effectiveMinor: string;
+  filteredSuppliers: T[];
 }

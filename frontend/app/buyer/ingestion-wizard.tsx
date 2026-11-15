@@ -22,6 +22,7 @@ import {
   fetchAllVendors,
   requestVendorCategoryUpdateEmail,
 } from '@/lib/rfqClient';
+import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
   addManualRFQLineItem,
@@ -589,19 +590,26 @@ export default function IngestionWizard({
   // Guards against a slower, earlier request resolving AFTER a newer,
   // re-searched one and overwriting it with stale results.
   const allVendorsFetchSeqRef = useRef(0);
+  const allVendorsAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => allVendorsAbortRef.current?.abort(), []);
   useEffect(() => {
     if (!isAllCategories && !selectedMajorCategory) return;
     const key = `${selectedMajorCategory}::${debouncedAllVendorsSearch}`;
     if (lastAllVendorsKeyRef.current === key) return;
     lastAllVendorsKeyRef.current = key;
+    allVendorsAbortRef.current?.abort();
+    const controller = new AbortController();
+    allVendorsAbortRef.current = controller;
     const seq = ++allVendorsFetchSeqRef.current;
     setAllVendorsLoading(true);
-    void fetchAllVendors({
-      page: 1,
-      pageSize: ALL_VENDORS_PAGE_SIZE,
-      search: debouncedAllVendorsSearch,
-      category: selectedMajorCategory,
-    }).then((result) => {
+    void withVendorFetchSignal(controller.signal, () =>
+      fetchAllVendors({
+        page: 1,
+        pageSize: ALL_VENDORS_PAGE_SIZE,
+        search: debouncedAllVendorsSearch,
+        category: selectedMajorCategory,
+      })
+    ).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
         setAllVendorsList(result.candidates);
@@ -644,20 +652,23 @@ export default function IngestionWizard({
       setProcucevV3Ranked([]);
       return;
     }
+    const controller = new AbortController();
     const { majors, minors } = extractRfqCategoryFilters(form);
     const seq = ++procucevV3FetchSeqRef.current;
     setProcucevV3Loading(true);
     // Pull an indexed public candidate pool covering every RFQ division and minor category;
     // the server widens sparse minors with parent majors and the client selects the top 10.
-    void fetchAllVendors({
-      page: 1,
-      pageSize: VENDOR_ASSIGNMENT_LIMITS.MODE3_CANDIDATE_POOL_SIZE,
-      search: '',
-      category: isAllCategories ? '' : selectedMajorCategory,
-      publicOnly: true,
-      ...(majors.length > 0 ? { majors } : {}),
-      ...(minors.length > 0 ? { minors } : {}),
-    }).then((result) => {
+    void withVendorFetchSignal(controller.signal, () =>
+      fetchAllVendors({
+        page: 1,
+        pageSize: VENDOR_ASSIGNMENT_LIMITS.MODE3_CANDIDATE_POOL_SIZE,
+        search: '',
+        category: isAllCategories ? '' : selectedMajorCategory,
+        publicOnly: true,
+        ...(majors.length > 0 ? { majors } : {}),
+        ...(minors.length > 0 ? { minors } : {}),
+      })
+    ).then((result) => {
       if (seq !== procucevV3FetchSeqRef.current) return;
       if (result.success) {
         const ranked = selectTopProcucevVendorsForMode3(
@@ -673,6 +684,9 @@ export default function IngestionWizard({
       }
       setProcucevV3Loading(false);
     });
+    return () => {
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-rank only on the inputs that change the ranking
   }, [form.sourcingMode, form.majorCategory, form.minorCategory, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode, JSON.stringify(form.lineItems.map((it) => [it.majorCategory, it.minorCategory]))]);
 
@@ -1240,12 +1254,12 @@ export default function IngestionWizard({
 
         let finalMatching = dispatchSignals.length > 0
           ? selectVendorsForCategories(
-              matchingVendors,
-              dispatchSignals,
-              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
-              dispatchMinorOnly
-            ).map((r) => r.vendor)
+            matchingVendors,
+            dispatchSignals,
+            VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+            { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
+            dispatchMinorOnly
+          ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
         if (finalMatching.length === 0 && matchingVendors.length > 0) {
@@ -1457,11 +1471,10 @@ export default function IngestionWizard({
             setIsDraggingDoc(false);
             if (e.dataTransfer.files) handleFilesSelected(e.dataTransfer.files);
           }}
-          className={`border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer group ${
-            isDraggingDoc
+          className={`border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer group ${isDraggingDoc
               ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
               : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
-          }`}
+            }`}
         >
           <div className="flex items-center justify-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
@@ -1717,185 +1730,185 @@ export default function IngestionWizard({
               </h2>
             </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleAutoCategorizeAll}
-              disabled={isCategorizing || form.lineItems.length === 0}
-              className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
-            >
-              {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
-            </button>
-            {form.lineItems.length < 5 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAutoCategorizeAll}
+                disabled={isCategorizing || form.lineItems.length === 0}
+                className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
+              >
+                {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
+              </button>
+              {form.lineItems.length < 5 && (
+                <button
+                  onClick={() => setForm(addManualRFQLineItem(form))}
+                  className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
+                >
+                  <Plus size={14} /> Add Line Item
+                </button>
+              )}
+            </div>
+          </div>
+
+          <FieldError message={formErrors.lineItems} />
+
+          {form.lineItems.length === 0 ? (
+            <div className="p-8 text-center rounded-2xl border-2 border-dashed border-slate-300 dark:border-gray-700 bg-slate-50/50 dark:bg-gray-900/40 space-y-3">
+              <p className="text-sm font-medium text-slate-600 dark:text-gray-300">No line items added yet.</p>
+              <button
+                onClick={() => setForm(addManualRFQLineItem(form))}
+                className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5"
+              >
+                <Plus size={14} /> Add First Line Item
+              </button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
+              <table className="w-full text-left min-w-[1080px] text-xs">
+                <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
+                  <tr>
+                    <th className="px-3 py-2.5 font-bold">{MODAL.colItem}<RequiredMarker /></th>
+                    <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
+                    <th className="px-3 py-2.5 font-bold">{MODAL.colQty}<RequiredMarker /></th>
+                    <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
+                    <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
+                    <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
+                    <th className="px-3 py-2.5 text-center font-bold">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                  {form.lineItems.map((item) => {
+                    const errors = lineItemErrors[item.id] || {};
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-gray-800/40 transition-colors">
+                        {/* Item Name */}
+                        <td className="px-3 py-2.5 align-top">
+                          <input
+                            type="text"
+                            aria-label={MODAL.colItem}
+                            value={item.itemName}
+                            onChange={(e) => patchItem(item.id, { itemName: e.target.value })}
+                            placeholder={MODAL.itemPlaceholder}
+                            className="w-56 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
+                          />
+                          <FieldError message={errors.itemName} />
+                        </td>
+
+                        {/* Specs */}
+                        <td className="px-3 py-2.5 align-top">
+                          <input
+                            type="text"
+                            aria-label={MODAL.colSpecs}
+                            aria-required
+                            aria-invalid={!!errors.technicalSpecs}
+                            value={item.technicalSpecs}
+                            onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
+                            placeholder={MODAL.specsPlaceholder}
+                            className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
+                          />
+                          <FieldError message={errors.technicalSpecs} />
+                        </td>
+
+                        {/* Quantity */}
+                        <td className="px-3 py-2.5 align-top">
+                          <input
+                            type="number"
+                            min={1}
+                            aria-label={MODAL.colQty}
+                            value={item.quantity ?? ''}
+                            onChange={(e) =>
+                              patchItem(item.id, {
+                                quantity: e.target.value === '' ? null : Number(e.target.value),
+                              })
+                            }
+                            placeholder={MODAL.qtyPlaceholder}
+                            className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 mono font-semibold focus:ring-2 focus:ring-indigo-500"
+                          />
+                          <FieldError message={errors.quantity} />
+                        </td>
+
+                        {/* Unit */}
+                        <td className="px-3 py-2.5 align-top">
+                          <input
+                            type="text"
+                            aria-label={MODAL.colUnit}
+                            value={item.unit}
+                            onChange={(e) => patchItem(item.id, { unit: e.target.value })}
+                            placeholder={MODAL.unitPlaceholder}
+                            className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
+                          />
+                          <FieldError message={errors.unit} />
+                        </td>
+
+                        {/* Major Category */}
+                        <td className="px-3 py-2.5 align-top">
+                          <select
+                            aria-label={MODAL.colMajor}
+                            aria-required
+                            aria-invalid={!!errors.majorCategory}
+                            value={item.majorCategory}
+                            onChange={(e) => {
+                              const newMajor = e.target.value;
+                              const keepMinor = newMajor && hasMinorCategory(newMajor, item.minorCategory) ? item.minorCategory : '';
+                              patchItem(item.id, { majorCategory: newMajor, minorCategory: keepMinor });
+                            }}
+                            className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
+                          >
+                            <option value="">{MODAL.selectPlaceholder}</option>
+                            <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
+                            {withStoredValue(taxonomyMajors(), item.majorCategory).map((major) => (
+                              <option key={major} value={major}>
+                                {major}
+                              </option>
+                            ))}
+                          </select>
+                          <FieldError message={errors.majorCategory} />
+                        </td>
+
+                        {/* Category: a search field that lists the matching categories of the chosen division */}
+                        <td className="px-3 py-2.5 align-top">
+                          <CategorySearchInput
+                            label={MODAL.colMinor}
+                            invalid={!!errors.minorCategory}
+                            value={item.minorCategory}
+                            options={withStoredValue(minorsFor(item.majorCategory), item.minorCategory)}
+                            onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
+                            disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
+                            placeholder={categoryFieldPlaceholder(item.majorCategory)}
+                          />
+                          <FieldError message={errors.minorCategory} />
+                        </td>
+
+                        {/* Delete */}
+                        <td className="px-3 py-2.5 align-top text-center">
+                          <button
+                            onClick={() => setForm(removeManualRFQLineItem(form, item.id))}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                            title="Remove line item"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── When 5+ items exist, place Add Line Item at bottom-right ── */}
+          {form.lineItems.length >= 5 && (
+            <div className="flex justify-end pt-1">
               <button
                 onClick={() => setForm(addManualRFQLineItem(form))}
                 className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
               >
                 <Plus size={14} /> Add Line Item
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
-
-        <FieldError message={formErrors.lineItems} />
-
-        {form.lineItems.length === 0 ? (
-          <div className="p-8 text-center rounded-2xl border-2 border-dashed border-slate-300 dark:border-gray-700 bg-slate-50/50 dark:bg-gray-900/40 space-y-3">
-            <p className="text-sm font-medium text-slate-600 dark:text-gray-300">No line items added yet.</p>
-            <button
-              onClick={() => setForm(addManualRFQLineItem(form))}
-              className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5"
-            >
-              <Plus size={14} /> Add First Line Item
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
-            <table className="w-full text-left min-w-[1080px] text-xs">
-              <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
-                <tr>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}<RequiredMarker /></th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}<RequiredMarker /></th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}<RequiredMarker /></th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}<RequiredMarker /></th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}<RequiredMarker /></th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}<RequiredMarker /></th>
-                  <th className="px-3 py-2.5 text-center font-bold">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                {form.lineItems.map((item) => {
-                  const errors = lineItemErrors[item.id] || {};
-                  return (
-                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-gray-800/40 transition-colors">
-                      {/* Item Name */}
-                      <td className="px-3 py-2.5 align-top">
-                        <input
-                          type="text"
-                          aria-label={MODAL.colItem}
-                          value={item.itemName}
-                          onChange={(e) => patchItem(item.id, { itemName: e.target.value })}
-                          placeholder={MODAL.itemPlaceholder}
-                          className="w-56 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <FieldError message={errors.itemName} />
-                      </td>
-
-                      {/* Specs */}
-                      <td className="px-3 py-2.5 align-top">
-                        <input
-                          type="text"
-                          aria-label={MODAL.colSpecs}
-                          aria-required
-                          aria-invalid={!!errors.technicalSpecs}
-                          value={item.technicalSpecs}
-                          onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
-                          placeholder={MODAL.specsPlaceholder}
-                          className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <FieldError message={errors.technicalSpecs} />
-                      </td>
-
-                      {/* Quantity */}
-                      <td className="px-3 py-2.5 align-top">
-                        <input
-                          type="number"
-                          min={1}
-                          aria-label={MODAL.colQty}
-                          value={item.quantity ?? ''}
-                          onChange={(e) =>
-                            patchItem(item.id, {
-                              quantity: e.target.value === '' ? null : Number(e.target.value),
-                            })
-                          }
-                          placeholder={MODAL.qtyPlaceholder}
-                          className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 mono font-semibold focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <FieldError message={errors.quantity} />
-                      </td>
-
-                      {/* Unit */}
-                      <td className="px-3 py-2.5 align-top">
-                        <input
-                          type="text"
-                          aria-label={MODAL.colUnit}
-                          value={item.unit}
-                          onChange={(e) => patchItem(item.id, { unit: e.target.value })}
-                          placeholder={MODAL.unitPlaceholder}
-                          className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <FieldError message={errors.unit} />
-                      </td>
-
-                      {/* Major Category */}
-                      <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMajor}
-                          aria-required
-                          aria-invalid={!!errors.majorCategory}
-                          value={item.majorCategory}
-                          onChange={(e) => {
-                            const newMajor = e.target.value;
-                            const keepMinor = newMajor && hasMinorCategory(newMajor, item.minorCategory) ? item.minorCategory : '';
-                            patchItem(item.id, { majorCategory: newMajor, minorCategory: keepMinor });
-                          }}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">{MODAL.selectPlaceholder}</option>
-                          <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
-                          {withStoredValue(taxonomyMajors(), item.majorCategory).map((major) => (
-                            <option key={major} value={major}>
-                              {major}
-                            </option>
-                          ))}
-                        </select>
-                        <FieldError message={errors.majorCategory} />
-                      </td>
-
-                      {/* Category: a search field that lists the matching categories of the chosen division */}
-                      <td className="px-3 py-2.5 align-top">
-                        <CategorySearchInput
-                          label={MODAL.colMinor}
-                          invalid={!!errors.minorCategory}
-                          value={item.minorCategory}
-                          options={withStoredValue(minorsFor(item.majorCategory), item.minorCategory)}
-                          onChange={(minor) => patchItem(item.id, { minorCategory: minor })}
-                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
-                          placeholder={categoryFieldPlaceholder(item.majorCategory)}
-                        />
-                        <FieldError message={errors.minorCategory} />
-                      </td>
-
-                      {/* Delete */}
-                      <td className="px-3 py-2.5 align-top text-center">
-                        <button
-                          onClick={() => setForm(removeManualRFQLineItem(form, item.id))}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                          title="Remove line item"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* ── When 5+ items exist, place Add Line Item at bottom-right ── */}
-        {form.lineItems.length >= 5 && (
-          <div className="flex justify-end pt-1">
-            <button
-              onClick={() => setForm(addManualRFQLineItem(form))}
-              className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
-            >
-              <Plus size={14} /> Add Line Item
-            </button>
-          </div>
-        )}
-      </div>
 
         {/* ── Section 3: Sourcing Mode Selection ── */}
         <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
@@ -1969,13 +1982,12 @@ export default function IngestionWizard({
                       }
                       patchForm('sourcingMode', mode.id as SourcingMode);
                     }}
-                    className={`h-9 px-3.5 py-1.5 rounded-xl text-xs font-semibold tracking-tight transition-all duration-150 shrink-0 flex items-center justify-center gap-1.5 border cursor-pointer select-none ${
-                      isSelected
+                    className={`h-9 px-3.5 py-1.5 rounded-xl text-xs font-semibold tracking-tight transition-all duration-150 shrink-0 flex items-center justify-center gap-1.5 border cursor-pointer select-none ${isSelected
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/20'
                         : !isEntitled
-                        ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
-                        : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
-                    }`}
+                          ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
+                          : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
+                      }`}
                   >
                     <span data-testid={`mode-${mode.id}`} aria-hidden="true" className="contents">
                       {isSelected && <Check size={13} className="shrink-0 stroke-[2.5]" />}
@@ -1995,516 +2007,127 @@ export default function IngestionWizard({
 
 
 
-        <FieldError message={formErrors.sourcingMode} />
+          <FieldError message={formErrors.sourcingMode} />
 
-        {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
-        {form.sourcingMode === 'mode_1' && (
-          <div className="mt-5 rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-blue-100 dark:border-blue-900/40 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
-                  <Building2 size={16} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
-                    <span className="badge badge-blue text-[10px] font-bold">
-                      {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
-                    </span>
-                  </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                    This RFQ will strictly be dispatched to your private, pre-approved supplier network below.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
-                <input
-                  type="text"
-                  placeholder="Filter vendors..."
-                  value={mode1VendorSearch}
-                  onChange={(e) => setMode1VendorSearch(e.target.value)}
-                  className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-800 dark:text-gray-200 w-36 sm:w-44 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    resetAddVendorForm();
-                    setIsAddVendorModalOpen(true);
-                  }}
-                  className="btn btn-primary btn-xs py-1.5 px-3 font-bold flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
-                >
-                  <Plus size={13} />
-                  <span>Add Vendor</span>
-                </button>
-                <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2.5 py-1.5 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
-                  🔒 Private Roster Only
-                </span>
-              </div>
-            </div>
-
-            {(() => {
-              const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
-              if (allMyVendors.length === 0) {
-                return (
-                  <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
-                    <Users size={28} className="mx-auto text-slate-400 opacity-60" />
-                    <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Vendors Uploaded Yet</p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
-                      Please ingest your 1–3 Year Pre-Purchase Orders or add approved vendors in the Vendor Directory to auto-dispatch in Mode 1.
+          {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
+          {form.sourcingMode === 'mode_1' && (
+            <div className="mt-5 rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-blue-100 dark:border-blue-900/40 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
+                    <Building2 size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
+                      <span className="badge badge-blue text-[10px] font-bold">
+                        {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                      This RFQ will strictly be dispatched to your private, pre-approved supplier network below.
                     </p>
                   </div>
-                );
-              }
+                </div>
+                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
+                  <input
+                    type="text"
+                    placeholder="Filter vendors..."
+                    value={mode1VendorSearch}
+                    onChange={(e) => setMode1VendorSearch(e.target.value)}
+                    className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-800 dark:text-gray-200 w-36 sm:w-44 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetAddVendorForm();
+                      setIsAddVendorModalOpen(true);
+                    }}
+                    className="btn btn-primary btn-xs py-1.5 px-3 font-bold flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                  >
+                    <Plus size={13} />
+                    <span>Add Vendor</span>
+                  </button>
+                  <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2.5 py-1.5 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
+                    🔒 Private Roster Only
+                  </span>
+                </div>
+              </div>
 
-              const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
-              const matchingVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
-                : allMyVendors;
-              const mismatchedVendors = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
-                : [];
+              {(() => {
+                const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                if (allMyVendors.length === 0) {
+                  return (
+                    <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
+                      <Users size={28} className="mx-auto text-slate-400 opacity-60" />
+                      <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Vendors Uploaded Yet</p>
+                      <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                        Please ingest your 1–3 Year Pre-Purchase Orders or add approved vendors in the Vendor Directory to auto-dispatch in Mode 1.
+                      </p>
+                    </div>
+                  );
+                }
 
-              let pool = allMyVendors;
-              if (vendorCategoryFilterTab === 'matched') {
-                pool = matchingVendors;
-              } else if (vendorCategoryFilterTab === 'mismatched') {
-                pool = mismatchedVendors;
-              }
+                const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
+                const matchingVendors = mode1Signals.length > 0
+                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                  : allMyVendors;
+                const mismatchedVendors = mode1Signals.length > 0
+                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                  : [];
 
-              const myVendors = mode1VendorSearch.trim()
-                ? pool.filter((v) =>
+                let pool = allMyVendors;
+                if (vendorCategoryFilterTab === 'matched') {
+                  pool = matchingVendors;
+                } else if (vendorCategoryFilterTab === 'mismatched') {
+                  pool = mismatchedVendors;
+                }
+
+                const myVendors = mode1VendorSearch.trim()
+                  ? pool.filter((v) =>
                     v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
                     v.email?.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
                     v.majorCategory?.toLowerCase().includes(mode1VendorSearch.toLowerCase())
                   )
-                : pool;
+                  : pool;
 
-              const allIds = myVendors.map((v) => v.id);
-              const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                const allIds = myVendors.map((v) => v.id);
+                const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
 
-              return (
-                <div className="space-y-2.5">
-                  {/* Category Filter Tabs & Toolbar */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-gray-800 pb-2">
-                    {mode1Signals.length > 0 && (
-                      <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
-                        <button
-                          type="button"
-                          onClick={() => setVendorCategoryFilterTab('all')}
-                          className={`px-2.5 py-1 rounded-md transition-all ${
-                            vendorCategoryFilterTab === 'all'
-                              ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
-                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
-                          }`}
-                        >
-                          All ({allMyVendors.length})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setVendorCategoryFilterTab('matched')}
-                          className={`px-2.5 py-1 rounded-md transition-all ${
-                            vendorCategoryFilterTab === 'matched'
-                              ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
-                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
-                          }`}
-                        >
-                          Matched ({matchingVendors.length})
-                        </button>
-                        {mismatchedVendors.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setVendorCategoryFilterTab('mismatched')}
-                            className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${
-                              vendorCategoryFilterTab === 'mismatched'
-                                ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
-                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
-                            }`}
-                          >
-                            <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
-                          </button>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
-                      <div className="text-slate-500 dark:text-gray-400">
-                        {selectedVendorIds.length > 0 ? (
-                          <span className="font-semibold text-blue-600 dark:text-blue-400">
-                            {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
-                          </span>
-                        ) : (
-                          <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const selectableIds = myVendors.filter((v) => {
-                            if (mode1Signals.length === 0) return true;
-                            return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
-                          }).map((v) => v.id);
-
-                          if (allSelected) {
-                            setSelectedVendorIds([]);
-                          } else {
-                            setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...selectableIds])));
-                          }
-                        }}
-                        className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
-                      >
-                        {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
-                        <span>{allSelected ? 'Deselect All' : 'Select All Matched'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {myVendors.length === 0 ? (
-                    <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900 border border-dashed border-slate-300 dark:border-gray-700 space-y-2">
-                      <Users size={24} className="mx-auto text-slate-400 opacity-60" />
-                      <p className="text-xs font-bold text-slate-700 dark:text-gray-300">
-                        {vendorCategoryFilterTab === 'matched'
-                          ? 'No Category-Matched Vendors in Roster'
-                          : 'No Vendors Found'}
-                      </p>
-                      <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
-                        {vendorCategoryFilterTab === 'matched'
-                          ? `No vendors in your approved roster match the RFQ category (${mode1Signals.join(', ') || 'selected'}). Switch to "All" or add a new vendor.`
-                          : 'No vendors match your search or filter criteria.'}
-                      </p>
-                      {vendorCategoryFilterTab === 'matched' && allMyVendors.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setVendorCategoryFilterTab('all')}
-                          className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-block mt-1"
-                        >
-                          View all {allMyVendors.length} private vendors →
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
-                      {myVendors.map((vendor, idx) => {
-                      const rawMinor = vendor.minorCategories as string | string[] | undefined;
-                      const minorList: string[] = Array.isArray(rawMinor)
-                        ? rawMinor
-                        : typeof rawMinor === 'string'
-                        ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                        : Array.isArray(vendor.vendorSelectedCategories)
-                        ? vendor.vendorSelectedCategories
-                        : [];
-                      
-                      const matchResult = mode1Signals.length > 0
-                        ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
-                        : { isMatch: true };
-                      const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
-
-                      const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
-
-                      return (
-                        <div
-                          key={vendor.id || idx}
-                          onClick={() => {
-                            if (isCategoryMismatch) return;
-                            setSelectedVendorIds((prev) => {
-                              if (prev.length === 0) {
-                                return allIds.filter((id) => id !== vendor.id);
-                              }
-                              return prev.includes(vendor.id)
-                                ? prev.filter((id) => id !== vendor.id)
-                                : [...prev, vendor.id];
-                            });
-                          }}
-                          className={`rounded-xl border p-3.5 space-y-2 transition-all ${
-                            isCategoryMismatch
-                              ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
-                              : isSelected
-                              ? 'cursor-pointer border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
-                              : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-1.5">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
-                                isCategoryMismatch
-                                  ? 'bg-amber-500 border-amber-500 text-white opacity-80'
-                                  : isSelected
-                                  ? 'bg-blue-600 border-blue-600 text-white'
-                                  : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                              }`}>
-                                {isCategoryMismatch ? (
-                                  <AlertCircle size={12} strokeWidth={2.5} />
-                                ) : isSelected ? (
-                                  <Check size={12} strokeWidth={3} />
-                                ) : null}
-                              </span>
-                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
-                                {vendor.name}
-                              </span>
-                            </div>
-                            {isCategoryMismatch ? (
-                              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0">
-                                ⚠️ Category Mismatch
-                              </span>
-                            ) : (
-                              <span className="badge badge-emerald text-[9px] font-bold shrink-0">
-                                Preferred
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
-                            {vendor.contactPerson && (
-                              <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
-                                <Users size={11} className="text-slate-400 shrink-0" />
-                                <span className="truncate">{vendor.contactPerson}</span>
-                              </div>
-                            )}
-                            {vendor.email && (
-                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                                <Mail size={11} className="text-blue-500 shrink-0" />
-                                <span className="font-mono text-[10px] truncate">{vendor.email}</span>
-                              </div>
-                            )}
-                            {vendor.phone && (
-                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                                <Phone size={11} className="text-emerald-500 shrink-0" />
-                                <span className="font-mono text-[10px]">{vendor.phone}</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Category Mismatch Warning & Update Button */}
-                          {isCategoryMismatch ? (
-                            <div className="pt-2 border-t border-amber-200/60 dark:border-amber-900/40 space-y-1.5">
-                              <div className="text-[10px] text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/50 space-y-0.5">
-                                <p className="font-bold flex items-center justify-between">
-                                  <span>Registered Category:</span>
-                                  <span className="text-amber-900 dark:text-amber-200">{vendor.majorCategory || 'None'}</span>
-                                </p>
-                                <p className="text-[9px] text-amber-700 dark:text-amber-400">
-                                  Excluded from RFQ shortlist until details updated & verified.
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleSendCategoryUpdateEmail(vendor, mode1Signals);
-                                }}
-                                disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
-                                className="w-full py-1.5 px-2.5 rounded-lg text-[10px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
-                                title="Send email requesting vendor to update their category"
-                              >
-                                {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
-                                  <>
-                                    <Loader2 size={11} className="animate-spin" />
-                                    <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
-                                  </>
-                                ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
-                                  <>
-                                    <CheckCircle2 size={11} />
-                                    <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Mail size={11} />
-                                    <span>Send Email to Update Category</span>
-                                  </>
-                                )}
-                              </button>
-                            </div>
-                          ) : (
-                            /* Category & Rating */
-                            <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
-                              <div className="flex items-center justify-between text-[10px]">
-                                <span className="font-semibold text-blue-700 dark:text-blue-300 truncate max-w-[150px]">
-                                  {vendor.majorCategory || 'General Industrial'}
-                                </span>
-                                <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
-                                  <Star size={10} className="fill-amber-400 text-amber-400" />
-                                  <span>{vendor.rating || 4.5}</span>
-                                </span>
-                              </div>
-                              {minorList.length > 0 && (
-                                <div className="flex flex-wrap gap-1">
-                                  {minorList.slice(0, 2).map((cat: string, ci: number) => (
-                                    <span
-                                      key={ci}
-                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
-                                      title={cat}
-                                    >
-                                      {cat}
-                                    </span>
-                                  ))}
-                                  {minorList.length > 2 && (
-                                    <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
-                                      +{minorList.length - 2}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* ── Mode 2: Hybrid Sourcing Pool (Private Roster + AI Routing) ── */}
-        {form.sourcingMode === 'mode_2' && (
-          <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
-            {(() => {
-              const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
-              if (allMyVendors.length === 0) {
                 return (
-                  <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
-                    <Users size={28} className="mx-auto text-slate-400 opacity-60" />
-                    <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Approved Vendors Found</p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
-                      Please ingest your approved vendor directory or add vendors in the Vendor Directory to dispatch in Mode 2.
-                    </p>
-                  </div>
-                );
-              }
-
-              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
-              const matchingVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
-                : allMyVendors;
-              const mismatchedVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
-                : [];
-
-              let pool = allMyVendors;
-              if (mode2VendorCategoryFilterTab === 'matched') {
-                pool = matchingVendors;
-              } else if (mode2VendorCategoryFilterTab === 'mismatched') {
-                pool = mismatchedVendors;
-              }
-
-              const myVendors = mode2VendorSearch.trim()
-                ? pool.filter((v) =>
-                    v.name.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
-                    v.email?.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
-                    v.majorCategory?.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
-                    (v.contactPerson || '').toLowerCase().includes(mode2VendorSearch.toLowerCase())
-                  )
-                : pool;
-
-              const allIds = myVendors.map((v) => v.id);
-              const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
-
-              return (
-                <>
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 dark:border-emerald-900/40 pb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-emerald-600 text-white shadow-xs">
-                        <Sparkles size={16} />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <span>Mode 2: Hybrid Sourcing Pool</span>
-                          <span className="badge badge-emerald text-[10px] font-bold">
-                            {matchingVendors.length} Hybrid Suppliers Matched
-                          </span>
-                        </h3>
-                        <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Dispatches to your approved internal roster below + automatically matched Procucev verified network suppliers in the background.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setShowAiInfo(!showAiInfo)}
-                        className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-emerald-100 bg-emerald-100/80 dark:bg-emerald-900/60 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer"
-                        title="Learn how AI categorizes and matches suppliers"
-                      >
-                        <Info size={13} />
-                        <span>AI Matching Criteria</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* AI Matching Info Panel */}
-                  {showAiInfo && (
-                    <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-slate-800 dark:text-gray-200 space-y-3 animate-fade-in shadow-xs">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 font-bold text-xs text-emerald-800 dark:text-emerald-200">
-                          <Sparkles size={15} className="text-emerald-600 dark:text-emerald-400" />
-                          <span>How QUA AI Categorizes Line Items & Matches Suppliers</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setShowAiInfo(false)}
-                          className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                        >
-                          ✕ Close
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] leading-relaxed">
-                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
-                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">1. BOQ & Line-Item Classification</strong>
-                          Extracts items and maps keywords against our 280+ standard industrial category taxonomy.
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
-                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                          Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
-                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">3. ≥80% Relevance Threshold</strong>
-                          Ensures only verified suppliers with direct capability overlap receive RFQ invitations.
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
-                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">4. Category Benchmarking</strong>
-                          Evaluates vendor reliability ratings, location proximity, and verified product specifications.
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Category Filter Tabs & Toolbar */}
                   <div className="space-y-2.5">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 dark:border-emerald-900/40 pb-2">
-                      {rfqSignals.length > 0 && (
+                    {/* Category Filter Tabs & Toolbar */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-gray-800 pb-2">
+                      {mode1Signals.length > 0 && (
                         <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
                           <button
                             type="button"
-                            onClick={() => setMode2VendorCategoryFilterTab('all')}
-                            className={`px-2.5 py-1 rounded-md transition-all ${
-                              mode2VendorCategoryFilterTab === 'all'
-                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                            onClick={() => setVendorCategoryFilterTab('all')}
+                            className={`px-2.5 py-1 rounded-md transition-all ${vendorCategoryFilterTab === 'all'
+                                ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
                                 : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
-                            }`}
+                              }`}
                           >
                             All ({allMyVendors.length})
                           </button>
                           <button
                             type="button"
-                            onClick={() => setMode2VendorCategoryFilterTab('matched')}
-                            className={`px-2.5 py-1 rounded-md transition-all ${
-                              mode2VendorCategoryFilterTab === 'matched'
+                            onClick={() => setVendorCategoryFilterTab('matched')}
+                            className={`px-2.5 py-1 rounded-md transition-all ${vendorCategoryFilterTab === 'matched'
                                 ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
                                 : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
-                            }`}
+                              }`}
                           >
                             Matched ({matchingVendors.length})
                           </button>
                           {mismatchedVendors.length > 0 && (
                             <button
                               type="button"
-                              onClick={() => setMode2VendorCategoryFilterTab('mismatched')}
-                              className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${
-                                mode2VendorCategoryFilterTab === 'mismatched'
+                              onClick={() => setVendorCategoryFilterTab('mismatched')}
+                              className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${vendorCategoryFilterTab === 'mismatched'
                                   ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
                                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
-                              }`}
+                                }`}
                             >
                               <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
                             </button>
@@ -2515,7 +2138,7 @@ export default function IngestionWizard({
                       <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
                         <div className="text-slate-500 dark:text-gray-400">
                           {selectedVendorIds.length > 0 ? (
-                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                            <span className="font-semibold text-blue-600 dark:text-blue-400">
                               {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
                             </span>
                           ) : (
@@ -2526,8 +2149,8 @@ export default function IngestionWizard({
                           type="button"
                           onClick={() => {
                             const selectableIds = myVendors.filter((v) => {
-                              if (rfqSignals.length === 0) return true;
-                              return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
+                              if (mode1Signals.length === 0) return true;
+                              return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
                             }).map((v) => v.id);
 
                             if (allSelected) {
@@ -2536,7 +2159,7 @@ export default function IngestionWizard({
                               setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...selectableIds])));
                             }
                           }}
-                          className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                          className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
                         >
                           {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
                           <span>{allSelected ? 'Deselect All' : 'Select All Matched'}</span>
@@ -2544,21 +2167,28 @@ export default function IngestionWizard({
                       </div>
                     </div>
 
-                    {/* Search Bar */}
-                    <div className="relative">
-                      <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
-                      <input
-                        type="search"
-                        value={mode2VendorSearch}
-                        onChange={(e) => setMode2VendorSearch(e.target.value)}
-                        placeholder="Search private suppliers by name, category, or contact info..."
-                        className="w-full text-xs pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
-                      />
-                    </div>
-
                     {myVendors.length === 0 ? (
-                      <div className="p-4 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
-                        No vendors match the search or filter criteria.
+                      <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900 border border-dashed border-slate-300 dark:border-gray-700 space-y-2">
+                        <Users size={24} className="mx-auto text-slate-400 opacity-60" />
+                        <p className="text-xs font-bold text-slate-700 dark:text-gray-300">
+                          {vendorCategoryFilterTab === 'matched'
+                            ? 'No Category-Matched Vendors in Roster'
+                            : 'No Vendors Found'}
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
+                          {vendorCategoryFilterTab === 'matched'
+                            ? `No vendors in your approved roster match the RFQ category (${mode1Signals.join(', ') || 'selected'}). Switch to "All" or add a new vendor.`
+                            : 'No vendors match your search or filter criteria.'}
+                        </p>
+                        {vendorCategoryFilterTab === 'matched' && allMyVendors.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setVendorCategoryFilterTab('all')}
+                            className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-block mt-1"
+                          >
+                            View all {allMyVendors.length} private vendors →
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
@@ -2567,15 +2197,15 @@ export default function IngestionWizard({
                           const minorList: string[] = Array.isArray(rawMinor)
                             ? rawMinor
                             : typeof rawMinor === 'string'
-                            ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                            : Array.isArray(vendor.vendorSelectedCategories)
-                            ? vendor.vendorSelectedCategories
-                            : [];
+                              ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                              : Array.isArray(vendor.vendorSelectedCategories)
+                                ? vendor.vendorSelectedCategories
+                                : [];
 
-                          const matchResult = rfqSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
+                          const matchResult = mode1Signals.length > 0
+                            ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
                             : { isMatch: true };
-                          const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
+                          const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
 
                           const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
 
@@ -2593,23 +2223,21 @@ export default function IngestionWizard({
                                     : [...prev, vendor.id];
                                 });
                               }}
-                              className={`rounded-xl border p-3.5 space-y-2 transition-all ${
-                                isCategoryMismatch
+                              className={`rounded-xl border p-3.5 space-y-2 transition-all ${isCategoryMismatch
                                   ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
                                   : isSelected
-                                  ? 'cursor-pointer border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
-                                  : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
-                              }`}
+                                    ? 'cursor-pointer border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
+                                    : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                                }`}
                             >
                               <div className="flex items-start justify-between gap-1.5">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
-                                    isCategoryMismatch
+                                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
                                       ? 'bg-amber-500 border-amber-500 text-white opacity-80'
                                       : isSelected
-                                      ? 'bg-emerald-600 border-emerald-600 text-white'
-                                      : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                                  }`}>
+                                        ? 'bg-blue-600 border-blue-600 text-white'
+                                        : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                                    }`}>
                                     {isCategoryMismatch ? (
                                       <AlertCircle size={12} strokeWidth={2.5} />
                                     ) : isSelected ? (
@@ -2620,26 +2248,15 @@ export default function IngestionWizard({
                                     {vendor.name}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {isBuyerUploaded(vendor) ? (
-                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700">
-                                      📁 Internal
-                                    </span>
-                                  ) : (
-                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300 border border-sky-300 dark:border-sky-700">
-                                      ✨ Procucev Vetted
-                                    </span>
-                                  )}
-                                  {isCategoryMismatch ? (
-                                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0">
-                                      ⚠️ Category Mismatch
-                                    </span>
-                                  ) : (
-                                    <span className="badge badge-emerald text-[9px] font-bold shrink-0">
-                                      Preferred
-                                    </span>
-                                  )}
-                                </div>
+                                {isCategoryMismatch ? (
+                                  <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0">
+                                    ⚠️ Category Mismatch
+                                  </span>
+                                ) : (
+                                  <span className="badge badge-emerald text-[9px] font-bold shrink-0">
+                                    Preferred
+                                  </span>
+                                )}
                               </div>
 
                               <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
@@ -2679,7 +2296,7 @@ export default function IngestionWizard({
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleSendCategoryUpdateEmail(vendor, rfqSignals);
+                                      handleSendCategoryUpdateEmail(vendor, mode1Signals);
                                     }}
                                     disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
                                     className="w-full py-1.5 px-2.5 rounded-lg text-[10px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
@@ -2707,7 +2324,7 @@ export default function IngestionWizard({
                                 /* Category & Rating */
                                 <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
                                   <div className="flex items-center justify-between text-[10px]">
-                                    <span className="font-semibold text-emerald-700 dark:text-emerald-300 truncate max-w-[150px]">
+                                    <span className="font-semibold text-blue-700 dark:text-blue-300 truncate max-w-[150px]">
                                       {vendor.majorCategory || 'General Industrial'}
                                     </span>
                                     <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
@@ -2741,293 +2358,676 @@ export default function IngestionWizard({
                       </div>
                     )}
                   </div>
-                </>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* ── Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol (Version 3) ── */}
-        {form.sourcingMode === 'mode_3' && (
-          <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
-            {(() => {
-              const allMyVendors = buyerVendors.filter(isBuyerUploaded);
-              const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
-              const lineItemMinors = Array.from(
-                new Set(
-                  (form.lineItems || [])
-                    .map((it) => it.minorCategory?.trim())
-                    
-                    .filter(Boolean) as string[]
-                )
-              );
-
-              let myVendors = allMyVendors;
-              if (lineItemMinors.length > 0) {
-                const minorMatched = allMyVendors.filter((v) =>
-                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
                 );
-                if (minorMatched.length > 0) {
-                  myVendors = minorMatched;
+              })()}
+            </div>
+          )}
+
+          {/* ── Mode 2: Hybrid Sourcing Pool (Private Roster + AI Routing) ── */}
+          {form.sourcingMode === 'mode_2' && (
+            <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
+              {(() => {
+                const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                if (allMyVendors.length === 0) {
+                  return (
+                    <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
+                      <Users size={28} className="mx-auto text-slate-400 opacity-60" />
+                      <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Approved Vendors Found</p>
+                      <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                        Please ingest your approved vendor directory or add vendors in the Vendor Directory to dispatch in Mode 2.
+                      </p>
+                    </div>
+                  );
+                }
+
+                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
+                const matchingVendors = rfqSignals.length > 0
+                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                  : allMyVendors;
+                const mismatchedVendors = rfqSignals.length > 0
+                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                  : [];
+
+                let pool = allMyVendors;
+                if (mode2VendorCategoryFilterTab === 'matched') {
+                  pool = matchingVendors;
+                } else if (mode2VendorCategoryFilterTab === 'mismatched') {
+                  pool = mismatchedVendors;
+                }
+
+                const myVendors = mode2VendorSearch.trim()
+                  ? pool.filter((v) =>
+                    v.name.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
+                    v.email?.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
+                    v.majorCategory?.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
+                    (v.contactPerson || '').toLowerCase().includes(mode2VendorSearch.toLowerCase())
+                  )
+                  : pool;
+
+                const allIds = myVendors.map((v) => v.id);
+                const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+
+                return (
+                  <>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 dark:border-emerald-900/40 pb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-emerald-600 text-white shadow-xs">
+                          <Sparkles size={16} />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                            <span>Mode 2: Hybrid Sourcing Pool</span>
+                            <span className="badge badge-emerald text-[10px] font-bold">
+                              {matchingVendors.length} Hybrid Suppliers Matched
+                            </span>
+                          </h3>
+                          <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                            Dispatches to your approved internal roster below + automatically matched Procucev verified network suppliers in the background.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setShowAiInfo(!showAiInfo)}
+                          className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-emerald-100 bg-emerald-100/80 dark:bg-emerald-900/60 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer"
+                          title="Learn how AI categorizes and matches suppliers"
+                        >
+                          <Info size={13} />
+                          <span>AI Matching Criteria</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* AI Matching Info Panel */}
+                    {showAiInfo && (
+                      <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-slate-800 dark:text-gray-200 space-y-3 animate-fade-in shadow-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 font-bold text-xs text-emerald-800 dark:text-emerald-200">
+                            <Sparkles size={15} className="text-emerald-600 dark:text-emerald-400" />
+                            <span>How QUA AI Categorizes Line Items & Matches Suppliers</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowAiInfo(false)}
+                            className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                          >
+                            ✕ Close
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] leading-relaxed">
+                          <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                            <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">1. BOQ & Line-Item Classification</strong>
+                            Extracts items and maps keywords against our 280+ standard industrial category taxonomy.
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                            <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
+                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                            <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">3. ≥80% Relevance Threshold</strong>
+                            Ensures only verified suppliers with direct capability overlap receive RFQ invitations.
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                            <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">4. Category Benchmarking</strong>
+                            Evaluates vendor reliability ratings, location proximity, and verified product specifications.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Category Filter Tabs & Toolbar */}
+                    <div className="space-y-2.5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 dark:border-emerald-900/40 pb-2">
+                        {rfqSignals.length > 0 && (
+                          <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
+                            <button
+                              type="button"
+                              onClick={() => setMode2VendorCategoryFilterTab('all')}
+                              className={`px-2.5 py-1 rounded-md transition-all ${mode2VendorCategoryFilterTab === 'all'
+                                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                }`}
+                            >
+                              All ({allMyVendors.length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMode2VendorCategoryFilterTab('matched')}
+                              className={`px-2.5 py-1 rounded-md transition-all ${mode2VendorCategoryFilterTab === 'matched'
+                                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                }`}
+                            >
+                              Matched ({matchingVendors.length})
+                            </button>
+                            {mismatchedVendors.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setMode2VendorCategoryFilterTab('mismatched')}
+                                className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${mode2VendorCategoryFilterTab === 'mismatched'
+                                    ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                  }`}
+                              >
+                                <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
+                          <div className="text-slate-500 dark:text-gray-400">
+                            {selectedVendorIds.length > 0 ? (
+                              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                                {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
+                              </span>
+                            ) : (
+                              <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const selectableIds = myVendors.filter((v) => {
+                                if (rfqSignals.length === 0) return true;
+                                return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
+                              }).map((v) => v.id);
+
+                              if (allSelected) {
+                                setSelectedVendorIds([]);
+                              } else {
+                                setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...selectableIds])));
+                              }
+                            }}
+                            className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
+                            <span>{allSelected ? 'Deselect All' : 'Select All Matched'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Search Bar */}
+                      <div className="relative">
+                        <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                        <input
+                          type="search"
+                          value={mode2VendorSearch}
+                          onChange={(e) => setMode2VendorSearch(e.target.value)}
+                          placeholder="Search private suppliers by name, category, or contact info..."
+                          className="w-full text-xs pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                        />
+                      </div>
+
+                      {myVendors.length === 0 ? (
+                        <div className="p-4 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
+                          No vendors match the search or filter criteria.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
+                          {myVendors.map((vendor, idx) => {
+                            const rawMinor = vendor.minorCategories as string | string[] | undefined;
+                            const minorList: string[] = Array.isArray(rawMinor)
+                              ? rawMinor
+                              : typeof rawMinor === 'string'
+                                ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                                : Array.isArray(vendor.vendorSelectedCategories)
+                                  ? vendor.vendorSelectedCategories
+                                  : [];
+
+                            const matchResult = rfqSignals.length > 0
+                              ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
+                              : { isMatch: true };
+                            const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
+
+                            const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+
+                            return (
+                              <div
+                                key={vendor.id || idx}
+                                onClick={() => {
+                                  if (isCategoryMismatch) return;
+                                  setSelectedVendorIds((prev) => {
+                                    if (prev.length === 0) {
+                                      return allIds.filter((id) => id !== vendor.id);
+                                    }
+                                    return prev.includes(vendor.id)
+                                      ? prev.filter((id) => id !== vendor.id)
+                                      : [...prev, vendor.id];
+                                  });
+                                }}
+                                className={`rounded-xl border p-3.5 space-y-2 transition-all ${isCategoryMismatch
+                                    ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
+                                    : isSelected
+                                      ? 'cursor-pointer border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
+                                      : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                                  }`}
+                              >
+                                <div className="flex items-start justify-between gap-1.5">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
+                                        ? 'bg-amber-500 border-amber-500 text-white opacity-80'
+                                        : isSelected
+                                          ? 'bg-emerald-600 border-emerald-600 text-white'
+                                          : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                                      }`}>
+                                      {isCategoryMismatch ? (
+                                        <AlertCircle size={12} strokeWidth={2.5} />
+                                      ) : isSelected ? (
+                                        <Check size={12} strokeWidth={3} />
+                                      ) : null}
+                                    </span>
+                                    <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                                      {vendor.name}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {isBuyerUploaded(vendor) ? (
+                                      <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700">
+                                        📁 Internal
+                                      </span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300 border border-sky-300 dark:border-sky-700">
+                                        ✨ Procucev Vetted
+                                      </span>
+                                    )}
+                                    {isCategoryMismatch ? (
+                                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0">
+                                        ⚠️ Category Mismatch
+                                      </span>
+                                    ) : (
+                                      <span className="badge badge-emerald text-[9px] font-bold shrink-0">
+                                        Preferred
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
+                                  {vendor.contactPerson && (
+                                    <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                                      <Users size={11} className="text-slate-400 shrink-0" />
+                                      <span className="truncate">{vendor.contactPerson}</span>
+                                    </div>
+                                  )}
+                                  {vendor.email && (
+                                    <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                      <Mail size={11} className="text-blue-500 shrink-0" />
+                                      <span className="font-mono text-[10px] truncate">{vendor.email}</span>
+                                    </div>
+                                  )}
+                                  {vendor.phone && (
+                                    <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                      <Phone size={11} className="text-emerald-500 shrink-0" />
+                                      <span className="font-mono text-[10px]">{vendor.phone}</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Category Mismatch Warning & Update Button */}
+                                {isCategoryMismatch ? (
+                                  <div className="pt-2 border-t border-amber-200/60 dark:border-amber-900/40 space-y-1.5">
+                                    <div className="text-[10px] text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/50 space-y-0.5">
+                                      <p className="font-bold flex items-center justify-between">
+                                        <span>Registered Category:</span>
+                                        <span className="text-amber-900 dark:text-amber-200">{vendor.majorCategory || 'None'}</span>
+                                      </p>
+                                      <p className="text-[9px] text-amber-700 dark:text-amber-400">
+                                        Excluded from RFQ shortlist until details updated & verified.
+                                      </p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleSendCategoryUpdateEmail(vendor, rfqSignals);
+                                      }}
+                                      disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
+                                      className="w-full py-1.5 px-2.5 rounded-lg text-[10px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                                      title="Send email requesting vendor to update their category"
+                                    >
+                                      {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                        <>
+                                          <Loader2 size={11} className="animate-spin" />
+                                          <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
+                                        </>
+                                      ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                        <>
+                                          <CheckCircle2 size={11} />
+                                          <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Mail size={11} />
+                                          <span>Send Email to Update Category</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  /* Category & Rating */
+                                  <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-semibold text-emerald-700 dark:text-emerald-300 truncate max-w-[150px]">
+                                        {vendor.majorCategory || 'General Industrial'}
+                                      </span>
+                                      <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
+                                        <Star size={10} className="fill-amber-400 text-amber-400" />
+                                        <span>{vendor.rating || 4.5}</span>
+                                      </span>
+                                    </div>
+                                    {minorList.length > 0 && (
+                                      <div className="flex flex-wrap gap-1">
+                                        {minorList.slice(0, 2).map((cat: string, ci: number) => (
+                                          <span
+                                            key={ci}
+                                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                            title={cat}
+                                          >
+                                            {cat}
+                                          </span>
+                                        ))}
+                                        {minorList.length > 2 && (
+                                          <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                            +{minorList.length - 2}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ── Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol (Version 3) ── */}
+          {form.sourcingMode === 'mode_3' && (
+            <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
+              {(() => {
+                const allMyVendors = buyerVendors.filter(isBuyerUploaded);
+                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
+                const lineItemMinors = Array.from(
+                  new Set(
+                    (form.lineItems || [])
+                      .map((it) => it.minorCategory?.trim())
+
+                      .filter(Boolean) as string[]
+                  )
+                );
+
+                let myVendors = allMyVendors;
+                if (lineItemMinors.length > 0) {
+                  const minorMatched = allMyVendors.filter((v) =>
+                    lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
+                  );
+                  if (minorMatched.length > 0) {
+                    myVendors = minorMatched;
+                  } else if (rfqSignals.length > 0) {
+                    myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
+                  }
                 } else if (rfqSignals.length > 0) {
                   myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
                 }
-              } else if (rfqSignals.length > 0) {
-                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
-              }
 
-              return (
-                <>
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100 dark:border-indigo-900/40 pb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
-                        <ShieldCheck size={16} />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <span>Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol</span>
-                          <span className="badge badge-indigo text-[10px] font-bold">
-                            {myVendors.length} Private Suppliers
-                          </span>
-                        </h3>
-                        <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Autonomous AI sourcing and evaluation protocol. Your corporate identity remains 100% confidential.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setShowAiInfo(!showAiInfo)}
-                        className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-100 bg-indigo-100/80 dark:bg-indigo-900/60 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer"
-                        title="Learn how AI categorizes and matches suppliers"
-                      >
-                        <Info size={13} />
-                        <span>AI Matching Criteria</span>
-                      </button>
-                      <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-100/70 dark:bg-indigo-900/50 px-2.5 py-1 rounded-full border border-indigo-200 dark:border-indigo-800 shrink-0">
-                        🛡️ Double-Blind Active
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* AI Matching Info Panel */}
-                  {showAiInfo && (
-                    <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 text-slate-800 dark:text-gray-200 space-y-3 animate-fade-in shadow-xs">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 font-bold text-xs text-indigo-800 dark:text-indigo-200">
-                          <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400" />
-                          <span>How QUA AI Categorizes Line Items & Matches Suppliers for Double-Blind Evaluation</span>
+                return (
+                  <>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100 dark:border-indigo-900/40 pb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
+                          <ShieldCheck size={16} />
                         </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                            <span>Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol</span>
+                            <span className="badge badge-indigo text-[10px] font-bold">
+                              {myVendors.length} Private Suppliers
+                            </span>
+                          </h3>
+                          <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                            Autonomous AI sourcing and evaluation protocol. Your corporate identity remains 100% confidential.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
-                          onClick={() => setShowAiInfo(false)}
-                          className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                          onClick={() => setShowAiInfo(!showAiInfo)}
+                          className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-100 bg-indigo-100/80 dark:bg-indigo-900/60 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer"
+                          title="Learn how AI categorizes and matches suppliers"
                         >
-                          ✕ Close
+                          <Info size={13} />
+                          <span>AI Matching Criteria</span>
                         </button>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] leading-relaxed">
-                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
-                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">1. BOQ & Line-Item Classification</strong>
-                          Extracts items and maps keywords against our 280+ standard industrial category taxonomy.
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
-                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                          Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
-                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">3. ≥80% Relevance Threshold</strong>
-                          Ensures only verified suppliers with direct capability overlap receive RFQ invitations.
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
-                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">4. Double-Blind Confidentiality Protocol</strong>
-                          Supplier capability invites are anonymized; buyer identity is withheld until qualification.
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Explanatory banner */}
-                  <div className="p-3.5 rounded-xl bg-indigo-100/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-[11px] text-indigo-950 dark:text-indigo-200 space-y-1">
-                    <div className="font-bold flex items-center gap-1.5 text-indigo-900 dark:text-indigo-300">
-                      <ShieldCheck size={14} />
-                      <span>Evaluation-First Protocol Active</span>
-                    </div>
-                    <p>
-                      The RFQ will be routed to your private approved roster. Suppliers will undergo double-blind qualification evaluation while your corporate identity remains 100% confidential.
-                    </p>
-                  </div>
-
-                  {/* Buyer Approved Roster */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
-                        <Users size={13} className="text-indigo-600 dark:text-indigo-400" />
-                        <span>Buyer Approved Suppliers (Double-Blind Protocol)</span>
-                      </h4>
-                      <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold">
-                        {myVendors.length} Suppliers
-                      </span>
-                    </div>
-
-                    {myVendors.length === 0 ? (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
-                        No private vendors found — please add vendors in your directory.
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
-                        {myVendors.map((v, i) => (
-                          <div key={v.id || i} className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200/70 dark:border-indigo-900/50 space-y-1 shadow-2xs">
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-                              <span className="badge badge-indigo text-[8px] font-bold shrink-0">Private</span>
-                            </div>
-                            <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400">
-                              {v.contactPerson && (
-                                <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
-                                  <Users size={10} className="text-slate-400 shrink-0" />
-                                  <span className="truncate">{v.contactPerson}</span>
-                                </div>
-                              )}
-                              {v.email && (
-                                <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                                  <Mail size={10} className="text-blue-500 shrink-0" />
-                                  <span className="font-mono text-[9px] truncate">{v.email}</span>
-                                </div>
-                              )}
-                              {v.phone && (
-                                <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                                  <Phone size={10} className="text-emerald-500 shrink-0" />
-                                  <span className="font-mono text-[9px]">{v.phone}</span>
-                                </div>
-                              )}
-                            </div>
-                            <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/40 text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                              {(() => {
-                                const vendorMinors = Array.isArray(v.minorCategories) && v.minorCategories.length > 0
-                                  ? v.minorCategories.join(', ')
-                                  : null;
-                                const displayMinor = vendorMinors || lineItemMinors[0] || v.majorCategory || 'General Industrial';
-                                return (
-                                  <span
-                                    className="font-semibold text-indigo-700 dark:text-indigo-300 truncate"
-                                    title={`Minor: ${displayMinor} | Major: ${v.majorCategory || 'General Industrial'}`}
-                                  >
-                                    {displayMinor}
-                                  </span>
-                                );
-                              })()}
-                              <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* ── Top 10 Procucev Network Vendors (360° category + location ranking) ── */}
-                  <div className="space-y-2 pt-1" data-testid="procucev-v3-panel">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
-                        <Sparkles size={13} className="text-indigo-600 dark:text-indigo-400" />
-                        <span>Top Procucev Network Vendors</span>
-                        <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400">
-                          (ranked by category &amp; delivery location)
+                        <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-100/70 dark:bg-indigo-900/50 px-2.5 py-1 rounded-full border border-indigo-200 dark:border-indigo-800 shrink-0">
+                          🛡️ Double-Blind Active
                         </span>
-                      </h4>
-                      {procucevV3Ranked.length > 0 && (
-                        <div className="flex items-center gap-3 text-[11px]">
-                          <span className="font-semibold text-indigo-600 dark:text-indigo-400">
-                            {selectedProcucevV3Ids.length} of {procucevV3Ranked.length} selected
-                          </span>
+                      </div>
+                    </div>
+
+                    {/* AI Matching Info Panel */}
+                    {showAiInfo && (
+                      <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 text-slate-800 dark:text-gray-200 space-y-3 animate-fade-in shadow-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 font-bold text-xs text-indigo-800 dark:text-indigo-200">
+                            <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400" />
+                            <span>How QUA AI Categorizes Line Items & Matches Suppliers for Double-Blind Evaluation</span>
+                          </div>
                           <button
                             type="button"
-                            data-testid="procucev-v3-select-all"
-                            onClick={toggleAllProcucevV3}
-                            className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                            onClick={() => setShowAiInfo(false)}
+                            className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                           >
-                            {procucevV3AllSelected ? 'Deselect all' : 'Select all'}
+                            ✕ Close
                           </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] leading-relaxed">
+                          <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                            <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">1. BOQ & Line-Item Classification</strong>
+                            Extracts items and maps keywords against our 280+ standard industrial category taxonomy.
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                            <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
+                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                            <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">3. ≥80% Relevance Threshold</strong>
+                            Ensures only verified suppliers with direct capability overlap receive RFQ invitations.
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                            <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">4. Double-Blind Confidentiality Protocol</strong>
+                            Supplier capability invites are anonymized; buyer identity is withheld until qualification.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Explanatory banner */}
+                    <div className="p-3.5 rounded-xl bg-indigo-100/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-[11px] text-indigo-950 dark:text-indigo-200 space-y-1">
+                      <div className="font-bold flex items-center gap-1.5 text-indigo-900 dark:text-indigo-300">
+                        <ShieldCheck size={14} />
+                        <span>Evaluation-First Protocol Active</span>
+                      </div>
+                      <p>
+                        The RFQ will be routed to your private approved roster. Suppliers will undergo double-blind qualification evaluation while your corporate identity remains 100% confidential.
+                      </p>
+                    </div>
+
+                    {/* Buyer Approved Roster */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
+                          <Users size={13} className="text-indigo-600 dark:text-indigo-400" />
+                          <span>Buyer Approved Suppliers (Double-Blind Protocol)</span>
+                        </h4>
+                        <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold">
+                          {myVendors.length} Suppliers
+                        </span>
+                      </div>
+
+                      {myVendors.length === 0 ? (
+                        <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
+                          No private vendors found — please add vendors in your directory.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
+                          {myVendors.map((v, i) => (
+                            <div key={v.id || i} className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200/70 dark:border-indigo-900/50 space-y-1 shadow-2xs">
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
+                                <span className="badge badge-indigo text-[8px] font-bold shrink-0">Private</span>
+                              </div>
+                              <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400">
+                                {v.contactPerson && (
+                                  <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                                    <Users size={10} className="text-slate-400 shrink-0" />
+                                    <span className="truncate">{v.contactPerson}</span>
+                                  </div>
+                                )}
+                                {v.email && (
+                                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                    <Mail size={10} className="text-blue-500 shrink-0" />
+                                    <span className="font-mono text-[9px] truncate">{v.email}</span>
+                                  </div>
+                                )}
+                                {v.phone && (
+                                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                    <Phone size={10} className="text-emerald-500 shrink-0" />
+                                    <span className="font-mono text-[9px]">{v.phone}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/40 text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                                {(() => {
+                                  const vendorMinors = Array.isArray(v.minorCategories) && v.minorCategories.length > 0
+                                    ? v.minorCategories.join(', ')
+                                    : null;
+                                  const displayMinor = vendorMinors || lineItemMinors[0] || v.majorCategory || 'General Industrial';
+                                  return (
+                                    <span
+                                      className="font-semibold text-indigo-700 dark:text-indigo-300 truncate"
+                                      title={`Minor: ${displayMinor} | Major: ${v.majorCategory || 'General Industrial'}`}
+                                    >
+                                      {displayMinor}
+                                    </span>
+                                  );
+                                })()}
+                                <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
 
-                    {procucevV3Loading ? (
-                      <div className="p-3.5 text-center text-[11px] text-slate-400 dark:text-gray-500">
-                        Ranking Procucev network vendors…
-                      </div>
-                    ) : procucevV3Ranked.length === 0 ? (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
-                        No Procucev network vendors matched this RFQ&apos;s category yet.
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1">
-                        {procucevV3Ranked.map((r, i) => {
-                          const isSelected = selectedProcucevV3Ids.includes(r.vendor.id);
-                          return (
+                    {/* ── Top 10 Procucev Network Vendors (360° category + location ranking) ── */}
+                    <div className="space-y-2 pt-1" data-testid="procucev-v3-panel">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
+                          <Sparkles size={13} className="text-indigo-600 dark:text-indigo-400" />
+                          <span>Top Procucev Network Vendors</span>
+                          <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400">
+                            (ranked by category &amp; delivery location)
+                          </span>
+                        </h4>
+                        {procucevV3Ranked.length > 0 && (
+                          <div className="flex items-center gap-3 text-[11px]">
+                            <span className="font-semibold text-indigo-600 dark:text-indigo-400">
+                              {selectedProcucevV3Ids.length} of {procucevV3Ranked.length} selected
+                            </span>
                             <button
                               type="button"
-                              key={r.vendor.id || i}
-                              data-testid="procucev-v3-vendor"
-                              aria-pressed={isSelected}
-                              onClick={() => toggleProcucevV3(r.vendor.id)}
-                              className={`text-left p-3 rounded-xl border space-y-1.5 shadow-2xs transition-colors ${
-                                isSelected
-                                  ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-600'
-                                  : 'bg-white dark:bg-gray-900 border-indigo-200/70 dark:border-indigo-900/50 hover:border-indigo-300'
-                              }`}
+                              data-testid="procucev-v3-select-all"
+                              onClick={toggleAllProcucevV3}
+                              className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="flex items-center gap-1.5 min-w-0">
-                                  <span
-                                    className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                                      isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 dark:border-gray-600'
-                                    }`}
-                                  >
-                                    {isSelected && <Check size={11} />}
-                                  </span>
-                                  {/* Double-blind: the vendor's name and sourcing
-                                      category are shown, not its contact details. */}
-                                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{r.vendor.name}</span>
-                                </span>
-                                <span className="badge badge-indigo text-[8px] font-bold shrink-0">#{i + 1}</span>
-                              </div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                {(() => {
-                                  const vendorMinors = Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0
-                                    ? r.vendor.minorCategories.join(', ')
-                                    : null;
-                                  const displayCat = r.matchedMinorCategory || vendorMinors || (r.hasMinorMatch ? lineItemMinors[0] : null) || r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial';
-                                  return (
-                                    <span
-                                      data-testid="procucev-v3-vendor-category"
-                                      className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100/70 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800 truncate max-w-full"
-                                      title={displayCat}
-                                    >
-                                      {displayCat}
-                                    </span>
-                                  );
-                                })()}
-                              </div>
-                              <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-gray-400">
-                                <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                                  {r.overallScore}% match
-                                </span>
-                                <span aria-hidden="true">·</span>
-                                <span className="truncate">{r.locationReason}</span>
-                              </div>
+                              {procucevV3AllSelected ? 'Deselect all' : 'Select all'}
                             </button>
-                          );
-                        })}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        )}
+
+                      {procucevV3Loading ? (
+                        <div className="p-3.5 text-center text-[11px] text-slate-400 dark:text-gray-500">
+                          Ranking Procucev network vendors…
+                        </div>
+                      ) : procucevV3Ranked.length === 0 ? (
+                        <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
+                          No Procucev network vendors matched this RFQ&apos;s category yet.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1">
+                          {procucevV3Ranked.map((r, i) => {
+                            const isSelected = selectedProcucevV3Ids.includes(r.vendor.id);
+                            return (
+                              <button
+                                type="button"
+                                key={r.vendor.id || i}
+                                data-testid="procucev-v3-vendor"
+                                aria-pressed={isSelected}
+                                onClick={() => toggleProcucevV3(r.vendor.id)}
+                                className={`text-left p-3 rounded-xl border space-y-1.5 shadow-2xs transition-colors ${isSelected
+                                    ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-600'
+                                    : 'bg-white dark:bg-gray-900 border-indigo-200/70 dark:border-indigo-900/50 hover:border-indigo-300'
+                                  }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="flex items-center gap-1.5 min-w-0">
+                                    <span
+                                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 dark:border-gray-600'
+                                        }`}
+                                    >
+                                      {isSelected && <Check size={11} />}
+                                    </span>
+                                    {/* Double-blind: the vendor's name and sourcing
+                                      category are shown, not its contact details. */}
+                                    <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{r.vendor.name}</span>
+                                  </span>
+                                  <span className="badge badge-indigo text-[8px] font-bold shrink-0">#{i + 1}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {(() => {
+                                    const vendorMinors = Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0
+                                      ? r.vendor.minorCategories.join(', ')
+                                      : null;
+                                    const displayCat = r.matchedMinorCategory || vendorMinors || (r.hasMinorMatch ? lineItemMinors[0] : null) || r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial';
+                                    return (
+                                      <span
+                                        data-testid="procucev-v3-vendor-category"
+                                        className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100/70 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800 truncate max-w-full"
+                                        title={displayCat}
+                                      >
+                                        {displayCat}
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                                <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-gray-400">
+                                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                                    {r.overallScore}% match
+                                  </span>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="truncate">{r.locationReason}</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
         </div>
       </section>
 
@@ -3317,9 +3317,8 @@ export default function IngestionWizard({
                     placeholder="e.g. 411001"
                     value={vendorFormPincode}
                     onChange={(e) => setVendorFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className={`w-full text-xs p-2 rounded-lg border font-mono ${
-                      vendorFormPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
-                    } bg-white dark:bg-gray-900 text-slate-900 dark:text-white`}
+                    className={`w-full text-xs p-2 rounded-lg border font-mono ${vendorFormPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                      } bg-white dark:bg-gray-900 text-slate-900 dark:text-white`}
                   />
                   {vendorFormPincodeError && vendorFormPincode.trim().length >= 6 && (
                     <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{vendorFormPincodeError}</p>
