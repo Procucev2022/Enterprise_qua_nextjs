@@ -723,4 +723,157 @@ describe('InviteVendorsModal — Comprehensive Multi-Filter & 20-Vendor Limit Su
       expect(screen.getByText(UI_STRINGS.inviteVendors.dbQueryTimeout)).toBeInTheDocument();
     });
   });
+
+  it('filters candidates by Minor Category standalone and alongside Major Category, resetting incompatible Minor selections', async () => {
+    const rfqWithLineItems: RFQItem = {
+      ...RFQ,
+      minorCategory: 'Hex Bolts',
+      extractedEntities: [
+        {
+          id: 'ent-stud',
+          itemName: 'High Tensile Studs',
+          quantity: 100,
+          unit: 'Nos',
+          targetDate: '2026-11-30',
+          technicalSpecs: 'Grade 8.8',
+          confidence: 0.95,
+          category: 'Studs',
+          majorCategory: 'Fasteners & Industrial Hardware',
+          minorCategory: 'Studs',
+        },
+        {
+          id: 'ent-valve',
+          itemName: 'Gate Valve',
+          quantity: 5,
+          unit: 'Nos',
+          targetDate: '2026-11-30',
+          technicalSpecs: 'PN16',
+          confidence: 0.92,
+          category: 'Valves',
+          majorCategory: 'Mechanical & Fluid Equipment',
+          minorCategory: 'Valves',
+        },
+      ],
+    };
+
+    (buyerProfileClient.fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [
+        { majorCategory: 'Fasteners & Industrial Hardware', minorCategories: ['Hex Bolts', 'Nuts', 'Studs', 'Washers'] },
+        { majorCategory: 'Mechanical & Fluid Equipment', minorCategories: ['Valves', 'Pumps'] },
+        { majorCategory: 'Electrical Equipment', minorCategories: ['Switchgear'] },
+      ],
+    });
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      categoryTaxonomy: [
+        { majorCategory: 'Fasteners & Industrial Hardware', minorCategories: ['Hex Bolts', 'Nuts', 'Studs', 'Washers'] },
+        { majorCategory: 'Mechanical & Fluid Equipment', minorCategories: ['Valves', 'Pumps'] },
+      ],
+    });
+
+    render(
+      <InviteVendorsModal isOpen={true} rfq={rfqWithLineItems} onClose={mockOnClose} onInvited={mockOnInvited} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Pune Fasteners Pvt Ltd')).toBeInTheDocument();
+    });
+
+    // Minor categories badge shown on candidate rows
+    expect(screen.getByTestId('vendor-minor-categories-v-pune-1')).toHaveTextContent('Hex Bolts, Nuts');
+
+    const majorSelect = screen.getByTestId('invite-vendors-category-filter') as HTMLSelectElement;
+    const minorSelect = screen.getByTestId('invite-vendors-minor-category-filter') as HTMLSelectElement;
+
+    // Standalone minor category filter (while Major Category is All categories)
+    fireEvent.change(minorSelect, { target: { value: 'Valves' } });
+    await waitFor(() => {
+      expect(screen.getByText('Gujarat Techno Forge')).toBeInTheDocument();
+      expect(screen.queryByText('Apex Pune Fasteners Pvt Ltd')).not.toBeInTheDocument();
+      expect(screen.queryByText('Precision Tools Pune')).not.toBeInTheDocument();
+    });
+
+    // Switching Major Category to a category that does NOT contain 'Valves' resets Minor Category to ''
+    fireEvent.change(majorSelect, { target: { value: 'Fasteners & Industrial Hardware' } });
+    await waitFor(() => {
+      expect(minorSelect.value).toBe('');
+      expect(screen.getByText('Apex Pune Fasteners Pvt Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Precision Tools Pune')).toBeInTheDocument();
+      expect(screen.queryByText('Gujarat Techno Forge')).not.toBeInTheDocument();
+    });
+
+    // Selecting 'Studs' under 'Fasteners & Industrial Hardware' narrows to Studs vendor only
+    fireEvent.change(minorSelect, { target: { value: 'Studs' } });
+    await waitFor(() => {
+      expect(screen.getByText('Precision Tools Pune')).toBeInTheDocument();
+      expect(screen.queryByText('Apex Pune Fasteners Pvt Ltd')).not.toBeInTheDocument();
+    });
+
+    // Clearing Major Category keeps compatible minor filter
+    fireEvent.change(majorSelect, { target: { value: '' } });
+    expect(minorSelect.value).toBe('Studs');
+    expect(screen.getByText('Precision Tools Pune')).toBeInTheDocument();
+
+    // Selecting compatible Major Category keeps minor filter
+    fireEvent.change(majorSelect, { target: { value: 'Fasteners & Industrial Hardware' } });
+    expect(minorSelect.value).toBe('Studs');
+  });
+
+  it('passes selected minor category to fetchAllVendors in All Vendors tab across initial load and pagination', async () => {
+    (buyerProfileClient.fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [
+        { majorCategory: 'Fasteners & Industrial Hardware', minorCategories: ['Hex Bolts', 'Studs'] },
+        { majorCategory: 'Mechanical & Fluid Equipment', minorCategories: ['Valves'] },
+      ],
+    });
+    (rfqClient.fetchAllVendors as jest.Mock)
+      .mockResolvedValueOnce({
+        success: true,
+        candidates: mockVendorsPool.slice(0, 2),
+        pagination: { page: 1, pageSize: 50, total: 2, totalPages: 1 },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        candidates: [mockVendorsPool[1]],
+        pagination: { page: 1, pageSize: 1, total: 2, totalPages: 2 },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        candidates: [mockVendorsPool[3]],
+        pagination: { page: 2, pageSize: 1, total: 2, totalPages: 2 },
+      });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => {
+      expect(rfqClient.fetchAllVendors).toHaveBeenCalledTimes(1);
+    });
+
+    const minorSelect = screen.getByTestId('invite-vendors-minor-category-filter');
+    fireEvent.change(minorSelect, { target: { value: 'Studs' } });
+
+    await waitFor(() => {
+      expect(rfqClient.fetchAllVendors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          page: 1,
+          minors: ['Studs'],
+        })
+      );
+    });
+
+    const loadMoreBtn = await screen.findByTestId('load-more-vendors');
+    fireEvent.click(loadMoreBtn);
+
+    await waitFor(() => {
+      expect(rfqClient.fetchAllVendors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          page: 2,
+          minors: ['Studs'],
+        })
+      );
+    });
+  });
 });

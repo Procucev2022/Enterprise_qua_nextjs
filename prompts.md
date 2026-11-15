@@ -5976,3 +5976,11 @@ in one another case, it detected zero minor category vendors for all unique dist
 [Attached image: image/png (media_1794742970605_68b1444c.jpg)]
 [Attached image: image/png (media_1794743095975_ea75bba6.jpg)]
 ---
+
+### Prompt 227
+**Timestamp**: 2026-11-15T18:22:14+05:30
+```text
+Add filter major or minor category as well.
+```
+[Attached image: image/jpeg (media_1794747107987_31b2c3c8.jpg)]
+---

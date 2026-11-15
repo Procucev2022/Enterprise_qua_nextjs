@@ -1366,6 +1366,8 @@ sellerDirectory: {
     cityLabel: 'City',
     categoryLabel: 'Category',
     allCategories: 'All categories',
+    minorCategoryLabel: 'Minor Category',
+    allMinorCategories: 'All minor categories',
     maxSelectionWarning: 'Maximum of {max} vendors can be selected per invitation.',
     limitReachedNotice: 'Maximum 20 vendors limit reached. Remove some to select others.',
     duplicateIgnored: 'Vendor already invited',
