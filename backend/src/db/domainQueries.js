@@ -194,13 +194,13 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           const pExact = params.length;
           catCondition = `(
             lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ($${pExact} || ' %')
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact})
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact} || ' %')
+            OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) LIKE ($${pExact} || ' %')
+            OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) LIKE ('% ' || $${pExact})
+            OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) LIKE ('% ' || $${pExact} || ' %')
             OR lower(raw->>'majorCategory') = $${pExact}
           )`;
           d1CatCondition = `(
-            lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
+            lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) = $${pExact}
             OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ($${pExact} || ' %')
             OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact})
             OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact} || ' %')
@@ -252,7 +252,8 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR raw->>'city' ILIKE $${p}
           OR raw->>'deliveryLocation' ILIKE $${p})`);
 
-        const d1SearchCondition = `(${d1CatCondition}
+        const d1SearchPrefilter = `(raw LIKE $${p} OR major_category LIKE $${p} OR email LIKE $${p})`;
+        const d1SearchCondition = `(${d1SearchPrefilter} AND (${d1CatCondition}
           OR lower(email) LIKE lower($${p})
           OR ${d1NameCondition}
           OR ${d1MinorCatCondition}
@@ -260,7 +261,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
-          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`;
+          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p})))`;
         d1TokenConditions.push(d1SearchCondition);
       }
 
@@ -280,7 +281,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     params.push(category.trim());
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
-    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR (raw LIKE ('%' || lower($${p}) || '%') AND (lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))))`);
+    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE)`);
   }
   if (state) {
     params.push(`%${state.trim()}%`);

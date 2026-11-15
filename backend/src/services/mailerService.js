@@ -686,42 +686,48 @@ async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER,
     return { sent: false, success: false, status: 'not_configured', reason: 'SMTP not configured' };
   }
 
+  await mailTransport.loadPersistedCooldowns();
+
   const attempts = [];
   let lastError;
-  for (const step of steps) {
-    const cooldown = mailTransport.getCooldown(step.key);
-    if (cooldown) {
-      attempts.push({ provider: step.label, skipped: `cooling down until ${new Date(cooldown.until).toISOString()}` });
-      continue;
-    }
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        logger.info(`Dispatching ${label} to ${message.to} via ${step.label}`, { subject: message.subject }, 'MAILER_SERVICE');
-        const result = await step.run(outgoing);
-        logger.info(`${label} sent successfully to ${message.to} via ${step.label}`, { messageId: result.messageId }, 'MAILER_SERVICE');
-        return { sent: true, success: true, status: 'sent', messageId: result.messageId };
-      } catch (err) {
-        lastError = err;
-        const kind = mailTransport.noteProviderFailure(step.key, err);
-        attempts.push({ provider: step.label, error: mailTransport.errorText(err).slice(0, 200), kind });
-        logger.warn(
-          `${step.label} failed for ${label} (${kind}) — trying the next provider`,
-          { errorMessage: err && err.message, to: message.to },
-          'MAILER_SERVICE'
-        );
-        // A network blip is worth one immediate retry on the same provider.
-        if (kind !== mailTransport.DELIVERY_ERROR_KIND.TRANSIENT || attempt === 2) break;
-        await wait(MAILER_RETRY_DELAY_MS);
+  try {
+    for (const step of steps) {
+      const cooldown = mailTransport.getCooldown(step.key);
+      if (cooldown) {
+        attempts.push({ provider: step.label, skipped: `cooling down until ${new Date(cooldown.until).toISOString()}` });
+        continue;
+      }
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          logger.info(`Dispatching ${label} to ${message.to} via ${step.label}`, { subject: message.subject }, 'MAILER_SERVICE');
+          const result = await step.run(outgoing);
+          logger.info(`${label} sent successfully to ${message.to} via ${step.label}`, { messageId: result.messageId }, 'MAILER_SERVICE');
+          return { sent: true, success: true, status: 'sent', messageId: result.messageId };
+        } catch (err) {
+          lastError = err;
+          const kind = mailTransport.noteProviderFailure(step.key, err);
+          attempts.push({ provider: step.label, error: mailTransport.errorText(err).slice(0, 200), kind });
+          logger.warn(
+            `${step.label} failed for ${label} (${kind}) — trying the next provider`,
+            { errorMessage: err && err.message, to: message.to },
+            'MAILER_SERVICE'
+          );
+          // A network blip is worth one immediate retry on the same provider.
+          if (kind !== mailTransport.DELIVERY_ERROR_KIND.TRANSIENT || attempt === 2) break;
+          await wait(MAILER_RETRY_DELAY_MS);
+        }
       }
     }
-  }
 
-  const failure =
-    lastError ||
-    Object.assign(new Error(`Every mail provider is cooling down — ${label} not sent`), { code: 'MAIL_PROVIDERS_COOLING_DOWN' });
-  failure.deliveryAttempts = attempts;
-  logger.error(`All mail providers failed for ${label} to ${message.to}`, { attempts, channel }, 'MAILER_SERVICE');
-  throw failure;
+    const failure =
+      lastError ||
+      Object.assign(new Error(`Every mail provider is cooling down — ${label} not sent`), { code: 'MAIL_PROVIDERS_COOLING_DOWN' });
+    failure.deliveryAttempts = attempts;
+    logger.error(`All mail providers failed for ${label} to ${message.to}`, { attempts, channel }, 'MAILER_SERVICE');
+    throw failure;
+  } finally {
+    await mailTransport.flushPendingCooldownWrites();
+  }
 }
 
 

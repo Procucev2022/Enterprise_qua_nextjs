@@ -83,4 +83,24 @@ describe('errorHandler with D1 overload', () => {
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'debug detail' }));
   });
+
+  test('marks wrapped 503 persistence errors whose cause is D1 overload as databaseOverloaded with Retry-After', () => {
+    const wrapped = Object.assign(new Error('Persistent database temporarily unavailable'), {
+      statusCode: 503,
+      code: 'PERSISTENCE_UNAVAILABLE',
+      cause: new Error(D1_OVERLOAD_TEXT),
+    });
+    const res = handle(wrapped);
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.setHeader).toHaveBeenCalledWith('Retry-After', String(D1_OVERLOAD_CONFIG.RETRY_AFTER_SECONDS));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      retryable: true,
+      error: D1_OVERLOAD_CONFIG.MESSAGE,
+    }));
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ databaseOverloaded: true, retryable: true }),
+      'GLOBAL_ERROR_HANDLER'
+    );
+  });
 });

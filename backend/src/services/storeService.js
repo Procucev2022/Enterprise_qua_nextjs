@@ -5577,16 +5577,16 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       let rfqSnapshot = null;
       let vendorSnapshot = null;
       try {
-        [rfq, vendor] = await Promise.all([
-          domainQueries.getRFQByIdFromDB(rfqId),
-          domainQueries.getVendorByIdFromDB(quote.vendorId, { fresh: true }),
+        [rfqSnapshot, vendorSnapshot] = await Promise.all([
+          domainQueries.getRFQSnapshotByIdFromDB
+            ? domainQueries.getRFQSnapshotByIdFromDB(rfqId).catch(() => null)
+            : Promise.resolve(null),
+          domainQueries.getVendorSnapshotByIdFromDB
+            ? domainQueries.getVendorSnapshotByIdFromDB(quote.vendorId, { fresh: true }).catch(() => null)
+            : Promise.resolve(null),
         ]);
-        if (rfq && domainQueries.getRFQSnapshotByIdFromDB) {
-          rfqSnapshot = await domainQueries.getRFQSnapshotByIdFromDB(rfqId).catch(() => null);
-        }
-        if (vendor && domainQueries.getVendorSnapshotByIdFromDB) {
-          vendorSnapshot = await domainQueries.getVendorSnapshotByIdFromDB(quote.vendorId, { fresh: true }).catch(() => null);
-        }
+        rfq = rfqSnapshot?.rfq || await domainQueries.getRFQByIdFromDB(rfqId);
+        vendor = vendorSnapshot?.vendor || await domainQueries.getVendorByIdFromDB(quote.vendorId, { fresh: true });
       } catch (error) {
         logger.error('Failed to load authoritative records before atomic vendor quote submission', {
           error,

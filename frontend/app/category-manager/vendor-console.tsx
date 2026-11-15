@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { fetchAllVendors } from '@/lib/rfqClient';
+import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { formatCurrency } from '@/lib/constants';
@@ -274,6 +275,8 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   // stale data — only the most recently *issued* request's response is ever
   // applied.
   const fetchSeqRef = useRef(0);
+  const vendorFetchAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => vendorFetchAbortRef.current?.abort(), []);
   useEffect(() => {
     const trimmedSearch = debouncedSearch.trim();
     const matchedCat = effectiveCategoryOptions.find(
@@ -285,15 +288,20 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     const key = `${effectiveSearch}|${effectiveCategory}`;
     if (lastFetchedKeyRef.current === key) return;
     lastFetchedKeyRef.current = key;
+    vendorFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    vendorFetchAbortRef.current = controller;
     const seq = ++fetchSeqRef.current;
     setVendorsLoading(true);
     setVendorsError(null);
-    void fetchAllVendors({
-      page: 1,
-      pageSize: VENDOR_CARDS_PAGE_SIZE,
-      search: effectiveSearch,
-      category: effectiveCategory,
-    }).then((result) => {
+    void withVendorFetchSignal(controller.signal, () =>
+      fetchAllVendors({
+        page: 1,
+        pageSize: VENDOR_CARDS_PAGE_SIZE,
+        search: effectiveSearch,
+        category: effectiveCategory,
+      })
+    ).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setFetchedVendors(result.candidates);

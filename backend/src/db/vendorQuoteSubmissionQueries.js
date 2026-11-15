@@ -170,6 +170,7 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     throw error;
   }
 
+  const expectedRFQ = parseRaw(options.expectedRFQ);
   return {
     expectedVendor,
     updatedVendor,
@@ -189,10 +190,10 @@ function makeD1VendorQuoteSubmissionStatements(options) {
           budget = $7,
           raw = $8,
           updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND (raw = $9 OR json(raw) = json($9) OR (json_extract(raw, '$.quotes') = json_extract($9, '$.quotes') AND COALESCE(status, '') = COALESCE($5, '')))
+        WHERE id = $1 AND (raw = $9 OR json(raw) = json($9) OR (json_extract(raw, '$.quotes') IS json_extract($9, '$.quotes') AND COALESCE(status, '') = COALESCE($14, '')))
           AND EXISTS (
             SELECT 1 FROM vendors v
-            WHERE v.id = $2 AND (v.raw = $10 OR json(v.raw) = json($10) OR json_extract(v.raw, '$.freeQuotationCredits') = json_extract($10, '$.freeQuotationCredits'))
+            WHERE v.id = $2 AND (v.raw = $10 OR json(v.raw) = json($10) OR json_extract(v.raw, '$.freeQuotationCredits') IS json_extract($10, '$.freeQuotationCredits'))
               AND (
                 $12 = 1 OR $13 = 1 OR ${subscribed} OR ${existingQuote} OR
                 EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $11) OR ${balance} > 0
@@ -213,6 +214,7 @@ function makeD1VendorQuoteSubmissionStatements(options) {
           options.idempotencyKey,
           options.isBuyerMapped ? 1 : 0,
           options.isResubmission || alreadyQuoted ? 1 : 0,
+          expectedRFQ.status || null,
         ],
       },
       {
@@ -223,7 +225,7 @@ function makeD1VendorQuoteSubmissionStatements(options) {
           '$.quotedRfqIds', ${quotedIdsJson},
           '$.unlockedRfqIds', ${unlockedIdsJson}
         ), updated_at = CURRENT_TIMESTAMP
-          WHERE id = $1 AND (raw = $2 OR json(raw) = json($2) OR json_extract(raw, '$.freeQuotationCredits') = json_extract($2, '$.freeQuotationCredits')) AND changes() > 0
+          WHERE id = $1 AND (raw = $2 OR json(raw) = json($2) OR json_extract(raw, '$.freeQuotationCredits') IS json_extract($2, '$.freeQuotationCredits')) AND changes() > 0
           RETURNING raw`,
         params: [
           options.vendorId,

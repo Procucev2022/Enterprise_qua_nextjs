@@ -279,6 +279,7 @@ CREATE TABLE IF NOT EXISTS vendors (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
+CREATE INDEX IF NOT EXISTS idx_vendors_major_category_lower_created_at ON vendors (lower(major_category), created_at DESC);
 -- Default listing/pagination sort (getVendorsPageFromDB's ORDER BY created_at
 -- DESC LIMIT/OFFSET) — without this, every "Load more" page at 600k+ rows
 -- requires a full sort of the whole table.
@@ -1220,3 +1221,11 @@ CREATE INDEX IF NOT EXISTS idx_vendors_raw_corporate_email ON vendors (lower(raw
 CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
 
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);
+
+CREATE TABLE IF NOT EXISTS mail_provider_cooldowns (
+  provider_key VARCHAR(255) PRIMARY KEY,
+  until_ms BIGINT NOT NULL,
+  reason TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mail_provider_cooldowns_until ON mail_provider_cooldowns (until_ms);

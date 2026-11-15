@@ -332,4 +332,88 @@ describe('mailerService delivery routing', () => {
     expect(rotated).not.toBe(first);
     expect(rotated.token).toBe('buyer-2');
   });
+
+  test('revoked quoteAlert Gmail grant persists cooldown to DB so a cold Worker isolate skips it', async () => {
+    const persistedRows = new Map();
+    const createSharedPoolMock = () => ({
+      hasStorage: () => true,
+      query: jest.fn(async (sql, params) => {
+        if (sql.includes('INSERT INTO mail_provider_cooldowns')) {
+          persistedRows.set(params[0], {
+            provider_key: params[0],
+            until_ms: params[1],
+            reason: params[2],
+          });
+          return { rows: [] };
+        }
+        if (sql.includes('SELECT provider_key, until_ms, reason')) {
+          const now = params[0];
+          const rows = Array.from(persistedRows.values()).filter((r) => r.until_ms > now);
+          return { rows };
+        }
+        return { rows: [] };
+      }),
+    });
+
+    const sendAcrossIsolate = async () => {
+      let mailer;
+      const sends = [];
+      jest.resetModules();
+      jest.isolateModules(() => {
+        ROUTING_ENV.forEach((key) => delete process.env[key]);
+        Object.assign(process.env, {
+          NODE_ENV: 'development',
+          GMAIL_CLIENT_ID: 'cid',
+          GMAIL_CLIENT_SECRET: 'secret',
+          QUOTE_ALERT_GMAIL_REFRESH_TOKEN: 'revoked-qa-token',
+          GMAIL_REFRESH_TOKEN: 'healthy-buyer-token',
+        });
+        jest.doMock('../src/db/pool', () => createSharedPoolMock());
+        jest.doMock('googleapis', () => ({
+          google: {
+            auth: {
+              OAuth2: jest.fn().mockImplementation(() => {
+                const client = {};
+                client.setCredentials = jest.fn((creds) => { client.token = creds.refresh_token; });
+                return client;
+              }),
+            },
+            gmail: jest.fn(({ auth }) => ({
+              users: {
+                messages: {
+                  send: jest.fn(async ({ requestBody }) => {
+                    sends.push({ token: auth.token, raw: Buffer.from(requestBody.raw, 'base64url').toString('utf8') });
+                    if (auth.token === 'revoked-qa-token') {
+                      throw new Error('invalid_grant');
+                    }
+                    return { data: { id: `id-${auth.token}` } };
+                  }),
+                },
+              },
+            })),
+          },
+        }));
+        mailer = require('../src/services/mailerService');
+      });
+      const result = await mailer.sendQuoteReceivedEmail('buyer@example.com', {
+        rfqNumber: 'RFQ-COOLDOWN',
+        rfqTitle: 'Coolant',
+        vendorName: 'Acme',
+        quoteAmount: 1000,
+      });
+      jest.dontMock('../src/db/pool');
+      return { result, sends };
+    };
+
+    // Isolate 1 hits invalid_grant once on quoteAlert, falls back to buyer, and persists cooldown to DB.
+    const firstRun = await sendAcrossIsolate();
+    expect(firstRun.result).toMatchObject({ sent: true, messageId: 'id-healthy-buyer-token' });
+    expect(firstRun.sends.map((s) => s.token)).toEqual(['revoked-qa-token', 'healthy-buyer-token']);
+    expect(persistedRows.size).toBe(1);
+
+    // Isolate 2 (fresh module registry / cold Worker) loads persisted cooldown and skips quoteAlert completely.
+    const secondRun = await sendAcrossIsolate();
+    expect(secondRun.result).toMatchObject({ sent: true, messageId: 'id-healthy-buyer-token' });
+    expect(secondRun.sends.map((s) => s.token)).toEqual(['healthy-buyer-token']);
+  });
 });

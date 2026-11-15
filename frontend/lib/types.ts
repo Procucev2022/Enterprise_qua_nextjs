@@ -326,6 +326,7 @@ export type NewRFQInput = Omit<
 /** Why an RFQ read or write did not succeed. */
 export type RFQTransportFailure =
   | 'NETWORK'
+  | 'ABORTED'
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
   | 'VALIDATION'

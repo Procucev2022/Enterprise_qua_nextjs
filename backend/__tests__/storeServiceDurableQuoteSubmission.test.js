@@ -775,4 +775,36 @@ describe('durable quote submission and credit synchronization', () => {
     await expect(storeService.consumeVendorQuotationCreditDurably(VENDOR_ID, RFQ_ID)).resolves.toMatchObject({ quotedRfqIds: [RFQ_ID] });
     expect(record).toHaveBeenCalledTimes(3);
   });
+
+  test('uses single-roundtrip snapshot getters before falling back when submitting a durable quote', async () => {
+    const currentRFQ = rfq();
+    const currentVendor = vendor();
+    const rawRFQ = JSON.stringify(currentRFQ);
+    const rawVendor = JSON.stringify({ ...currentVendor, panNumber: 'ABCPE1234F' });
+    const savedRFQ = { ...currentRFQ, status: 'In Evaluation', quotes: [{ vendorId: VENDOR_ID, unitPrice: 300 }] };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const rfqSnapSpy = jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockResolvedValue({ id: RFQ_ID, rfq: currentRFQ, raw: rawRFQ });
+    const vendorSnapSpy = jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockResolvedValue({ id: VENDOR_ID, vendor: currentVendor, raw: rawVendor });
+    const getRfqSpy = jest.spyOn(domainQueries, 'getRFQByIdFromDB');
+    const getVendorSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB');
+    const submitSpy = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
+      rfq: savedRFQ,
+      vendor: currentVendor,
+      creditCharged: 1,
+    });
+    jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
+    jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
+
+    const res = await storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID, unitPrice: 300 });
+
+    expect(res).toEqual(savedRFQ);
+    expect(rfqSnapSpy).toHaveBeenCalledWith(RFQ_ID);
+    expect(vendorSnapSpy).toHaveBeenCalledWith(VENDOR_ID, { fresh: true });
+    expect(getRfqSpy).not.toHaveBeenCalled();
+    expect(getVendorSpy).not.toHaveBeenCalled();
+    expect(submitSpy).toHaveBeenCalledWith(expect.objectContaining({
+      expectedRFQRaw: rawRFQ,
+      expectedVendorRaw: rawVendor,
+    }));
+  });
 });

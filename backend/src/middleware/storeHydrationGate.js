@@ -21,6 +21,15 @@ function isLogIngestionRequest(req) {
   return req.method === 'POST' && STORE_HYDRATION_CONFIG.LOG_INGESTION_PATHS.includes(normalizePath(req.path));
 }
 
+function isPaginatedVendorDirectoryRead(req) {
+  return req.method === 'GET'
+    && normalizePath(req.path) === '/api/vendors'
+    && req.query !== undefined
+    && req.query !== null
+    && req.query.page !== undefined
+    && String(req.query.page).trim() !== '';
+}
+
 function sendUnavailable(res, retryAfterSeconds, message) {
   res.setHeader('Retry-After', String(retryAfterSeconds));
   return res.status(503).json({ success: false, retryable: true, error: message });
@@ -69,7 +78,8 @@ function createStoreHydrationGate({
       storeService.isHydratedFromDB ||
       !hasStorage() ||
       shouldSkipPath(req.path) ||
-      isLogIngestionRequest(req)
+      isLogIngestionRequest(req) ||
+      isPaginatedVendorDirectoryRead(req)
     ) {
       return next();
     }
@@ -106,4 +116,5 @@ function createStoreHydrationGate({
 module.exports = {
   createStoreHydrationGate,
   isLogIngestionRequest,
+  isPaginatedVendorDirectoryRead,
 };

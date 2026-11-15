@@ -57,6 +57,7 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { usablePan } from '@/lib/validationSchemas';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
+import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import SupplierDossierDrawer from './components/SupplierDossierDrawer';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 
@@ -247,17 +248,20 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   const fetchSeqRef = useRef(0);
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     const query = debouncedSearch.trim();
     const seq = ++fetchSeqRef.current;
     setLoadingVendors(true);
 
     async function load() {
       try {
-        const res = await fetchAllVendors({
-          pageSize: 150,
-          search: query || undefined,
-          category: selectedCategory !== 'all' ? selectedCategory : undefined,
-        });
+        const res = await withVendorFetchSignal(controller.signal, () =>
+          fetchAllVendors({
+            pageSize: 150,
+            search: query || undefined,
+            category: selectedCategory !== 'all' ? selectedCategory : undefined,
+          })
+        );
         if (active && seq === fetchSeqRef.current && res.success && (res.candidates || (res as any).data)) {
           setRemoteVendors(res.candidates || (res as any).data);
         }
@@ -272,6 +276,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     load();
     return () => {
       active = false;
+      controller.abort();
     };
   }, [debouncedSearch, selectedCategory]);
 

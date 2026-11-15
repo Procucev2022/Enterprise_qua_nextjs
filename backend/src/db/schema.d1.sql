@@ -241,6 +241,8 @@ CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
 CREATE INDEX IF NOT EXISTS idx_vendors_email_nocase ON vendors (email COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_vendors_corporate_email ON vendors (json_extract(raw, '$.corporateEmail'));
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
+CREATE INDEX IF NOT EXISTS idx_vendors_major_category_nocase ON vendors (major_category COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_vendors_major_category_created_at ON vendors (major_category COLLATE NOCASE, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
 CREATE INDEX IF NOT EXISTS idx_vendors_status ON vendors (status);
@@ -1098,3 +1100,11 @@ CREATE INDEX IF NOT EXISTS idx_vendors_source_created ON vendors (source, create
 CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
 
 CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_status_processed ON email_ingestion_log (status, processed_at ASC);
+
+CREATE TABLE IF NOT EXISTS mail_provider_cooldowns (
+  provider_key TEXT PRIMARY KEY,
+  until_ms INTEGER NOT NULL,
+  reason TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mail_provider_cooldowns_until ON mail_provider_cooldowns (until_ms);

@@ -1427,6 +1427,7 @@ sellerDirectory: {
     // silently fabricating a valid session when the API could not be reached.
     networkUnreachable:
       'Cannot reach the Procucev API, so your credentials could not be verified. Check that the backend is running on the configured port and that you are online, then try again.',
+    requestCancelled: 'Request superseded by a newer search.',
     serverErrorFallback:
       'The server rejected the request but did not explain why. Please retry, and contact support if it persists.',
 

@@ -72,6 +72,7 @@ const REPORTED_TABLES = [
   'buyer_credit_transactions',
   'document_vault',
   'account_documents',
+  'mail_provider_cooldowns',
 ];
 
 function checksum(content) {

@@ -211,4 +211,58 @@ describe('lib/store.tsx - AI feed by role and RFQ load when the session ends', (
     expect(app().aiFeed).toEqual([]);
     expect(app().aiFeedError).toBeNull();
   });
+
+  test('a 401 logged-out AI feed response is logged as WARN and clears session state instead of ERROR', async () => {
+    const app = await mountAs('buyer');
+    const logSpy = jest.spyOn(logger, 'log');
+    mockFetch.mockImplementation((url: string) => {
+      if (url.startsWith('/api/ai-feed')) {
+        return respond(401, { success: false, error: 'Session has been logged out.' });
+      }
+      return serveDefaults(url);
+    });
+
+    await act(async () => {
+      await app().refreshAIFeed();
+    });
+
+    expect(logSpy).toHaveBeenCalledWith('WARN', 'AI feed not loaded because the session ended', { status: 401 }, 'AI_FEED');
+    expect(logSpy).not.toHaveBeenCalledWith('ERROR', 'AI feed request failed', expect.anything(), 'AI_FEED');
+    expect(authClient.getToken()).toBeNull();
+    expect(app().aiFeed).toEqual([]);
+    expect(app().aiFeedError).toBeNull();
+  });
+
+  test('an in-flight AI feed response arriving after logout does not repopulate the feed', async () => {
+    const app = await mountAs('buyer');
+    let resolveFeed!: (value: unknown) => void;
+    mockFetch.mockImplementation((url: string) => {
+      if (url.startsWith('/api/ai-feed')) {
+        return new Promise((resolve) => {
+          resolveFeed = resolve;
+        });
+      }
+      if (url === '/api/auth/logout') {
+        return respond(200, { success: true });
+      }
+      return serveDefaults(url);
+    });
+
+    let refreshPromise!: Promise<void>;
+    await act(async () => {
+      refreshPromise = app().refreshAIFeed();
+    });
+    await act(async () => {
+      await authClient.logout('buyer@procucev.com');
+      resolveFeed({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ success: true, data: [{ id: 'ev-1', title: 'Stale Event' }] }),
+      });
+      await refreshPromise;
+    });
+
+    expect(app().aiFeed).toEqual([]);
+  });
 });
