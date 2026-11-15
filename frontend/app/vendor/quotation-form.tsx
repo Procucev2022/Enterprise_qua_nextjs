@@ -43,7 +43,6 @@ import {
   Users,
   Globe,
   CheckCircle2,
-  Check,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
@@ -879,7 +878,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       } else if (wasUnlocked) {
         showToast('RFQ Downloaded', `RFQ specification for ${opp.rfqNumber} downloaded. Already unlocked (0 credits deducted).`, 'success');
       } else {
-        showToast('RFQ Downloaded', `RFQ specification for ${opp.rfqNumber} has been downloaded and unlocked.`, 'success');
+        showToast('RFQ Unlocked', `1 credit deducted. Quote submission is now unlocked for ${opp.rfqNumber}.`, 'success');
       }
     } catch (err: unknown) {
       showToast(
@@ -955,16 +954,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             <div className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-500 dark:text-gray-400">
               Submitted Quotes
             </div>
-            <div className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-500 dark:text-gray-400 sr-only">
-              Quotations Submitted
-            </div>
-            <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="font-mono text-3xl font-black text-purple-700 dark:text-purple-400">
-                {totalSubmittedCount}
-              </span>
-              {' '}
-              <span className="text-xs font-semibold text-slate-500 dark:text-gray-400">Sent</span>
-            </div>
+            <span className="sr-only">Quotations Submitted</span>
+            <span className="mt-2 block font-mono text-3xl font-black text-purple-700 dark:text-purple-400">
+              {totalSubmittedCount}
+              <span className="sr-only"> Sent</span>
+            </span>
           </div>
           <div className="rounded-xl bg-purple-50 p-3 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300">
             <CheckCircle2 size={22} />
@@ -1050,7 +1044,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 type="search"
                 value={opportunitySearch}
                 onChange={(event) => setOpportunitySearch(event.target.value)}
-                placeholder="Search RFQ number, title, or buyer / item..."
+                placeholder="Search by RFQ Number, Title, or Item..."
                 className="has-leading-icon h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-gray-950 dark:focus:bg-gray-900"
                 aria-label="Search enquiries"
               />
@@ -1368,14 +1362,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                         <td data-label="Your Bid" className="py-3 px-3">
                           {quote ? (
                             <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200">
-                                  <Check size={10} className="text-emerald-600" /> Submitted
-                                </span>
-                                <span className="font-bold text-slate-800 dark:text-gray-200">
-                                  {quote.totalPrice !== null ? `₹${quote.totalPrice.toLocaleString('en-IN')}` : '—'}
-                                </span>
-                              </div>
+                              <span className="font-bold text-slate-800 dark:text-gray-200">
+                                {quote.totalPrice !== null ? `₹${quote.totalPrice.toLocaleString('en-IN')}` : '—'}
+                              </span>
                               <span className="mt-0.5 block text-[10px] text-slate-500 dark:text-gray-400">
                                 {quote.submissionMethod} · {quote.submittedDate}
                               </span>
@@ -1517,14 +1506,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                             <div className="flex items-center justify-end gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => {
-                                  handleDownloadRfq(opp);
-                                  openBidForm(opp);
-                                }}
-                                className="btn btn-emerald text-white text-xs font-bold py-1.5 px-3 rounded-xl inline-flex items-center gap-1.5 opacity-60 cursor-pointer hover:opacity-80 shadow-none"
+                                disabled
+                                className="btn btn-emerald text-white text-xs font-bold py-1.5 px-3 rounded-xl inline-flex items-center gap-1.5 opacity-50 cursor-not-allowed shadow-none"
                                 title="Download RFQ specification first to unlock quote submission"
                                 aria-label="Submit Quote"
-                                aria-disabled="true"
                               >
                                 <Send size={11} />
                                 <span>Submit Quote</span>
@@ -1557,7 +1542,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             {/* ═══════════════════════════════════════════════════════════════ */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-600 dark:text-gray-400">
               <div className="font-semibold text-slate-600 dark:text-gray-300">
-                {totalFilteredCount > 0 ? `Displaying ${startIdx + 1} - ${endIdx} of ${totalFilteredCount} items` : 'Displaying 0 of 0 items'}
+                Displaying {totalFilteredCount > 0 ? `${startIdx + 1} - ${endIdx} of ${totalFilteredCount}` : '0 of 0'} items
               </div>
 
               <div className="flex items-center gap-1">

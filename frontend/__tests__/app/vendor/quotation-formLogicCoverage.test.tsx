@@ -1432,8 +1432,8 @@ describe('RFQ specification download', () => {
 
     await waitFor(() =>
       expect(mockShowToast).toHaveBeenCalledWith(
-        'RFQ Downloaded',
-        'RFQ specification for RFQ-100 has been downloaded and unlocked.',
+        'RFQ Unlocked',
+        '1 credit deducted. Quote submission is now unlocked for RFQ-100.',
         'success'
       )
     );
@@ -1514,10 +1514,17 @@ describe('RFQ specification download', () => {
   test('downloads the specification first when quoting on an RFQ that is not unlocked yet', async () => {
     await renderForm({ vendorOpportunities: [opportunity()], vendorUnlockedRfqIds: ['RFQ-OTHER'] });
 
-    await openBidFormFor();
+    expect(within(rowFor('RFQ-100')).getByRole('button', { name: /^Submit Quote$/ })).toBeDisabled();
+    await act(async () => {
+      await clickDownload('RFQ-100');
+    });
 
     await waitFor(() => expect(callsTo('preview')).toHaveLength(1));
     expect(callsTo('preview')[0][0]).toBe('/api/rfqs/RFQ-100/email-preview');
+    await waitFor(() => {
+      expect(within(rowFor('RFQ-100')).getByRole('button', { name: /^Submit Quote$/ })).not.toBeDisabled();
+    });
+    await openBidFormFor();
   });
 
   test('does not download again when quoting on an RFQ unlocked earlier, whatever the letter case', async () => {

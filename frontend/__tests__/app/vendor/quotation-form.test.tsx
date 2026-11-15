@@ -1267,7 +1267,18 @@ describe("QuotationForm Comprehensive Suite", () => {
       expect(btns.length).toBeGreaterThan(0);
       return btns;
     });
-    fireEvent.click(submitBtns[0]);
+    if (submitBtns[0].hasAttribute("disabled")) {
+      const downloadBtns = screen.getAllByRole("button", { name: /Download RFQ|Download/i });
+      await act(async () => {
+        fireEvent.click(downloadBtns[0]);
+      });
+    }
+    const enabledSubmitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns[0]).not.toBeDisabled();
+      return btns;
+    });
+    fireEvent.click(enabledSubmitBtns[0]);
     const priceInput = document.querySelectorAll('input[type="number"]')[0];
     fireEvent.change(priceInput, { target: { value: "999" } });
     fireEvent.change(screen.getByPlaceholderText("e.g. 14"), { target: { value: "7" } });
@@ -1356,7 +1367,7 @@ describe("QuotationForm Comprehensive Suite", () => {
       expect(screen.getByText(/Centrifugal Water Pump/i)).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByPlaceholderText(/Search RFQ number, title, or buyer/i);
+    const searchInput = screen.getByPlaceholderText(/Search (?:by )?RFQ (?:Number, Title|number)/i);
     const statusSelect = screen.getByRole("combobox", { name: /Filter enquiries by status/i });
 
     // Search for pump
@@ -1539,7 +1550,16 @@ describe("QuotationForm Comprehensive Suite", () => {
       expect(screen.getByText(/No bid submitted/i)).toBeInTheDocument();
     });
 
-    const submitBtns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+    const downloadBtns = screen.getAllByRole("button", { name: /Download RFQ|Download/i });
+    await act(async () => {
+      fireEvent.click(downloadBtns[0]);
+    });
+
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns[0]).not.toBeDisabled();
+      return btns;
+    });
     fireEvent.click(submitBtns[0]);
 
     const priceInputs = document.querySelectorAll('input[type="number"]');
