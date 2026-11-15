@@ -104,7 +104,7 @@ const REPORTED_TABLES = [
   'vendor_categories_indexed', 'document_vault', 'account_documents',
 ];
 
-async function d1Query(sql, params = [], { maxRetries = 4, backoffBaseMs = 3000, minWindowDelayMs = 10_000 } = {}) {
+async function d1Query(sql, params = [], { maxRetries = 6, backoffBaseMs = 3000, minWindowDelayMs = 10_000 } = {}) {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     const res = await fetch(QUERY_URL, {
       method: 'POST',
@@ -117,18 +117,21 @@ async function d1Query(sql, params = [], { maxRetries = 4, backoffBaseMs = 3000,
       throw new Error(`D1 non-JSON response (${res.status}): ${text.slice(0, 300)}`);
     }
 
-    if (res.status === 429 && attempt < maxRetries) {
-      const isWindowOverload = /Too many resources consumed within a 10 second window/i.test(text);
+    const isWindowOverload = /Too many resources consumed within a 10 second window|D1 DB is overloaded|too many requests queued/i.test(text);
+    const isTransientServerError = res.status >= 500
+      && /temporarily unavailable|database is locked|sqlite_busy|rate limit|resource limit/i.test(text);
+    if (attempt < maxRetries && (res.status === 429 || isWindowOverload || isTransientServerError)) {
       const delayMs = isWindowOverload
         ? Math.max(minWindowDelayMs, backoffBaseMs * (2 ** attempt))
         : backoffBaseMs * (2 ** attempt);
-      logger.warn('D1 query rate/resource limited (429); retrying with backoff', {
+      logger.warn(`D1 query rate/resource limited (${res.status}); retrying with backoff`, {
         attempt: attempt + 1,
         maxRetries,
         delayMs,
         isWindowOverload,
+        status: res.status,
       }, 'DATABASE_MIGRATION');
-      console.warn(`[migrate-d1] D1 rate/resource limited (429); waiting ${Math.round(delayMs / 1000)}s before retry (${attempt + 1}/${maxRetries})...`);
+      console.warn(`[migrate-d1] D1 rate/resource limited (${res.status}); waiting ${Math.round(delayMs / 1000)}s before retry (${attempt + 1}/${maxRetries})...`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       continue;
     }
@@ -379,13 +382,16 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
         }
 
         const isFtsRebuildStmt = /vendors_search_fts/i.test(statement) && /rebuild/i.test(statement);
+        const isVendorIndexStmt = /^\s*CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+[\w"`]+\s+ON\s+["`]?vendors["`]?\b/i.test(statement);
         const isCpuReset = /exceeded its CPU time limit|database isolate was reset/i.test(error?.message || '');
-        if (isFtsRebuildStmt && isCpuReset) {
-          logger.warn('FTS rebuild exceeded D1 CPU limits; skipping to allow compatibility search path', {
+        if ((isFtsRebuildStmt || isVendorIndexStmt) && isCpuReset) {
+          logger.warn('D1 migration statement exceeded CPU limits; skipping idempotent step', {
             migrationVersion: version,
+            isFtsRebuildStmt,
+            isVendorIndexStmt,
             error: error.message,
           }, 'DATABASE_MIGRATION');
-          console.warn('  ~  (FTS rebuild exceeded D1 CPU limit; skipped to preserve compatibility path)');
+          console.warn('  ~  (D1 CPU limit reached during statement; skipped idempotently)');
           continue;
         }
 

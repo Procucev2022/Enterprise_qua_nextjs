@@ -1,6 +1,7 @@
 const vendorRfqUnlockQueries = require('../src/db/vendorRfqUnlockQueries');
 const pool = require('../src/db/pool');
 const d1Bridge = require('../src/db/d1Bridge');
+const { VENDOR_FREE_CREDITS_LIMIT } = require('../src/config/constants');
 
 describe('atomic vendor RFQ unlock persistence', () => {
   let originalPool;
@@ -335,7 +336,57 @@ describe('atomic vendor RFQ unlock persistence', () => {
       .toMatchObject({ shouldCharge: false, remaining: 46 });
     expect(vendorRfqUnlockQueries.vendorCreditState({ unlimitedAccess: true })).toMatchObject({ unlimited: true, remaining: 999999 });
     expect(vendorRfqUnlockQueries.vendorCreditState({ freeQuotationCredits: 'invalid' })).toMatchObject({ remaining: 0 });
+    expect(vendorRfqUnlockQueries.vendorCreditState({ freeRfqDownloadCredits: 3, freeCreditsAllocated: 'invalid' }))
+      .toMatchObject({ currentCredits: 3, allocated: VENDOR_FREE_CREDITS_LIMIT, remaining: 3 });
     expect(vendorRfqUnlockQueries.parseVendorRaw('null')).toEqual({});
+    expect(vendorRfqUnlockQueries.parseVendorRaw('[]')).toEqual({});
+    expect(vendorRfqUnlockQueries.parseVendorRaw(null)).toEqual({});
+    expect(vendorRfqUnlockQueries.parseVendorRaw([1, 2])).toEqual({});
     expect(() => vendorRfqUnlockQueries.parseVendorRaw('{invalid')).toThrow('invalid JSON');
+    expect(vendorRfqUnlockQueries.makeD1UnlockStatements({ ...options, rfqNumber: '' }).params[2]).toBeNull();
+  });
+
+  test('covers D1 fallback rows on exhaustion, update-only raw return, and zero-charge subscribed unlock', async () => {
+    const noCredits = { ...baseVendor, freeQuotationCredits: 0 };
+    const exhaustedFallback = d1Results({ vendor: noCredits });
+    exhaustedFallback[6] = { rows: [] };
+    configureD1(exhaustedFallback);
+    await expect(vendorRfqUnlockQueries.unlockVendorRfqInDB(options)).resolves.toMatchObject({
+      success: false,
+      creditsExhausted: true,
+      freeCreditsRemaining: 0,
+    });
+
+    const updatedVendor = {
+      ...baseVendor,
+      freeQuotationCredits: 1,
+      unlockedRfqIds: [options.rfqId],
+    };
+    const updateFallback = d1Results({
+      updated: updatedVendor,
+      insertedUnlock: unlockRow,
+      insertedLedger: { ...ledgerRow, balance_after: undefined, balanceAfter: 1 },
+    });
+    updateFallback[6] = { rows: [] };
+    updateFallback[8] = { rows: [] };
+    configureD1(updateFallback);
+    await expect(vendorRfqUnlockQueries.unlockVendorRfqInDB(options)).resolves.toMatchObject({
+      success: true,
+      freeCreditsRemaining: 1,
+      creditCharged: 1,
+    });
+
+    const subscribedVendor = { ...baseVendor, subscriptionPlan: 'select', freeQuotationCredits: 0 };
+    const subscribedFallback = d1Results({
+      vendor: subscribedVendor,
+      updated: { ...subscribedVendor, unlockedRfqIds: [options.rfqId] },
+      insertedUnlock: { ...unlockRow, credit_charged: 0, source: 'subscription' },
+    });
+    configureD1(subscribedFallback);
+    await expect(vendorRfqUnlockQueries.unlockVendorRfqInDB(options)).resolves.toMatchObject({
+      success: true,
+      creditCharged: 0,
+      source: 'subscription',
+    });
   });
 });

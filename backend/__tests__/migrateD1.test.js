@@ -11,6 +11,7 @@ const {
   migrate,
   recordSchemaBaseline,
   reportRowCounts,
+  resultRows,
   resolveD1Config,
   schemaChecksum,
   splitStatements,
@@ -990,5 +991,249 @@ describe('D1 migration SQL handling', () => {
     expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "vendors_search_fts"'))).toBe(true);
     expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "system_error_logs"'))).toBe(true);
     expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "audit_logs"'))).toBe(true);
+  });
+
+  test('keeps schema.d1.sql locked to the immutable 0000_schema_baseline checksum', () => {
+    const schemaPath = path.resolve(__dirname, '../src/db/schema.d1.sql');
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    expect(schemaChecksum(schemaSql)).toBe('77924fddc60f028a8d17659d1b9edeb51fe1bfbccc5752f093077c36f88ccb78');
+  });
+
+  test('d1Query retries on 503/500 D1 DB is overloaded and SQLITE_BUSY JSON responses and throws after exhaustion', async () => {
+    const originalFetch = global.fetch;
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let callCount = 0;
+    global.fetch = jest.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          status: 503,
+          ok: false,
+          text: async () => '{"success":false,"errors":[{"message":"D1 DB is overloaded"}]}',
+        };
+      }
+      if (callCount === 2) {
+        return {
+          status: 500,
+          ok: false,
+          text: async () => '{"success":false,"errors":[{"message":"database is locked: SQLITE_BUSY"}]}',
+        };
+      }
+      return {
+        status: 200,
+        ok: true,
+        text: async () => '{"success":true,"result":[{"results":[{"ok":1}]}]}',
+      };
+    });
+
+    try {
+      const res = await d1Query('SELECT 1', [], { maxRetries: 3, backoffBaseMs: 1, minWindowDelayMs: 2 });
+      expect(res.success).toBe(true);
+      expect(callCount).toBe(3);
+
+      callCount = 0;
+      global.fetch = jest.fn(async () => {
+        callCount += 1;
+        return {
+          status: 503,
+          ok: false,
+          text: async () => '{"success":false,"errors":[{"message":"D1 DB is overloaded"}]}',
+        };
+      });
+      await expect(d1Query('SELECT 1', [], { maxRetries: 1, backoffBaseMs: 1, minWindowDelayMs: 2 }))
+        .rejects.toThrow('D1 query failed (503): D1 DB is overloaded');
+      expect(callCount).toBe(2);
+    } finally {
+      warnSpy.mockRestore();
+      global.fetch = originalFetch;
+    }
+  });
+
+  test('applyD1Migrations recovers gracefully from D1 CPU time limit errors on vendors index creation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-vendor-index-cpu-'));
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    const sql = 'CREATE INDEX IF NOT EXISTS idx_vendors_major_category_created_at ON vendors (major_category COLLATE NOCASE, created_at DESC);';
+    fs.writeFileSync(path.join(migrationsPath, '0035_vendor_category_created_at_index.d1.sql'), sql);
+    const expectedChecksum = crypto.createHash('sha256').update(sql).digest('hex');
+
+    const executedSql = [];
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const query = jest.fn(async (querySql) => {
+      executedSql.push(querySql);
+      if (querySql.includes('SELECT checksum FROM schema_migrations')) {
+        return querySql.includes('WHERE version = ?') && executedSql.some((s) => s.startsWith('INSERT INTO schema_migrations'))
+          ? { result: [{ results: [{ checksum: expectedChecksum }] }] }
+          : { result: [{ results: [] }] };
+      }
+      if (querySql.includes('CREATE INDEX IF NOT EXISTS idx_vendors_major_category_created_at')) {
+        throw new Error('D1 query failed (429): D1 DB exceeded its CPU time limit and was reset.');
+      }
+      return { result: [{ results: [] }] };
+    });
+
+    try {
+      const summary = await applyD1Migrations({ query, migrationsPath });
+      expect(summary).toEqual({ applied: 1, skipped: 0 });
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('covers resolveD1Config, splitStatements, resultRows, d1Query fallback, and migrate row-count branches', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-branch-cov-'));
+    const origAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const origDb = process.env.CLOUDFLARE_D1_DATABASE_ID;
+    const origFetch = global.fetch;
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'env-acc';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'env-db';
+      expect(resolveD1Config({ target: 'dev' })).toMatchObject({ accountId: 'env-acc', databaseId: 'env-db' });
+
+      const topWrangler = path.join(root, 'top.jsonc');
+      fs.writeFileSync(topWrangler, '{"account_id":"top-acc","d1_databases":[{"database_id":"top-db"}]}');
+
+      delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'only-db';
+      expect(resolveD1Config({ target: 'dev', wranglerPath: topWrangler })).toMatchObject({ accountId: 'top-acc', databaseId: 'only-db' });
+
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'only-acc';
+      delete process.env.CLOUDFLARE_D1_DATABASE_ID;
+      expect(resolveD1Config({ target: 'dev', wranglerPath: topWrangler })).toMatchObject({ accountId: 'only-acc', databaseId: 'top-db' });
+
+      delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      delete process.env.CLOUDFLARE_D1_DATABASE_ID;
+
+      const emptyWrangler = path.join(root, 'empty.jsonc');
+      fs.writeFileSync(emptyWrangler, '{}');
+      expect(resolveD1Config({ target: 'dev', wranglerPath: emptyWrangler })).toMatchObject({ accountId: null, databaseId: null });
+
+      expect(resolveD1Config({ target: '', wranglerPath: topWrangler })).toMatchObject({ accountId: 'top-acc', databaseId: 'top-db' });
+
+      const badWrangler = path.join(root, 'bad.jsonc');
+      fs.writeFileSync(badWrangler, '{not-valid-json');
+      expect(resolveD1Config({ target: 'dev', wranglerPath: badWrangler })).toMatchObject({ accountId: null, databaseId: null });
+
+      expect(splitStatements()).toEqual([]);
+      expect(splitStatements('; ;; ;')).toEqual([]);
+      expect(splitStatements('CREATE TEMP TRIGGER t_ins AFTER INSERT ON tbl BEGIN SELECT 1; END;'))
+        .toHaveLength(1);
+      expect(schemaChecksum('SELECT 1;\r\n')).toBe(schemaChecksum('SELECT 1;\n'));
+      expect(schemaChecksum('')).toBe(schemaChecksum());
+
+      expect(resultRows(null)).toEqual([]);
+      expect(resultRows({ result: { results: [{ id: 1 }] } })).toEqual([{ id: 1 }]);
+
+      global.fetch = jest.fn(async () => ({
+        status: 400,
+        ok: false,
+        text: async () => '{"success":false}',
+      }));
+      await expect(d1Query('SELECT 1')).rejects.toThrow('D1 query failed (400): {"success":false}');
+
+      await purgeDeprecatedTables(jest.fn().mockRejectedValue(new Error('drop failed')));
+
+      const ftsDir = path.join(root, 'fts-mig');
+      fs.mkdirSync(ftsDir, { recursive: true });
+      const ftsSql = "INSERT INTO vendors_search_fts(vendors_search_fts) SELECT 'rebuild';";
+      fs.writeFileSync(path.join(ftsDir, '0001_fts.d1.sql'), ftsSql);
+      const ftsHash = crypto.createHash('sha256').update(ftsSql).digest('hex');
+      let ftsInserted = false;
+      const ftsQuery = jest.fn(async (sql) => {
+        if (sql.includes('INSERT INTO schema_migrations')) ftsInserted = true;
+        if (sql.includes('SELECT checksum FROM schema_migrations')) {
+          return { result: [{ results: ftsInserted ? [{ checksum: ftsHash }] : [] }] };
+        }
+        return { result: [{ results: [] }] };
+      });
+      await expect(applyD1Migrations({ query: ftsQuery, migrationsPath: ftsDir })).resolves.toEqual({ applied: 1, skipped: 0 });
+
+      const idxDir = path.join(root, 'idx-mig');
+      fs.mkdirSync(idxDir, { recursive: true });
+      fs.writeFileSync(path.join(idxDir, '0035_vendor_category_created_at_index.d1.sql'), 'CREATE INDEX IF NOT EXISTS idx_v ON vendors(id);');
+      const idxFailQuery = jest.fn(async (sql) => {
+        if (sql.includes('SELECT checksum')) return { result: [{ results: [] }] };
+        throw new Error('D1 syntax error near INDEX');
+      });
+      await expect(applyD1Migrations({ query: idxFailQuery, migrationsPath: idxDir })).rejects.toThrow('D1 syntax error near INDEX');
+
+      const noStackDir = path.join(root, 'nostack-mig');
+      fs.mkdirSync(noStackDir, { recursive: true });
+      fs.writeFileSync(path.join(noStackDir, '0001_err.d1.sql'), 'SELECT 1;');
+      const noMsgFailQuery = jest.fn(async (sql) => {
+        if (sql.includes('SELECT checksum')) return { result: [{ results: [] }] };
+        return Promise.reject({ message: '' });
+      });
+      await expect(applyD1Migrations({ query: noMsgFailQuery, migrationsPath: noStackDir })).rejects.toEqual({ message: '' });
+
+      await expect(migrate({
+        requireCredentials: true,
+        credentials: { accountId: 'a', databaseId: null, apiToken: null },
+      })).resolves.toMatchObject({ applied: 0, skipped: 0, failures: [] });
+      await expect(migrate({
+        requireCredentials: true,
+        credentials: { accountId: 'a', databaseId: 'd', apiToken: null },
+      })).resolves.toMatchObject({ applied: 0, skipped: 0, failures: [] });
+      await expect(migrate({
+        requireCredentials: true,
+        credentials: null,
+      })).resolves.toMatchObject({ applied: 0, skipped: 0, failures: [] });
+
+      const schemaFile = path.join(root, 'schema.d1.sql');
+      fs.writeFileSync(schemaFile, 'SELECT 1;');
+      const noStackSchemaQuery = jest.fn(async (sql, params = []) => {
+        if (sql.includes('INSERT INTO schema_migration_locks')) return { result: [{ results: [{ owner_token: params[1] }] }] };
+        if (sql.includes('UPDATE schema_migration_locks')) return { result: [{ results: [{ owner_token: params[2] }] }] };
+        if (sql.includes('SELECT checksum FROM schema_migrations')) return { result: [{ results: [] }] };
+        if (sql.trim() === 'SELECT 1') return Promise.reject({ message: 'plain schema fail' });
+        return { result: [{ results: [] }] };
+      });
+      await expect(migrate({
+        query: noStackSchemaQuery,
+        schemaPath: schemaFile,
+        migrationsPath: noStackDir,
+        requireCredentials: false,
+      })).resolves.toMatchObject({ failures: expect.arrayContaining([expect.objectContaining({ message: 'plain schema fail' })]) });
+      await expect(migrate({
+        query: async (sql, params = []) => {
+          if (sql.includes('INSERT INTO schema_migration_locks')) return { result: [{ results: [{ owner_token: params[1] }] }] };
+          if (sql.includes('UPDATE schema_migration_locks')) return { result: [{ results: [{ owner_token: params[2] }] }] };
+          if (sql.includes('SELECT checksum FROM schema_migrations')) return Promise.reject({ message: 'plain baseline fail' });
+          return { result: [{ results: [] }] };
+        },
+        schemaPath: schemaFile,
+        migrationsPath: noStackDir,
+        requireCredentials: false,
+      })).resolves.toMatchObject({ failures: expect.arrayContaining([expect.objectContaining({ message: 'plain baseline fail' })]) });
+      const okMigrations = path.join(root, 'ok-mig');
+      fs.mkdirSync(okMigrations, { recursive: true });
+      const migrateQuery = jest.fn(async (sql, params = []) => {
+        if (sql.includes('INSERT INTO schema_migration_locks')) return { result: [{ results: [{ owner_token: params[1] }] }] };
+        if (sql.includes('UPDATE schema_migration_locks')) return { result: [{ results: [{ owner_token: params[2] }] }] };
+        if (sql.includes('SELECT checksum FROM schema_migrations')) return { result: [{ results: [{ checksum: schemaChecksum('SELECT 1;') }] }] };
+        return { result: [{ results: [{ total: 0 }] }] };
+      });
+      await expect(migrate({
+        query: migrateQuery,
+        schemaPath: schemaFile,
+        migrationsPath: okMigrations,
+        includeRowCounts: true,
+        requireCredentials: false,
+      })).resolves.toMatchObject({ applied: 0, skipped: 0, failures: [] });
+    } finally {
+      if (origAccount !== undefined) process.env.CLOUDFLARE_ACCOUNT_ID = origAccount;
+      if (origDb !== undefined) process.env.CLOUDFLARE_D1_DATABASE_ID = origDb;
+      global.fetch = origFetch;
+      errSpy.mockRestore();
+      logSpy.mockRestore();
+      process.exitCode = 0;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

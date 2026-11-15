@@ -46,6 +46,13 @@ describe('PostgreSQL migration runner', () => {
     jest.restoreAllMocks();
   });
 
+  test('keeps schema.sql locked to the immutable 0000_schema_baseline checksum', () => {
+    const schemaPath = path.resolve(__dirname, '../src/db/schema.sql');
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    const actualChecksum = require('crypto').createHash('sha256').update(schemaSql).digest('hex');
+    expect(actualChecksum).toBe('8d8720f867c6b5b1e0b069d507a2d6b72adedade02f801346533e495459a66f5');
+  });
+
   test('keeps PostgreSQL and D1 table inventories aligned', () => {
     const dbDir = path.resolve(__dirname, '../src/db');
     const readTables = (fileName) => {
