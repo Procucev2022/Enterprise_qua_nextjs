@@ -32,6 +32,7 @@ router.get('/:sessionId/jobs/active', vendorIngestionController.getActiveJobStat
 router.get('/:sessionId/jobs/:jobId', vendorIngestionController.getJobById);
 
 router.post('/:sessionId/vendor-master/upload', vendorIngestionController.uploadVendorMaster);
+router.get('/:sessionId/vendor-master', vendorIngestionController.getVendorMasterPreview);
 router.get('/:sessionId/vendor-master/preview', vendorIngestionController.getVendorMasterPreview);
 router.post('/:sessionId/po-dump/upload', vendorIngestionController.uploadPoDump);
 router.post('/:sessionId/join', vendorIngestionController.runJoin);

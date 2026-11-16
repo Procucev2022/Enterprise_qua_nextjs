@@ -6175,9 +6175,15 @@ I entered my GST number and registered address during buyer registration, but th
 ```
 ---
 
-### Prompt 252
-**Timestamp**: 2026-11-16T17:22:31+05:30
+### Prompt 253
+**Timestamp**: 2026-11-16T18:00:52+05:30
 ```text
-I entered my GST number and registered address during buyer registration, but these details are not appearing in the Buyer Profile.
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-16T12_21_04.549Z.csv] 
+
+Please check the errors & fix them
+
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-16T12_29_48.949Z.csv] 
+
+Also check warnings in logs file, & fix them
 ```
 ---

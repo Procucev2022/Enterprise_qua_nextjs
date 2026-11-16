@@ -996,6 +996,27 @@ class StoreService {
           country: profile.country || existing.country,
           categories: profile.categories || existing.categories,
         };
+        const hasNewFieldData =
+          enriched.organizationName !== existing.organizationName ||
+          enriched.brandName !== existing.brandName ||
+          enriched.organizationType !== existing.organizationType ||
+          enriched.contactPerson !== existing.contactPerson ||
+          enriched.contactDesignation !== existing.contactDesignation ||
+          enriched.mobileNumber !== existing.mobileNumber ||
+          enriched.corporateEmail !== existing.corporateEmail ||
+          enriched.gstin !== existing.gstin ||
+          enriched.pan !== existing.pan ||
+          enriched.cinNumber !== existing.cinNumber ||
+          enriched.website !== existing.website ||
+          enriched.street !== existing.street ||
+          enriched.city !== existing.city ||
+          enriched.state !== existing.state ||
+          enriched.pincode !== existing.pincode ||
+          enriched.country !== existing.country ||
+          (Array.isArray(profile.categories) && profile.categories.length > 0 && (!Array.isArray(existing.categories) || existing.categories.length === 0));
+        if (!hasNewFieldData) {
+          return existing;
+        }
         const saved = await this.updateBuyerAccountDurably(existing.id, enriched);
         if (!saved && pool.hasStorage()) {
           throw new Error('Buyer profile enrichment did not find a durable account row.');
@@ -2527,6 +2548,31 @@ class StoreService {
       action: `Removed vendor ${target.name || id} (${target.email || 'no email on record'}) from the vendor master`,
     });
     return true;
+  }
+
+  async deleteVendorsDurably(ids, actorEmail = null) {
+    const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return [];
+
+    if (pool.hasStorage() && typeof domainQueries.deleteVendorsInDB === 'function') {
+      try {
+        await domainQueries.deleteVendorsInDB(uniqueIds);
+      } catch (error) {
+        logger.error('Failed to persist bulk vendor deletion', error, 'STORE_SERVICE');
+        const persistError = new Error('The selected vendors could not be deleted from storage. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+    }
+
+    const removedSet = new Set(uniqueIds);
+    this.vendors = this.vendors.filter((vendor) => !removedSet.has(vendor.id));
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Removed ${uniqueIds.length} vendor${uniqueIds.length === 1 ? '' : 's'} from the vendor master`,
+    });
+    return uniqueIds;
   }
 
 

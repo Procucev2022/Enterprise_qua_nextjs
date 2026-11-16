@@ -104,6 +104,23 @@ describe('buyerProfileClient', () => {
       expect(res.error).toBe(UI_STRINGS.buyerProfile.loadUnreachable);
     });
 
+    test('passes AbortSignal cleanly and suppresses error logging when aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      global.fetch = jest.fn().mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+      const { logger } = await import('../../lib/logger');
+      const errorSpy = jest.spyOn(logger, 'error');
+
+      const res = await fetchBuyerProfile({ signal: controller.signal });
+      expect(res.success).toBe(false);
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      const catRes = await fetchCategoryTaxonomy(undefined, { signal: controller.signal });
+      expect(catRes.success).toBe(false);
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
     test('wraps a server-side reason in the load-failure template', async () => {
       global.fetch = jest
         .fn()

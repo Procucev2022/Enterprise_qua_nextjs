@@ -2,6 +2,7 @@ import { authClient } from './authClient';
 import { BUYER_PROFILE_ENDPOINTS } from './constants';
 import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
+import { isAbortOrPageUnloadError } from './errorUtils';
 import type {
   BuyerCreditSummary,
   BuyerCreditTransaction,
@@ -96,11 +97,17 @@ function describeFailure(res: Response, body: ApiEnvelope | null): { error: stri
 /**
  * Read the signed-in buyer's organisation profile.
  */
-export async function fetchBuyerProfile(): Promise<BuyerProfileResult> {
+export async function fetchBuyerProfile(options?: { signal?: AbortSignal }): Promise<BuyerProfileResult> {
   let res: Response;
   try {
-    res = await fetch(BUYER_PROFILE_ENDPOINTS.ME, { headers: authHeaders() });
-  } catch {
+    res = await fetch(BUYER_PROFILE_ENDPOINTS.ME, {
+      headers: authHeaders(),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  } catch (err) {
+    if (isAbortOrPageUnloadError(err, options?.signal)) {
+      return { success: false, error: UI_STRINGS.buyerProfile.loadUnreachable };
+    }
     logger.error('Buyer profile load failed: API unreachable', {}, 'BUYER_PROFILE');
     return { success: false, error: UI_STRINGS.buyerProfile.loadUnreachable };
   }
@@ -187,14 +194,23 @@ export async function saveBuyerProfile(
  * A failure therefore yields an empty list plus a reason for the caller to
  * surface, rather than a plausible-looking tree assembled offline.
  */
-export async function fetchCategoryTaxonomy(query?: string): Promise<CategoryTaxonomyResult> {
+export async function fetchCategoryTaxonomy(
+  query?: string,
+  options?: { signal?: AbortSignal }
+): Promise<CategoryTaxonomyResult> {
   let res: Response;
   const endpoint = query && query.trim()
     ? `${BUYER_PROFILE_ENDPOINTS.CATEGORIES}?q=${encodeURIComponent(query.trim())}`
     : BUYER_PROFILE_ENDPOINTS.CATEGORIES;
   try {
-    res = await fetch(endpoint, { headers: authHeaders() });
-  } catch {
+    res = await fetch(endpoint, {
+      headers: authHeaders(),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  } catch (err) {
+    if (isAbortOrPageUnloadError(err, options?.signal)) {
+      return { success: false, data: [], error: UI_STRINGS.buyerProfile.loadUnreachable };
+    }
     logger.error('Category taxonomy load failed: API unreachable', {}, 'BUYER_PROFILE');
     return { success: false, data: [], error: UI_STRINGS.buyerProfile.loadUnreachable };
   }

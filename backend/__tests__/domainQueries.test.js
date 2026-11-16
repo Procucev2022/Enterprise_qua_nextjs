@@ -3099,5 +3099,27 @@ describe('additional domainQueries branch coverage', () => {
       expect(options.d1).toBe(true);
       expect(options.useCache).toBeUndefined();
     });
+
+    test('getVendorsByIdsFromDB and deleteVendorsInDB batch vendor reads and deletes', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      await expect(domainQueries.getVendorsByIdsFromDB(['v-1'])).resolves.toEqual([]);
+      await expect(domainQueries.deleteVendorsInDB(['v-1'])).resolves.toBe(0);
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      await expect(domainQueries.getVendorsByIdsFromDB([])).resolves.toEqual([]);
+      await expect(domainQueries.deleteVendorsInDB([])).resolves.toBe(0);
+
+      const querySpy = jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [{ raw: JSON.stringify({ id: 'v-1', name: 'A' }) }, { raw: null }] })
+        .mockResolvedValueOnce({ rowCount: 2 });
+
+      const fetched = await domainQueries.getVendorsByIdsFromDB(['v-1', 'v-1', 'v-2']);
+      expect(fetched).toEqual([{ id: 'v-1', name: 'A' }]);
+      expect(querySpy.mock.calls[0][1]).toEqual(['v-1', 'v-2']);
+
+      const deletedCount = await domainQueries.deleteVendorsInDB(['v-1', 'v-2']);
+      expect(deletedCount).toBe(2);
+      expect(querySpy.mock.calls[1][0]).toContain('DELETE FROM vendors WHERE id IN ($1, $2)');
+    });
   });
 });

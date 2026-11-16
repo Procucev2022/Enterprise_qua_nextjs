@@ -1517,6 +1517,47 @@ async function deleteVendorInDB(id) {
   return result.rowCount > 0;
 }
 
+async function getVendorsByIdsFromDB(ids) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+  if (!pool.hasStorage() || uniqueIds.length === 0) return [];
+  const chunkSize = PINCODE_LOOKUP_CONFIG.MAX_UNION_PARAMS_D1;
+  const rows = [];
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    const result = await pool.query(
+      `SELECT raw FROM vendors WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    for (const row of result.rows || []) {
+      const parsed = parseVendorRaw(row.raw);
+      if (parsed) rows.push(parsed);
+    }
+  }
+  return rows;
+}
+
+async function deleteVendorsInDB(ids) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+  if (!pool.hasStorage() || uniqueIds.length === 0) return 0;
+  const chunkSize = PINCODE_LOOKUP_CONFIG.MAX_UNION_PARAMS_D1;
+  let totalDeleted = 0;
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    const result = await pool.query(
+      `DELETE FROM vendors WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    totalDeleted += result.rowCount || 0;
+  }
+  queryCache.invalidate('vendors');
+  nonVendorEmailCache.clear();
+  return totalDeleted;
+}
+
 // One multi-row INSERT for a whole batch of newly bulk-uploaded vendors,
 // rather than one round trip per row (what the reference p2pservices app
 // does — confirmed not to scale). `ON CONFLICT (email) DO NOTHING` is a
@@ -2401,11 +2442,11 @@ async function upsertAIFeedItemInDB(item) {
 
   try {
     await pool.query(
-      `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`,
+      `DELETE FROM ai_feed WHERE sequence < (SELECT MIN(sequence) FROM (SELECT sequence FROM ai_feed ORDER BY sequence DESC LIMIT 100) AS recent_ai_feed)`,
       [],
       {
         d1: true,
-        d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
+        d1Text: `DELETE FROM ai_feed WHERE rowid < (SELECT MIN(rowid) FROM (SELECT rowid FROM ai_feed ORDER BY rowid DESC LIMIT 100))`,
       }
     );
   } catch (error) {
@@ -3530,6 +3571,8 @@ module.exports = {
   incrementBulkImportSessionInDB,
   upsertVendorInDB,
   deleteVendorInDB,
+  getVendorsByIdsFromDB,
+  deleteVendorsInDB,
   bulkInsertVendorsInDB,
   getRFQsFromDB,
   getRFQsByBuyerFromDB,

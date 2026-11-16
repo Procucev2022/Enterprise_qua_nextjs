@@ -118,11 +118,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   });
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     if (activeBuyerAccount?.pincode) {
       setBuyerPincode(String(activeBuyerAccount.pincode).trim() || null);
       return;
     }
-    void fetchBuyerProfile().then((result) => {
+    void fetchBuyerProfile({ signal: controller.signal }).then((result) => {
       if (cancelled) return;
       if (result.success && result.data?.pincode) {
         setBuyerPincode(String(result.data.pincode).trim() || null);
@@ -130,6 +131,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [activeBuyerAccount?.pincode]);
 

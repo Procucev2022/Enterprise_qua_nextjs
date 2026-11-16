@@ -363,6 +363,10 @@ describe('scoped reads, limits and deletion results', () => {
     pool.query.mockResolvedValueOnce({ rowCount: 20 }).mockResolvedValueOnce({ rowCount: 5 })
       .mockResolvedValueOnce({ rowCount: 3 }).mockResolvedValueOnce({ rowCount: 2 }).mockResolvedValueOnce({ rowCount: 1 });
     expect(await queries.matchPoLineItemsToVendors(SESSION, ORG)).toEqual({ byVendorCode: 5, byGstin: 3, byName: 2, unmatched: 1 });
+    expect(pool.query.mock.calls.map(([sql]) => sql.trim())).toEqual(
+      expect.arrayContaining([expect.not.stringMatching(/update\s+po_line_items\s+p\b/i)])
+    );
+    expect(pool.query.mock.calls.some(([sql]) => /update\s+po_line_items\s+p\b/i.test(sql))).toBe(false);
     expect(pool.query.mock.calls.map(([, params]) => params)).toEqual([
       [SESSION, ORG], [SESSION, ORG, VENDOR_MATCH_STRATEGY.VENDOR_CODE], [SESSION, ORG, VENDOR_MATCH_STRATEGY.GSTIN],
       [SESSION, ORG, VENDOR_MATCH_STRATEGY.NORMALIZED_NAME], [SESSION, ORG, VENDOR_MATCH_STRATEGY.UNMATCHED],

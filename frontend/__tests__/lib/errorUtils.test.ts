@@ -1,4 +1,4 @@
-import { formatDescriptiveErrorMessage } from '../../lib/errorUtils';
+import { formatDescriptiveErrorMessage, isAbortOrPageUnloadError } from '../../lib/errorUtils';
 
 describe('errorUtils Unit Tests', () => {
   test('formats validation errors with fieldErrors and actionable text', () => {
@@ -84,5 +84,24 @@ describe('errorUtils Unit Tests', () => {
     const formattedEmpty = formatDescriptiveErrorMessage(null);
     expect(formattedEmpty.category).toBe('SYSTEM');
     expect(formattedEmpty.message).toMatch(/unexpected operational anomaly/i);
+  });
+
+  test('detects AbortError, aborted AbortSignal, and page unload events', () => {
+    expect(isAbortOrPageUnloadError(new Error('network'))).toBe(false);
+
+    const abortErr = new Error('The operation was aborted');
+    abortErr.name = 'AbortError';
+    expect(isAbortOrPageUnloadError(abortErr)).toBe(true);
+    expect(isAbortOrPageUnloadError(new DOMException('Aborted', 'AbortError'))).toBe(true);
+
+    const controller = new AbortController();
+    controller.abort();
+    expect(isAbortOrPageUnloadError(new TypeError('Failed to fetch'), controller.signal)).toBe(true);
+
+    window.dispatchEvent(new Event('pagehide'));
+    expect(isAbortOrPageUnloadError(new TypeError('Failed to fetch'))).toBe(true);
+
+    window.dispatchEvent(new Event('pageshow'));
+    expect(isAbortOrPageUnloadError(new TypeError('Failed to fetch'))).toBe(false);
   });
 });

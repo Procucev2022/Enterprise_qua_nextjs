@@ -2226,6 +2226,23 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     expect(logger.getLogs({ category: 'BUYER_ACCOUNT' }).some((entry) =>
       entry.message === 'Active buyer account refresh failed' && entry.metadata?.error instanceof TypeError
     )).toBe(true);
+
+    // Aborted fetches do not spam ERROR telemetry logs
+    logger.clearLogs();
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        return Promise.reject(new DOMException('Aborted', 'AbortError'));
+      }
+      if (typeof url === 'string' && url.includes('/api/bootstrap')) {
+        return Promise.reject(new DOMException('Aborted', 'AbortError'));
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    });
+    await act(async () => contextValue.refreshActiveBuyerAccount());
+    await act(async () => contextValue.refreshFromDB());
+    expect(logger.getLogs({ level: 'ERROR', category: 'BUYER_ACCOUNT' })).toHaveLength(0);
+    expect(logger.getLogs({ level: 'ERROR', category: 'REFERENCE_DATA' })).toHaveLength(0);
+
     authClient.setSession(null);
   });
 

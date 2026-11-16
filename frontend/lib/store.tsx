@@ -30,6 +30,7 @@ import {
 import { authClient } from './authClient';
 import { logger } from './logger';
 import { installApiFetchPatch } from './apiFetchPatch';
+import { isAbortOrPageUnloadError } from './errorUtils';
 
 installApiFetchPatch();
 
@@ -447,7 +448,7 @@ export function setSessionCache<T>(key: string, data: T): void {
   if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
   try {
     sessionStorage.setItem(`procucev_cache_${key}`, JSON.stringify(data));
-  } catch {}
+  } catch { }
 }
 
 export function clearSessionCache(): void {
@@ -455,7 +456,7 @@ export function clearSessionCache(): void {
   try {
     const keys = ['vendors', 'evaluations', 'rfqs', 'activeBuyerAccount', 'aiFeed', 'taxonomy'];
     keys.forEach((k) => sessionStorage.removeItem(`procucev_cache_${k}`));
-  } catch {}
+  } catch { }
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -883,7 +884,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (err) {
-      logger.log('ERROR', 'Failed to load reference data', { error: err }, 'REFERENCE_DATA');
+      if (!isAbortOrPageUnloadError(err)) {
+        logger.log('ERROR', 'Failed to load reference data', { error: err }, 'REFERENCE_DATA');
+      }
       setDbConnected(false);
     } finally {
       setIsLoadingDB(false);
@@ -946,10 +949,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       loadedEntitiesRef.current.activeBuyerAccount = true;
     } catch (error) {
       if (requestGeneration !== activeBuyerAccountRequestGenerationRef.current) return;
-      logger.log('ERROR', 'Active buyer account refresh failed', {
-        operation: 'GET /api/buyer-accounts/active',
-        error,
-      }, 'BUYER_ACCOUNT');
+      if (!isAbortOrPageUnloadError(error)) {
+        logger.log('ERROR', 'Active buyer account refresh failed', {
+          operation: 'GET /api/buyer-accounts/active',
+          error,
+        }, 'BUYER_ACCOUNT');
+      }
       clearActiveBuyerAccount();
     }
   };
@@ -1973,20 +1978,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const directVendor = buyerVendors.find((v) => v.id === vendorId);
     const reconciledList = !directVendor
       ? reconcileBuyerVendorsWithUploadHistory(
-          buyerVendors,
-          loadVendorUploadHistoryFromStorage(),
-          activeBuyerAccount
-        )
+        buyerVendors,
+        loadVendorUploadHistoryFromStorage(),
+        activeBuyerAccount
+      )
       : buyerVendors;
     const resolvedVendor =
       directVendor ||
       reconciledList.find((v) => v.id === vendorId) ||
       (vendorDetails
         ? ({
-            ...vendorDetails,
-            id: vendorDetails.id || vendorId,
-            name: vendorDetails.name || vendorDetails.email || vendorId,
-          } as VendorEntry)
+          ...vendorDetails,
+          id: vendorDetails.id || vendorId,
+          name: vendorDetails.name || vendorDetails.email || vendorId,
+        } as VendorEntry)
         : undefined);
     if (!resolvedVendor) {
       showToast(UI_STRINGS.vendorEvaluationRequest.vendorNotFoundTitle, UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody, 'warning');
@@ -1999,11 +2004,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const persistedByEmail =
       isSyntheticId && resolvedEmailLower
         ? buyerVendors.find(
-            (v) =>
-              !v.id.startsWith('v-master-') &&
-              !v.id.startsWith('v-hist-local-') &&
-              String(v.email || '').trim().toLowerCase() === resolvedEmailLower
-          )
+          (v) =>
+            !v.id.startsWith('v-master-') &&
+            !v.id.startsWith('v-hist-local-') &&
+            String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+        )
         : undefined;
     const targetVendor = persistedByEmail || resolvedVendor;
     const requestPayload: Record<string, string> = { notes: notes || '' };
@@ -2064,13 +2069,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return prev.map((v) =>
             v.id === vendorId || v.id === targetVendor.id || v.id === persistedVendorId
               ? {
-                  ...v,
-                  id: persistedVendorId,
-                  evaluationRequested: true,
-                  evaluationRequestedAt: requestedAt,
-                  evaluationRequestedBy: requestedBy,
-                  status: typeof sent.status === 'string' ? sent.status : v.status,
-                }
+                ...v,
+                id: persistedVendorId,
+                evaluationRequested: true,
+                evaluationRequestedAt: requestedAt,
+                evaluationRequestedBy: requestedBy,
+                status: typeof sent.status === 'string' ? sent.status : v.status,
+              }
               : v
           );
         }
@@ -2399,8 +2404,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // seal (sha) and no dispatch time.
     const emailId = `EML-${rfq.rfqNumber}-${vendor.id}`;
     const major = vendor.majorCategory || rfq.extractedEntities[0]?.majorCategory || rfq.category || '';
-    const minors = vendor.minorCategories && vendor.minorCategories.length > 0 
-      ? vendor.minorCategories 
+    const minors = vendor.minorCategories && vendor.minorCategories.length > 0
+      ? vendor.minorCategories
       : rfq.extractedEntities.map(e => e.minorCategory || e.category).filter(Boolean);
 
     let specialInstructions = '';
@@ -2466,7 +2471,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedEmailForModal(emailPayload);
     setEmailModalOpen(true);
   };
-  
+
   const [toastMessage, setToastMessage] = useState<{ title: string; description: string; type: 'success' | 'info' | 'warning' } | null>(null);
 
   const showToast = (title: string, description: string, type: 'success' | 'info' | 'warning' = 'info') => {
@@ -2628,25 +2633,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const next = prev.map((r) =>
           r.rfqNumber === rfqNumber
             ? {
-                ...r,
-                status: 'PO Generated' as const,
-                awardedVendor: effectiveVendorName,
-                awardedAmount: effectiveAmount,
-                awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
-                poNumber: data.poNumber,
-                poIssueDate: data.issueDate,
-                poFinalised: true,
-                poShaSignature: data.shaSignature,
-                quotes: Array.isArray(r.quotes)
-                  ? r.quotes.map((q) => {
-                      const isAwarded = Boolean(
-                        (effectiveVendorId && q.vendorId === effectiveVendorId) ||
-                        (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
-                      );
-                      return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
-                    })
-                  : r.quotes,
-              }
+              ...r,
+              status: 'PO Generated' as const,
+              awardedVendor: effectiveVendorName,
+              awardedAmount: effectiveAmount,
+              awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
+              poNumber: data.poNumber,
+              poIssueDate: data.issueDate,
+              poFinalised: true,
+              poShaSignature: data.shaSignature,
+              quotes: Array.isArray(r.quotes)
+                ? r.quotes.map((q) => {
+                  const isAwarded = Boolean(
+                    (effectiveVendorId && q.vendorId === effectiveVendorId) ||
+                    (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
+                  );
+                  return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
+                })
+                : r.quotes,
+            }
             : r
         );
         setSessionCache('rfqs', next);
@@ -2684,7 +2689,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const matchesTarget = (candidate?: Pick<RFQItem, 'id' | 'rfqNumber'> | null) =>
       Boolean(
         candidate &&
-          ((rfq.rfqNumber && candidate.rfqNumber === rfq.rfqNumber) || (rfq.id && candidate.id === rfq.id))
+        ((rfq.rfqNumber && candidate.rfqNumber === rfq.rfqNumber) || (rfq.id && candidate.id === rfq.id))
       );
 
     setRfqs((prev) => {
@@ -2743,8 +2748,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ...result.rfq,
       assignedVendors:
         changes.assignedVendors &&
-        Array.isArray(changes.assignedVendors) &&
-        changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
+          Array.isArray(changes.assignedVendors) &&
+          changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
           ? (changes.assignedVendors as any)
           : result.rfq.assignedVendors || (changes.assignedVendors as any) || [],
     };

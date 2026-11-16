@@ -2,6 +2,7 @@ const bootstrapController = require('../src/controllers/bootstrapController');
 const buyerAccountController = require('../src/controllers/buyerAccountController');
 const vendorController = require('../src/controllers/vendorController');
 const identityQueries = require('../src/db/identityQueries');
+const domainQueries = require('../src/db/domainQueries');
 const rootResolvers = require('../src/graphql/resolvers');
 const storeService = require('../src/services/storeService');
 const zohoPaymentService = require('../src/services/zohoPaymentService');
@@ -738,6 +739,57 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(next).toHaveBeenCalledWith(expect.any(Error));
+
+      // 7. Batch storage path (pool.hasStorage() === true and multiple targetIds)
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      const getBatchSpy = jest.spyOn(domainQueries, 'getVendorsByIdsFromDB').mockResolvedValueOnce([
+        { id: 'v-owned-1', buyerId: 'buyer-org-123' },
+        { id: 'v-denied-1', buyerId: 'other-org' },
+      ]);
+      const deleteBatchDbSpy = jest.spyOn(domainQueries, 'deleteVendorsInDB').mockResolvedValueOnce(3);
+      const resBatchStorage = mockRes();
+      await vendorController.bulkDeleteVendors(
+        {
+          user: { role: 'buyer', email: 'b@b.com' },
+          body: { vendorIds: ['v-owned-1', 'v-denied-1', 'vm-legacy-orphan', 'nonexistent'] },
+        },
+        resBatchStorage,
+        next
+      );
+      expect(getBatchSpy).toHaveBeenCalledWith(['v-owned-1', 'v-denied-1', 'vm-legacy-orphan', 'nonexistent']);
+      expect(deleteBatchDbSpy).toHaveBeenCalledWith(['v-owned-1', 'vm-legacy-orphan']);
+      expect(resBatchStorage.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          deletedCount: 2,
+          deletedIds: ['v-owned-1', 'vm-legacy-orphan'],
+          skippedIds: ['v-denied-1', 'nonexistent'],
+        })
+      );
+
+      // Admin with no matching delete targets skips DB deletion call
+      getBatchSpy.mockResolvedValueOnce([]);
+      const resAdminSkip = mockRes();
+      await vendorController.bulkDeleteVendors(
+        {
+          user: { role: 'admin', email: 'admin@qua.com' },
+          body: { vendorIds: ['unknown-1', 'unknown-2'] },
+        },
+        resAdminSkip,
+        next
+      );
+      expect(resAdminSkip.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, deletedCount: 0, skippedIds: ['unknown-1', 'unknown-2'] })
+      );
+
+      // 8. Storage delete error in deleteVendorsDurably surfaces 503 via next(err)
+      await expect(storeService.deleteVendorsDurably([])).resolves.toEqual([]);
+      jest.spyOn(domainQueries, 'deleteVendorsInDB').mockRejectedValueOnce(new Error('D1 delete down'));
+      await expect(storeService.deleteVendorsDurably(['v-err-1'], 'b@b.com')).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
 
     test('reviseRating validation and success flows', async () => {

@@ -945,10 +945,9 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
   );
   void clearResult;
 
-  // UPDATE ... FROM (a join-based update) is Postgres syntax that SQLite has
-  // also supported since 3.33 with an identical shape — verified directly
-  // against the real D1 database before relying on it here, so this is one
-  // genuinely shared query text, not a d1Text override.
+  // Target-table aliases (e.g. `UPDATE po_line_items p SET ... FROM ...`) are valid in
+  // PostgreSQL but rejected by SQLite / Cloudflare D1 with `near "p": syntax error`.
+  // Qualifying the target table by its name works identically across both PostgreSQL and D1.
   const byVendorCode = await pool.query(
     `update po_line_items
         set matched_vendor_record_id = v.id, match_strategy = $3

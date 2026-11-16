@@ -1015,6 +1015,10 @@ async function deleteVendor(req, res, next) {
   }
 }
 
+function canDeleteMissingVendorId(user, id) {
+  return (user.role === 'buyer' || user.role === 'admin') && (id.startsWith('v-') || id.startsWith('vm-'));
+}
+
 async function bulkDeleteVendors(req, res, next) {
   try {
     const { vendorIds, ids } = req.body || {};
@@ -1031,34 +1035,62 @@ async function bulkDeleteVendors(req, res, next) {
 
     const deletedIds = [];
     const skippedIds = [];
+    const cleanedIds = Array.from(new Set(targetIds.map((rawId) => String(rawId || '').trim()).filter(Boolean)));
 
-    for (const rawId of targetIds) {
-      const id = String(rawId).trim();
-      if (!id) continue;
-      let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
-      if (!existing) {
-        existing = storeService.getVendorById(id, 'all');
+    const useBatchDbPath =
+      pool.hasStorage() &&
+      cleanedIds.length > 1 &&
+      typeof domainQueries.getVendorsByIdsFromDB === 'function' &&
+      typeof storeService.deleteVendorsDurably === 'function';
+
+    if (useBatchDbPath) {
+      const dbVendors = await domainQueries.getVendorsByIdsFromDB(cleanedIds);
+      const vendorById = new Map(dbVendors.map((vendor) => [vendor.id, vendor]));
+      const idsToDelete = [];
+
+      for (const id of cleanedIds) {
+        const existing = vendorById.get(id) || storeService.getVendorById(id, 'all');
+        if (!existing) {
+          if (canDeleteMissingVendorId(user, id)) {
+            idsToDelete.push(id);
+          } else {
+            skippedIds.push(id);
+          }
+        } else if (await checkVendorOwnership(user, existing)) {
+          idsToDelete.push(existing.id);
+        } else {
+          skippedIds.push(id);
+        }
       }
 
-      if (!existing) {
-        if (
-          (user.role === 'buyer' || user.role === 'admin') &&
-          (id.startsWith('v-') || id.startsWith('vm-'))
-        ) {
-          await storeService.deleteVendorDurably(id, user.email);
-          deletedIds.push(id);
+      if (idsToDelete.length > 0) {
+        await storeService.deleteVendorsDurably(idsToDelete, user.email);
+        deletedIds.push(...idsToDelete);
+      }
+    } else {
+      for (const id of cleanedIds) {
+        let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+        if (!existing) {
+          existing = storeService.getVendorById(id, 'all');
+        }
+
+        if (!existing) {
+          if (canDeleteMissingVendorId(user, id)) {
+            await storeService.deleteVendorDurably(id, user.email);
+            deletedIds.push(id);
+            continue;
+          }
+          skippedIds.push(id);
           continue;
         }
-        skippedIds.push(id);
-        continue;
-      }
 
-      if (await checkVendorOwnership(user, existing)) {
-        const deleted = await storeService.deleteVendorDurably(existing.id, user.email);
-        if (deleted) deletedIds.push(existing.id);
-        else skippedIds.push(id);
-      } else {
-        skippedIds.push(id);
+        if (await checkVendorOwnership(user, existing)) {
+          const deleted = await storeService.deleteVendorDurably(existing.id, user.email);
+          if (deleted) deletedIds.push(existing.id);
+          else skippedIds.push(id);
+        } else {
+          skippedIds.push(id);
+        }
       }
     }
 
