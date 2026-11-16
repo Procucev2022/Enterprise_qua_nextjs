@@ -1509,10 +1509,10 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // Consume used OTPs before changing identity state. If any delete fails, fail
   // closed so the account is not verified while a reusable code may remain.
   const otpCleanup = await Promise.allSettled([
-    authSessionQueries.deleteOtp(emailOtpKey),
-    authSessionQueries.deleteOtp(mobileOtpKey),
-    authSessionQueries.deleteOtp(emailCombinedKey),
-  ]);
+      authSessionQueries.deleteOtp(emailOtpKey),
+      authSessionQueries.deleteOtp(mobileOtpKey),
+      authSessionQueries.deleteOtp(emailCombinedKey),
+    ]);
   const failedCleanup = otpCleanup.find((result) => result.status === 'rejected');
   if (failedCleanup) {
     logger.error(
