@@ -34,7 +34,7 @@ describe('NotificationToast', () => {
     });
 
     const { container } = render(<NotificationToast />);
-    expect(container.firstChild).toHaveClass('z-[70]');
+    expect(container.firstChild).toHaveClass('z-[9999]');
     expect(screen.getByText('Success Title')).toBeInTheDocument();
     expect(screen.getByText('Operation completed')).toBeInTheDocument();
 

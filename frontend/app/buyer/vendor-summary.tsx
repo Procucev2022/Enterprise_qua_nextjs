@@ -57,6 +57,8 @@ import {
   PINCODE_PATTERN,
   isDummyPincode,
   usablePan,
+  EXACT_10_DIGIT_MOBILE_PATTERN,
+  sanitize10DigitMobile,
 } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
@@ -183,6 +185,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formContactDesignation, setFormContactDesignation] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPhone, setFormPhone] = useState('');
+  const [formValidationError, setFormValidationError] = useState<string | null>(null);
+  const [phoneFieldError, setPhoneFieldError] = useState<string | null>(null);
   const [formLocation, setFormLocation] = useState('');
   const [formCity, setFormCity] = useState('');
   const [formState, setFormState] = useState('');
@@ -358,12 +362,101 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return allAvailableMinorCategories.filter((cat) => cat.toLowerCase().includes(q));
   }, [formMinorInput, allAvailableMinorCategories]);
 
+  const clearVendorModalErrors = () => {
+    setFormValidationError(null);
+    setPhoneFieldError(null);
+  };
+
+  const reportVendorModalError = (title: string, message: string) => {
+    setFormValidationError(message);
+    showToast(title, message, 'warning');
+  };
+
+  const handleVendorPhoneChange = (rawValue: string) => {
+    const sanitized = sanitize10DigitMobile(rawValue);
+    setFormPhone(sanitized);
+    setFormValidationError(null);
+
+    const hasInvalidCharacters = /[^0-9+\s()-]/.test(rawValue);
+    if (hasInvalidCharacters || (sanitized.length === 10 && !EXACT_10_DIGIT_MOBILE_PATTERN.test(sanitized))) {
+      setPhoneFieldError(UI_STRINGS.addVendorModal.invalidPhoneError);
+    } else {
+      setPhoneFieldError(null);
+    }
+  };
+
+  const validateVendorPhoneOnSubmit = (): string | null => {
+    const normalized = sanitize10DigitMobile(formPhone);
+    if (!EXACT_10_DIGIT_MOBILE_PATTERN.test(normalized)) {
+      setPhoneFieldError(UI_STRINGS.addVendorModal.invalidPhoneError);
+      reportVendorModalError(
+        UI_STRINGS.addVendorModal.invalidPhoneTitle,
+        UI_STRINGS.addVendorModal.invalidPhoneError
+      );
+      return null;
+    }
+    setPhoneFieldError(null);
+    return normalized;
+  };
+
+  const renderModalErrorBanner = () =>
+    formValidationError ? (
+      <div
+        role="alert"
+        data-testid="vendor-modal-error-banner"
+        className="mt-3 shrink-0 flex items-start justify-between gap-2.5 rounded-xl border border-rose-300 dark:border-rose-700 bg-rose-50 dark:bg-rose-950/60 px-3.5 py-2.5 text-xs text-rose-800 dark:text-rose-200 shadow-sm"
+      >
+        <div className="flex items-start gap-2">
+          <AlertCircle size={15} className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+          <p className="font-medium leading-relaxed">{formValidationError}</p>
+        </div>
+        <button
+          type="button"
+          aria-label={UI_STRINGS.addVendorModal.dismissErrorAria}
+          onClick={() => setFormValidationError(null)}
+          className="shrink-0 rounded-md p-0.5 text-rose-600 hover:bg-rose-100 dark:text-rose-300 dark:hover:bg-rose-900/60"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    ) : null;
+
+  const renderVendorPhoneField = (id: string, label: string) => (
+    <div>
+      <label htmlFor={id} className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+        {label} <span className="text-rose-500">*</span>
+      </label>
+      <input
+        id={id}
+        type="tel"
+        inputMode="numeric"
+        required
+        placeholder={UI_STRINGS.addVendorModal.phonePlaceholder}
+        value={formPhone}
+        onChange={(e) => handleVendorPhoneChange(e.target.value)}
+        aria-invalid={Boolean(phoneFieldError)}
+        aria-describedby={phoneFieldError ? `${id}-error` : undefined}
+        className={`w-full text-xs p-2 rounded-lg border bg-white dark:bg-gray-900 ${
+          phoneFieldError
+            ? 'border-rose-400 dark:border-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30'
+            : 'border-slate-200 dark:border-gray-700'
+        }`}
+      />
+      {phoneFieldError && (
+        <p id={`${id}-error`} className="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400">
+          {phoneFieldError}
+        </p>
+      )}
+    </div>
+  );
+
   // Open Add Vendor Modal — reuses the same form field state as Edit, reset
   // to blanks/defaults since there is no existing vendor to populate from.
   const handleOpenAddModal = () => {
     if (ensureCategoryTaxonomy) {
       void ensureCategoryTaxonomy();
     }
+    clearVendorModalErrors();
     setFormName('');
     setFormBrandName('');
     setFormMajorCategory('');
@@ -393,6 +486,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // clears the form once the backend actually confirms the write.
   const handleAddVendorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    clearVendorModalErrors();
     if (
       !formName.trim() ||
       !formMajorCategory ||
@@ -405,21 +499,29 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       !formGst.trim() ||
       formRating === null
     ) {
-      showToast(
-        'Validation Error',
-        'Please complete all required fields including Division, City, State, Pincode, GSTIN and Rating (1.0 - 5.0).',
-        'warning'
+      if (!formPhone.trim()) {
+        setPhoneFieldError(UI_STRINGS.addVendorModal.invalidPhoneError);
+      }
+      reportVendorModalError(
+        UI_STRINGS.addVendorModal.validationErrorTitle,
+        UI_STRINGS.addVendorModal.requiredFieldsError
       );
       return;
     }
 
+    const normalizedPhone = validateVendorPhoneOnSubmit();
+    if (!normalizedPhone) return;
+
     if (formRating < 1 || formRating > 5) {
-      showToast('Invalid Rating', 'Rating must be between 1.0 and 5.0.', 'warning');
+      reportVendorModalError(
+        UI_STRINGS.addVendorModal.invalidRatingTitle,
+        UI_STRINGS.addVendorModal.invalidRatingError
+      );
       return;
     }
 
     if (formPincodeError) {
-      showToast('Invalid Pincode', formPincodeError, 'warning');
+      reportVendorModalError(UI_STRINGS.addVendorModal.invalidPincodeTitle, formPincodeError);
       return;
     }
 
@@ -432,7 +534,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       contactPerson: formContactPerson.trim(),
       contactDesignation: formContactDesignation.trim(),
       email: formEmail.trim().toLowerCase(),
-      phone: formPhone.trim(),
+      phone: normalizedPhone,
       location: formLocation.trim() || `${formCity}, ${formState}`,
       city: formCity.trim(),
       state: formState.trim(),
@@ -461,6 +563,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (ensureCategoryTaxonomy) {
       void ensureCategoryTaxonomy();
     }
+    clearVendorModalErrors();
     setSelectedVendorForCrud(vendor);
     setFormName(vendor.name || '');
     setFormBrandName(vendor.brandName || vendor.name || '');
@@ -526,18 +629,31 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const handleEditVendorSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVendorForCrud) return;
+    clearVendorModalErrors();
     if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
-      showToast('Validation Error', 'Please complete all required fields.', 'warning');
+      if (!formPhone.trim()) {
+        setPhoneFieldError(UI_STRINGS.addVendorModal.invalidPhoneError);
+      }
+      reportVendorModalError(
+        UI_STRINGS.addVendorModal.validationErrorTitle,
+        UI_STRINGS.addVendorModal.editRequiredFieldsError
+      );
       return;
     }
 
+    const normalizedPhone = validateVendorPhoneOnSubmit();
+    if (!normalizedPhone) return;
+
     if (formRating !== null && (formRating < 1 || formRating > 5)) {
-      showToast('Invalid Rating', 'Rating must be between 1.0 and 5.0.', 'warning');
+      reportVendorModalError(
+        UI_STRINGS.addVendorModal.invalidRatingTitle,
+        UI_STRINGS.addVendorModal.invalidRatingError
+      );
       return;
     }
 
     if (formPincode.trim() && formPincodeError) {
-      showToast('Invalid Pincode', formPincodeError, 'warning');
+      reportVendorModalError(UI_STRINGS.addVendorModal.invalidPincodeTitle, formPincodeError);
       return;
     }
 
@@ -549,7 +665,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       contactPerson: formContactPerson.trim(),
       contactDesignation: formContactDesignation.trim(),
       email: formEmail.trim().toLowerCase(),
-      phone: formPhone.trim(),
+      phone: normalizedPhone,
       location: formLocation.trim() || `${formCity}, ${formState}`,
       city: formCity.trim(),
       state: formState.trim(),
@@ -1559,6 +1675,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </button>
             </div>
 
+            {renderModalErrorBanner()}
+
             <form onSubmit={handleAddVendorSubmit} noValidate className="overflow-y-auto my-3 space-y-3 pr-1 text-xs">
               <div>
                 <label htmlFor="add-vendor-name" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
@@ -1590,20 +1708,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>
-                <div>
-                  <label htmlFor="add-vendor-phone" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Phone <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    id="add-vendor-phone"
-                    type="tel"
-                    required
-                    placeholder="+91 XXXXX XXXXX"
-                    value={formPhone}
-                    onChange={(e) => setFormPhone(e.target.value)}
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-                  />
-                </div>
+                {renderVendorPhoneField('add-vendor-phone', UI_STRINGS.addVendorModal.phoneLabel)}
               </div>
 
               <div>
@@ -1908,6 +2013,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </button>
             </div>
 
+            {renderModalErrorBanner()}
+
             {/* Modal Body Form */}
             <form onSubmit={handleEditVendorSubmit} noValidate className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
               {/* Section 1: Basic Company & Brand Details */}
@@ -2140,18 +2247,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                     />
                   </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                      Phone / Mobile Number <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="tel"
-                      required
-                      value={formPhone}
-                      onChange={(e) => setFormPhone(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-                    />
-                  </div>
+                  {renderVendorPhoneField('edit-vendor-phone', UI_STRINGS.addVendorModal.editPhoneLabel)}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2189,7 +2285,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="block font-semibold text-slate-700 dark:text-gray-300">Pincode</label>
+                      <label htmlFor="edit-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300">Pincode</label>
                       {formPincodeValidating && (
                         <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
                           <Loader2 size={10} className="animate-spin" /> {UI_STRINGS.pincodeVerification.checking}
@@ -2207,6 +2303,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       )}
                     </div>
                     <input
+                      id="edit-vendor-pincode"
                       type="text"
                       maxLength={6}
                       value={formPincode}

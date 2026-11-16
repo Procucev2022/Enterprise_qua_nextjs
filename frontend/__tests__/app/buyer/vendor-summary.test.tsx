@@ -1308,7 +1308,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
           name: 'Apex Supplies Pvt Ltd.',
           majorCategory: 'Electrical',
           email: 'rajesh.new@apex.in',
-          phone: '+91 90000 00000',
+          phone: '9000000000',
         })
       );
     });
@@ -1679,7 +1679,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const requiredInputs = screen.getAllByRole('textbox').filter((i) => i.hasAttribute('required'));
       requiredInputs.forEach((input) => {
         if ((input as HTMLInputElement).value === '') {
-          fireEvent.change(input, { target: { value: 'Contact Person Name' } });
+          const fallbackValue = (input as HTMLInputElement).type === 'tel' ? '9876543210' : 'Contact Person Name';
+          fireEvent.change(input, { target: { value: fallbackValue } });
         }
       });
 
@@ -4417,6 +4418,243 @@ describe('app/buyer/vendor-summary.tsx', () => {
       await waitFor(() => expect(mockValidatePincode).toHaveBeenCalledWith('560099'));
       await waitFor(() => expect(screen.getByDisplayValue('Bengaluru')).toBeInTheDocument());
       expect(screen.getByDisplayValue('Karnataka')).toBeInTheDocument();
+    });
+  });
+
+  describe('Add and Edit Vendor phone validation & modal error visibility', () => {
+    it('strips alphabets and special characters in Add Vendor phone and normalizes +91 numbers', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      const phoneInput = screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.phoneLabel, 'i')) as HTMLInputElement;
+
+      fireEvent.change(phoneInput, { target: { value: 'dkjbckbk' } });
+      expect(phoneInput.value).toBe('');
+      expect(screen.getByText(UI_STRINGS.addVendorModal.invalidPhoneError)).toBeInTheDocument();
+
+      fireEvent.change(phoneInput, { target: { value: '98765@!#' } });
+      expect(phoneInput.value).toBe('98765');
+      expect(screen.getByText(UI_STRINGS.addVendorModal.invalidPhoneError)).toBeInTheDocument();
+
+      fireEvent.change(phoneInput, { target: { value: '1234567890' } });
+      expect(phoneInput.value).toBe('1234567890');
+      expect(screen.getByText(UI_STRINGS.addVendorModal.invalidPhoneError)).toBeInTheDocument();
+
+      fireEvent.change(phoneInput, { target: { value: '+91 98765 43210' } });
+      expect(phoneInput.value).toBe('9876543210');
+      expect(screen.queryByText(UI_STRINGS.addVendorModal.invalidPhoneError)).not.toBeInTheDocument();
+    });
+
+    it('renders visible inline alert banner above Add Vendor form and blocks short phone numbers', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Reliable Electro Pvt Ltd' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Amit Kulkarni' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'amit@reliable.test' } });
+      fireEvent.change(screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.phoneLabel, 'i')), {
+        target: { value: '98765' },
+      });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAACA1928K1Z4' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.5' } });
+
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+
+      const banner = screen.getByTestId('vendor-modal-error-banner');
+      expect(banner).toHaveAttribute('role', 'alert');
+      expect(within(banner).getByText(UI_STRINGS.addVendorModal.invalidPhoneError)).toBeInTheDocument();
+      const phoneInput = screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.phoneLabel, 'i'));
+      expect(phoneInput).toHaveAttribute('aria-invalid', 'true');
+      expect(phoneInput).toHaveAttribute('aria-describedby', 'add-vendor-phone-error');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.addVendorModal.invalidPhoneTitle,
+        UI_STRINGS.addVendorModal.invalidPhoneError,
+        'warning'
+      );
+      expect(mockAddBuyerVendor).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByLabelText(UI_STRINGS.addVendorModal.dismissErrorAria));
+      expect(screen.queryByTestId('vendor-modal-error-banner')).not.toBeInTheDocument();
+    });
+
+    it('keeps phone field error clear when another required field is missing in Add Vendor', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      const phoneInput = screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.phoneLabel, 'i'));
+      fireEvent.change(phoneInput, {
+        target: { value: '9876543210' },
+      });
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.requiredFieldsError
+      );
+      expect(phoneInput).toHaveAttribute('aria-invalid', 'false');
+      expect(phoneInput).not.toHaveAttribute('aria-describedby');
+      expect(mockAddBuyerVendor).not.toHaveBeenCalled();
+    });
+
+    it('enforces 10-digit phone validation and inline banner in Edit Vendor modal', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      const editPhoneInput = screen.getByLabelText(
+        new RegExp(UI_STRINGS.addVendorModal.editPhoneLabel, 'i')
+      ) as HTMLInputElement;
+
+      fireEvent.change(editPhoneInput, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.editRequiredFieldsError
+      );
+      expect(editPhoneInput).toHaveAttribute('aria-invalid', 'true');
+      expect(editPhoneInput).toHaveAttribute('aria-describedby', 'edit-vendor-phone-error');
+      expect(screen.getByText(UI_STRINGS.addVendorModal.invalidPhoneError)).toHaveAttribute(
+        'id',
+        'edit-vendor-phone-error'
+      );
+      expect(mockUpdateBuyerVendor).not.toHaveBeenCalled();
+
+      fireEvent.change(editPhoneInput, { target: { value: '98765' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.invalidPhoneError
+      );
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.addVendorModal.invalidPhoneTitle,
+        UI_STRINGS.addVendorModal.invalidPhoneError,
+        'warning'
+      );
+      expect(mockUpdateBuyerVendor).not.toHaveBeenCalled();
+
+      // Valid phone + updated City/State + cleared rating + dummy pincode triggers visible pincode error banner in Edit Vendor
+      fireEvent.change(editPhoneInput, { target: { value: '9876543210' } });
+      fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '' } });
+      expect(screen.getByText('—')).toBeInTheDocument();
+      fireEvent.change(screen.getByDisplayValue('Pune'), { target: { value: 'Thane' } });
+      fireEvent.change(screen.getByDisplayValue('Maharashtra'), { target: { value: 'Gujarat' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '111111' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent('Invalid or dummy PIN code');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.addVendorModal.invalidPincodeTitle,
+        'Invalid or dummy PIN code',
+        'warning'
+      );
+      expect(mockUpdateBuyerVendor).not.toHaveBeenCalled();
+    });
+
+    it('initializes Edit Vendor fallbacks cleanly when vendor name, brandName, and email are blank', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [
+          {
+            id: 'v-empty-fields',
+            source: 'buyer_manual',
+            majorCategory: 'Mechanical',
+          },
+        ],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+      expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
+      expect(screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.editPhoneLabel, 'i'))).toHaveValue('');
+    });
+
+    it('shows inline error banner on dummy pincode in Add Vendor and clears it after valid pincode save', async () => {
+      mockAddBuyerVendor.mockResolvedValueOnce(true);
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Pincode Guard Co' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Meera Joshi' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'meera@guard.test' } });
+      fireEvent.change(screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.phoneLabel, 'i')), {
+        target: { value: '9876543210' },
+      });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '111111' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAACA1928K1Z4' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.5' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '' } });
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.requiredFieldsError
+      );
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.5' } });
+
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent('Invalid or dummy PIN code');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.addVendorModal.invalidPincodeTitle,
+        'Invalid or dummy PIN code',
+        'warning'
+      );
+      expect(mockAddBuyerVendor).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
+      await waitFor(() => expect(mockValidatePincode).toHaveBeenCalledWith('411001'));
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+
+      await waitFor(() =>
+        expect(mockAddBuyerVendor).toHaveBeenCalledWith(
+          expect.objectContaining({
+            phone: '9876543210',
+            country: 'India',
+          })
+        )
+      );
     });
   });
 });

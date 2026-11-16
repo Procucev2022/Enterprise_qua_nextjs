@@ -6156,3 +6156,14 @@ After clicking the button, the popup should close automatically once the request
 I closed this RFQ, and the status is showing Closed inside the RFQ details page. However, in the RFQ Summary list, it is still showing Quotes Pending. Please check and fix the status synchronization so that the correct RFQ status is reflected consistently both inside and outside.
 ```
 ---
+
+### Prompt 251
+**Timestamp**: 2026-11-16T15:14:36+05:30
+```text
+please fix these two issues in the Vendor Directory – Add Single Vendor popup:
+
+Phone Number Validation: The Phone field is accepting alphabets and special characters. Allow only numeric digits and validate the required mobile number length.
+
+Error Message Visibility: Validation error messages are appearing behind the popup or are hidden. Please ensure all error messages are displayed clearly above the popup content and remain visible to the user.
+```
+---

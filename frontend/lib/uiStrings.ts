@@ -259,7 +259,7 @@ export const UI_STRINGS = {
 
   },
 
-sellerDirectory: {
+  sellerDirectory: {
     title: 'Sellers Directory',
     searchPlaceholder: 'Search company, contact, email, category, city...',
     allSources: 'All Sources',
@@ -3271,6 +3271,19 @@ sellerDirectory: {
   addVendorModal: {
     heading: 'Add Vendor',
     description: 'Add a vendor you deal with directly to your vendor directory only.',
+    phoneLabel: 'Phone',
+    editPhoneLabel: 'Phone / Mobile Number',
+    phonePlaceholder: '10-digit mobile number (e.g. 9876543210)',
+    validationErrorTitle: 'Validation Error',
+    requiredFieldsError:
+      'Please complete all required fields including Division, City, State, Pincode, GSTIN and Rating (1.0 - 5.0).',
+    editRequiredFieldsError: 'Please complete all required fields.',
+    invalidPhoneTitle: 'Invalid Phone Number',
+    invalidPhoneError: 'Enter a valid 10-digit Indian mobile number using digits only (starting with 6–9).',
+    invalidRatingTitle: 'Invalid Rating',
+    invalidRatingError: 'Rating must be between 1.0 and 5.0.',
+    invalidPincodeTitle: 'Invalid Pincode',
+    dismissErrorAria: 'Dismiss validation error',
   },
 
   vendorCategorySelect: {
@@ -3408,7 +3421,7 @@ sellerDirectory: {
     quickAgentPrompt: 'Connect me with a support agent.',
   },
 
-  
+
 };
 
 /**
