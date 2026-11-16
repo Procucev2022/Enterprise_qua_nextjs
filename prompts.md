@@ -6124,3 +6124,10 @@ Please proceed with these optimizations.
 Remove the "Packages requirement specification" text after Line items 5
 ```
 ---
+
+### Prompt 247
+**Timestamp**: 2026-11-16T15:11:52+05:30
+```text
+the Excel template has been updated, but the PO Dump upload page is still displaying the old field names and instructions. Please update the page UI to match the latest Excel template, showing only the 3 fields: Vendor/Supplier Name, Item Description, and Specifications (Optional)
+```
+---
