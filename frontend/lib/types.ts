@@ -1434,6 +1434,21 @@ export interface HistoricalPurchaseVendorRecord {
   isExistingInDatabase?: boolean;
 }
 
+export interface VendorUploadHistoryBatch {
+  id?: string | number;
+  fileName?: string;
+  uploadedAt?: string;
+  records?: Array<Record<string, unknown>> | null;
+}
+
+export interface VendorOwnershipShape {
+  id?: string | null;
+  source?: string | null;
+  buyerId?: string | null;
+  buyerAccountId?: string | null;
+  addedByBuyerCompany?: string | boolean | null;
+}
+
 export interface IngestionFailedEmail {
   vendorId?: string;
   vendorName: string;

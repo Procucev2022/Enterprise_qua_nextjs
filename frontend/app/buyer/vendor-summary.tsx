@@ -6,7 +6,13 @@ import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import { getMinorCategories } from '@/lib/categoryTaxonomy';
-import { resolveVendorLocationFields } from '@/lib/constants';
+import {
+  isBuyerUploadedVendor,
+  isProcucevNetworkVendor,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
+  resolveVendorLocationFields,
+} from '@/lib/constants';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import {
   Search,
@@ -68,34 +74,9 @@ const statutoryText = (value: unknown): string => {
   return clean === '' ? UI_STRINGS.recordPlaceholders.notApplicable : clean;
 };
 
-// Classification helper: Uploaded by Buyer. Reads only the ownership fields the
-// vendor record carries (source, buyerId, buyerAccountId, addedByBuyerCompany).
-// The vendor ID is never parsed for a prefix.
-export const isBuyerUploaded = (
-  v: Partial<Pick<VendorEntry, 'source' | 'buyerId' | 'buyerAccountId' | 'addedByBuyerCompany'>> | null | undefined
-): boolean => {
-  if (!v) return false;
-  const s = String(v.source || '').toLowerCase().trim();
-  return (
-    s === 'buyer_uploaded' ||
-    s === 'vendor_master_ingestion' ||
-    s === 'historical_purchase_dump' ||
-    s === 'buyer_manual' ||
-    s === 'buyer_excel' ||
-    s === 'buyer' ||
-    s.includes('buyer') ||
-    s.includes('ingestion') ||
-    s.includes('purchase_dump') ||
-    !!v.addedByBuyerCompany ||
-    !!v.buyerId ||
-    !!v.buyerAccountId
-  );
-};
-
-// Classification helper: Procucev Vendors (Category Manager uploads & Direct Self-Registration)
-export const isProcucevVendor = (v: any): boolean => {
-  return !isBuyerUploaded(v);
-};
+// Classification helpers shared across Buyer Vendor Directory and Evaluation Summary.
+export const isBuyerUploaded = isBuyerUploadedVendor;
+export const isProcucevVendor = isProcucevNetworkVendor;
 
 export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: VendorSummaryProps) {
   const {
@@ -296,17 +277,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
 
   const loadUploadHistory = useCallback(() => {
-    try {
-      const raw = localStorage.getItem('procucev_vendor_upload_history');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        setUploadHistoryList(Array.isArray(parsed) ? parsed : []);
-      } else {
-        setUploadHistoryList([]);
-      }
-    } catch {
-      setUploadHistoryList([]);
-    }
+    setUploadHistoryList(loadVendorUploadHistoryFromStorage());
   }, []);
 
   useEffect(() => {
@@ -852,80 +823,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       };
     });
 
-  const reconciledBuyerVendors = useMemo<VendorEntry[]>(() => {
-    if (uploadHistoryList.length === 0) return buyerVendors;
-
-    const seenEmails = new Set(
-      buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
-    );
-    const seenNames = new Set(
-      buyerVendors.map((v) => String(v.name || '').trim().toLowerCase()).filter(Boolean)
-    );
-
-    const extras: VendorEntry[] = [];
-    uploadHistoryList.forEach((batch, batchIdx) => {
-      const records = Array.isArray(batch?.records) ? batch.records : [];
-      records.forEach((rec: Record<string, unknown>, recIdx: number) => {
-        const recStatus = String(rec.status || '').toUpperCase();
-        if (recStatus === 'FAILED' || recStatus === 'DUPLICATE' || recStatus === 'SKIPPED') {
-          return;
-        }
-        const rawName = String(rec.name || rec.vendorName || rec.companyName || '').trim();
-        const rawEmail = String(rec.email || '').trim();
-        if (!rawName && !rawEmail) return;
-
-        const emailKey = rawEmail.toLowerCase();
-        const nameKey = rawName.toLowerCase();
-        if ((emailKey && seenEmails.has(emailKey)) || (!emailKey && nameKey && seenNames.has(nameKey))) {
-          return;
-        }
-        if (emailKey) seenEmails.add(emailKey);
-        if (nameKey) seenNames.add(nameKey);
-
-        const loc = resolveVendorLocationFields({
-          address: rec.address ? String(rec.address) : '',
-          location: rec.location ? String(rec.location) : '',
-          factoryAddress: rec.factoryAddress ? String(rec.factoryAddress) : '',
-          city: rec.city ? String(rec.city) : '',
-          state: rec.state ? String(rec.state) : '',
-          pincode: rec.pincode ? String(rec.pincode) : '',
-        });
-        const city = loc.city;
-        const state = loc.state;
-        const rawCategory = String(rec.category || rec.majorCategory || '').trim();
-        const numericRating = Number(rec.rating);
-        const rating =
-          rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(numericRating)
-            ? numericRating
-            : 0;
-
-        extras.push({
-          id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
-          name: rawName || rawEmail,
-          contactPerson: String(rec.contactPerson || ''),
-          phone: String(rec.phone || ''),
-          email: rawEmail,
-          majorCategory: rawCategory,
-          minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
-          location: loc.location || [city, state].filter(Boolean).join(', '),
-          rating,
-          source: 'buyer_uploaded',
-          status: 'REGISTERED / NOT EVALUATED',
-          evaluated: false,
-          hasRecord: false,
-          addedByBuyerCompany: activeBuyerAccount?.organizationName,
-          buyerId: activeBuyerAccount?.id,
-          buyerAccountId: activeBuyerAccount?.id,
-          ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
-          ...(city ? { city } : {}),
-          ...(state ? { state } : {}),
-          ...(loc.pincode ? { pincode: loc.pincode } : {}),
-        });
-      });
-    });
-
-    return extras.length > 0 ? [...buyerVendors, ...extras] : buyerVendors;
-  }, [buyerVendors, uploadHistoryList, activeBuyerAccount]);
+  const reconciledBuyerVendors = useMemo<VendorEntry[]>(
+    () => reconcileBuyerVendorsWithUploadHistory(buyerVendors, uploadHistoryList, activeBuyerAccount),
+    [buyerVendors, uploadHistoryList, activeBuyerAccount]
+  );
 
   const normalizeBuyerVendorEntry = (vendor: VendorEntry): VendorEntry => {
     const loc = resolveVendorLocationFields({

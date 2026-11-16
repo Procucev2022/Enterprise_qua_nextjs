@@ -789,4 +789,93 @@ describe('Indian address location extraction helpers', () => {
     expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Unit Price (INR)');
     expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Total Spend (INR)');
   });
+
+  it('reconciles buyer vendors from local upload history with deduplication and storage guards', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      isBuyerUploadedVendor,
+      isProcucevNetworkVendor,
+      loadVendorUploadHistoryFromStorage,
+      reconcileBuyerVendorsWithUploadHistory,
+    } = require('@/lib/constants');
+
+    expect(isBuyerUploadedVendor(null)).toBe(false);
+    expect(isBuyerUploadedVendor({ source: 'buyer_uploaded' })).toBe(true);
+    expect(isProcucevNetworkVendor({ source: 'procucev_network' })).toBe(true);
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
+    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, '{bad-json');
+    expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
+    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify({ notArray: true }));
+    expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([{ id: 'b-1', records: [{ vendorName: 'Uploaded Co', email: 'up@co.test' }] }])
+    );
+    expect(loadVendorUploadHistoryFromStorage()).toHaveLength(1);
+
+    const existing = [
+      {
+        id: 'v-existing',
+        name: 'Existing Vendor',
+        contactPerson: 'Owner',
+        phone: '9999999999',
+        email: 'existing@co.test',
+        majorCategory: 'Mechanical',
+        minorCategories: [],
+        location: 'Pune',
+        rating: 4,
+        source: 'buyer_manual',
+      },
+    ];
+    expect(reconcileBuyerVendorsWithUploadHistory(existing, [])).toEqual(existing);
+
+    const merged = reconcileBuyerVendorsWithUploadHistory(
+      existing,
+      [
+        {
+          id: 'batch-1',
+          records: [
+            { name: 'Dup Email', email: 'EXISTING@CO.TEST' },
+            { name: 'Failed Row', email: 'fail@co.test', status: 'FAILED' },
+            { name: '', email: '' },
+            {
+              vendorName: 'Veera Solutions Pvt LTD',
+              email: 'veerababu@procucev.com',
+              contactPerson: 'Veera',
+              phone: '9381877013',
+              city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+              majorCategory: 'Vendor Master',
+              minorCategories: ['Valves'],
+              gstin: '27AAACK3921P1Z9',
+              rating: 85,
+            },
+            {
+              email: 'emailonly@co.test',
+              status: 'IMPORTED',
+            },
+          ],
+        },
+        { records: null },
+      ],
+      { id: 'ba-1', organizationName: 'Buyer Org' }
+    );
+
+    expect(merged).toHaveLength(3);
+    expect(merged[1]).toMatchObject({
+      name: 'Veera Solutions Pvt LTD',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+      source: 'buyer_uploaded',
+      addedByBuyerCompany: 'Buyer Org',
+      buyerId: 'ba-1',
+      rating: 85,
+    });
+    expect(merged[2]).toMatchObject({
+      name: 'emailonly@co.test',
+      rating: 0,
+    });
+  });
 });

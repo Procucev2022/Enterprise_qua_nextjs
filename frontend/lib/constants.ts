@@ -11,6 +11,9 @@ import type {
   OrganizationType,
   SourcingMode,
   RFQItem,
+  VendorEntry,
+  VendorOwnershipShape,
+  VendorUploadHistoryBatch,
 } from './types';
 import { UI_STRINGS, formatString } from './uiStrings';
 import { EXTENSION_MIN_DAYS, EXTENSION_MAX_DAYS, isWholeExtensionDays } from './validationSchemas';
@@ -1728,6 +1731,131 @@ export function resolveVendorLocationFields(input?: {
   const location = address || [city, state].filter(Boolean).join(', ');
 
   return { location, address, city, state, pincode };
+}
+
+export const VENDOR_UPLOAD_HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
+
+/** Classification helper: Uploaded by Buyer using ownership & ingestion source attributes. */
+export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined): boolean {
+  if (!v) return false;
+  const s = String(v.source || '').toLowerCase().trim();
+  return (
+    s === 'buyer_uploaded' ||
+    s === 'vendor_master_ingestion' ||
+    s === 'historical_purchase_dump' ||
+    s === 'buyer_manual' ||
+    s === 'buyer_excel' ||
+    s === 'buyer' ||
+    s.includes('buyer') ||
+    s.includes('ingestion') ||
+    s.includes('purchase_dump') ||
+    Boolean(v.addedByBuyerCompany) ||
+    Boolean(v.buyerId) ||
+    Boolean(v.buyerAccountId)
+  );
+}
+
+/** Classification helper: Procucev network vendor not uploaded by the buyer. */
+export function isProcucevNetworkVendor(v: VendorOwnershipShape | null | undefined): boolean {
+  return !isBuyerUploadedVendor(v);
+}
+
+/** Safely reads locally saved vendor upload batches from browser storage. */
+export function loadVendorUploadHistoryFromStorage(): VendorUploadHistoryBatch[] {
+  try {
+    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
+    const raw = window.localStorage.getItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as VendorUploadHistoryBatch[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Merges buyer vendor upload batches stored in localStorage with store buyerVendors,
+ * deduplicating by email and vendor name so Vendor Directory and Evaluation Summary stay consistent.
+ */
+export function reconcileBuyerVendorsWithUploadHistory(
+  buyerVendors: readonly VendorEntry[],
+  uploadHistory: readonly VendorUploadHistoryBatch[],
+  activeBuyerAccount?: { id?: string; organizationName?: string } | null
+): VendorEntry[] {
+  if (!Array.isArray(uploadHistory) || uploadHistory.length === 0) {
+    return [...buyerVendors];
+  }
+
+  const seenEmails = new Set(
+    buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
+  );
+  const seenNames = new Set(
+    buyerVendors.map((v) => String(v.name || '').trim().toLowerCase()).filter(Boolean)
+  );
+
+  const extras: VendorEntry[] = [];
+  uploadHistory.forEach((batch, batchIdx) => {
+    const records: ReadonlyArray<Record<string, unknown>> = Array.isArray(batch?.records) ? batch.records : [];
+    records.forEach((rec: Record<string, unknown>, recIdx: number) => {
+      const recStatus = String(rec.status || '').toUpperCase();
+      if (recStatus === 'FAILED' || recStatus === 'DUPLICATE' || recStatus === 'SKIPPED') {
+        return;
+      }
+      const rawName = String(rec.name || rec.vendorName || rec.companyName || '').trim();
+      const rawEmail = String(rec.email || '').trim();
+      if (!rawName && !rawEmail) return;
+
+      const emailKey = rawEmail.toLowerCase();
+      const nameKey = rawName.toLowerCase();
+      if ((emailKey && seenEmails.has(emailKey)) || (!emailKey && nameKey && seenNames.has(nameKey))) {
+        return;
+      }
+      if (emailKey) seenEmails.add(emailKey);
+      if (nameKey) seenNames.add(nameKey);
+
+      const loc = resolveVendorLocationFields({
+        address: rec.address ? String(rec.address) : '',
+        location: rec.location ? String(rec.location) : '',
+        factoryAddress: rec.factoryAddress ? String(rec.factoryAddress) : '',
+        city: rec.city ? String(rec.city) : '',
+        state: rec.state ? String(rec.state) : '',
+        pincode: rec.pincode ? String(rec.pincode) : '',
+      });
+      const city = loc.city;
+      const state = loc.state;
+      const rawCategory = String(rec.category || rec.majorCategory || '').trim();
+      const numericRating = Number(rec.rating);
+      const rating =
+        rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(numericRating)
+          ? numericRating
+          : 0;
+
+      extras.push({
+        id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
+        name: rawName || rawEmail,
+        contactPerson: String(rec.contactPerson || ''),
+        phone: String(rec.phone || ''),
+        email: rawEmail,
+        majorCategory: rawCategory,
+        minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
+        location: loc.location || [city, state].filter(Boolean).join(', '),
+        rating,
+        source: 'buyer_uploaded',
+        status: 'REGISTERED / NOT EVALUATED',
+        evaluated: false,
+        hasRecord: false,
+        addedByBuyerCompany: activeBuyerAccount?.organizationName,
+        buyerId: activeBuyerAccount?.id,
+        buyerAccountId: activeBuyerAccount?.id,
+        ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
+        ...(city ? { city } : {}),
+        ...(state ? { state } : {}),
+        ...(loc.pincode ? { pincode: loc.pincode } : {}),
+      });
+    });
+  });
+
+  return extras.length > 0 ? [...buyerVendors, ...extras] : [...buyerVendors];
 }
 
 
