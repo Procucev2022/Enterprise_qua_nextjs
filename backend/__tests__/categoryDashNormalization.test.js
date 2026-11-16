@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+let DatabaseSync;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+} catch {
+  // node:sqlite requires Node 22+
+}
+const describeWithSqlite = DatabaseSync ? describe : describe.skip;
 const { splitStatements } = require('../scripts/migrate-d1');
 const pool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
@@ -34,7 +40,7 @@ function createD1Harness() {
   return { db, binding: { prepare } };
 }
 
-describe('category dash normalization across taxonomy, D1 queries, and RFQ minor planning', () => {
+describeWithSqlite('category dash normalization across taxonomy, D1 queries, and RFQ minor planning', () => {
   const originalPool = pool.pool;
   const originalBinding = globalThis.__CF_ENV__;
 

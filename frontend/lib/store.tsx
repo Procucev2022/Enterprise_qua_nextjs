@@ -137,6 +137,8 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     type: isNetwork ? 'network_marketplace' : 'direct_invitation',
     estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
     deliveryLocation: rfq.deliveryLocation || '',
+    deliveryPincode: rfq.deliveryPincode || '',
+    pincode: rfq.deliveryPincode || '',
     status: rfq.status === 'Closed' || rfq.status === 'Expired'
       ? rfq.status
       : (rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid'),

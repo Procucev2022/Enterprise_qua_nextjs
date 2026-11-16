@@ -160,6 +160,7 @@ describe('Vendor RFQ Visibility: My Enquiries & Public Enquiries', () => {
       );
 
       expect(canVendorViewRfq(vendorA, rfqRaw)).toBe(true);
+      expect(canVendorViewRfq(vendorB, rfqRaw)).toBe(true);
       expect(canVendorViewRfq(vendorC, rfqRaw)).toBe(true);
     });
   });

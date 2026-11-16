@@ -829,6 +829,8 @@ export interface VendorOpportunity {
   type: 'direct_invitation' | 'network_marketplace';
   estimatedValue?: string;
   deliveryLocation: string;
+  deliveryPincode?: string;
+  pincode?: string;
   status: 'pending_bid' | 'submitted' | 'under_review' | 'Closed' | 'Expired';
   lineItems: LineItemBid[];
   /** The RFQ's real category (RFQItem.category) — empty when the buyer never set one. */

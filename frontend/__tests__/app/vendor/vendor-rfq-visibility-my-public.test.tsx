@@ -3,7 +3,7 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom';
 import QuotationForm from '@/app/vendor/quotation-form';
 import { AppProvider } from '@/lib/store';
-import type { RFQItem, VendorOpportunity, UserSession } from '@/lib/types';
+import type { RFQItem, UserSession } from '@/lib/types';
 
 const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
@@ -30,6 +30,8 @@ const VENDOR_PROFILE = {
   buyerAccountId: BUYER_ID,
   addedByBuyerCompany: BUYER_COMPANY,
   majorCategory: 'Civil Works', // Registered category is Civil Works
+  minorCategories: ['Structural Steel'],
+  pincode: '400001',
   freeQuotationCredits: 5,
   subscriptionPlan: 'premium',
 };
@@ -48,6 +50,8 @@ const RFQ_INVITED_DIFFERENT_CAT: RFQItem = {
   budget: 350000,
   createdAt: '2026-11-01',
   targetDeliveryDate: '2026-11-20',
+  deliveryPincode: '400001',
+  deliveryLocation: 'Mumbai',
   chasingActive: false,
   extractedEntities: [],
   assignedVendors: [
@@ -70,6 +74,8 @@ const RFQ_UNINVITED_SAME_BUYER: RFQItem = {
   budget: 600000,
   createdAt: '2026-11-02',
   targetDeliveryDate: '2026-11-25',
+  deliveryPincode: '400001',
+  deliveryLocation: 'Mumbai',
   chasingActive: false,
   extractedEntities: [],
   assignedVendors: [
@@ -78,7 +84,7 @@ const RFQ_UNINVITED_SAME_BUYER: RFQItem = {
   quotes: [],
 };
 
-// 3. RFQ-3: Mode 0 RFQ created by Buyer Corp
+// 3. RFQ-3: Mode 0 RFQ created by Buyer Corp with non-matching category (IT) and pincode (110001)
 const RFQ_MODE_0_PUBLIC: RFQItem = {
   id: 'rfq-mode-0-public',
   rfqNumber: 'RFQ-PUBLIC-03',
@@ -92,8 +98,54 @@ const RFQ_MODE_0_PUBLIC: RFQItem = {
   budget: 200000,
   createdAt: '2026-11-03',
   targetDeliveryDate: '2026-11-30',
+  deliveryPincode: '110001',
+  deliveryLocation: 'Delhi',
   chasingActive: false,
-  extractedEntities: [],
+  extractedEntities: [{ id: 'ent-1', itemName: 'Network Switch', minorCategory: 'Networking', quantity: 5 } as any],
+  assignedVendors: [],
+  quotes: [],
+};
+
+// 4. RFQ-4: Mode 0 RFQ matching vendor minor category ('Structural Steel') AND vendor pincode ('400001')
+const RFQ_MODE_0_MATCHING: RFQItem = {
+  id: 'rfq-mode-0-matching',
+  rfqNumber: 'RFQ-MATCHING-04',
+  title: 'Structural Steel Beams',
+  buyerAccountId: 'buyer-other-202',
+  buyerAccountName: 'Construction Corp',
+  category: 'Civil Works',
+  sourcingMode: 'mode_0',
+  status: 'Quotes Pending',
+  quotesCount: 0,
+  budget: 800000,
+  createdAt: '2026-11-04',
+  targetDeliveryDate: '2026-12-05',
+  deliveryPincode: '400001',
+  deliveryLocation: 'Mumbai',
+  chasingActive: false,
+  extractedEntities: [{ id: 'ent-2', itemName: 'Steel Beams', minorCategory: 'Structural Steel', quantity: 20 } as any],
+  assignedVendors: [],
+  quotes: [],
+};
+
+// 5. RFQ-5: Mode 0 RFQ with matching minor category ('Structural Steel') but DIFFERENT pincode ('560001')
+const RFQ_MODE_0_DIFF_PIN: RFQItem = {
+  id: 'rfq-mode-0-diff-pin',
+  rfqNumber: 'RFQ-DIFFPIN-05',
+  title: 'Bangalore Structural Steel Sourcing',
+  buyerAccountId: 'buyer-other-202',
+  buyerAccountName: 'Construction Corp',
+  category: 'Civil Works',
+  sourcingMode: 'mode_0',
+  status: 'Quotes Pending',
+  quotesCount: 0,
+  budget: 450000,
+  createdAt: '2026-11-05',
+  targetDeliveryDate: '2026-12-10',
+  deliveryPincode: '560001',
+  deliveryLocation: 'Bangalore',
+  chasingActive: false,
+  extractedEntities: [{ id: 'ent-3', itemName: 'Steel Rebars', minorCategory: 'Structural Steel', quantity: 15 } as any],
   assignedVendors: [],
   quotes: [],
 };
@@ -141,7 +193,13 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
           json: () =>
             Promise.resolve({
               success: true,
-              data: [RFQ_INVITED_DIFFERENT_CAT, RFQ_UNINVITED_SAME_BUYER, RFQ_MODE_0_PUBLIC],
+              data: [
+                RFQ_INVITED_DIFFERENT_CAT,
+                RFQ_UNINVITED_SAME_BUYER,
+                RFQ_MODE_0_PUBLIC,
+                RFQ_MODE_0_MATCHING,
+                RFQ_MODE_0_DIFF_PIN,
+              ],
             }),
         } as Response);
       }
@@ -163,12 +221,10 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
       );
     });
 
-    // Wait for RFQs to load
     await waitFor(() => {
       expect(screen.getByText('RFQ-INVITED-01')).toBeInTheDocument();
     });
 
-    // Verify My Enquiries tab contains RFQ-INVITED-01
     expect(screen.getByText('RFQ-INVITED-01')).toBeInTheDocument();
   });
 
@@ -185,11 +241,10 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
       expect(screen.getByText('RFQ-INVITED-01')).toBeInTheDocument();
     });
 
-    // In My Enquiries tab, RFQ-UNINVITED-02 should NOT be visible
     expect(screen.queryByText('RFQ-UNINVITED-02')).not.toBeInTheDocument();
   });
 
-  test('Mode 0 RFQ appears in Public Enquiries tab, NOT in My Enquiries tab', async () => {
+  test('Mode 0 RFQ with non-matching category/pincode appears in Public Enquiries tab, NOT in My Enquiries tab', async () => {
     await act(async () => {
       render(
         <AppProvider>
@@ -202,16 +257,129 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
       expect(screen.getByText('RFQ-INVITED-01')).toBeInTheDocument();
     });
 
-    // In My Enquiries tab, Mode 0 RFQ should NOT be present
+    // In My Enquiries tab, non-matching Mode 0 RFQ should NOT be present
     expect(screen.queryByText('RFQ-PUBLIC-03')).not.toBeInTheDocument();
 
     // Switch to Public Enquiries tab
     const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
     fireEvent.click(publicTab);
 
-    // In Public Enquiries tab, Mode 0 RFQ SHOULD be present
+    // In Public Enquiries tab, all Mode 0 RFQs should be visible
     await waitFor(() => {
       expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
     });
+  });
+
+  test('Mode 0 RFQ matching minor category AND pincode is displayed in My Enquiries as well as Public Enquiries', async () => {
+    await act(async () => {
+      render(
+        <AppProvider>
+          <QuotationForm onBack={jest.fn()} />
+        </AppProvider>
+      );
+    });
+
+    // In My Enquiries tab, RFQ-MATCHING-04 SHOULD be present because its minor category & pincode match
+    await waitFor(() => {
+      expect(screen.getByText('RFQ-MATCHING-04')).toBeInTheDocument();
+    });
+
+    // RFQ-DIFFPIN-05 should NOT be in My Enquiries because pincode does not match
+    expect(screen.queryByText('RFQ-DIFFPIN-05')).not.toBeInTheDocument();
+
+    // Switch to Public Enquiries tab
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    // In Public Enquiries tab, both Mode 0 RFQs should be present
+    await waitFor(() => {
+      expect(screen.getByText('RFQ-MATCHING-04')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
+    });
+  });
+
+  test('filters RFQs by single and multiple pincodes', async () => {
+    await act(async () => {
+      render(
+        <AppProvider>
+          <QuotationForm onBack={jest.fn()} />
+        </AppProvider>
+      );
+    });
+
+    // Switch to Public Enquiries tab where 110001, 400001, and 560001 are present
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-MATCHING-04')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
+    });
+
+    // Open the Pincode multi-select dropdown
+    const pincodeBtn = screen.getByRole('button', { name: /filter enquiries by pincode/i });
+    fireEvent.click(pincodeBtn);
+
+    // Filter by single pincode: 560001
+    const pin560001Checkbox = screen.getByRole('checkbox', { name: '560001' });
+    fireEvent.click(pin560001Checkbox);
+
+    // Only RFQ-DIFFPIN-05 should be visible
+    expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-PUBLIC-03')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-MATCHING-04')).not.toBeInTheDocument();
+
+    // Now select a second pincode: 110001 (multi-pincode filtering)
+    const pin110001Checkbox = screen.getByRole('checkbox', { name: '110001' });
+    fireEvent.click(pin110001Checkbox);
+
+    // Both 560001 and 110001 RFQs should now be visible
+    expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-MATCHING-04')).not.toBeInTheDocument();
+
+    // Clear pincode filters
+    const clearBtn = screen.getByRole('button', { name: /Clear All/i });
+    fireEvent.click(clearBtn);
+
+    // All RFQs should be visible again
+    expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-MATCHING-04')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
+  });
+
+  test('filters RFQs by category and minor category', async () => {
+    await act(async () => {
+      render(
+        <AppProvider>
+          <QuotationForm onBack={jest.fn()} />
+        </AppProvider>
+      );
+    });
+
+    // Switch to Public Enquiries tab
+    const publicTab = screen.getByRole('button', { name: /Public Enquiries/i });
+    fireEvent.click(publicTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
+    });
+
+    // Filter by category "IT"
+    const catSelect = screen.getByLabelText(/filter enquiries by category/i);
+    fireEvent.change(catSelect, { target: { value: 'IT' } });
+
+    expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-MATCHING-04')).not.toBeInTheDocument();
+    expect(screen.queryByText('RFQ-DIFFPIN-05')).not.toBeInTheDocument();
+
+    // Filter by minor category "Structural Steel"
+    fireEvent.change(catSelect, { target: { value: 'Structural Steel' } });
+
+    expect(screen.getByText('RFQ-MATCHING-04')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
+    expect(screen.queryByText('RFQ-PUBLIC-03')).not.toBeInTheDocument();
   });
 });

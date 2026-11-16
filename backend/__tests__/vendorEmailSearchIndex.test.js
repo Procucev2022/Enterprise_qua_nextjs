@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+let DatabaseSync;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+} catch {
+  // node:sqlite requires Node 22+
+}
+const describeWithSqlite = DatabaseSync ? describe : describe.skip;
 
 const pool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
@@ -96,7 +102,7 @@ function setupSqliteVendorDb() {
   return db;
 }
 
-describe('D1 indexed vendor email search in getVendorsPageFromDB', () => {
+describeWithSqlite('D1 indexed vendor email search in getVendorsPageFromDB', () => {
   const prevPool = pool.pool;
   const prevCfEnv = globalThis.__CF_ENV__;
 
