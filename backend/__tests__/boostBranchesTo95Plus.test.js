@@ -409,7 +409,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     }, buyer);
     expect(rfq2.assignedVendors.length).toBeGreaterThan(0);
 
-    // 3. Category mismatch branch coverage (lines 1540-1575)
+    // 3. Category mismatch branch coverage: buyer-selected vendor is preserved regardless of category
     const mismatchVendor = storeService.addVendor({
       name: 'Chemical Vendor',
       email: 'chem@example.com',
@@ -423,7 +423,23 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       sourcingMode: 'mode_1',
       assignedVendors: [{ id: mismatchVendor.id }],
     }, buyer);
-    expect(rfqMismatch.assignedVendors).toHaveLength(0);
+    expect(rfqMismatch.assignedVendors).toHaveLength(1);
+    expect(rfqMismatch.assignedVendors[0].id).toBe(mismatchVendor.id);
+
+    // Unrelated network vendor with category mismatch is excluded
+    const unrelatedMismatchVendor = storeService.addVendor({
+      name: 'Unrelated Vendor',
+      email: 'unrelated@example.com',
+      majorCategory: 'Chemicals & Reagents',
+      source: 'procucev_network',
+    });
+    const rfqUnrelatedMismatch = storeService.createRFQ({
+      title: 'Unrelated Mismatched Category RFQ',
+      category: 'Medical Devices',
+      sourcingMode: 'mode_1',
+      assignedVendors: [{ id: unrelatedMismatchVendor.id }],
+    }, buyer);
+    expect(rfqUnrelatedMismatch.assignedVendors).toHaveLength(0);
   });
 
   test('rfqController createRFQ subscription plan & credit limit branch paths', async () => {

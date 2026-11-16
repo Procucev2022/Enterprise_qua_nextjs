@@ -640,37 +640,44 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
 
-        const matchingVendors: typeof candidatePool = [];
-        const mismatchedVendors: typeof candidatePool = [];
+        let finalMatching: typeof candidatePool = [];
 
-        for (const v of candidatePool) {
-          if (signals.length === 0 || matchVendorAgainstSignals(v, signals, minorOnly).isMatch) {
-            matchingVendors.push(v);
-          } else {
-            mismatchedVendors.push(v);
+        if (selectedVendorIds.length > 0) {
+          // Explicitly selected vendors are always assigned regardless of category
+          finalMatching = candidatePool;
+        } else {
+          const matchingVendors: typeof candidatePool = [];
+          const mismatchedVendors: typeof candidatePool = [];
+
+          for (const v of candidatePool) {
+            if (signals.length === 0 || matchVendorAgainstSignals(v, signals, minorOnly).isMatch) {
+              matchingVendors.push(v);
+            } else {
+              mismatchedVendors.push(v);
+            }
           }
-        }
 
-        if (mismatchedVendors.length > 0) {
-          store?.showToast?.(
-            MODAL.shortlistAdjustedTitle,
-            formatString(MODAL.shortlistMismatchNotice, { count: mismatchedVendors.length }),
-            'info'
-          );
-        }
+          if (mismatchedVendors.length > 0) {
+            store?.showToast?.(
+              MODAL.shortlistAdjustedTitle,
+              formatString(MODAL.shortlistMismatchNotice, { count: mismatchedVendors.length }),
+              'info'
+            );
+          }
 
-        let finalMatching = signals.length > 0
-          ? selectVendorsForCategories(
-              matchingVendors,
-              signals,
-              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: form.deliveryLocation, pincode: form.deliveryPincode },
-              minorOnly
-            ).map((r) => r.vendor)
-          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          finalMatching = signals.length > 0
+            ? selectVendorsForCategories(
+                matchingVendors,
+                signals,
+                VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+                { location: form.deliveryLocation, pincode: form.deliveryPincode },
+                minorOnly
+              ).map((r) => r.vendor)
+            : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
-        if (finalMatching.length === 0 && matchingVendors.length > 0) {
-          finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          if (finalMatching.length === 0 && matchingVendors.length > 0) {
+            finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          }
         }
 
         if (finalMatching.length > 0) {
