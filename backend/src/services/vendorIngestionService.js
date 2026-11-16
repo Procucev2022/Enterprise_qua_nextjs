@@ -61,6 +61,7 @@ const {
   VENDOR_CATEGORY_MASTER_SOURCE,
   DEFAULT_CATEGORY_TAXONOMY,
   normalizePoDate,
+  resolveVendorLocationFields,
 } = require('../config/constants');
 
 const LOG_CATEGORY = 'VENDOR_INGESTION_SERVICE';
@@ -1313,12 +1314,21 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
   const attributedBuyerId = buyerAccount?.id || context?.organizationId || context?.userId || null;
   const attributedBuyerEmail = buyerAccount?.corporateEmail || context?.email || null;
 
+  const loc = resolveVendorLocationFields({
+    address: record ? record.address || null : null,
+    city: record ? record.city || null : null,
+    state: record ? record.state || null : null,
+    pincode: record ? record.pincode || null : null,
+  });
   const payload = {
     name: mapping.companyName,
     email: mapping.email,
     contactPerson: record ? record.contactPerson || null : null,
     phone: record ? record.phone || null : null,
-    location: record ? record.address || null : null,
+    location: loc.location || null,
+    city: loc.city || null,
+    state: loc.state || null,
+    pincode: loc.pincode || null,
     gstin: record ? record.gstin || null : null,
     majorCategory: mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory || null,
     minorCategories: categories,

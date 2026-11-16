@@ -768,3 +768,103 @@ describe('buyer evaluation summary: vendor code, overall score and submitted lin
     expect(screen.getByText(`${SUMMARY.submittedLabel} 2026-02-28`)).toBeInTheDocument();
   });
 });
+
+describe('buyer evaluation summary: reconciles uploaded vendor batches with directory', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('includes all uploaded suppliers alongside manual store vendors and supports search by name, email, or contact', () => {
+    const manualVendor = buildVendor({
+      id: 'v-manual-1',
+      name: 'rtger',
+      contactPerson: 'tewrt',
+      email: 'ewrfefdsfcsdf@gmail.com',
+      majorCategory: 'Engineering Spares - Mechanical',
+      source: 'buyer_manual',
+    });
+
+    const uploadedRecords = Array.from({ length: 10 }, (_, idx) => ({
+      vendorCode: `VC-${idx + 1}`,
+      name: idx === 0 ? 'Veera Solutions Pvt LTD' : `Uploaded Supplier ${idx + 1}`,
+      contactPerson: idx === 0 ? 'Veerababu' : `Contact ${idx + 1}`,
+      email: idx === 0 ? 'veerababu@procucev.com' : `supplier${idx + 1}@example.com`,
+      phone: '9381877013',
+      category: 'Vendor Master',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    }));
+
+    localStorage.setItem(
+      'procucev_vendor_upload_history',
+      JSON.stringify([{ id: 'batch-csv-1', fileName: 'Testing data.csv', records: uploadedRecords }])
+    );
+
+    const veeraEvaluation = buildRecord({
+      id: 'eval-veera',
+      vendorId: 'db-veera-id',
+      vendorName: 'Veera Solutions Pvt LTD',
+      email: 'veerababu@procucev.com',
+      category: 'Vendor Master',
+      overallScore: 88,
+      status: 'PREFERRED ENTERPRISE SUPPLIER',
+    });
+
+    const store = mockStore({
+      buyerVendors: [manualVendor],
+      vendorEvaluations: [veeraEvaluation],
+    });
+
+    render(<VendorEvaluationSummary />);
+
+    fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+    expect(screen.getByText(formatString(SUMMARY.foundMany, { count: 11 }))).toBeInTheDocument();
+
+    // Search by email finds uploaded supplier and loads its evaluation matched by name/email
+    fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), {
+      target: { value: 'veerababu@procucev.com' },
+    });
+    expect(screen.getByText(formatString(SUMMARY.foundOne, { count: 1 }))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Veera Solutions Pvt LTD/ }));
+
+    expect(store.setActiveEvaluationRecord).toHaveBeenCalledWith(expect.objectContaining({ id: 'eval-veera' }));
+    expect(screen.getByText('88%')).toBeInTheDocument();
+
+    // Re-open picker and search by contactPerson for another uploaded vendor without evaluation
+    fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+    fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), {
+      target: { value: 'Contact 7' },
+    });
+    expect(screen.getByRole('button', { name: /Uploaded Supplier 7/ })).toBeInTheDocument();
+  });
+
+  it('refreshes uploaded vendors on storage updates and skips buyer-local upload history for category managers', () => {
+    const manualVendor = buildVendor({
+      id: 'v-manual-1',
+      name: 'rtger',
+      source: 'buyer_manual',
+    });
+
+    mockStore({ buyerVendors: [manualVendor], currentRole: 'buyer' });
+    const { rerender } = render(<VendorEvaluationSummary />);
+
+    localStorage.setItem(
+      'procucev_vendor_upload_history',
+      JSON.stringify([{ id: 'batch-live', records: [{ name: 'Synced Later Co', email: 'later@co.test' }] }])
+    );
+    fireEvent(window, new StorageEvent('storage', { key: 'unrelated_key' }));
+    fireEvent(window, new StorageEvent('storage', { key: 'procucev_vendor_upload_history' }));
+
+    fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+    expect(screen.getByRole('button', { name: /Synced Later Co/ })).toBeInTheDocument();
+
+    mockStore({ buyerVendors: [manualVendor], currentRole: 'category_manager' });
+    rerender(<VendorEvaluationSummary />);
+    expect(screen.queryByRole('button', { name: /Synced Later Co/ })).not.toBeInTheDocument();
+  });
+});

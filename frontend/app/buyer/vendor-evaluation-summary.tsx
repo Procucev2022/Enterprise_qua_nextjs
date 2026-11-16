@@ -6,6 +6,11 @@ import {
   VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT,
   VENDOR_EVALUATION_GATE_SCORE,
   VENDOR_EVALUATION_PILLARS,
+  VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+  isBuyerUploadedVendor,
+  isProcucevNetworkVendor,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type {
@@ -17,6 +22,7 @@ import type {
   VendorEvaluationSelectOption,
   VendorEvaluationSummaryProps,
   VendorEvaluationSummaryView,
+  VendorUploadHistoryBatch,
 } from '@/lib/types';
 import {
   ArrowLeft,
@@ -43,35 +49,9 @@ const NOT_RECORDED = UI_STRINGS.recordPlaceholders.notRecorded;
 const NOT_EVALUATED = UI_STRINGS.recordPlaceholders.notEvaluated;
 const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
 
-// Classification helper: a supplier the buyer uploaded. Reads only the ownership fields the supplier record carries.
-// The supplier ID is never parsed for a prefix.
-export const isBuyerUploaded = (
-  v: Partial<Pick<VendorEntry, 'source' | 'buyerId' | 'buyerAccountId' | 'addedByBuyerCompany'>> | null | undefined
-): boolean => {
-  if (!v) return false;
-  const s = String(v.source || '').toLowerCase().trim();
-  return (
-    s === 'buyer_uploaded' ||
-    s === 'vendor_master_ingestion' ||
-    s === 'historical_purchase_dump' ||
-    s === 'buyer_manual' ||
-    s === 'buyer_excel' ||
-    s === 'buyer' ||
-    s.includes('buyer') ||
-    s.includes('ingestion') ||
-    s.includes('purchase_dump') ||
-    !!v.addedByBuyerCompany ||
-    !!v.buyerId ||
-    !!v.buyerAccountId
-  );
-};
-
-// Classification helper: a Procucev supplier, meaning one the buyer did not upload.
-export const isProcucevVendor = (
-  v: Partial<Pick<VendorEntry, 'source' | 'buyerId' | 'buyerAccountId' | 'addedByBuyerCompany'>> | null | undefined
-): boolean => {
-  return !isBuyerUploaded(v);
-};
+// Classification helpers shared with Buyer Vendor Directory.
+export const isBuyerUploaded = isBuyerUploadedVendor;
+export const isProcucevVendor = isProcucevNetworkVendor;
 
 /** A finite number from a number or a numeric string. Anything else counts as not on record. */
 function toScore(value: unknown): number | null {
@@ -84,11 +64,24 @@ function toText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
-function findEvaluation(records: VendorEvaluationRecord[] | undefined, vendorId: string): VendorEvaluationRecord | null {
+function findEvaluation(
+  records: VendorEvaluationRecord[] | undefined,
+  vendorId: string,
+  vendorName?: string | null,
+  vendorEmail?: string | null
+): VendorEvaluationRecord | null {
+  const list = records || [];
+  const lowerId = vendorId.toLowerCase();
+  const lowerName = (vendorName || '').trim().toLowerCase();
+  const lowerEmail = (vendorEmail || '').trim().toLowerCase();
   return (
-    (records || []).find(
-      (e) => e.vendorId === vendorId || (e.vendorName || '').toLowerCase() === vendorId.toLowerCase()
-    ) ?? null
+    list.find((e) => e.vendorId === vendorId || (e.vendorName || '').toLowerCase() === lowerId) ??
+    list.find(
+      (e) =>
+        (lowerEmail !== '' && (e.email || '').trim().toLowerCase() === lowerEmail) ||
+        (lowerName !== '' && (e.vendorName || '').trim().toLowerCase() === lowerName)
+    ) ??
+    null
   );
 }
 
@@ -246,7 +239,39 @@ export default function VendorEvaluationSummary({
     isLoadingDB,
     refreshFromDB,
     fetchVendorEvaluation,
+    activeBuyerAccount,
+    currentRole,
   } = useApp();
+
+  const shouldIncludeBuyerUploadHistory = currentRole !== 'category_manager' && currentRole !== 'admin';
+  const [uploadHistoryList, setUploadHistoryList] = useState<VendorUploadHistoryBatch[]>(() =>
+    shouldIncludeBuyerUploadHistory ? loadVendorUploadHistoryFromStorage() : []
+  );
+
+  useEffect(() => {
+    if (!shouldIncludeBuyerUploadHistory) {
+      setUploadHistoryList([]);
+      return;
+    }
+    setUploadHistoryList(loadVendorUploadHistoryFromStorage());
+    const handleStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === VENDOR_UPLOAD_HISTORY_STORAGE_KEY) {
+        setUploadHistoryList(loadVendorUploadHistoryFromStorage());
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [shouldIncludeBuyerUploadHistory, buyerVendors]);
+
+  const reconciledBuyerVendors = useMemo<VendorEntry[]>(
+    () =>
+      reconcileBuyerVendorsWithUploadHistory(
+        buyerVendors || [],
+        shouldIncludeBuyerUploadHistory ? uploadHistoryList : [],
+        activeBuyerAccount
+      ),
+    [buyerVendors, shouldIncludeBuyerUploadHistory, uploadHistoryList, activeBuyerAccount]
+  );
 
   // The reference load that carries the suppliers and their evaluations has finished and failed. An empty list then
   // does not mean nothing is on record, so the screen says the load failed.
@@ -257,21 +282,29 @@ export default function VendorEvaluationSummary({
   // Every supplier the picker knows about. The overall score is the score on its evaluation record, or null when it has none.
   const allOptions = useMemo<VendorEvaluationSelectOption[]>(() => {
     const evaluationById = new Map<string, VendorEvaluationRecord>();
-    if (evaluationRecord?.vendorId) evaluationById.set(evaluationRecord.vendorId, evaluationRecord);
+    const allEvaluations: VendorEvaluationRecord[] = [];
+    if (evaluationRecord?.vendorId) {
+      evaluationById.set(evaluationRecord.vendorId, evaluationRecord);
+      allEvaluations.push(evaluationRecord);
+    }
     (vendorEvaluations || []).forEach((e) => {
       if (e.vendorId && !evaluationById.has(e.vendorId)) evaluationById.set(e.vendorId, e);
+      allEvaluations.push(e);
     });
 
     const optionById = new Map<string, VendorEvaluationSelectOption>();
-    (buyerVendors || []).forEach((v) => {
+    const matchedEvaluationRefs = new Set<VendorEvaluationRecord>();
+    reconciledBuyerVendors.forEach((v) => {
       if (!v.id) return;
-      optionById.set(v.id, buildSelectOption(v, toScore(evaluationById.get(v.id)?.overallScore)));
+      const matchedEval = findEvaluation(allEvaluations, v.id, v.name, v.email);
+      if (matchedEval) matchedEvaluationRefs.add(matchedEval);
+      optionById.set(v.id, buildSelectOption(v, toScore(matchedEval?.overallScore)));
     });
     evaluationById.forEach((e, id) => {
-      if (!optionById.has(id)) optionById.set(id, buildOptionFromRecord(e));
+      if (!optionById.has(id) && !matchedEvaluationRefs.has(e)) optionById.set(id, buildOptionFromRecord(e));
     });
     return Array.from(optionById.values());
-  }, [buyerVendors, vendorEvaluations, evaluationRecord]);
+  }, [reconciledBuyerVendors, vendorEvaluations, evaluationRecord]);
 
   // Buyer-uploaded suppliers when there are any. Otherwise every supplier.
   const companyOptions = useMemo(() => {
@@ -333,7 +366,7 @@ export default function VendorEvaluationSummary({
     if (selectedVendorId) {
       const option = allOptions.find((c) => c.id === selectedVendorId) ?? null;
       // 2. The stored evaluation for the selected supplier.
-      const stored = findEvaluation(vendorEvaluations, selectedVendorId);
+      const stored = findEvaluation(vendorEvaluations, selectedVendorId, option?.name, option?.email);
       if (stored) return buildSummaryView(stored, option);
       // 3. A supplier with no evaluation yet. Its own details show, and every score is not evaluated.
       if (option) return buildSummaryView(null, option);
@@ -344,7 +377,7 @@ export default function VendorEvaluationSummary({
 
     // 5. The first supplier in the picker.
     const first = companyOptions[0];
-    if (first) return buildSummaryView(findEvaluation(vendorEvaluations, first.id), first);
+    if (first) return buildSummaryView(findEvaluation(vendorEvaluations, first.id, first.name, first.email), first);
 
     // 6. The first stored evaluation, when no supplier is listed.
     const storedFirst = vendorEvaluations?.[0];
@@ -358,6 +391,8 @@ export default function VendorEvaluationSummary({
       (c) =>
         (c.name || '').toLowerCase().includes(q) ||
         (c.category || '').toLowerCase().includes(q) ||
+        (c.email || '').toLowerCase().includes(q) ||
+        (c.contactPerson || '').toLowerCase().includes(q) ||
         c.id.toLowerCase().includes(q)
     );
   }, [companyOptions, searchQuery]);
@@ -368,7 +403,7 @@ export default function VendorEvaluationSummary({
     setSearchQuery('');
     const option = allOptions.find((c) => c.id === vendorId);
     if (!option) return;
-    const existingRec = findEvaluation(vendorEvaluations, vendorId);
+    const existingRec = findEvaluation(vendorEvaluations, vendorId, option.name, option.email);
     if (setActiveEvaluationRecord) {
       setActiveEvaluationRecord(existingRec);
     }

@@ -6,6 +6,13 @@ import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import { getMinorCategories } from '@/lib/categoryTaxonomy';
+import {
+  isBuyerUploadedVendor,
+  isProcucevNetworkVendor,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
+  resolveVendorLocationFields,
+} from '@/lib/constants';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import {
   Search,
@@ -67,34 +74,9 @@ const statutoryText = (value: unknown): string => {
   return clean === '' ? UI_STRINGS.recordPlaceholders.notApplicable : clean;
 };
 
-// Classification helper: Uploaded by Buyer. Reads only the ownership fields the
-// vendor record carries (source, buyerId, buyerAccountId, addedByBuyerCompany).
-// The vendor ID is never parsed for a prefix.
-export const isBuyerUploaded = (
-  v: Partial<Pick<VendorEntry, 'source' | 'buyerId' | 'buyerAccountId' | 'addedByBuyerCompany'>> | null | undefined
-): boolean => {
-  if (!v) return false;
-  const s = String(v.source || '').toLowerCase().trim();
-  return (
-    s === 'buyer_uploaded' ||
-    s === 'vendor_master_ingestion' ||
-    s === 'historical_purchase_dump' ||
-    s === 'buyer_manual' ||
-    s === 'buyer_excel' ||
-    s === 'buyer' ||
-    s.includes('buyer') ||
-    s.includes('ingestion') ||
-    s.includes('purchase_dump') ||
-    !!v.addedByBuyerCompany ||
-    !!v.buyerId ||
-    !!v.buyerAccountId
-  );
-};
-
-// Classification helper: Procucev Vendors (Category Manager uploads & Direct Self-Registration)
-export const isProcucevVendor = (v: any): boolean => {
-  return !isBuyerUploaded(v);
-};
+// Classification helpers shared across Buyer Vendor Directory and Evaluation Summary.
+export const isBuyerUploaded = isBuyerUploadedVendor;
+export const isProcucevVendor = isProcucevNetworkVendor;
 
 export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: VendorSummaryProps) {
   const {
@@ -259,10 +241,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             const offices = res.postOffices || [];
             setFormPincodeError(null);
             setFormPincodePostOffices(offices);
+            const { city, state } = resolveCityAndStateFromPostalResult(raw, offices);
             if (pincodeFillsLocationRef.current) {
-              const { city, state } = resolveCityAndStateFromPostalResult(raw, offices);
               if (city) setFormCity(city);
               if (state) setFormState(state);
+            } else {
+              if (city) setFormCity((prev) => (prev.trim() ? prev : city));
+              if (state) setFormState((prev) => (prev.trim() ? prev : state));
             }
           }
         } catch {
@@ -292,17 +277,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
 
   const loadUploadHistory = useCallback(() => {
-    try {
-      const raw = localStorage.getItem('procucev_vendor_upload_history');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        setUploadHistoryList(Array.isArray(parsed) ? parsed : []);
-      } else {
-        setUploadHistoryList([]);
-      }
-    } catch {
-      setUploadHistoryList([]);
-    }
+    setUploadHistoryList(loadVendorUploadHistoryFromStorage());
   }, []);
 
   useEffect(() => {
@@ -497,12 +472,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormContactDesignation(vendor.contactDesignation || '');
     setFormEmail(vendor.email || '');
     setFormPhone(vendor.phone || '');
-    setFormLocation(vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`);
-    setFormCity(vendor.city || '');
-    setFormState(vendor.state || '');
+    const normalizedLoc = resolveVendorLocationFields({
+      location: vendor.location,
+      factoryAddress: vendor.factoryAddress,
+      city: vendor.city,
+      state: vendor.state,
+      pincode: vendor.pincode,
+    });
+    setFormLocation(normalizedLoc.location || `${normalizedLoc.city || ''}, ${normalizedLoc.state || ''}`);
+    setFormCity(normalizedLoc.city);
+    setFormState(normalizedLoc.state);
     setFormCountry(vendor.country || 'India');
     pincodeFillsLocationRef.current = false;
-    setFormPincode(vendor.pincode || '');
+    setFormPincode(normalizedLoc.pincode);
     setFormRating(typeof vendor.rating === 'number' ? vendor.rating : null);
     setEditModalOpen(true);
   };
@@ -841,74 +823,36 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       };
     });
 
-  const reconciledBuyerVendors = useMemo<VendorEntry[]>(() => {
-    if (uploadHistoryList.length === 0) return buyerVendors;
+  const reconciledBuyerVendors = useMemo<VendorEntry[]>(
+    () => reconcileBuyerVendorsWithUploadHistory(buyerVendors, uploadHistoryList, activeBuyerAccount),
+    [buyerVendors, uploadHistoryList, activeBuyerAccount]
+  );
 
-    const seenEmails = new Set(
-      buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
-    );
-    const seenNames = new Set(
-      buyerVendors.map((v) => String(v.name || '').trim().toLowerCase()).filter(Boolean)
-    );
-
-    const extras: VendorEntry[] = [];
-    uploadHistoryList.forEach((batch, batchIdx) => {
-      const records = Array.isArray(batch?.records) ? batch.records : [];
-      records.forEach((rec: Record<string, unknown>, recIdx: number) => {
-        const recStatus = String(rec.status || '').toUpperCase();
-        if (recStatus === 'FAILED' || recStatus === 'DUPLICATE' || recStatus === 'SKIPPED') {
-          return;
-        }
-        const rawName = String(rec.name || rec.vendorName || rec.companyName || '').trim();
-        const rawEmail = String(rec.email || '').trim();
-        if (!rawName && !rawEmail) return;
-
-        const emailKey = rawEmail.toLowerCase();
-        const nameKey = rawName.toLowerCase();
-        if ((emailKey && seenEmails.has(emailKey)) || (!emailKey && nameKey && seenNames.has(nameKey))) {
-          return;
-        }
-        if (emailKey) seenEmails.add(emailKey);
-        if (nameKey) seenNames.add(nameKey);
-
-        const city = String(rec.city || '').trim();
-        const state = String(rec.state || '').trim();
-        const rawCategory = String(rec.category || rec.majorCategory || '').trim();
-        const numericRating = Number(rec.rating);
-        const rating =
-          rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(numericRating)
-            ? numericRating
-            : 0;
-
-        extras.push({
-          id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
-          name: rawName || rawEmail,
-          contactPerson: String(rec.contactPerson || ''),
-          phone: String(rec.phone || ''),
-          email: rawEmail,
-          majorCategory: rawCategory,
-          minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
-          location: [city, state].filter(Boolean).join(', '),
-          rating,
-          source: 'buyer_uploaded',
-          status: 'REGISTERED / NOT EVALUATED',
-          evaluated: false,
-          hasRecord: false,
-          addedByBuyerCompany: activeBuyerAccount?.organizationName,
-          buyerId: activeBuyerAccount?.id,
-          buyerAccountId: activeBuyerAccount?.id,
-          ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
-          ...(city ? { city } : {}),
-          ...(state ? { state } : {}),
-          ...(rec.pincode ? { pincode: String(rec.pincode) } : {}),
-        });
-      });
+  const normalizeBuyerVendorEntry = (vendor: VendorEntry): VendorEntry => {
+    const loc = resolveVendorLocationFields({
+      location: vendor.location,
+      factoryAddress: vendor.factoryAddress,
+      city: vendor.city,
+      state: vendor.state,
+      pincode: vendor.pincode,
     });
-
-    return extras.length > 0 ? [...buyerVendors, ...extras] : buyerVendors;
-  }, [buyerVendors, uploadHistoryList, activeBuyerAccount]);
-
-  const mergedVendors = mergeWithEvaluations(reconciledBuyerVendors);
+    if (
+      loc.location === (vendor.location || '') &&
+      loc.city === (vendor.city || '') &&
+      loc.state === (vendor.state || '') &&
+      loc.pincode === (vendor.pincode || '')
+    ) {
+      return vendor;
+    }
+    return {
+      ...vendor,
+      ...(loc.location ? { location: loc.location } : {}),
+      ...(loc.city ? { city: loc.city } : {}),
+      ...(loc.state ? { state: loc.state } : {}),
+      ...(loc.pincode ? { pincode: loc.pincode } : {}),
+    };
+  };
+  const mergedVendors = mergeWithEvaluations(reconciledBuyerVendors.map(normalizeBuyerVendorEntry));
   const buyerUploadedVendorsList = mergedVendors.filter(isBuyerUploaded);
 
   // Filter categories dynamically

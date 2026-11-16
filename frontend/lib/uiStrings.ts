@@ -2032,6 +2032,7 @@ sellerDirectory: {
       requiredColumnsBanner: 'Mandatory 2 columns only: Vendor/Supplier Name & Item Description/Short Text/Material Description. Specifications & other columns are optional; Category is extracted by AI.',
       fieldVendor: 'Vendor/Supplier Name',
       fieldDescription: 'Item Description/Short Text/Material Description',
+      fieldSpecsOptional: 'Specifications (Optional)',
       requiredTitle: 'PO Dump Required',
       requiredError:
         'Historical PO Purchase Dump is mandatory. Please upload your PO dump file (containing Vendor/Supplier Name and Item Description/Short Text/Material Description) before continuing.',

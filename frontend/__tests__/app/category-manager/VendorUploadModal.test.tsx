@@ -797,4 +797,51 @@ describe('VendorUploadModal', () => {
     expect(within(errorList).getByText('Vendor Four')).toBeInTheDocument();
     expect(within(errorList).getByText('Validation failed: Invalid mobile number format.')).toBeInTheDocument();
   });
+
+  test('persists resolved city, state, and pincode into procucev_vendor_upload_history', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        rows: [
+          validRow(
+            {
+              vendor: {
+                vendorCode: 'VC-99',
+                name: 'Veera Solutions Pvt LTD',
+                email: 'veerababu.v@procucev.com',
+                phone: '9381877013',
+                city: 'Bengaluru',
+                state: 'Karnataka',
+                pincode: '560037',
+                majorCategory: 'Vendor Master',
+              },
+            },
+            2
+          ),
+        ],
+        blankRowCount: 0,
+      },
+    });
+    (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+      total: 1,
+      imported: 1,
+      duplicates: 0,
+      failed: 0,
+      results: [{ rowNumber: 2, status: 'imported', email: 'veerababu.v@procucev.com' }],
+    });
+
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    pickFile(new File(['x'], 'loc-vendors.xlsx'));
+    await screen.findByText('loc-vendors.xlsx');
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
+    await screen.findByText(/Upload Completed/);
+
+    const savedHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+    expect(savedHistory[0].records[0]).toMatchObject({
+      name: 'Veera Solutions Pvt LTD',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+  });
 });

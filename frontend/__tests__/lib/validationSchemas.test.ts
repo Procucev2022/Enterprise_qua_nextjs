@@ -819,6 +819,13 @@ describe('PO dump required columns', () => {
   it('accepts the other spellings of each required column', () => {
     expect(findMissingPoDumpHeaders(['Vendor Code', 'Item Description'])).toEqual([]);
     expect(findMissingPoDumpHeaders(['Supplier', 'Item Description/Short Text/Material Description'])).toEqual([]);
+    expect(
+      findMissingPoDumpHeaders([
+        UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+        UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+        UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional,
+      ])
+    ).toEqual([]);
   });
 
   it('names only the two required columns when missing, ignoring empty headers', () => {

@@ -40,6 +40,7 @@ const {
   PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
   EXTENSION_HOURS_PER_DAY,
   clearDummyPanFields,
+  resolveVendorLocationFields,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -1720,8 +1721,30 @@ class StoreService {
     const normalizedEmail = safeVendorData.email === undefined || safeVendorData.email === null
       ? safeVendorData.email
       : String(safeVendorData.email).trim().toLowerCase();
+    const hasLocationInput = Boolean(
+      safeVendorData.location ||
+      safeVendorData.address ||
+      safeVendorData.factoryAddress ||
+      safeVendorData.city ||
+      safeVendorData.state ||
+      safeVendorData.pincode
+    );
+    const resolvedLocation = hasLocationInput
+      ? resolveVendorLocationFields({
+          location: safeVendorData.location,
+          address: safeVendorData.address,
+          factoryAddress: safeVendorData.factoryAddress,
+          city: safeVendorData.city,
+          state: safeVendorData.state,
+          pincode: safeVendorData.pincode,
+        })
+      : null;
     return clearDummyPanFields({
       ...safeVendorData,
+      ...(resolvedLocation?.location ? { location: resolvedLocation.location } : {}),
+      ...(resolvedLocation?.city ? { city: resolvedLocation.city } : {}),
+      ...(resolvedLocation?.state ? { state: resolvedLocation.state } : {}),
+      ...(resolvedLocation?.pincode ? { pincode: resolvedLocation.pincode } : {}),
       ...(safeVendorData.email !== undefined ? { email: normalizedEmail } : {}),
       id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       buyerId: resolvedBuyerId,
@@ -2039,6 +2062,14 @@ class StoreService {
 
   /** A bulk-import row as a new vendor record (see bulkAddVendors). */
   _buildBulkVendor(row, idx) {
+    const resolvedLocation = resolveVendorLocationFields({
+      location: row.location,
+      address: row.address,
+      factoryAddress: row.factoryAddress,
+      city: row.city,
+      state: row.state,
+      pincode: row.pincode,
+    });
     return {
       id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
       vendorCode: row.vendorCode || '',
@@ -2048,10 +2079,10 @@ class StoreService {
       email: row.email || null,
       majorCategory: row.majorCategory || 'Uncategorised',
       minorCategories: row.minorCategories || [],
-      location: row.city || '',
-      city: row.city || '',
-      state: row.state || '',
-      pincode: row.pincode || '',
+      location: resolvedLocation.location || '',
+      city: resolvedLocation.city || '',
+      state: resolvedLocation.state || '',
+      pincode: resolvedLocation.pincode || '',
       gstin: row.gstin || '',
       products: row.products || '',
       // Not evaluated yet, so no rating or score is recorded. An unrated supplier
@@ -10032,7 +10063,17 @@ class StoreService {
         if (name) updatedVendor.name = name;
         if (rec.contactPerson) updatedVendor.contactPerson = (rec.contactPerson || '').trim();
         if (rec.phone) updatedVendor.phone = (rec.phone || '').trim();
-        if (rec.location || rec.address) updatedVendor.location = (rec.location || rec.address || '').trim();
+        const recLoc = resolveVendorLocationFields({
+          location: rec.location,
+          address: rec.address,
+          city: rec.city,
+          state: rec.state,
+          pincode: rec.pincode,
+        });
+        if (recLoc.location) updatedVendor.location = recLoc.location;
+        if (recLoc.city) updatedVendor.city = recLoc.city;
+        if (recLoc.state) updatedVendor.state = recLoc.state;
+        if (recLoc.pincode) updatedVendor.pincode = recLoc.pincode;
         if (rec.vendorCode) updatedVendor.vendorCode = String(rec.vendorCode).trim();
         const rawGstin = rec.gstin || rec.gstNumber;
         if (rawGstin) updatedVendor.gstin = String(rawGstin).trim().toUpperCase();
@@ -10085,7 +10126,21 @@ class StoreService {
         phone: (rec.phone || '').trim() || null,
         majorCategory,
         minorCategories,
-        location: (rec.location || rec.address || '').trim() || null,
+        ...(() => {
+          const loc = resolveVendorLocationFields({
+            location: rec.location,
+            address: rec.address,
+            city: rec.city,
+            state: rec.state,
+            pincode: rec.pincode,
+          });
+          return {
+            location: loc.location || null,
+            city: loc.city || null,
+            state: loc.state || null,
+            pincode: loc.pincode || null,
+          };
+        })(),
         // Absent, not assumed. A supplier arriving from a spend extract has not
         // been rated or audited by anyone yet.
         rating: Number.isFinite(Number(rec.rating)) ? Number(rec.rating) : null,
@@ -10405,13 +10460,23 @@ class StoreService {
    */
   async empanelIngestedVendor(vendorData, actorEmail = null) {
     const minorCategories = Array.isArray(vendorData.minorCategories) ? vendorData.minorCategories : [];
+    const loc = resolveVendorLocationFields({
+      location: vendorData.location,
+      factoryAddress: vendorData.factoryAddress,
+      city: vendorData.city,
+      state: vendorData.state,
+      pincode: vendorData.pincode,
+    });
     const newVendor = {
       id: `v-ingest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: vendorData.name,
       email: vendorData.email,
       contactPerson: vendorData.contactPerson || null,
       phone: vendorData.phone || null,
-      location: vendorData.location || null,
+      location: loc.location || null,
+      city: loc.city || null,
+      state: loc.state || null,
+      pincode: loc.pincode || null,
       gstin: vendorData.gstin || null,
       vendorCode: vendorData.vendorCode || null,
       majorCategory: vendorData.majorCategory || null,

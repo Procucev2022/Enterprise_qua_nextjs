@@ -4257,6 +4257,116 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
     });
   });
+
+  describe('Reconciled & uploaded vendor location field population', () => {
+    it('extracts City, State, and Pincode into Edit Vendor Profile when upload history stored full address inside city', () => {
+      localStorage.setItem(
+        'procucev_vendor_upload_history',
+        JSON.stringify([
+          {
+            id: 'batch-loc-fix-1',
+            fileName: 'Testing data.csv',
+            uploadedAt: '2026-11-16T10:00:00Z',
+            records: [
+              {
+                vendorCode: 'VC-VEERA-01',
+                name: 'Veera Solutions Pvt LTD',
+                contactPerson: 'veerababu',
+                email: 'veerababu.v@procucev.com',
+                phone: '9381877013',
+                gstin: '27AAACK3921P1Z9',
+                category: 'Vendor Master',
+                city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+                rating: 0,
+              },
+            ],
+          },
+        ])
+      );
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [{ majorCategory: 'Vendor Master', minorCategories: [] }],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      expect(screen.getByText('Veera Solutions Pvt LTD')).toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+
+      expect(
+        screen.getByDisplayValue('302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037')
+      ).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Bengaluru')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Karnataka')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('India')).toBeInTheDocument();
+    });
+
+    it('backfills empty City and State via verified PIN lookup when opening Edit on a vendor with only pincode', async () => {
+      mockValidatePincode.mockResolvedValueOnce({
+        isValid: true,
+        postOffices: [{ Name: 'Bommasandra', Pincode: '560099', District: 'Bengaluru', State: 'Karnataka' }],
+      });
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [
+          {
+            id: 'v-pin-only-1',
+            name: 'Pin Only Mfg Pvt Ltd',
+            contactPerson: 'Suresh',
+            email: 'pinonly@mfg.test',
+            phone: '9888877777',
+            location: 'Industrial Plot 99 - 560099',
+            majorCategory: 'Mechanical',
+            source: 'buyer_uploaded',
+          },
+        ],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: [] }],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Corp' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+
+      expect(screen.getByDisplayValue('560099')).toBeInTheDocument();
+      await waitFor(() => expect(mockValidatePincode).toHaveBeenCalledWith('560099'));
+      await waitFor(() => expect(screen.getByDisplayValue('Bengaluru')).toBeInTheDocument());
+      expect(screen.getByDisplayValue('Karnataka')).toBeInTheDocument();
+    });
+  });
 });
 
 
