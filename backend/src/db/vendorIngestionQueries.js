@@ -666,7 +666,7 @@ async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = [
            rating = excluded.rating,
            source_row_number = excluded.source_row_number,
            raw = excluded.raw,
-           updated_at = now()
+           updated_at = CURRENT_TIMESTAMP
      returning *`,
     values,
     {
@@ -1412,7 +1412,7 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
                then vendor_category_mappings.processing_status
              else '${VENDOR_AI_PROCESSING_STATUS.QUEUED}'
            end,
-           updated_at = now()
+           updated_at = CURRENT_TIMESTAMP
      returning *`,
     values,
     { d1: true }
@@ -1480,7 +1480,7 @@ async function markMappingProcessing(mappingId, organizationId) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
-        set processing_status = $3, attempt_count = attempt_count + 1, updated_at = now()
+        set processing_status = $3, attempt_count = attempt_count + 1, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.PROCESSING],
@@ -1512,7 +1512,7 @@ async function saveAiSuggestion(mappingId, organizationId, suggestion) {
             processing_error = null,
             is_new_category_suggestion = $12,
             suggested_new_category = $13,
-            updated_at = now()
+            updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [
@@ -1567,7 +1567,7 @@ async function markMappingFailed(mappingId, organizationId, errorMessage) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
-        set processing_status = $3, status = $4, processing_error = $5, updated_at = now()
+        set processing_status = $3, status = $4, processing_error = $5, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [
@@ -1587,7 +1587,7 @@ async function requeueMapping(mappingId, organizationId) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
-        set processing_status = $3, processing_error = null, updated_at = now()
+        set processing_status = $3, processing_error = null, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2 and has_po_history
       returning *`,
     [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.QUEUED],
@@ -1612,8 +1612,8 @@ async function saveBuyerReview(mappingId, organizationId, review) {
             status = $6,
             review_action = $7,
             reviewed_by = $8,
-            reviewed_at = now(),
-            updated_at = now()
+            reviewed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [
@@ -1648,7 +1648,7 @@ async function saveBuyerReview(mappingId, organizationId, review) {
 async function attachVendorId(mappingId, organizationId, vendorId) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
-    `update vendor_category_mappings set vendor_id = $3, updated_at = now()
+    `update vendor_category_mappings set vendor_id = $3, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2 returning *`,
     [mappingId, organizationId, nullable(vendorId)],
     { d1: true }
@@ -1878,7 +1878,7 @@ async function finalizeDispatch(dispatchId, organizationId, { sentCount, failedC
   if (!pool.hasStorage() || !dispatchId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_dispatches
-        set sent_count = $3, failed_count = $4, skipped_count = $5, status = $6, updated_at = now()
+        set sent_count = $3, failed_count = $4, skipped_count = $5, status = $6, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [dispatchId, organizationId, counter(sentCount), counter(failedCount), counter(skippedCount), status],
@@ -1995,7 +1995,7 @@ async function claimEmailSlot({
            dispatch_id = $2,
            attempt_count = vendor_email_dispatch_log.attempt_count + 1,
            detail = null,
-           updated_at = now()
+           updated_at = CURRENT_TIMESTAMP
        where vendor_email_dispatch_log.status in ($12, $13)
      returning *`,
     [
@@ -2022,7 +2022,7 @@ async function markEmailSent(logId, organizationId, messageId) {
   if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
-        set status = $3, message_id = $4, detail = null, sent_at = now(), updated_at = now()
+        set status = $3, message_id = $4, detail = null, sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [logId, organizationId, VENDOR_EMAIL_STATUS.SENT, nullable(messageId)],
@@ -2035,7 +2035,7 @@ async function markEmailFailed(logId, organizationId, detail) {
   if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
-        set status = $3, detail = $4, updated_at = now()
+        set status = $3, detail = $4, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [logId, organizationId, VENDOR_EMAIL_STATUS.FAILED, nullable(detail)],
