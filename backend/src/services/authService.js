@@ -55,7 +55,16 @@ function resolveAuthSecret(env = process.env) {
   return ephemeral;
 }
 
-const AUTH_SECRET = resolveAuthSecret();
+let cachedAuthSecret = null;
+
+function getAuthSecret(env = process.env) {
+  const configured = env.AUTH_SECRET || env.JWT_SECRET || '';
+  if (configured) return configured;
+  if (!cachedAuthSecret) {
+    cachedAuthSecret = resolveAuthSecret(env);
+  }
+  return cachedAuthSecret;
+}
 
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
 
@@ -246,7 +255,7 @@ function generateSessionToken(user, options = {}) {
   ).toString('base64url');
 
   const signature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', getAuthSecret())
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -285,7 +294,7 @@ function verifySessionToken(token) {
 
   const [header, payload, signature] = parts;
   const expectedSignature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', getAuthSecret())
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -1500,10 +1509,10 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // Consume used OTPs before changing identity state. If any delete fails, fail
   // closed so the account is not verified while a reusable code may remain.
   const otpCleanup = await Promise.allSettled([
-      authSessionQueries.deleteOtp(emailOtpKey),
-      authSessionQueries.deleteOtp(mobileOtpKey),
-      authSessionQueries.deleteOtp(emailCombinedKey),
-    ]);
+    authSessionQueries.deleteOtp(emailOtpKey),
+    authSessionQueries.deleteOtp(mobileOtpKey),
+    authSessionQueries.deleteOtp(emailCombinedKey),
+  ]);
   const failedCleanup = otpCleanup.find((result) => result.status === 'rejected');
   if (failedCleanup) {
     logger.error(
