@@ -11,6 +11,8 @@ import {
   isProcucevNetworkVendor,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
+  removeVendorsFromUploadHistoryInStorage,
+  subscribeVendorUploadHistory,
   resolveVendorLocationFields,
 } from '@/lib/constants';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
@@ -286,6 +288,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   useEffect(() => {
     loadUploadHistory();
+    const handleUpdate = () => loadUploadHistory();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('vendor_upload_history_updated', handleUpdate);
+    }
+    const unsubscribe = subscribeVendorUploadHistory((batches) => setUploadHistoryList(batches));
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('vendor_upload_history_updated', handleUpdate);
+      }
+      unsubscribe();
+    };
   }, [loadUploadHistory]);
 
   const handleDownloadBatchCsv = (batch: any) => {
@@ -688,6 +701,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     try {
       const res = await deleteBuyerVendor(vendorId);
       if (res !== false) {
+        loadUploadHistory();
         setDeleteModalOpen(false);
         setSelectedVendorForCrud(null);
       }
@@ -713,6 +727,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       } else if (typeof deleteBuyerVendor === 'function') {
         await Promise.all(idsToDelete.map((id) => deleteBuyerVendor(id)));
       }
+      loadUploadHistory();
       setSelectedVendorIds([]);
       setBulkDeleteModalOpen(false);
     } catch (err) {

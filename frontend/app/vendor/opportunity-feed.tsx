@@ -65,6 +65,13 @@ function distinctSorted(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
 }
 
+/** Extracts a 6-digit Indian postal code from a field or location string. */
+function extractPincode(value: unknown): string {
+  if (!value) return '';
+  const match = String(value).match(/\b\d{6}\b/);
+  return match ? match[0] : '';
+}
+
 export default function OpportunityFeed({
   onNavigateToBidForm,
   onNavigateToSubscription,
@@ -494,29 +501,21 @@ export default function OpportunityFeed({
         vendorCatPool.some((vc) => vc === m || vc.includes(m) || m.includes(vc))
       );
 
-    const rawOppPin =
-      opp.pincode || opp.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode || '';
-    let oppPin = String(rawOppPin).replace(/\D/g, '');
-    if (!oppPin && opp.deliveryLocation) {
-      const match = opp.deliveryLocation.match(/\b\d{6}\b/);
-      if (match) oppPin = match[0];
-    }
-    if (!oppPin && rfqRecord?.deliveryLocation) {
-      const match = rfqRecord.deliveryLocation.match(/\b\d{6}\b/);
-      if (match) oppPin = match[0];
-    }
+    const oppPin =
+      extractPincode(opp.pincode) ||
+      extractPincode(opp.deliveryPincode) ||
+      extractPincode(rfqRecord?.deliveryPincode) ||
+      extractPincode((rfqRecord as any)?.pincode) ||
+      extractPincode(opp.deliveryLocation) ||
+      extractPincode(rfqRecord?.deliveryLocation);
 
-    const rawVendorPin =
-      myPincode || myVendorRecord?.pincode || (currentUserSession as any)?.pincode || (currentUserSession as any)?.postalCode || '';
-    let vendorPin = String(rawVendorPin).replace(/\D/g, '');
-    if (!vendorPin && (currentUserSession as any)?.address) {
-      const match = String((currentUserSession as any)?.address).match(/\b\d{6}\b/);
-      if (match) vendorPin = match[0];
-    }
-    if (!vendorPin && (myVendorRecord as any)?.address) {
-      const match = String((myVendorRecord as any)?.address).match(/\b\d{6}\b/);
-      if (match) vendorPin = match[0];
-    }
+    const vendorPin =
+      extractPincode(myPincode) ||
+      extractPincode(myVendorRecord?.pincode) ||
+      extractPincode((currentUserSession as any)?.pincode) ||
+      extractPincode((currentUserSession as any)?.postalCode) ||
+      extractPincode((currentUserSession as any)?.address) ||
+      extractPincode((myVendorRecord as any)?.address);
 
     const hasPincodeMatch = Boolean(oppPin) && Boolean(vendorPin) && oppPin === vendorPin;
     return Boolean(hasCategoryMatch && hasPincodeMatch);
@@ -729,17 +728,14 @@ export default function OpportunityFeed({
 
   const getOpportunityPincode = React.useCallback((opp: VendorOpportunity) => {
     const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
-    const rawPin = opp.pincode || opp.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode || '';
-    let pin = String(rawPin).replace(/\D/g, '');
-    if (!pin && opp.deliveryLocation) {
-      const match = opp.deliveryLocation.match(/\b\d{6}\b/);
-      if (match) pin = match[0];
-    }
-    if (!pin && rfqRecord?.deliveryLocation) {
-      const match = rfqRecord.deliveryLocation.match(/\b\d{6}\b/);
-      if (match) pin = match[0];
-    }
-    return pin;
+    return (
+      extractPincode(opp.pincode) ||
+      extractPincode(opp.deliveryPincode) ||
+      extractPincode(rfqRecord?.deliveryPincode) ||
+      extractPincode((rfqRecord as any)?.pincode) ||
+      extractPincode(opp.deliveryLocation) ||
+      extractPincode(rfqRecord?.deliveryLocation)
+    );
   }, [rfqs]);
 
   // Section-wise base opportunities before user filters

@@ -2239,4 +2239,118 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
     expect(screen.getAllByText('RFQ-MODE0-MATCHED-400001').length).toBeGreaterThanOrEqual(1);
   });
+
+  test('covers edge branches: empty pincodes, due today stat card, modal dismissals, and bid statuses', async () => {
+    const noPinDirect: RFQFixture = {
+      ...DIRECT_OWN,
+      id: 'rfq-no-pin-d',
+      rfqNumber: 'RFQ-NO-PIN-D',
+      deliveryLocation: 'Warehouse Only',
+    };
+    const noPinNet: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-no-pin-n',
+      rfqNumber: 'RFQ-NO-PIN-N',
+      deliveryLocation: 'Site Office',
+    };
+    const rfqConcluded: any = {
+      id: 'rfq-concluded-1',
+      rfqNumber: 'RFQ-CONCLUDED-1',
+      title: 'Concluded RFQ',
+      buyerCompany: 'Steel Corp',
+      status: 'PO Generated',
+      quotes: [{
+        vendorEmail: 'buyer@procucev.com',
+        awarded: false,
+        totalPrice: 1000,
+        attachments: [{ id: 'att-x' }, { name: 'OnlyName.txt' }, {}],
+      }],
+    };
+    const rfqClosed: any = {
+      id: 'rfq-closed-sub-1',
+      rfqNumber: 'RFQ-CLOSED-SUB-1',
+      title: 'Closed Sub RFQ',
+      status: 'Closed',
+      quotes: [{
+        vendorEmail: 'buyer@procucev.com',
+        status: 'CustomStatus',
+        totalPrice: 2000,
+      }],
+    };
+    const rfqShortlisted: any = {
+      id: 'rfq-shortlisted-1',
+      rfqNumber: 'RFQ-SHORTLISTED-1',
+      title: 'Shortlisted RFQ',
+      status: 'Draft',
+      quotes: [{
+        vendorEmail: 'buyer@procucev.com',
+        status: 'Shortlisted',
+        totalPrice: 3000,
+      }],
+    };
+
+    serveRFQs([noPinDirect, noPinNet, rfqConcluded, rfqClosed, rfqShortlisted]);
+
+    const priorFetch = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && url.includes('/api/vendor-plans/pricing')) {
+        return Promise.resolve({ ok: false, status: 500 });
+      }
+      return priorFetch ? priorFetch(url, init) : Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    await renderFeed({
+      downloadsUsed: 5,
+    });
+
+    // Pincode dropdowns when empty
+    fireEvent.click(screen.getByRole('button', { name: 'Direct Pincode Filter' }));
+    expect(screen.getByText('No pincodes available')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Direct Pincode Filter' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Network Pincode Filter' }));
+    expect(screen.getByText('No pincodes available')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Network Pincode Filter' }));
+
+    // Click Due Today Deadline RFQ stat card
+    const dueTodayCard = screen.getByText(/Due Today Deadline RFQ/i).closest('div');
+    if (dueTodayCard) {
+      fireEvent.click(dueTodayCard);
+      const closeStatBtns = screen.queryAllByRole('button', { name: /Close|✕/i });
+      if (closeStatBtns.length > 0) fireEvent.click(closeStatBtns[0]);
+    }
+
+    // Open upgrade modal to exercise planPricingFailed notice and Dismiss
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade|Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      expect(screen.getByText(/Your vendor profile was uploaded by/i)).toBeInTheDocument();
+      const dismissBtn = screen.queryByRole('button', { name: /Dismiss/i });
+      if (dismissBtn) fireEvent.click(dismissBtn);
+
+      const premBtn = screen.queryByRole('button', { name: /^Select$/i });
+      if (premBtn) fireEvent.click(premBtn);
+
+      // Try clicking Connect upgrade when pricing is unavailable
+      const upgradeConnectBtns = screen.queryAllByRole('button', { name: /^Upgrade$/i });
+      if (upgradeConnectBtns.length > 0) fireEvent.click(upgradeConnectBtns[0]);
+
+      const closeUpgrade = screen.queryAllByRole('button', { name: /^Close$/i });
+      if (closeUpgrade.length > 0) fireEvent.click(closeUpgrade[0]);
+    }
+
+    // Switch to Submitted Bids tab
+    fireEvent.click(screen.getByRole('button', { name: /Submitted Bids/i }));
+    expect(screen.getByText('RFQ-CONCLUDED-1')).toBeInTheDocument();
+
+    // View submitted bid modal and close it
+    const viewBidBtns = screen.getAllByRole('button', { name: /View Details/i });
+    if (viewBidBtns.length > 0) {
+      fireEvent.click(viewBidBtns[0]);
+      expect(screen.getByText(/Attached Bid Documents/i)).toBeInTheDocument();
+      const closeBidBtns = screen.getAllByRole('button', { name: /^Close$/i });
+      if (closeBidBtns.length > 0) fireEvent.click(closeBidBtns[closeBidBtns.length - 1]);
+    }
+  });
 });

@@ -61,6 +61,13 @@ function messageSortTime(timestamp: string | null | undefined): number {
   return timestamp ? new Date(timestamp).getTime() : Number.MAX_SAFE_INTEGER;
 }
 
+function extractPin(pinVal?: any, addrVal?: any): string {
+  const digits = String(pinVal || '').replace(/\D/g, '');
+  if (digits.length === 6) return digits;
+  const match = String(addrVal || '').match(/\b\d{6}\b/);
+  return match ? match[0] : '';
+}
+
 interface QuotationFormProps {
   opportunity?: VendorOpportunity;
   onBack: () => void;
@@ -239,16 +246,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (qEmail && sessionEmail && qEmail === sessionEmail) return true;
 
     const qVendorId = String(q.vendorId || '').trim().toLowerCase();
-    if (myVendorId && qVendorId && qVendorId === myVendorId.toLowerCase()) return true;
-    if (myVendorRecord?.id && qVendorId && qVendorId === String(myVendorRecord.id).toLowerCase()) return true;
+    const myIds = [myVendorId, myVendorRecord?.id ? String(myVendorRecord.id) : '']
+      .filter((id): id is string => Boolean(id))
+      .map((id) => id.toLowerCase());
+    if (qVendorId && myIds.includes(qVendorId)) return true;
 
     const qName = (q.vendorName || '').toLowerCase().trim();
     if (qName) {
-      if (myVendorName && qName === myVendorName.toLowerCase().trim()) return true;
-      if (myVendorRecord?.name && qName === myVendorRecord.name.toLowerCase().trim()) return true;
-      if (currentUserSession?.name && qName === currentUserSession.name.toLowerCase().trim()) return true;
       const sessionOrgName = (currentUserSession as any)?.organizationName || currentUserSession?.orgName;
-      if (sessionOrgName && qName === String(sessionOrgName).toLowerCase().trim()) return true;
+      const myNames = [myVendorName, myVendorRecord?.name, currentUserSession?.name, sessionOrgName]
+        .filter(Boolean)
+        .map((n) => String(n).toLowerCase().trim());
+      if (myNames.includes(qName)) return true;
     }
     return false;
   };
@@ -332,27 +341,15 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         vendorCategoryPool.some((vc) => vc === minor || vc.includes(minor) || minor.includes(vc))
       );
 
-    const rawOppPin =
-      rfq?.pincode || rfq?.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode || '';
-    let rfqPin = String(rawOppPin).replace(/\D/g, '');
-    if (!rfqPin && rfq?.deliveryLocation) {
-      const match = rfq.deliveryLocation.match(/\b\d{6}\b/);
-      if (match) rfqPin = match[0];
-    }
-    if (!rfqPin && rfqRecord?.deliveryLocation) {
-      const match = rfqRecord.deliveryLocation.match(/\b\d{6}\b/);
-      if (match) rfqPin = match[0];
-    }
+    const rfqPin = extractPin(
+      rfq?.pincode || rfq?.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode,
+      rfq?.deliveryLocation || rfqRecord?.deliveryLocation
+    );
 
-    let vendorPin = effectiveVendorPincode;
-    if (!vendorPin && (currentUserSession as any)?.address) {
-      const match = String((currentUserSession as any)?.address).match(/\b\d{6}\b/);
-      if (match) vendorPin = match[0];
-    }
-    if (!vendorPin && (myVendorRecord as any)?.address) {
-      const match = String((myVendorRecord as any)?.address).match(/\b\d{6}\b/);
-      if (match) vendorPin = match[0];
-    }
+    const vendorPin = extractPin(
+      effectiveVendorPincode,
+      (currentUserSession as any)?.address || (myVendorRecord as any)?.address
+    );
 
     const hasPincodeMatch =
       Boolean(rfqPin) &&

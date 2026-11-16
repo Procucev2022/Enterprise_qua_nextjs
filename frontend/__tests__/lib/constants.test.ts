@@ -920,4 +920,62 @@ describe('Indian address location extraction helpers', () => {
       localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     }
   });
+
+  it('removes deleted vendors from local storage upload batches and dispatches update event', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      removeVendorsFromUploadHistoryInStorage,
+      loadVendorUploadHistoryFromStorage,
+    } = require('@/lib/constants');
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-del-1',
+          records: [
+            { id: 'v-keep-1', vendorName: 'Keep Vendor', email: 'keep@test.com' },
+            { id: 'v-del-1', vendorName: 'Delete By ID', email: 'del1@test.com' },
+            { id: 'v-del-2', vendorName: 'Delete By Email', email: 'delete-me@test.com' },
+            { id: 'v-del-3', vendorName: 'Delete By Name', email: 'del3@test.com' },
+          ],
+        },
+        {
+          id: 'batch-del-2',
+          records: [
+            { id: 'v-del-4', vendorName: 'Only Vendor To Delete', email: 'del4@test.com' },
+          ],
+        },
+      ])
+    );
+
+    // Call with empty / null identifiers
+    expect(removeVendorsFromUploadHistoryInStorage([] as any)).toHaveLength(2);
+    expect(removeVendorsFromUploadHistoryInStorage(['   '])).toHaveLength(2);
+
+    let eventFired = false;
+    const listener = () => { eventFired = true; };
+    window.addEventListener('vendor_upload_history_updated', listener);
+
+    const updated = removeVendorsFromUploadHistoryInStorage([
+      'v-del-1',
+      'delete-me@test.com',
+      'Delete By Name',
+      'v-del-4',
+    ]);
+
+    window.removeEventListener('vendor_upload_history_updated', listener);
+
+    expect(eventFired).toBe(true);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].records).toHaveLength(1);
+    expect(updated[0].records[0]).toMatchObject({ id: 'v-keep-1', vendorName: 'Keep Vendor' });
+
+    // Verify localStorage reflects the filtered batches
+    const stored = loadVendorUploadHistoryFromStorage();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].records).toHaveLength(1);
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
 });

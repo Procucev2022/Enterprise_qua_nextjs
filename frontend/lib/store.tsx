@@ -61,6 +61,7 @@ import {
   REQUEST_ID_HEADER,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
+  removeVendorsFromUploadHistoryInStorage,
 } from './constants';
 
 function logApiResponseFailure(
@@ -2247,6 +2248,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSessionCache('vendors', updated);
       return updated;
     });
+
+    removeVendorsFromUploadHistoryInStorage([vendorId]);
+
     void addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
     return true;
@@ -2278,13 +2282,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : [];
+    const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : vendorIds;
     const deletedSet = new Set(deletedIds);
     setBuyerVendors((prev) => {
-      const updated = prev.filter((v) => !deletedSet.has(v.id) && !deletedSet.has(v.email || ''));
+      const updated = prev.filter((v) => !deletedSet.has(v.id));
       setSessionCache('vendors', updated);
       return updated;
     });
+
+    removeVendorsFromUploadHistoryInStorage(deletedIds);
+
     void addAuditLog(`Removed ${deletedIds.length} vendor record(s) from buyer vendor master.`);
     showToast(
       'Vendors Removed',

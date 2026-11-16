@@ -1000,6 +1000,7 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
       .updateIngestionJobProgress(jobId, organizationId, {
         status: VENDOR_INGESTION_JOB_STATUS.FAILED,
         errorMessage: message,
+        errorDetails: err?.message ? { error: err.message, name: err?.name } : null,
         processedRecords: processed,
         failedRecords: failed,
         completedAt: new Date().toISOString(),

@@ -1195,6 +1195,33 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       }, 'VENDOR_CREDITS');
       creditSpy.mockRestore();
 
+      // 3b. refreshVendorCredits with numbers and null unlockedRfqIds
+      const creditNumSpy = jest.spyOn(rfqClient, 'fetchVendorRfqCredits').mockResolvedValueOnce({
+        success: true,
+        data: { freeCreditsRemaining: 5, freeCreditsAllocated: 10, freeCreditsUsed: 5, unlockedRfqIds: null as any } as any,
+      });
+      await act(async () => {
+        await captured.refreshVendorCredits();
+      });
+      creditNumSpy.mockRestore();
+
+      // 3c. refreshVendorCredits when res.success is false
+      const creditFailSpy = jest.spyOn(rfqClient, 'fetchVendorRfqCredits').mockResolvedValueOnce({
+        success: false,
+        error: 'Credits unavailable',
+      } as any);
+      await act(async () => {
+        await captured.refreshVendorCredits();
+      });
+      creditFailSpy.mockRestore();
+
+      // 3d. refreshVendorCredits when no token
+      const creditNoToken = jest.spyOn(authClient, 'getToken').mockReturnValue(null as any);
+      await act(async () => {
+        await captured.refreshVendorCredits();
+      });
+      creditNoToken.mockRestore();
+
       // 4. ensureBootstrapData early return when already loaded via refreshFromDB
       await act(async () => {
         await captured.refreshFromDB();

@@ -2551,14 +2551,36 @@ export default function InitialSetupModal() {
             {aiJob?.status === 'FAILED' && (
               <div
                 data-testid="ai-job-error-banner"
-                className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5 shadow-xs"
+                className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
               >
-                <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" size={16} />
-                <div className="flex-1 min-w-0">
-                  <p className="font-bold text-rose-900 dark:text-rose-100">{UI_STRINGS.vendorPoIngestion.aiCategory.failedTitle}</p>
-                  <p className="mt-0.5 text-[11px] leading-relaxed">
-                    {aiJob.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
-                  </p>
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" size={16} />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-rose-900 dark:text-rose-100">{UI_STRINGS.vendorPoIngestion.aiCategory.failedTitle}</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed">
+                      {aiJob.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                  <button
+                    type="button"
+                    onClick={handleSimulatePOJoin}
+                    disabled={isProcessingPOJoin || isAiRunning}
+                    className="btn btn-rose btn-xs font-bold px-3 py-1.5"
+                  >
+                    Retry AI Match
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setApiJoinedVendors(computeJoinedRecords());
+                      setStep(4);
+                    }}
+                    className="btn btn-secondary btn-xs font-bold px-3 py-1.5 text-slate-700 dark:text-gray-200"
+                  >
+                    Skip to Step 4
+                  </button>
                 </div>
               </div>
             )}
@@ -2748,17 +2770,33 @@ export default function InitialSetupModal() {
               <button type="button" onClick={() => navigateToStep(2)} className="btn btn-secondary btn-sm">
                 Back to Vendor Master
               </button>
-              <button
-                type="button"
-                onClick={handleSimulatePOJoin}
-                disabled={isProcessingPOJoin || isAiRunning}
-                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5 disabled:opacity-60"
-              >
-                {isProcessingPOJoin || isAiRunning
-                  ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
-                  : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
-                <ArrowRight size={14} />
-              </button>
+              <div className="flex items-center gap-2">
+                {aiJob?.status === 'FAILED' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setApiJoinedVendors(computeJoinedRecords());
+                      setStep(4);
+                    }}
+                    className="btn btn-secondary font-bold text-xs py-2.5 px-4 text-slate-700 dark:text-gray-200"
+                  >
+                    Continue to Step 4 (Self-Map Required)
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSimulatePOJoin}
+                  disabled={isProcessingPOJoin || isAiRunning}
+                  className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  {isProcessingPOJoin || isAiRunning
+                    ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
+                    : aiJob?.status === 'FAILED'
+                    ? 'Retry AI Category Cross-Match'
+                    : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
+                  <ArrowRight size={14} />
+                </button>
+              </div>
             </div>
           </div>
         )}

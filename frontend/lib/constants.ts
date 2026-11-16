@@ -1774,6 +1774,67 @@ export function loadVendorUploadHistoryFromStorage(): VendorUploadHistoryBatch[]
 }
 
 /**
+ * Removes vendors from `procucev_vendor_upload_history` in browser localStorage
+ * matching any deleted vendor ID, email, or name.
+ */
+export function removeVendorsFromUploadHistoryInStorage(
+  deletedIdentifiers: readonly string[]
+): VendorUploadHistoryBatch[] {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
+  if (!Array.isArray(deletedIdentifiers) || deletedIdentifiers.length === 0) {
+    return loadVendorUploadHistoryFromStorage();
+  }
+
+  const lookupSet = new Set(
+    deletedIdentifiers
+      .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      .map((id) => id.trim().toLowerCase())
+  );
+
+  if (lookupSet.size === 0) {
+    return loadVendorUploadHistoryFromStorage();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const batches: unknown = JSON.parse(raw);
+    if (!Array.isArray(batches)) return [];
+
+    const updatedBatches = (batches as VendorUploadHistoryBatch[])
+      .map((batch) => {
+        if (!Array.isArray(batch?.records)) return batch;
+        const filteredRecords = batch.records.filter((rec: Record<string, unknown>) => {
+          const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
+          const recEmail = String(rec.email || '').trim().toLowerCase();
+          const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
+
+          if (recId && lookupSet.has(recId)) return false;
+          if (recEmail && lookupSet.has(recEmail)) return false;
+          if (recName && lookupSet.has(recName)) return false;
+          return true;
+        });
+
+        return {
+          ...batch,
+          records: filteredRecords,
+          totalRecords: filteredRecords.length,
+          processedRecords: filteredRecords.length,
+        };
+      })
+      .filter((batch) => Array.isArray(batch.records) && batch.records.length > 0);
+
+    window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+    if (typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new Event('vendor_upload_history_updated'));
+    }
+    return updatedBatches;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Merges buyer vendor upload batches stored in localStorage with store buyerVendors,
  * deduplicating by email and vendor name so Vendor Directory and Evaluation Summary stay consistent.
  */

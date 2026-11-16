@@ -950,43 +950,43 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
   // against the real D1 database before relying on it here, so this is one
   // genuinely shared query text, not a d1Text override.
   const byVendorCode = await pool.query(
-    `update po_line_items p
+    `update po_line_items
         set matched_vendor_record_id = v.id, match_strategy = $3
        from vendor_master_records v
-      where p.session_id = $1 and p.organization_id = $2 and p.in_horizon
-        and v.session_id = p.session_id and v.organization_id = p.organization_id
-        and p.matched_vendor_record_id is null
-        and p.vendor_code is not null and p.vendor_code <> ''
+      where po_line_items.session_id = $1 and po_line_items.organization_id = $2 and po_line_items.in_horizon
+        and v.session_id = po_line_items.session_id and v.organization_id = po_line_items.organization_id
+        and po_line_items.matched_vendor_record_id is null
+        and po_line_items.vendor_code is not null and po_line_items.vendor_code <> ''
         and v.vendor_code is not null and v.vendor_code <> ''
-        and lower(trim(p.vendor_code)) = lower(trim(v.vendor_code))`,
+        and lower(trim(po_line_items.vendor_code)) = lower(trim(v.vendor_code))`,
     [sessionId, organizationId, VENDOR_MATCH_STRATEGY.VENDOR_CODE],
     { d1: true }
   );
 
   const byGstin = await pool.query(
-    `update po_line_items p
+    `update po_line_items
         set matched_vendor_record_id = v.id, match_strategy = $3
        from vendor_master_records v
-      where p.session_id = $1 and p.organization_id = $2 and p.in_horizon
-        and v.session_id = p.session_id and v.organization_id = p.organization_id
-        and p.matched_vendor_record_id is null
-        and p.vendor_gstin is not null and p.vendor_gstin <> ''
+      where po_line_items.session_id = $1 and po_line_items.organization_id = $2 and po_line_items.in_horizon
+        and v.session_id = po_line_items.session_id and v.organization_id = po_line_items.organization_id
+        and po_line_items.matched_vendor_record_id is null
+        and po_line_items.vendor_gstin is not null and po_line_items.vendor_gstin <> ''
         and v.gstin is not null and v.gstin <> ''
-        and upper(trim(p.vendor_gstin)) = upper(trim(v.gstin))`,
+        and upper(trim(po_line_items.vendor_gstin)) = upper(trim(v.gstin))`,
     [sessionId, organizationId, VENDOR_MATCH_STRATEGY.GSTIN],
     { d1: true }
   );
 
   const byName = await pool.query(
-    `update po_line_items p
+    `update po_line_items
         set matched_vendor_record_id = v.id, match_strategy = $3
        from vendor_master_records v
-      where p.session_id = $1 and p.organization_id = $2 and p.in_horizon
-        and v.session_id = p.session_id and v.organization_id = p.organization_id
-        and p.matched_vendor_record_id is null
-        and p.normalized_vendor_name is not null and p.normalized_vendor_name <> ''
+      where po_line_items.session_id = $1 and po_line_items.organization_id = $2 and po_line_items.in_horizon
+        and v.session_id = po_line_items.session_id and v.organization_id = po_line_items.organization_id
+        and po_line_items.matched_vendor_record_id is null
+        and po_line_items.normalized_vendor_name is not null and po_line_items.normalized_vendor_name <> ''
         and v.normalized_name is not null and v.normalized_name <> ''
-        and p.normalized_vendor_name = v.normalized_name`,
+        and po_line_items.normalized_vendor_name = v.normalized_name`,
     [sessionId, organizationId, VENDOR_MATCH_STRATEGY.NORMALIZED_NAME],
     { d1: true }
   );
@@ -1115,7 +1115,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
             json_group_array(distinct p.existing_category)
               filter (where p.existing_category is not null and p.existing_category <> '')
               as existing_categories,
-            json_group_array(json_object('desc', p.item_description, 'spec', p.specification, 'qty', p.quantity, 'uom', p.uom) order by p.spend desc)
+            json_group_array(json_object('desc', p.item_description, 'spec', p.specification, 'qty', p.quantity, 'uom', p.uom))
               filter (where p.id is not null)
               as line_parts
        from vendor_master_records v
