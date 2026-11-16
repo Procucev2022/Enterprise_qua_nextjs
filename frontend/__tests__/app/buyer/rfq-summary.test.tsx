@@ -613,4 +613,27 @@ describe('Buyer RFQ Summary: details action and unset budget', () => {
 
     expect(within(budgetCell()).getByText(formatCurrency(145000))).toBeInTheDocument();
   });
+
+  it('triggers refreshRFQs on mount when available so status transitions like Closed appear consistently', () => {
+    const refreshRFQs = jest.fn().mockResolvedValue(undefined);
+    const closedRfq = buildRFQ({ rfqNumber: 'RFQ261611296521', status: 'Closed' });
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [closedRfq],
+      activeBuyerAccount: TEST_BUYER_ACCOUNT,
+      showToast: jest.fn(),
+      setSelectedRFQForMatrix: jest.fn(),
+      openRFQDeepDive: jest.fn(),
+      refreshRFQs,
+    });
+
+    render(
+      <RFQSummary onViewQuotes={onViewQuotes} onCreateRFQ={onCreateRFQ} onViewDetails={onViewDetails} />
+    );
+
+    expect(refreshRFQs).toHaveBeenCalledTimes(1);
+    const row = screen.getAllByRole('row')[1];
+    expect(within(row).getByText('Closed')).toBeInTheDocument();
+    expect(within(row).queryByText('Quotes Pending')).not.toBeInTheDocument();
+  });
 });

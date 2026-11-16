@@ -451,9 +451,9 @@ async function getRFQs(req, res, next) {
   try {
     const scope = await resolveRfqReadScope(req);
     if (scope.restricted && scope.role === 'buyer' && scope.buyerAccountId) {
-      await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
+      await storeService.syncRFQsFromDB(true, scope.buyerAccountId);
     } else {
-      await storeService.syncRFQsFromDB();
+      await storeService.syncRFQsFromDB(true);
     }
     let rfqs = scopedRfqList(scope);
     const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
@@ -480,6 +480,9 @@ async function getRFQs(req, res, next) {
         }))
       : rfqs;
     logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    }
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data });
   } catch (err) {
     logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
@@ -499,7 +502,7 @@ async function getRFQs(req, res, next) {
  */
 async function getAllRFQs(req, res, next) {
   try {
-    await storeService.syncRFQsFromDB();
+    await storeService.syncRFQsFromDB(true);
     let rfqs = storeService
       .getRFQs()
       .slice()
@@ -1628,9 +1631,12 @@ async function stageExtractionDocument(req, res, next) {
 async function getRFQSummary(req, res, next) {
   try {
     const scope = await resolveRfqReadScope(req);
-    await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
+    await storeService.syncRFQsFromDB(true, scope.buyerAccountId);
     const rfqs = scopedRfqList(scope);
     logger.info('Building RFQ portfolio summary', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    }
     res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });
   } catch (err) {
     logger.error('Error building RFQ summary', err, 'RFQ_CONTROLLER');
@@ -1818,7 +1824,7 @@ async function downloadQuoteAttachment(req, res, next) {
 async function updateRFQ(req, res, next) {
   const { id } = req.params;
   try {
-    const existing = storeService.getRFQById(id);
+    const existing = storeService.getRFQById(id) || (await storeService.getRFQByIdAsync(id));
     if (!existing || !(await canAccessRfq(req, existing))) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });

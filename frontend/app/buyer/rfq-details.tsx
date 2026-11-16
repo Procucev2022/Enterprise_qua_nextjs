@@ -531,7 +531,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   } catch {
     router = null;
   }
-  const { currentRole, showToast, refreshFromDB, buyerVendors, currentUserSession } = useApp();
+  const { currentRole, showToast, refreshFromDB, refreshRFQs, syncRFQRecord, buyerVendors, currentUserSession } = useApp();
   const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor' || currentRole === 'vendor');
   // The category manager is an internal oversight role: it sees full vendor
   // contact details (no double-blind) and a tabbed Procucev / Buyer's-own split
@@ -585,15 +585,26 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     (activeRfq?.sourcingMode as any) === 'v2' ||
     (activeRfq?.sourcingMode as any) === 'version_2';
 
+  const syncUpdatedRfq = async (updatedRfq?: RFQItem | null) => {
+    if (updatedRfq) {
+      setLocalRfq(updatedRfq);
+      if (onUpdate) onUpdate(updatedRfq);
+      syncRFQRecord?.(updatedRfq);
+    }
+    if (typeof refreshRFQs === 'function') {
+      await refreshRFQs();
+    }
+    await refreshFromDB();
+  };
+
   const handleCloseRFQ = async () => {
     if (!activeRfq || isClosing || isVendor) return;
     setIsClosing(true);
     try {
       const result = await updateRFQ(activeRfq.id, { status: 'Closed' });
       if (result.success) {
-        setLocalRfq(result.rfq);
         showToast('RFQ Closed', `RFQ ${activeRfq.rfqNumber} has been officially closed.`, 'success');
-        await refreshFromDB();
+        await syncUpdatedRfq(result.rfq);
       } else {
         throw new Error(result.error || 'Failed to close RFQ.');
       }
@@ -615,7 +626,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     try {
       const result = await extendRFQ(activeRfq.id, extensionDays);
       if (result.success) {
-        setLocalRfq(result.rfq);
         const closingIso = resolveRfqClosingDeadline(result.rfq);
         const formattedDeadline = closingIso ? formatIndianDateTime(closingIso) : '';
         showToast(
@@ -628,7 +638,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           'success'
         );
         setExtendModalOpen(false);
-        await refreshFromDB();
+        await syncUpdatedRfq(result.rfq);
       } else {
         throw new Error(result.error || DETAILS.extensionFailedTitle);
       }
@@ -1057,10 +1067,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         if (res.rfq) {
           setLocalRfq(res.rfq);
           if (onUpdate) onUpdate(res.rfq);
+          syncRFQRecord?.(res.rfq);
         }
 
         setChatInputText('');
-        await refreshFromDB();
+        await syncUpdatedRfq();
         showToast(DETAILS.clarificationSentTitle, DETAILS.clarificationSentToBuyer, 'success');
       } else {
         // Buyer replying to Vendor
@@ -1078,6 +1089,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           if (res.rfq) {
             setLocalRfq(res.rfq);
             if (onUpdate) onUpdate(res.rfq);
+            syncRFQRecord?.(res.rfq);
           }
         } else {
           // A new thread stores the sender's name, so a session without one cannot send it.
@@ -1121,10 +1133,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           }
           setLocalRfq(res.rfq);
           if (onUpdate) onUpdate(res.rfq);
+          syncRFQRecord?.(res.rfq);
         }
 
         setChatInputText('');
-        await refreshFromDB();
+        await syncUpdatedRfq();
         showToast(
           DETAILS.clarificationSentTitle,
           formatString(DETAILS.clarificationDispatchedTemplate, { vendorName: activeChannel.vendorName }),
@@ -1154,8 +1167,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       if (res.rfq) {
         setLocalRfq(res.rfq);
         if (onUpdate) onUpdate(res.rfq);
+        syncRFQRecord?.(res.rfq);
       }
-      await refreshFromDB();
+      await syncUpdatedRfq();
       setReplyModalInquiry(null);
       setReplyMessage('');
       showToast(
@@ -3573,6 +3587,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           onInvited={(updatedRfq, count) => {
             setLocalRfq(updatedRfq);
             if (onUpdate) onUpdate(updatedRfq);
+            syncRFQRecord?.(updatedRfq);
+            if (typeof refreshRFQs === 'function') void refreshRFQs();
             setInviteModalOpen(false);
             showToast('Suppliers Assigned', `${count} supplier(s) have been assigned to RFQ ${updatedRfq.rfqNumber}.`, 'success');
           }}

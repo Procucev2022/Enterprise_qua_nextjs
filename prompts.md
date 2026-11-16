@@ -6149,3 +6149,10 @@ After clicking the button, the popup should close automatically once the request
  there are 11 vendors available in my Vendor Directory, but none of them are appearing in the Create RFQ page under Mode 1 – Internal Vendors , V2 and V3 also
 ```
 ---
+
+### Prompt 250
+**Timestamp**: 2026-11-16T15:13:59+05:30
+```text
+I closed this RFQ, and the status is showing Closed inside the RFQ details page. However, in the RFQ Summary list, it is still showing Quotes Pending. Please check and fix the status synchronization so that the correct RFQ status is reflected consistently both inside and outside.
+```
+---

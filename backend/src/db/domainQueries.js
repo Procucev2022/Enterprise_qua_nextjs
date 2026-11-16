@@ -1679,7 +1679,7 @@ async function getRFQsFromDB(buyerAccountId = null, limit = null) {
   const result = await pool.query(
     sql,
     params,
-    { d1: true, d1Text: d1Sql, useCache: true, tag: 'rfqs', ttlMs: 60000 }
+    { d1: true, d1Text: d1Sql }
   );
   return result.rows.map((row) => parseRaw(row.raw));
 }

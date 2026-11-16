@@ -3424,5 +3424,34 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       const netErrVendorPay = await ctx().createVendorPaymentLink('select');
       expect(netErrVendorPay).toBeNull();
     });
+
+    it('syncRFQRecord updates matching RFQ lists, opportunities, selections, and prepends new RFQs without audit log noise', async () => {
+      const ctx = await mountStore();
+      const targetRfq = ctx().rfqs[0];
+      expect(targetRfq).toBeDefined();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(targetRfq);
+        ctx().openRFQDeepDive(targetRfq);
+      });
+
+      const beforeAuditCount = ctx().auditLogs.length;
+      const closedTarget = { ...targetRfq, status: 'Closed' as const };
+
+      await act(async () => {
+        ctx().syncRFQRecord(closedTarget);
+      });
+
+      expect(ctx().rfqs.find((r: RFQItem) => r.rfqNumber === targetRfq.rfqNumber)?.status).toBe('Closed');
+      expect(ctx().selectedRFQForMatrix?.status).toBe('Closed');
+      expect(ctx().selectedRFQForDeepDive?.status).toBe('Closed');
+      expect(ctx().auditLogs.length).toBe(beforeAuditCount);
+
+      const newRfq = { ...targetRfq, id: 'rfq-sync-new', rfqNumber: 'RFQ261611999999', status: 'Closed' as const };
+      await act(async () => {
+        ctx().syncRFQRecord(newRfq);
+      });
+      expect(ctx().rfqs.find((r: RFQItem) => r.rfqNumber === 'RFQ261611999999')?.status).toBe('Closed');
+    });
   });
 });

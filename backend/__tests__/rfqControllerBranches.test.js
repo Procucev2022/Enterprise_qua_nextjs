@@ -2493,5 +2493,60 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       storeService.addInquiryToRFQ.mockRestore();
       mailerService.sendVendorIssueAcknowledgementEmail.mockRestore();
     });
+
+    test('getRFQs forces fresh DB sync with no-store Cache-Control and updateRFQ falls back to getRFQByIdAsync', async () => {
+      const rfqClosed = {
+        id: 'rfq-sync-1',
+        rfqNumber: 'RFQ261611296521',
+        buyerAccountId: 'buyer-sync-1',
+        status: 'Closed',
+      };
+      const getByIdSpy = jest.spyOn(storeService, 'getRFQById').mockReturnValue(undefined);
+      const getByIdAsyncSpy = jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue({
+        ...rfqClosed,
+        status: 'Quotes Pending',
+      });
+      const ensureBuyerSpy = jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({ id: 'buyer-sync-1' });
+      const updateDurableSpy = jest.spyOn(storeService, 'updateRFQDurably').mockResolvedValue(rfqClosed);
+      const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue([rfqClosed]);
+      const getRfqsSpy = jest.spyOn(storeService, 'getRFQs').mockReturnValue([rfqClosed]);
+      const next = jest.fn();
+
+      try {
+        const updateRes = { ...mockRes(), setHeader: jest.fn() };
+        await rfqController.updateRFQ(
+          {
+            params: { id: rfqClosed.id },
+            body: { status: 'Closed' },
+            user: { role: 'buyer', buyerAccountId: 'buyer-sync-1', email: 'buyer@sync.test' },
+          },
+          updateRes,
+          next
+        );
+        expect(getByIdAsyncSpy).toHaveBeenCalledWith(rfqClosed.id);
+        expect(updateRes.statusCode).toBe(200);
+        expect(updateRes.data.data.status).toBe('Closed');
+
+        const listRes = { ...mockRes(), setHeader: jest.fn() };
+        await rfqController.getRFQs(
+          {
+            query: {},
+            user: { role: 'buyer', buyerAccountId: 'buyer-sync-1', email: 'buyer@sync.test' },
+          },
+          listRes,
+          next
+        );
+        expect(syncSpy).toHaveBeenCalledWith(true, 'buyer-sync-1');
+        expect(listRes.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+        expect(listRes.data.data[0].status).toBe('Closed');
+      } finally {
+        getByIdSpy.mockRestore();
+        getByIdAsyncSpy.mockRestore();
+        ensureBuyerSpy.mockRestore();
+        updateDurableSpy.mockRestore();
+        syncSpy.mockRestore();
+        getRfqsSpy.mockRestore();
+      }
+    });
   });
 });

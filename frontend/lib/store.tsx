@@ -297,6 +297,11 @@ interface AppContextType {
    */
   adoptCreatedRFQ: (rfq: RFQItem, remainingCredits?: number | null) => void;
   /**
+   * Synchronize an updated RFQ record into the store list, session cache,
+   * vendor opportunities, and active selections without emitting creation logs.
+   */
+  syncRFQRecord: (rfq: RFQItem) => void;
+  /**
    * Apply an edit to one RFQ and adopt the stored result.
    *
    * Resolves with the record the API saved, or throws with the reason. Local state
@@ -1138,9 +1143,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       tasks.push(loaders.ensureActiveBuyerAccount());
 
       if (path === '/buyer' || path === '/buyer/dashboard' || path.startsWith('/buyer/command-center')) {
-        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureRFQs(true));
         tasks.push(loaders.ensureAIFeed());
-      } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs') || path.startsWith('/buyer/rfq-details')) {
+      } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs')) {
+        tasks.push(loaders.ensureRFQs(true));
+      } else if (path.startsWith('/buyer/rfq-details')) {
         tasks.push(loaders.ensureRFQs());
       } else if (path.startsWith('/buyer/quote-matrix')) {
         tasks.push(loaders.ensureRFQs());
@@ -2610,8 +2617,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: data.error };
       }
 
-      setRfqs((prev) =>
-        prev.map((r) =>
+      setRfqs((prev) => {
+        const next = prev.map((r) =>
           r.rfqNumber === rfqNumber
             ? {
                 ...r,
@@ -2634,8 +2641,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                   : r.quotes,
               }
             : r
-        )
-      );
+        );
+        setSessionCache('rfqs', next);
+        return next;
+      });
 
       // The approval endpoint writes its own audit entry on the server. It does not dispatch to an ERP or a
       // vendor portal, so the feed line states only what was recorded.
@@ -2664,22 +2673,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * Adopt a server-created RFQ, replacing any existing entry with the same RFQ
    * number so a refresh cannot leave two copies of one record.
    */
-  const adoptCreatedRFQ = (rfq: RFQItem, remainingCredits?: number | null) => {
+  const syncRFQRecord = useCallback((rfq: RFQItem) => {
+    const matchesTarget = (candidate?: Pick<RFQItem, 'id' | 'rfqNumber'> | null) =>
+      Boolean(
+        candidate &&
+          ((rfq.rfqNumber && candidate.rfqNumber === rfq.rfqNumber) || (rfq.id && candidate.id === rfq.id))
+      );
+
     setRfqs((prev) => {
-      const exists = prev.some((r) => r.rfqNumber === rfq.rfqNumber || (rfq.id && r.id === rfq.id));
-      if (exists) {
-        return prev.map((r) => (r.rfqNumber === rfq.rfqNumber || (rfq.id && r.id === rfq.id) ? rfq : r));
-      }
-      return [rfq, ...prev];
+      const exists = prev.some((r) => matchesTarget(r));
+      const next = exists ? prev.map((r) => (matchesTarget(r) ? rfq : r)) : [rfq, ...prev];
+      setSessionCache('rfqs', next);
+      return next;
     });
     setVendorOpportunities((prev) => {
       const opp = buildOpportunityFromRFQ(rfq);
       const exists = prev.some((o) => o.rfqNumber === rfq.rfqNumber);
-      if (exists) {
-        return prev.map((o) => (o.rfqNumber === rfq.rfqNumber ? opp : o));
-      }
-      return [opp, ...prev];
+      return exists ? prev.map((o) => (o.rfqNumber === rfq.rfqNumber ? opp : o)) : [opp, ...prev];
     });
+    setSelectedRFQForMatrix((prev) => (matchesTarget(prev) ? rfq : prev));
+    setSelectedRFQForDeepDive((prev) => (matchesTarget(prev) ? rfq : prev));
+  }, []);
+
+  const adoptCreatedRFQ = (rfq: RFQItem, remainingCredits?: number | null) => {
+    syncRFQRecord(rfq);
 
     // Only a balance the server reported changes the count. If none was reported, the count is left as it was.
     // Nothing is decremented or derived here.
@@ -2724,13 +2741,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ? (changes.assignedVendors as any)
           : result.rfq.assignedVendors || (changes.assignedVendors as any) || [],
     };
-    setRfqs((prev) => prev.map((r) => (r.rfqNumber === saved.rfqNumber ? saved : r)));
-    setVendorOpportunities((prev) =>
-      prev.map((opp) => (opp.rfqNumber === saved.rfqNumber ? buildOpportunityFromRFQ(saved) : opp))
-    );
-    // Kept in step so a screen already holding this RFQ does not show the old terms.
-    setSelectedRFQForMatrix((prev) => (prev?.rfqNumber === saved.rfqNumber ? saved : prev));
-    setSelectedRFQForDeepDive((prev) => (prev?.rfqNumber === saved.rfqNumber ? saved : prev));
+    syncRFQRecord(saved);
 
     addAuditLog(
       `Edited ${saved.rfqNumber}: ${Object.keys(changes).join(', ')}`,
@@ -2759,7 +2770,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const { rfqNumber } = result;
-    setRfqs((prev) => prev.filter((r) => r.rfqNumber !== rfqNumber));
+    setRfqs((prev) => {
+      const next = prev.filter((r) => r.rfqNumber !== rfqNumber);
+      setSessionCache('rfqs', next);
+      return next;
+    });
     setVendorOpportunities((prev) => prev.filter((opp) => opp.rfqNumber !== rfqNumber));
     // A selection pointing at a deleted RFQ would render a stale record, so it is
     // cleared rather than left dangling.
@@ -2858,7 +2873,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     // Replaces any entry with the same number so a concurrent refresh cannot leave
     // two copies of one RFQ.
-    setRfqs((prev) => [newRFQ, ...prev.filter((r) => r.rfqNumber !== newRFQ.rfqNumber)]);
+    setRfqs((prev) => {
+      const next = [newRFQ, ...prev.filter((r) => r.rfqNumber !== newRFQ.rfqNumber)];
+      setSessionCache('rfqs', next);
+      return next;
+    });
 
     // Built from the saved RFQ by the same mapper the list uses, so the vendor portal shows the buyer, location
     // and value the server stored.
@@ -2948,6 +2967,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         refreshCategoryTaxonomy,
         addNewRFQ,
         adoptCreatedRFQ,
+        syncRFQRecord,
         updateRFQ,
         deleteRFQ,
         triggerChannelChaser,

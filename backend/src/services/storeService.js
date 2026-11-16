@@ -5141,6 +5141,8 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
+    this._lastRfqSyncTime = 0;
+    this._lastRfqSyncMap.clear();
     if (persist) this._persistRFQ(updated);
 
     if (notify) this._notifyRFQUpdate(updated, oldStatus, updates);
@@ -5228,6 +5230,8 @@ class StoreService {
     const updatedIndex = this.rfqs.findIndex((rfq) => rfq.id === publicUpdated.id);
     if (updatedIndex >= 0) this.rfqs[updatedIndex] = publicUpdated;
     else this.rfqs.unshift(publicUpdated);
+    this._lastRfqSyncTime = 0;
+    this._lastRfqSyncMap.clear();
     this._notifyRFQUpdate(publicUpdated, previous.status, appliedUpdates);
     return publicUpdated;
   }

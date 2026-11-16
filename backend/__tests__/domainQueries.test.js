@@ -3086,5 +3086,18 @@ describe('additional domainQueries branch coverage', () => {
       await expect(domainQueries.getPublicVendorsByMinorCategoryFromDB(['Laptop'], [], 25)).resolves.toEqual([]);
       expect(querySpy).not.toHaveBeenCalled();
     });
+
+    test('getRFQsFromDB queries DB directly without per-isolate queryCache so status transitions are fresh across workers', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const closedRfq = { id: 'rfq-bypass-1', rfqNumber: 'RFQ261611296521', status: 'Closed' };
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: closedRfq }] });
+
+      const rows = await domainQueries.getRFQsFromDB('buyer-acc-1', 100);
+      expect(rows).toEqual([closedRfq]);
+      const [, params, options] = querySpy.mock.calls[0];
+      expect(params).toEqual(['buyer-acc-1', 100]);
+      expect(options.d1).toBe(true);
+      expect(options.useCache).toBeUndefined();
+    });
   });
 });
