@@ -8,7 +8,7 @@ const { RFQ_MINOR_SHORTFALL_ALERT } = require('../src/config/constants');
 
 const MAJOR = 'Engineering Spares - Mechanical';
 const MINOR = 'Bearings & Accessories';
-const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'quateam@procucev.com', 'anshul.goel@procucev.com', 'veerababu.v@procucev.com'];
+const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'anshul.goel@procucev.com', 'veerababu.v@procucev.com'];
 const SHORTFALL = { minorCategory: MINOR, majorCategory: MAJOR, minorMatched: 21, majorFilled: 4, target: 25 };
 const RECIPIENT_ENV = 'RFQ_MINOR_SHORTFALL_ALERT_EMAILS';
 
@@ -98,6 +98,13 @@ describe('shortfall alert recipients from the environment', () => {
 
     globalThis.__CF_ENV__ = { [RECIPIENT_ENV]: '' };
     expect(RFQ_MINOR_SHORTFALL_ALERT.RECIPIENTS).toEqual(['env@quota.test']);
+
+    delete globalThis.__CF_ENV__;
+    process.env[RECIPIENT_ENV] = 'gmtrfq@procucev.com, quateam@procucev.com, anshul.goel@procucev.com';
+    expect(RFQ_MINOR_SHORTFALL_ALERT.RECIPIENTS).toEqual(['gmtrfq@procucev.com', 'anshul.goel@procucev.com']);
+
+    process.env[RECIPIENT_ENV] = 'quateam@procucev.com';
+    expect(RFQ_MINOR_SHORTFALL_ALERT.RECIPIENTS).toEqual(DEFAULT_RECIPIENTS);
   });
 });
 

@@ -522,6 +522,34 @@ describe('emailGatewayService remaining branch coverage', () => {
       );
     });
 
+    test('strips quateam@procucev.com and falls back to default alert CCs when retrying persisted VENDOR_QUOTE_FAILURE rows', async () => {
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([
+        {
+          message_id: 'notice-strip-quateam',
+          from_address: 'sales@vendor.in',
+          rfq_number: 'RFQ-RETRY-QT',
+          subject: 'Industrial valves',
+          processed_at: new Date().toISOString(),
+          detail: JSON.stringify({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+            rfqTitle: 'Industrial valves',
+            vendorName: 'Apex Valves',
+            cc: 'quateam@procucev.com',
+          }),
+        },
+      ]);
+      const deliverySpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValueOnce({ sent: true });
+      jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
+
+      await emailGatewayService.retryPendingAcknowledgements();
+      expect(deliverySpy).toHaveBeenCalledWith(
+        'sales@vendor.in',
+        expect.objectContaining({
+          cc: 'gmtrfq@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com',
+        })
+      );
+    });
+
     test('reconstructs a vendor quote acknowledgement from its persisted RFQ and quote IDs', async () => {
       const quote = { id: 'quote-ack-1', vendorId: 'vendor-1', vendorName: 'Apex Valves', unitPrice: 120 };
       const rfq = { id: 'rfq-ack-1', rfqNumber: 'RFQ-ACK-01', title: 'Industrial valves', quotes: [quote] };

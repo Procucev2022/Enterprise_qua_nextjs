@@ -938,5 +938,34 @@ describe('free trial credits, moved message objects and ticket constants', () =>
     for (const key of keyMatches) counts.set(key, (counts.get(key) || 0) + 1);
     const duplicates = [...counts.entries()].filter(([, c]) => c > 1);
     expect(duplicates).toEqual([]);
+    expect(rawWrangler).not.toContain('quateam@procucev.com');
+  });
+
+  test('QUOTE_FAILURE_ALERT and VENDOR_QUOTE_SUPPORT_CC exclude quateam@procucev.com and default to gmtrfq, anshul, veerababu', () => {
+    const savedCc = process.env.QUOTE_FAILURE_CC_EMAILS;
+    const savedSupport = process.env.VENDOR_QUOTE_SUPPORT_CC;
+    try {
+      delete process.env.QUOTE_FAILURE_CC_EMAILS;
+      process.env.VENDOR_QUOTE_SUPPORT_CC = 'quateam@procucev.com, support@procucev.com';
+      const constants = loadConstants();
+      expect(constants.QUOTE_FAILURE_ALERT.CC_RECIPIENTS).toEqual([
+        'gmtrfq@procucev.com',
+        'anshul.goel@procucev.com',
+        'veerababu.v@procucev.com',
+      ]);
+      expect(constants.VENDOR_QUOTE_SUPPORT_CC).toBe('support@procucev.com');
+
+      process.env.QUOTE_FAILURE_CC_EMAILS = 'quateam@procucev.com';
+      expect(constants.QUOTE_FAILURE_ALERT.CC_RECIPIENTS).toEqual([
+        'gmtrfq@procucev.com',
+        'anshul.goel@procucev.com',
+        'veerababu.v@procucev.com',
+      ]);
+    } finally {
+      if (savedCc === undefined) delete process.env.QUOTE_FAILURE_CC_EMAILS;
+      else process.env.QUOTE_FAILURE_CC_EMAILS = savedCc;
+      if (savedSupport === undefined) delete process.env.VENDOR_QUOTE_SUPPORT_CC;
+      else process.env.VENDOR_QUOTE_SUPPORT_CC = savedSupport;
+    }
   });
 });

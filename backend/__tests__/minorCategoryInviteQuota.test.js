@@ -15,7 +15,7 @@ const MINOR = 'Bearings & Accessories';
 const OTHER_MINOR = 'Pumps & Accessories';
 const TARGET = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
 const PER_MINOR_LOOKUP = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY * RFQ_MINOR_INVITE_LOOKUP.OVERFETCH_FACTOR;
-const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'quateam@procucev.com', 'anshul.goel@procucev.com', 'veerababu.v@procucev.com'];
+const DEFAULT_RECIPIENTS = ['gmtrfq@procucev.com', 'anshul.goel@procucev.com', 'veerababu.v@procucev.com'];
 
 /** A Procucev network vendor. A vendor with no minors is a major-only vendor. */
 function networkVendor(id, { minors = [], major = MAJOR, rating = 3, pincode = null } = {}) {
