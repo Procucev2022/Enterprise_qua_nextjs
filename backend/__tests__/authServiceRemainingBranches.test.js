@@ -561,6 +561,121 @@ describe('authService remaining branch tests', () => {
       expect(result.success).toBe(true);
       expect(result.dispatchedQuotesCount).toBe(0);
     });
+
+    test('creates and links missing organization and mirror row during buyer onboarding', async () => {
+      const dbUser = {
+        id: 'u-ob-noorg',
+        email: 'buyer.noorg@test.com',
+        orgId: '',
+        role: 'buyer',
+        password: 'CorrectOldPass!',
+        name: 'Veera',
+      };
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(dbUser);
+      jest.spyOn(authSessionQueries, 'findOtp')
+        .mockResolvedValueOnce({ code: '111222', expiresAt: Date.now() + 60000 })
+        .mockResolvedValueOnce({ code: '333444', expiresAt: Date.now() + 60000 });
+      jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValue({});
+      jest.spyOn(identityQueries, 'updateBuyerOnboardingStatus').mockResolvedValue(true);
+      const ensureOrgSpy = jest.spyOn(identityQueries, 'ensureBuyerOrganization').mockResolvedValue('org-created-99');
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue(null);
+      const addMirrorSpy = jest.spyOn(storeService, 'addBuyerAccountDurably').mockResolvedValue({ id: 'u-ob-noorg' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+      jest.spyOn(storeService, 'addAuditLog').mockReturnValue({});
+
+      const result = await authService.completeBuyerOnboarding(
+        { role: 'buyer', email: 'buyer.noorg@test.com' },
+        {
+          mobile: '9381877013',
+          currentPassword: 'CorrectOldPass!',
+          newPassword: 'BrandNewSecurePass1!',
+          emailOtp: '111222',
+          mobileOtp: '333444',
+          companyName: 'Veera solutions pvt ltd',
+          registeredAddress: 'HSR Layout Sector 2',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560102',
+          gst: '29ABCDE1234F1Z5',
+        },
+        '127.0.0.1'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.user.orgId).toBe('org-created-99');
+      expect(ensureOrgSpy).toHaveBeenCalledWith(expect.objectContaining({
+        userUuid: 'u-ob-noorg',
+        street: 'HSR Layout Sector 2',
+        gstin: '29ABCDE1234F1Z5',
+      }));
+      expect(addMirrorSpy).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'u-ob-noorg',
+        organizationId: 'org-created-99',
+        street: 'HSR Layout Sector 2',
+        address1: 'HSR Layout Sector 2',
+        gstin: '29ABCDE1234F1Z5',
+      }));
+    });
+
+    test('falls back to ensureBuyerOrganization when updateProfile reports ORG_NOT_FOUND and tolerates errors', async () => {
+      const dbUser = {
+        id: 'u-ob-missingorg',
+        email: 'buyer.missing@test.com',
+        orgId: 'org-dangling',
+        role: 'buyer',
+        password: 'CorrectOldPass!',
+      };
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(dbUser);
+      jest.spyOn(authSessionQueries, 'findOtp')
+        .mockResolvedValueOnce({ code: '111222', expiresAt: Date.now() + 60000 })
+        .mockResolvedValueOnce({ code: '333444', expiresAt: Date.now() + 60000 });
+      jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValue({});
+      jest.spyOn(identityQueries, 'updateBuyerOnboardingStatus').mockResolvedValue(true);
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: false, reason: 'ORG_NOT_FOUND' });
+      const ensureOrgSpy = jest.spyOn(identityQueries, 'ensureBuyerOrganization').mockResolvedValueOnce('org-repaired');
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'u-ob-missingorg' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+      jest.spyOn(storeService, 'addAuditLog').mockReturnValue({});
+
+      const repaired = await authService.completeBuyerOnboarding(
+        { role: 'buyer', email: 'buyer.missing@test.com' },
+        {
+          mobile: '9876543210',
+          currentPassword: 'CorrectOldPass!',
+          newPassword: 'BrandNewSecurePass1!',
+          emailOtp: '111222',
+          mobileOtp: '333444',
+          companyName: 'Repaired Org',
+          gstin: '27AAAAA0000A1Z5',
+          street: 'Plot 5',
+        },
+        '127.0.0.1'
+      );
+
+      expect(repaired.user.orgId).toBe('org-repaired');
+      expect(ensureOrgSpy).toHaveBeenCalled();
+
+      // Also cover catch path when !dbUser.orgId and ensureBuyerOrganization rejects
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ ...dbUser, orgId: null });
+      jest.spyOn(authSessionQueries, 'findOtp')
+        .mockResolvedValueOnce({ code: '111222', expiresAt: Date.now() + 60000 })
+        .mockResolvedValueOnce({ code: '333444', expiresAt: Date.now() + 60000 });
+      ensureOrgSpy.mockRejectedValueOnce(new Error('D1 org write error'));
+
+      const tolerated = await authService.completeBuyerOnboarding(
+        { role: 'buyer', email: 'buyer.missing@test.com' },
+        {
+          mobile: '9876543210',
+          currentPassword: 'CorrectOldPass!',
+          newPassword: 'BrandNewSecurePass1!',
+          emailOtp: '111222',
+          mobileOtp: '333444',
+          companyName: 'Tolerated Org',
+        },
+        '127.0.0.1'
+      );
+      expect(tolerated.success).toBe(true);
+    });
   });
 
   describe('vendor directory session token generation & scope verification', () => {

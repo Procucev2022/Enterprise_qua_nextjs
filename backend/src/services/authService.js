@@ -1155,13 +1155,18 @@ async function registerUser(payload, ipAddress) {
     orgName,
     role,
     street,
+    streetAddress: streetAddressParam,
     address,
+    registeredAddress,
     city,
     state,
     pincode,
     country,
     gstin,
+    gstNumber,
+    gst,
     pan,
+    panNumber,
     emailOtp,
     mobileOtp,
     code,
@@ -1180,9 +1185,15 @@ async function registerUser(payload, ipAddress) {
   const normalizedState = (state || '').trim();
   const normalizedPincode = (pincode || '').trim();
   const normalizedCountry = (country || 'India').trim();
-  const streetAddress = (street || address || (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')).trim();
-  const normalizedGstin = (gstin || '').trim().toUpperCase();
-  const normalizedPan = (pan || '').trim().toUpperCase();
+  const streetAddress = (
+    street ||
+    streetAddressParam ||
+    address ||
+    registeredAddress ||
+    (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')
+  ).trim();
+  const normalizedGstin = (gstin || gstNumber || gst || '').trim().toUpperCase();
+  const normalizedPan = (pan || panNumber || '').trim().toUpperCase();
 
   // If OTP codes were provided with registration, verify both email and mobile OTPs
   const submittedEmailOtp = emailOtp || code;
@@ -1289,9 +1300,12 @@ async function registerUser(payload, ipAddress) {
         contactPerson: name,
         mobileNumber: mobile,
         gstin: normalizedGstin,
+        gstNumber: normalizedGstin,
         pan: normalizedPan,
+        panNumber: normalizedPan,
         street: streetAddress,
         address1: streetAddress,
+        address: streetAddress,
         city: normalizedCity,
         state: normalizedState,
         pincode: normalizedPincode,
@@ -1423,17 +1437,25 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     city,
     state,
     pincode,
+    country,
     address,
+    registeredAddress,
     street,
+    streetAddress,
     gstin,
     gstNumber,
+    gst,
     pan,
     panNumber,
   } = payload || {};
 
-  const effectiveGstin = (gstin || gstNumber || '').trim().toUpperCase();
+  const effectiveGstin = (gstin || gstNumber || gst || '').trim().toUpperCase();
   const effectivePan = (pan || panNumber || '').trim().toUpperCase();
-  const effectiveAddress = (address || street || '').trim();
+  const effectiveAddress = (street || streetAddress || address || registeredAddress || '').trim();
+  const effectiveCity = (city || '').trim();
+  const effectiveState = (state || '').trim();
+  const effectivePincode = (pincode || '').trim();
+  const effectiveCountry = (country || 'India').trim();
 
   const normalizedEmail = (user.email || '').trim().toLowerCase();
   const cleanedMobile = String(mobile || '').replace(/\D/g, '');
@@ -1539,36 +1561,134 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     throw new Error('Failed to update buyer onboarding credentials in identity database.');
   }
 
-  // 6. Update buyer account in storeService
-  try {
-    const updatedBuyer = await storeService.updateBuyerAccountDurably(normalizedEmail, {
-      companyName: companyName || dbUser.orgName,
-      organizationName: companyName || dbUser.orgName,
-      contactName: contactName || dbUser.name,
-      contactPerson: contactName || dbUser.name,
-      phone: cleanedMobile,
-      mobileNumber: cleanedMobile,
-      city: city || '',
-      state: state || '',
-      pincode: pincode || '',
-      address: effectiveAddress,
-      gstin: effectiveGstin,
-      pan: effectivePan,
-      profileVerified: true,
-      status: 'ACTIVE_VERIFIED',
-      verificationStatus: 'verified',
-      onboardingRequired: false,
-      emailVerified: true,
-      phoneVerified: true,
-      isApproved: true,
-      isAutoRegistered: false,
-      tempPasswordRequired: false,
-    });
-    if (!updatedBuyer) {
-      logger.warn('Buyer identity onboarding completed but no buyer-account mirror was found', {
-        email: normalizedEmail,
+  // Update organization profile in database first (or link one if org_uuid was missing)
+  let resolvedOrgId = dbUser.orgId || null;
+  const effectiveOrgName = companyName || dbUser.orgName;
+  const effectiveContactName = contactName || dbUser.name;
+  const resolvedStreetForMirror =
+    effectiveAddress ||
+    (effectiveCity && effectiveState ? `${effectiveCity}, ${effectiveState}` : effectiveCity || '');
+
+  if (resolvedOrgId) {
+    try {
+      const profileWrite = await buyerProfileQueries.updateProfile({
+        organizationId: resolvedOrgId,
         userId: dbUser.id,
-      }, 'AUTH_SERVICE');
+        actor: normalizedEmail,
+        patch: {
+          companyName: effectiveOrgName,
+          contactName: effectiveContactName,
+          city: effectiveCity || undefined,
+          state: effectiveState || undefined,
+          pincode: effectivePincode || undefined,
+          country: effectiveCountry || undefined,
+          street: effectiveAddress || undefined,
+          gstNumber: effectiveGstin || undefined,
+          panNumber: effectivePan || undefined,
+        },
+      });
+      if (profileWrite && profileWrite.updated === false) {
+        logger.warn('Buyer identity onboarding completed but organization profile was not updated', {
+          email: normalizedEmail,
+          userId: dbUser.id,
+          organizationId: resolvedOrgId,
+          reason: profileWrite.reason,
+        }, 'AUTH_SERVICE');
+        if (profileWrite.reason === 'ORG_NOT_FOUND' && typeof identityQueries.ensureBuyerOrganization === 'function') {
+          resolvedOrgId = (await identityQueries.ensureBuyerOrganization({
+            userUuid: dbUser.id,
+            email: normalizedEmail,
+            organizationName: effectiveOrgName,
+            contactName: effectiveContactName,
+            phone: cleanedMobile,
+            street: effectiveAddress,
+            address: effectiveAddress,
+            city: effectiveCity,
+            state: effectiveState,
+            pincode: effectivePincode,
+            country: effectiveCountry,
+            gstin: effectiveGstin,
+            pan: effectivePan,
+            actorEmail: normalizedEmail,
+          })) || resolvedOrgId;
+        }
+      }
+    } catch (profileErr) {
+      logger.warn('Failed to update DB organization profile during onboarding', { error: profileErr.message }, 'AUTH_SERVICE');
+    }
+  } else if (typeof identityQueries.ensureBuyerOrganization === 'function') {
+    try {
+      resolvedOrgId = await identityQueries.ensureBuyerOrganization({
+        userUuid: dbUser.id,
+        email: normalizedEmail,
+        organizationName: effectiveOrgName,
+        contactName: effectiveContactName,
+        phone: cleanedMobile,
+        street: effectiveAddress,
+        address: effectiveAddress,
+        city: effectiveCity,
+        state: effectiveState,
+        pincode: effectivePincode,
+        country: effectiveCountry,
+        gstin: effectiveGstin,
+        pan: effectivePan,
+        actorEmail: normalizedEmail,
+      });
+    } catch (orgErr) {
+      logger.warn('Failed to create/link DB organization profile during onboarding', { error: orgErr.message }, 'AUTH_SERVICE');
+    }
+  }
+
+  // 6. Update buyer account mirror in storeService (or create it if absent)
+  const onboardingMirrorFields = {
+    companyName: effectiveOrgName,
+    organizationName: effectiveOrgName,
+    brandName: effectiveOrgName,
+    contactName: effectiveContactName,
+    contactPerson: effectiveContactName,
+    corporateEmail: normalizedEmail,
+    phone: cleanedMobile,
+    mobileNumber: cleanedMobile,
+    city: effectiveCity,
+    state: effectiveState,
+    pincode: effectivePincode,
+    zip_code: effectivePincode,
+    country: effectiveCountry,
+    address: effectiveAddress,
+    street: resolvedStreetForMirror,
+    address1: resolvedStreetForMirror,
+    primaryPlantLocation: [
+      effectiveCity,
+      effectiveState && effectivePincode ? `${effectiveState} (${effectivePincode})` : effectiveState,
+    ]
+      .filter(Boolean)
+      .join(', '),
+    gstin: effectiveGstin,
+    gstNumber: effectiveGstin,
+    pan: effectivePan,
+    panNumber: effectivePan,
+    organizationId: resolvedOrgId || null,
+    profileVerified: true,
+    status: 'ACTIVE_VERIFIED',
+    verificationStatus: 'verified',
+    onboardingRequired: false,
+    emailVerified: true,
+    phoneVerified: true,
+    isApproved: true,
+    isAutoRegistered: false,
+    tempPasswordRequired: false,
+  };
+  try {
+    const updatedBuyer = await storeService.updateBuyerAccountDurably(normalizedEmail, onboardingMirrorFields);
+    if (!updatedBuyer) {
+      await storeService.addBuyerAccountDurably({
+        id: dbUser.id,
+        ...onboardingMirrorFields,
+        sourcingMode: 'mode_2',
+        subscriptionPlan: 'free_trial',
+        remainingFreeRFQs: BUYER_FREE_TRIAL_RFQ_CREDITS,
+        accountSource: 'web_registration',
+      });
     }
   } catch (buyerSyncErr) {
     // Identity state is canonical and has already committed. Keep onboarding
@@ -1579,37 +1699,6 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
       email: normalizedEmail,
       userId: dbUser.id,
     }, 'AUTH_SERVICE');
-  }
-
-  // Also update organization profile in database if available
-  if (dbUser.orgId) {
-    try {
-      const profileWrite = await buyerProfileQueries.updateProfile({
-        organizationId: dbUser.orgId,
-        userId: dbUser.id,
-        actor: normalizedEmail,
-        patch: {
-          companyName: companyName || dbUser.orgName,
-          contactName: contactName || dbUser.name,
-          city: city || undefined,
-          state: state || undefined,
-          pincode: pincode || undefined,
-          street: effectiveAddress || undefined,
-          gstNumber: effectiveGstin || undefined,
-          panNumber: effectivePan || undefined,
-        },
-      });
-      if (!profileWrite.updated) {
-        logger.warn('Buyer identity onboarding completed but organization profile was not updated', {
-          email: normalizedEmail,
-          userId: dbUser.id,
-          organizationId: dbUser.orgId,
-          reason: profileWrite.reason,
-        }, 'AUTH_SERVICE');
-      }
-    } catch (profileErr) {
-      logger.warn('Failed to update DB organization profile during onboarding', { error: profileErr.message }, 'AUTH_SERVICE');
-    }
   }
 
   // 7. Dispatch pending quotation notifications if any were queued
@@ -1623,6 +1712,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // 8. Generate fresh session token
   const updatedUserRecord = {
     ...dbUser,
+    orgId: resolvedOrgId || dbUser.orgId,
     mobile: cleanedMobile,
     resetPasswordRequired: false,
     onboardingRequired: false,

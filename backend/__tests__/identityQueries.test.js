@@ -1122,4 +1122,66 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       expect(newBuyerOrganization.text).not.toMatch(/contact_name|contact_email|contact_phone/);
     });
   });
+
+  describe('ensureBuyerOrganization', () => {
+    test('returns null when storage is unconfigured, userUuid missing, or org type missing', async () => {
+      dbPool.pool = null;
+      await expect(identityQueries.ensureBuyerOrganization({ userUuid: 'u-1' })).resolves.toBeNull();
+
+      dbPool.pool = { connect: jest.fn() };
+      await expect(identityQueries.ensureBuyerOrganization({ userUuid: '' })).resolves.toBeNull();
+
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
+      await expect(identityQueries.ensureBuyerOrganization({ userUuid: 'u-1', email: 'b@co.in' })).resolves.toBeNull();
+    });
+
+    test('creates and links a new organization when none exists', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([{ uuid: 'master-uuid' }]);
+      const querySpy = jest.spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [] }) // no existing org
+        .mockResolvedValueOnce({ rowCount: 1 }) // insert org
+        .mockResolvedValueOnce({ rowCount: 1 }); // update user
+
+      const orgUuid = await identityQueries.ensureBuyerOrganization({
+        userUuid: 'u-new-org',
+        email: 'newbuyer@co.in',
+        organizationName: 'New Buyer Org',
+        contactName: 'Riya Sen',
+        phone: '9876543210',
+        street: 'Plot 14, Bommasandra',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560099',
+        gstin: '29abcde1234f1z5',
+        pan: 'abcde1234f',
+      });
+
+      expect(orgUuid).toEqual(expect.any(String));
+      expect(querySpy).toHaveBeenCalledTimes(3);
+      expect(querySpy.mock.calls[1][0]).toContain('insert into organization');
+      expect(querySpy.mock.calls[2][0]).toContain('update "user" set org_uuid = $1');
+    });
+
+    test('reuses and populates an existing organization record', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([{ uuid: 'master-uuid' }]);
+      const querySpy = jest.spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [{ uuid: 'existing-org-uuid' }] })
+        .mockResolvedValueOnce({ rowCount: 1 })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      const orgUuid = await identityQueries.ensureBuyerOrganization({
+        userUuid: 'u-existing-org',
+        email: 'existing@co.in',
+        city: 'Pune',
+        state: 'Maharashtra',
+        pincode: '411001',
+        gstin: '27AAAAA0000A1Z5',
+      });
+
+      expect(orgUuid).toBe('existing-org-uuid');
+      expect(querySpy.mock.calls[1][0]).toContain('update organization');
+    });
+  });
 });

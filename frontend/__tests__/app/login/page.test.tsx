@@ -865,6 +865,42 @@ describe('LoginPage', () => {
       expect(addBuyerAccount.mock.calls[0][0]).not.toHaveProperty('contactDesignation');
     });
 
+    it('propagates explicit registered street address and GSTIN during buyer registration', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.register as jest.Mock).mockResolvedValue({
+        success: true,
+        user: BUYER_SESSION,
+        token: 'jwt',
+      });
+
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      typeInto(/Registered Address/i, 'Plot 42, Electronics City');
+      fireEvent.click(submitButton(/Create Account/i));
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
+      completeDualOtp();
+
+      await waitFor(() => {
+        expect(authClient.register).toHaveBeenCalledWith(
+          expect.objectContaining({
+            street: 'Plot 42, Electronics City',
+            address: 'Plot 42, Electronics City',
+            gstin: '27AAAAA0000A1Z5',
+          })
+        );
+        expect(addBuyerAccount).toHaveBeenCalledWith(
+          expect.objectContaining({
+            street: 'Plot 42, Electronics City',
+            address1: 'Plot 42, Electronics City',
+            gstin: '27AAAAA0000A1Z5',
+          })
+        );
+      });
+    });
+
     it('rejects a short password before calling the API', () => {
       render(<LoginPage />);
       openRegister();

@@ -182,6 +182,9 @@ async function getProfile(sessionUser) {
       }
       if (!profile.country || profile.country === '') {
         profile.country = buyerAcc.country || 'India';
+        if (needsDbUpdate) {
+          patch.country = profile.country;
+        }
       }
 
       if (needsDbUpdate && profile.organizationId) {

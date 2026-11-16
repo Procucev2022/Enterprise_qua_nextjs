@@ -173,6 +173,39 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(next).toHaveBeenCalled();
+
+      // Merges into existing buyer mirror when an account already exists for corporateEmail
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'u-buyer-existing',
+        corporateEmail: 'merge@test.com',
+        organizationId: 'org-merge-1',
+      });
+      const mergeSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({
+        id: 'u-buyer-existing',
+        organizationName: 'Merge Corp',
+        gstin: '27AAAAA0000A1Z5',
+        street: 'Plot 88',
+      });
+      const mergeRes = mockRes();
+      await buyerAccountController.createBuyerAccount(
+        {
+          user: { role: 'buyer', sub: 'u-buyer-existing', email: 'merge@test.com' },
+          body: {
+            organizationName: 'Merge Corp',
+            corporateEmail: 'merge@test.com',
+            gstin: '27AAAAA0000A1Z5',
+            street: 'Plot 88',
+          },
+        },
+        mergeRes,
+        next
+      );
+      expect(mergeSpy).toHaveBeenCalledWith('u-buyer-existing', expect.objectContaining({
+        gstin: '27AAAAA0000A1Z5',
+        street: 'Plot 88',
+        organizationId: 'org-merge-1',
+      }));
+      expect(mergeRes.status).toHaveBeenCalledWith(201);
     });
 
     test('updateBuyerAccount not found, success, and error', async () => {

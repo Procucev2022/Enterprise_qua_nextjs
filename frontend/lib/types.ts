@@ -2075,6 +2075,8 @@ export interface BuyerAccount {
   contactDesignation?: string;
   mobileNumber: string;
   gstin: string;
+  gstNumber?: string;
+  gst?: string;
   panNumber?: string;
   cinNumber?: string;
   industrySector: string;
@@ -2090,10 +2092,12 @@ export interface BuyerAccount {
   primaryPlantLocation: string;
   street?: string;
   address1?: string;
+  address?: string;
   city?: string;
   state?: string;
   pincode?: string;
   zip_code?: string;
+  zipCode?: string;
   country?: string;
   pan?: string;
   supportedMajorCategories: string[];
@@ -2479,6 +2483,7 @@ export interface RegisterPayload {
   orgName?: string;
   street?: string;
   address?: string;
+  registeredAddress?: string;
   city?: string;
   state?: string;
   pincode?: string;

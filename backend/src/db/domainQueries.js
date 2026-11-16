@@ -2177,7 +2177,7 @@ async function getBuyerAccountsFromDB(limit = null) {
 async function getBuyerAccountByEmailFromDB(email, { fresh = false } = {}) {
   if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
-    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC LIMIT 1',
     [email],
     { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
   );
@@ -2206,7 +2206,7 @@ async function getBuyerAccountSnapshotByIdFromDB(id) {
 async function getBuyerAccountSnapshotByEmailFromDB(email) {
   if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
-    'SELECT id, raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    'SELECT id, raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC LIMIT 1',
     [email],
     { d1: true }
   );

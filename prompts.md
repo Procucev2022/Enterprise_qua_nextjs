@@ -6164,6 +6164,20 @@ please fix these two issues in the Vendor Directory – Add Single Vendor popup:
 
 Phone Number Validation: The Phone field is accepting alphabets and special characters. Allow only numeric digits and validate the required mobile number length.
 
-Error Message Visibility: Validation error messages are appearing behind the popup or are hidden. Please ensure all error messages are displayed clearly above the popup content and remain visible to the user.
+Error Message Visibility: Validation error messages are appearing behind the popup or are hidden. Please ensure all error messages displayed clearly above the popup content and remain visible to the user.
+```
+---
+
+### Prompt 252
+**Timestamp**: 2026-11-16T17:22:31+05:30
+```text
+I entered my GST number and registered address during buyer registration, but these details are not appearing in the Buyer Profile.
+```
+---
+
+### Prompt 252
+**Timestamp**: 2026-11-16T17:22:31+05:30
+```text
+I entered my GST number and registered address during buyer registration, but these details are not appearing in the Buyer Profile.
 ```
 ---
