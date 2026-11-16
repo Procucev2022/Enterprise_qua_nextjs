@@ -1125,10 +1125,6 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     valves: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
     hose: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
     pipe: { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
-    panel: { major: 'Engineering Spares - Electrical', minor: 'Panels' },
-    cable: { major: 'Engineering Spares - Electrical', minor: 'Cables' },
-    sensor: { major: 'Engineering Spares - Electrical', minor: 'Sensors' },
-    motor: { major: 'Engineering Spares - Electrical', minor: 'Motors' },
     pipes: { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
     gasket: { major: 'Engineering Spares - Mechanical', minor: 'O-Rings / Gasket / Seals' },
     'o-ring': { major: 'Engineering Spares - Mechanical', minor: 'O-Rings / Gasket / Seals' },
@@ -1187,8 +1183,6 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     plumbing: { major: 'Civil Works', minor: 'Plumbing' },
     peb: { major: 'Civil Works', minor: 'PEB Structure' },
     tmt: { major: 'Civil Works', minor: 'TMT BARS' },
-    steel: { major: 'Raw Material', minor: 'Steels' },
-    tool: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
     'tmt bar': { major: 'Civil Works', minor: 'TMT BARS' },
     'tmt bars': { major: 'Civil Works', minor: 'TMT BARS' },
     bricks: { major: 'Civil Works', minor: 'Bricks' },
@@ -1217,7 +1211,6 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
     glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
     gloves: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
-    filter: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
 
     // ── Packaging & Materials ──
     'corrugated box': { major: 'Packing Material', minor: 'Corrugated Boxes' },

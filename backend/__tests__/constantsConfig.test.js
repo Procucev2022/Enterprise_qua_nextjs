@@ -913,4 +913,30 @@ describe('free trial credits, moved message objects and ticket constants', () =>
     );
     expect(constants.formatMessage(constants.TICKET_MESSAGES.DELETED, { id: 'tkt-9' })).toBe('Ticket tkt-9 deleted.');
   });
+
+  test('wrangler environments declare every top-level var and DOMAIN_KEYWORD_MAP has no duplicate keys', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const wranglerPath = path.resolve(__dirname, '../wrangler.jsonc');
+    const rawWrangler = fs.readFileSync(wranglerPath, 'utf8')
+      .replace(/^\s*\/\/.*$/gm, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    const wrangler = JSON.parse(rawWrangler);
+    const topLevelVars = Object.keys(wrangler.vars || {});
+    for (const [, envConfig] of Object.entries(wrangler.env || {})) {
+      const envVars = Object.keys(envConfig.vars || {});
+      expect(topLevelVars.filter((k) => !envVars.includes(k))).toEqual([]);
+    }
+
+    const constantsSource = fs.readFileSync(path.resolve(__dirname, '../src/config/constants.js'), 'utf8');
+    const mapStart = constantsSource.indexOf('DOMAIN_KEYWORD_MAP: {');
+    const mapEnd = constantsSource.indexOf('DEFAULT_CATEGORY_TAXONOMY', mapStart);
+    const mapBlock = constantsSource.slice(mapStart, mapEnd);
+    const keyMatches = [...mapBlock.matchAll(/^\s*(?:'([^']+)'|([A-Za-z0-9_]+)):\s*\{/gm)]
+      .map((m) => m[1] || m[2]);
+    const counts = new Map();
+    for (const key of keyMatches) counts.set(key, (counts.get(key) || 0) + 1);
+    const duplicates = [...counts.entries()].filter(([, c]) => c > 1);
+    expect(duplicates).toEqual([]);
+  });
 });
