@@ -549,9 +549,9 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const hasCustomD1Params = d1ParamOverrides.size > 0 || d1ExtraParams.length > 0;
   const d1BaseParams = hasCustomD1Params
     ? [
-        ...params.map((val, idx) => (d1ParamOverrides.has(idx + 1) ? d1ParamOverrides.get(idx + 1) : val)),
-        ...d1ExtraParams,
-      ]
+      ...params.map((val, idx) => (d1ParamOverrides.has(idx + 1) ? d1ParamOverrides.get(idx + 1) : val)),
+      ...d1ExtraParams,
+    ]
     : null;
 
   let total = 0;
@@ -1048,7 +1048,7 @@ async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCate
          AND json_extract(raw,'$.buyerId') IS NULL
          AND json_extract(raw,'$.buyerAccountId') IS NULL`;
 
-  return executePincodeTieredPublicVendorQuery({
+  const primaryRows = await executePincodeTieredPublicVendorQuery({
     basePgWhere,
     baseD1Where,
     basePgParams,
@@ -1064,6 +1064,79 @@ async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCate
     fallbackPgParams: basePgParams,
     fallbackD1Params: baseD1Params,
   });
+
+  // Several master minors (e.g. IT > Laptop, Networking Equipment) have no tagged vendors in the
+  // bulk catalogue, or carry composite minor labels ("Desktop & Laptop") / product keywords in
+  // their company name or products field (see getVendorsPageFromDB). Also, on D1 the quoted-prefix
+  // check (`raw LIKE '%"term%'`) can match non-category fields such as email addresses. Count how
+  // many primary rows actually carry a matching minor term in their category/name/products fields,
+  // and when fewer than safeLimit verified rows were found, top up with substring matches (>= 4 chars)
+  // under the same parent major categories and pincode proximity stages.
+  const broadTerms = terms.filter((term) => term.length >= 4);
+  const verifiedPrimaryCount = primaryRows.filter((vendor) => {
+    if (!vendor || typeof vendor !== 'object') return false;
+    const haystack = [
+      vendor.name,
+      vendor.products,
+      vendor.majorCategory,
+      vendor.category,
+      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [vendor.minorCategories]),
+      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
+      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+      ...(Array.isArray(vendor.categories) ? vendor.categories : []),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return terms.some((term) => haystack.includes(term));
+  }).length;
+  if (verifiedPrimaryCount >= safeLimit || broadTerms.length === 0) {
+    return primaryRows;
+  }
+
+  const broadPatterns = broadTerms.map((term) => `%${term}%`);
+  const broadPgParams = [majors, ...broadPatterns];
+  const broadPgClauses = broadPatterns.map((_, index) => {
+    const p = index + 2;
+    return `lower(concat_ws(' ', raw->>'name', raw->>'products', (raw->'minorCategories')::text, (raw->'vendorSelectedCategories')::text, (raw->'clientMappedCategories')::text, (raw->'categories')::text)) LIKE $${p}`;
+  });
+  const broadPgWhere = `lower(major_category) = ANY($1::text[])
+       AND (${broadPgClauses.join(' OR ')})
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+
+  const broadD1Params = [...majors, ...broadPatterns];
+  const broadD1Clauses = broadPatterns.map((_, index) => {
+    const p = majors.length + index + 1;
+    return `(raw LIKE $${p} AND lower(coalesce(json_extract(raw,'$.name'), '') || ' ' || coalesce(json_extract(raw,'$.products'), '') || ' ' || coalesce(json_extract(raw,'$.minorCategories'), '') || ' ' || coalesce(json_extract(raw,'$.vendorSelectedCategories'), '') || ' ' || coalesce(json_extract(raw,'$.clientMappedCategories'), '') || ' ' || coalesce(json_extract(raw,'$.categories'), '')) LIKE $${p})`;
+  });
+  const broadD1Where = `major_category COLLATE NOCASE IN (${d1Majors})
+         AND (${broadD1Clauses.join(' OR ')})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+
+  const broadRows = await executePincodeTieredPublicVendorQuery({
+    basePgWhere: broadPgWhere,
+    baseD1Where: broadD1Where,
+    basePgParams: broadPgParams,
+    baseD1Params: broadD1Params,
+    safeLimit,
+    pincode: options?.pincode,
+    fallbackPgSql: (limitIdx) => `SELECT raw FROM vendors
+     WHERE ${broadPgWhere}
+     ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackD1Sql: (limitIdx) => `SELECT raw FROM vendors
+       WHERE ${broadD1Where}
+       ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackPgParams: broadPgParams,
+    fallbackD1Params: broadD1Params,
+  });
+
+  const combined = [];
+  const seenKeys = new Set();
+  appendUniqueVendors(combined, seenKeys, primaryRows, safeLimit);
+  appendUniqueVendors(combined, seenKeys, broadRows, safeLimit);
+  return combined;
 }
 
 /**

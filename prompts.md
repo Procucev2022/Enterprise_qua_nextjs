@@ -6194,3 +6194,12 @@ Also check warnings in logs file, & fix them
 in the Buyer's Vendor Directory, Some vendors do not have categories assigned. Ideally all vendors should have a category, without a category a vendor can't exist. please check & fix this, why the vendor got created without category, also make sure to give an option to edit or add or update category for a vendor for buyer's own vendor.
 ```
 ---
+### Prompt 255
+**Timestamp**: 2026-11-16T22:44:36+05:30
+```text
+in this image, we are always getting minor category shortfall "0" value for all or any RFQ invitations. 
+
+
+basically when a RFQ invitations is sent to minor category vendors, in case we have 4 minor category vendors for that pincode instead of 25, we send this email notifications, but the value is not coming correct, can you please check
+```
+---

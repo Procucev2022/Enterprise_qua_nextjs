@@ -4731,6 +4731,8 @@ class StoreService {
             phone: v.phone || null,
             pincode: v.pincode || null,
             source: v.source || 'procucev_network',
+            majorCategory: v.majorCategory || v.category || null,
+            minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
           }));
 
         if (additions.length > 0) {
@@ -5421,16 +5423,28 @@ class StoreService {
     let committedAdditions = [];
     let invitationTargets = [];
     const updatedRFQ = await this.updateRFQDurably(id, (current) => {
-      const existing = Array.isArray(current.assignedVendors) ? current.assignedVendors : [];
-      const assignedIds = new Set(existing.map((vendor) => vendor.id));
+      const existing = Array.isArray(current.assignedVendors) ? [...current.assignedVendors] : [];
+      const existingIndexById = new Map();
+      existing.forEach((vendor, idx) => {
+        if (vendor && vendor.id) existingIndexById.set(vendor.id, idx);
+      });
       committedAdditions = [];
       for (const vendor of additions) {
-        if (assignedIds.has(vendor.id)) continue;
-        assignedIds.add(vendor.id);
+        const existingIdx = vendor && vendor.id ? existingIndexById.get(vendor.id) : undefined;
+        if (existingIdx !== undefined) {
+          const prev = existing[existingIdx];
+          if (!resolveVendorEmail(prev) && resolveVendorEmail(vendor)) {
+            existing[existingIdx] = { ...prev, ...vendor };
+            committedAdditions.push(existing[existingIdx]);
+          }
+          continue;
+        }
+        if (vendor && vendor.id) existingIndexById.set(vendor.id, existing.length);
+        existing.push(vendor);
         committedAdditions.push(vendor);
       }
 
-      const assignedVendors = [...existing, ...committedAdditions];
+      const assignedVendors = existing;
       const isV1 = current.sourcingMode === 'mode_1' || current.sourcingMode === 'v1' || current.sourcingMode === 'version_1';
       const procucevCount = isV1
         ? 0
@@ -7158,7 +7172,7 @@ class StoreService {
    * @param {string} minorCategory
    * @returns {boolean}
    */
-  vendorCoversMinorCategory(vendor, minorCategory) {
+  _vendorHasExplicitMinorTag(vendor, minorCategory) {
     if (!vendor || !minorCategory) return false;
     const target = minorCategoryKey(minorCategory);
     if (!target) return false;
@@ -7170,12 +7184,55 @@ class StoreService {
       ...extractCategories(vendor.clientMappedCategories),
       ...extractCategories(vendor.categories),
       ...extractCategories(vendor.category),
+      ...extractCategories(vendor.products),
     ];
 
     return pools.some((category) => {
       const key = minorCategoryKey(category);
       return Boolean(key) && minorKeysMatch(key, target);
     });
+  }
+
+  vendorCoversMinorCategory(vendor, minorCategory) {
+    if (!vendor || !minorCategory) return false;
+    if (this._vendorHasExplicitMinorTag(vendor, minorCategory)) return true;
+
+    const target = minorCategoryKey(minorCategory);
+    if (!target || target.length < 4) return false;
+
+    // Mirror getVendorsPageFromDB's minor matching rule (domainQueries.js):
+    // When a vendor sits under the minor's parent major category (e.g. IT > Laptop, where the
+    // bulk catalogue filed suppliers under a broader minor such as Hardware while their company
+    // name or products field carries the minor product), match whole-word occurrences of the minor
+    // search terms in the vendor's name or products.
+    const majorKeys = new Set(this._majorCategoriesForMinors([minorCategory], { allMajors: true }));
+    if (majorKeys.size === 0 || !vendorMajorKeys(vendor).some((key) => majorKeys.has(key))) {
+      return false;
+    }
+
+    const searchTerms = minorSearchTerms([minorCategory])
+      .map((term) => minorCategoryKey(term))
+      .filter((term) => term.length >= 4);
+    if (searchTerms.length === 0) return false;
+
+    const nonTaxonomyCategoryLabels = [
+      ...extractCategories(vendor.minorCategories),
+      ...extractCategories(vendor.vendorSelectedCategories),
+      ...extractCategories(vendor.clientMappedCategories),
+      ...extractCategories(vendor.categories),
+    ].filter((label) => !MINOR_TO_MAJOR_MAP.has(taxonomyKeyOf(label)));
+
+    const candidateTexts = [vendor.name, vendor.products, ...nonTaxonomyCategoryLabels]
+      .map((text) => minorCategoryKey(text))
+      .filter(Boolean);
+
+    return candidateTexts.some((normalizedText) =>
+      searchTerms.some((term) => {
+        if (normalizedText === term) return true;
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|\\s)${escaped}s?(?:\\s|$)`).test(normalizedText);
+      })
+    );
   }
 
   /**
@@ -7403,7 +7460,47 @@ class StoreService {
     }
     for (const candidate of Array.isArray(candidatePool) ? candidatePool : []) {
       const key = vendorKey(candidate);
-      if (key && !seeds.has(key) && !pool.has(key)) pool.set(key, { vendor: candidate, view: candidate });
+      if (!key) continue;
+      if (seeds.has(key)) {
+        const seedEntry = seeds.get(key);
+        const mergedMinors = Array.from(
+          new Set([
+            ...extractCategories(seedEntry.view.minorCategories),
+            ...extractCategories(candidate.minorCategories),
+          ])
+        );
+        seedEntry.view = {
+          ...candidate,
+          ...seedEntry.view,
+          majorCategory: seedEntry.view.majorCategory || candidate.majorCategory || candidate.category,
+          minorCategories: mergedMinors.length > 0 ? mergedMinors : candidate.minorCategories,
+          vendorSelectedCategories:
+            Array.isArray(seedEntry.view.vendorSelectedCategories) && seedEntry.view.vendorSelectedCategories.length > 0
+              ? seedEntry.view.vendorSelectedCategories
+              : candidate.vendorSelectedCategories,
+          clientMappedCategories:
+            Array.isArray(seedEntry.view.clientMappedCategories) && seedEntry.view.clientMappedCategories.length > 0
+              ? seedEntry.view.clientMappedCategories
+              : candidate.clientMappedCategories,
+          categories:
+            Array.isArray(seedEntry.view.categories) && seedEntry.view.categories.length > 0
+              ? seedEntry.view.categories
+              : candidate.categories,
+          products: seedEntry.view.products || candidate.products,
+        };
+        seedEntry.vendor = {
+          ...candidate,
+          ...seedEntry.vendor,
+          email: resolveVendorEmail(seedEntry.vendor) || resolveVendorEmail(candidate) || null,
+          phone: seedEntry.vendor.phone || candidate.phone || candidate.mobile || candidate.mobileNumber || null,
+          contactPerson: seedEntry.vendor.contactPerson || candidate.contactPerson || null,
+          pincode: seedEntry.vendor.pincode || candidate.pincode || null,
+          majorCategory: seedEntry.vendor.majorCategory || candidate.majorCategory || candidate.category || null,
+          minorCategories: mergedMinors.length > 0 ? mergedMinors : (Array.isArray(candidate.minorCategories) ? candidate.minorCategories : []),
+        };
+      } else if (!pool.has(key)) {
+        pool.set(key, { vendor: candidate, view: candidate });
+      }
     }
 
     const rank = (a, b) => this._compareVendorsByLocationAndRating(a.view, b.view, targetLocation);
@@ -8060,11 +8157,15 @@ class StoreService {
       return updated || rfq;
     }
 
-    const existingKeys = new Set(
-      existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
+    const existingByKey = new Map(
+      existing.map((v) => [(v.id || v.email || v.name || '').toLowerCase(), v])
     );
     const additions = sorted
-      .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+      .filter((v) => {
+        const key = (v.id || v.email || v.name || '').toLowerCase();
+        const prev = existingByKey.get(key);
+        return !prev || (!resolveVendorEmail(prev) && Boolean(resolveVendorEmail(v)));
+      })
       .map((v) => ({
         id: v.id,
         name: v.name,
@@ -8412,11 +8513,15 @@ class StoreService {
     }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    const existingKeys = new Set(
-      existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
+    const existingByKey = new Map(
+      existing.map((v) => [(v.id || v.email || v.name || '').toLowerCase(), v])
     );
     const additions = candidatePool
-      .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+      .filter((v) => {
+        const key = (v.id || v.email || v.name || '').toLowerCase();
+        const prev = existingByKey.get(key);
+        return !prev || (!resolveVendorEmail(prev) && Boolean(resolveVendorEmail(v)));
+      })
       .map((v) => {
         const isProc = this.isProcucevVendor(v);
         return {
