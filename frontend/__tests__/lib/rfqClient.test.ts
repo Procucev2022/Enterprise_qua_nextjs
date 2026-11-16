@@ -1335,6 +1335,26 @@ describe('rfqClient RFQ persistence', () => {
       expect(url.searchParams.get('minors')).toBe('Laptop');
     });
 
+    test('sends en/em dash category names with the plain hyphen the database stores', async () => {
+      global.fetch = reply(200, { success: true, data: [], pagination: { ...pagination, total: 0 } });
+
+      await fetchAllVendors({
+        page: 1,
+        pageSize: 20,
+        category: 'Others – New Product',
+        majors: ['Others — New Service', 'Others - New Service'],
+        minors: ['Stationery'],
+        search: 'pen – blue',
+      });
+
+      const url = new URL(lastPath(), 'http://localhost');
+      expect(url.searchParams.get('category')).toBe('Others - New Product');
+      expect(url.searchParams.get('majors')).toBe('Others - New Service');
+      expect(url.searchParams.get('minors')).toBe('Stationery');
+      // Free-text search is left exactly as typed.
+      expect(url.searchParams.get('search')).toBe('pen – blue');
+    });
+
     test('attaches the session token when one is held', async () => {
       signIn();
       global.fetch = reply(200, { success: true, data: [], pagination });
