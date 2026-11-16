@@ -1809,6 +1809,40 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(res.success).toBe(false);
     });
 
+    // Synthetic v-master-* supplier sends email/name hints and stores the promoted vendor id on success
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        message: 'Evaluation request sent',
+        data: {
+          vendorId: 'v-ingest-promoted-9',
+          evaluationRequested: true,
+          evaluationRequestedAt: '2026-11-16T10:00:00.000Z',
+          evaluationRequestedBy: 'Veera solutions pvt ltd',
+          status: 'PENDING EVALUATION',
+        },
+      }),
+    });
+    await act(async () => {
+      const res = await contextValue.requestVendorEvaluation('v-master-rec-9', '', {
+        id: 'v-master-rec-9',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan.kilari@procucev.com',
+        contactPerson: 'Govardhan',
+      });
+      expect(res.success).toBe(true);
+    });
+    expect(
+      contextValue.buyerVendors.find((v: { id: string }) => v.id === 'v-ingest-promoted-9')
+    ).toEqual(
+      expect.objectContaining({
+        evaluationRequested: true,
+        evaluationRequestedBy: 'Veera solutions pvt ltd',
+      })
+    );
+
     // 3. Add Audit Log & Feed Item across all role contexts and feed types
     // Audit events go to the frontend log. Feed entries stay in this session.
     await act(async () => {

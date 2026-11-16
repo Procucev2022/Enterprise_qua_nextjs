@@ -3072,6 +3072,58 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-1');
     });
 
+    it('forwards vendor details and closes popup when requesting evaluation for a reconciled upload-history vendor', async () => {
+      const localOnlyBatch = [
+        {
+          id: 'batch-eval-req',
+          fileName: 'vendors.xlsx',
+          total: 1,
+          imported: 1,
+          records: [
+            {
+              name: 'Govardhan Solutions pvt LTD',
+              email: 'govardhan.kilari@procucev.com',
+              contactPerson: 'Govardhan',
+              city: 'Bengaluru',
+              state: 'Karnataka',
+              rating: 0,
+            },
+          ],
+        },
+      ];
+      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(localOnlyBatch));
+      mockRequestVendorEvaluation.mockResolvedValueOnce({ success: true, message: 'Evaluation request sent' });
+
+      try {
+        render(
+          <VendorSummary
+            onViewEvaluation={mockOnViewEvaluation}
+            onNavigateToWizard={mockOnNavigateToWizard}
+          />
+        );
+
+        const reviseBtns = screen.getAllByText(/Revise Rating/i);
+        fireEvent.click(reviseBtns[reviseBtns.length - 1]);
+        expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /Request Vendor Evaluation/i }));
+
+        await waitFor(() => {
+          expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument();
+        });
+        expect(mockRequestVendorEvaluation).toHaveBeenCalledWith(
+          'v-hist-local-batch-eval-req-0',
+          undefined,
+          expect.objectContaining({
+            name: 'Govardhan Solutions pvt LTD',
+            email: 'govardhan.kilari@procucev.com',
+          })
+        );
+      } finally {
+        localStorage.removeItem('procucev_vendor_upload_history');
+      }
+    });
+
     it('handles vendor evaluation request returning success false or failure without error message', async () => {
       mockRequestVendorEvaluation.mockResolvedValueOnce({ success: false });
       render(

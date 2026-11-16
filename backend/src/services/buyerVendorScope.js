@@ -6,7 +6,7 @@
  * @param {object|null} resolvedBuyerAccount The buyer account the roster is built from, when one exists.
  * @returns {string[]} Identifiers in the order the buyer roster has always used them.
  */
-function buyerScopeIdsFor(user, resolvedBuyerAccount = null) {
+function buyerScopeIdsFor(user, resolvedBuyerAccount = null, extraOrgId = null) {
   const ids = [];
   if (resolvedBuyerAccount) {
     if (resolvedBuyerAccount.id) ids.push(resolvedBuyerAccount.id);
@@ -17,6 +17,8 @@ function buyerScopeIdsFor(user, resolvedBuyerAccount = null) {
   if (user?.id) ids.push(user.id);
   if (user?.email) ids.push(user.email);
   if (user?.orgId) ids.push(user.orgId);
+  if (user?.organizationId) ids.push(user.organizationId);
+  if (extraOrgId) ids.push(extraOrgId);
   return ids;
 }
 

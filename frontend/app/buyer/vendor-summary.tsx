@@ -722,12 +722,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
     const targetVendor = vendorToRequest || selectedVendorForRevision;
-    if (!targetVendor) return;
+    if (!targetVendor || isRequestingEvaluation) return;
 
     setIsRequestingEvaluation(true);
     try {
       // The store asks the server to look for a saved evaluation before it sends any request.
-      const res = await requestVendorEvaluation(targetVendor.id);
+      const isStoredVendor = Array.isArray(buyerVendors) && buyerVendors.some((v) => v.id === targetVendor.id);
+      const res = isStoredVendor
+        ? await requestVendorEvaluation(targetVendor.id)
+        : await requestVendorEvaluation(targetVendor.id, undefined, targetVendor);
       // A request that did not go out keeps the popup open. The store has already said why.
       if (!res.success) return;
       if (res.evaluationExists && res.evaluation) {
@@ -950,7 +953,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       allEvaluations.some(
         (e) =>
           ((e.vendorId && e.vendorId === vendor.id) ||
-           (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())) &&
+            (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())) &&
           typeof e.overallScore === 'number'
       )
     );
@@ -979,9 +982,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return (
       <tr
         key={vendor.id}
-        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${
-          isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
-        }`}
+        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
+          }`}
       >
         {/* Selection Checkbox */}
         <td className="py-2.5 px-3 w-10 text-center align-middle">
@@ -1168,10 +1170,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 {currentMode === 'mode_1' && !isUploaded
                   ? 'Hidden (V1 Restriction)'
                   : isLockedForProcucevV2
-                  ? 'Locked (Awaiting Quote)'
-                  : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                  ? 'Locked (Buyer Roster Only)'
-                  : 'Not Evaluated'}
+                    ? 'Locked (Awaiting Quote)'
+                    : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                      ? 'Locked (Buyer Roster Only)'
+                      : 'Not Evaluated'}
               </div>
               {vendor.rating && (
                 <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
@@ -1185,26 +1187,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         {/* Status */}
         <td className="py-2.5 px-3 min-w-[130px] text-center align-middle">
           <span
-            className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${
-              currentMode === 'mode_1' && !isUploaded
+            className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
                 ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
                 : getStatusStyle(vendor.status || '')
-            }`}
+              }`}
           >
             {currentMode === 'mode_1' && !isUploaded
               ? 'UNAVAILABLE IN V1'
               : isLockedForProcucevV2
-              ? 'LOCKED (PENDING BID)'
-              : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-              ? 'BUYER ROSTER (NO EVAL)'
-              : vendor.status}
+                ? 'LOCKED (PENDING BID)'
+                : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                  ? 'BUYER ROSTER (NO EVAL)'
+                  : vendor.status}
           </span>
           {vendor.evaluationRequested && (
             <span className="mt-1 block text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
               {vendor.evaluationRequestedAt
                 ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-                    date: new Date(vendor.evaluationRequestedAt).toLocaleDateString(),
-                  })
+                  date: new Date(vendor.evaluationRequestedAt).toLocaleDateString(),
+                })
                 : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
             </span>
           )}
@@ -1797,9 +1798,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     maxLength={6}
                     value={formPincode}
                     onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className={`w-full text-xs p-2 rounded-lg border font-mono ${
-                      formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
-                    } bg-white dark:bg-gray-900`}
+                    className={`w-full text-xs p-2 rounded-lg border font-mono ${formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                      } bg-white dark:bg-gray-900`}
                   />
                   {formPincodeError && formPincode.trim().length >= 6 && (
                     <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
@@ -2211,9 +2211,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       maxLength={6}
                       value={formPincode}
                       onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      className={`w-full text-xs p-2 rounded-lg border font-mono ${
-                        formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
-                      } bg-white dark:bg-gray-900`}
+                      className={`w-full text-xs p-2 rounded-lg border font-mono ${formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                        } bg-white dark:bg-gray-900`}
                     />
                     {formPincodeError && formPincode.trim().length >= 6 && (
                       <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
@@ -2370,7 +2369,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         allEvaluations.some(
                           (e) =>
                             ((e.vendorId && e.vendorId === selectedVendorForCrud.id) ||
-                             (e.vendorName && e.vendorName.toLowerCase() === (selectedVendorForCrud.name || '').toLowerCase())) &&
+                              (e.vendorName && e.vendorName.toLowerCase() === (selectedVendorForCrud.name || '').toLowerCase())) &&
                             typeof e.overallScore === 'number'
                         )
                       );
@@ -2459,8 +2458,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <span className="text-slate-400 block text-[10px] font-semibold">Location / Address:</span>
                     <span>
                       {selectedVendorForCrud.location ||
-                        `${selectedVendorForCrud.city || ''}, ${selectedVendorForCrud.state || ''} ${
-                          selectedVendorForCrud.country || 'India'
+                        `${selectedVendorForCrud.city || ''}, ${selectedVendorForCrud.state || ''} ${selectedVendorForCrud.country || 'India'
                         }`}
                     </span>
                   </div>

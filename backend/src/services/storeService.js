@@ -3854,7 +3854,8 @@ class StoreService {
 
     if (vendor.email) {
       try {
-        void mailerService.sendVendorEvaluationRequestEmail({
+        // Await delivery so serverless runtimes (Cloudflare Workers) complete the outbound mail request before closing the response.
+        const deliveryResult = await mailerService.sendVendorEvaluationRequestEmail({
           to: vendor.email,
           recipientName: vendor.contactPerson || vendor.name,
           vendorName: vendor.name,
@@ -3863,6 +3864,13 @@ class StoreService {
           buyerEmail,
           notes,
         });
+        if (deliveryResult && deliveryResult.sent === false && deliveryResult.status !== 'skipped') {
+          logger.warn('Evaluation request email was not dispatched by mail provider', {
+            vendorId: vendor.id,
+            status: deliveryResult.status,
+            reason: deliveryResult.reason,
+          }, 'STORE_SERVICE');
+        }
       } catch (emailErr) {
         logger.error('Failed to dispatch evaluation request email', emailErr, 'STORE_SERVICE');
       }

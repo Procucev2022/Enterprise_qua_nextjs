@@ -6,6 +6,8 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const { isD1Overloaded } = require('../db/d1Bridge');
 const identityQueries = require('../db/identityQueries');
+const vendorIngestionQueries = require('../db/vendorIngestionQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const eventOutboxService = require('../services/eventOutboxService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
@@ -1127,6 +1129,109 @@ async function reviseRating(req, res, next) {
   }
 }
 
+const SYNTHETIC_MASTER_PREFIX = 'v-master-';
+const SYNTHETIC_LOCAL_HISTORY_PREFIX = 'v-hist-local-';
+
+async function resolveBuyerOrgIdForScope(user, buyerAccount) {
+  let resolvedOrgId = buyerAccount?.organizationId || user?.orgId || user?.organizationId || null;
+  if (
+    user?.role === 'buyer' &&
+    !resolvedOrgId &&
+    (user?.sub || user?.id) &&
+    typeof buyerProfileQueries.findProfileByUserId === 'function'
+  ) {
+    const profileLookup = await buyerProfileQueries.findProfileByUserId(user.sub || user.id).catch(() => null);
+    if (profileLookup?.found && profileLookup.profile?.organizationId) {
+      resolvedOrgId = profileLookup.profile.organizationId;
+    }
+  }
+  return resolvedOrgId;
+}
+
+async function empanelFallbackVendorForEvaluation({ candidate, buyerAccount, resolvedOrgId, user, buyerCompany }) {
+  const email = String(candidate.email || '').trim().toLowerCase();
+  if (!email) return null;
+  // Never overwrite or claim an existing vendor owned by another buyer. The preceding
+  // getVendorByIdWithDBFallback lookup already synced any DB match into storeService.vendors.
+  if (storeService.getVendorById(email, 'all')) return null;
+
+  const attributedBuyerId = buyerAccount?.id || resolvedOrgId || user?.sub || user?.id || user?.email || null;
+  return storeService.empanelIngestedVendor(
+    {
+      name: candidate.name || email,
+      email,
+      contactPerson: candidate.contactPerson || null,
+      phone: candidate.phone || null,
+      location: candidate.location || null,
+      city: candidate.city || null,
+      state: candidate.state || null,
+      pincode: candidate.pincode || null,
+      gstin: candidate.gstin || null,
+      vendorCode: candidate.vendorCode || null,
+      source: candidate.source || 'buyer_uploaded',
+      addedByBuyerCompany: buyerCompany || buyerAccount?.organizationName || null,
+      buyerId: attributedBuyerId,
+      buyerAccountId: attributedBuyerId,
+      buyerEmail: buyerAccount?.corporateEmail || user?.email || null,
+    },
+    user?.email || null
+  );
+}
+
+async function resolveVendorForEvaluationRequest({ id, user, buyerAccount, buyerScope, resolvedOrgId, buyerCompany, bodyData }) {
+  let vendor = await storeService.getVendorByIdWithDBFallback(id, buyerScope, { fresh: true });
+  if (vendor) return { vendor, missingEmail: false };
+
+  const sanitizedVendorEmail = String(bodyData.vendorEmail || '').trim().toLowerCase();
+  if (sanitizedVendorEmail) {
+    vendor = await storeService.getVendorByIdWithDBFallback(sanitizedVendorEmail, buyerScope, { fresh: true });
+    if (vendor) return { vendor, missingEmail: false };
+  }
+
+  if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && resolvedOrgId && typeof vendorIngestionQueries.findVendorMasterRecord === 'function') {
+    const masterRec = await vendorIngestionQueries.findVendorMasterRecord(id.slice(SYNTHETIC_MASTER_PREFIX.length), resolvedOrgId);
+    if (masterRec) {
+      const candidateEmail = String(masterRec.email || sanitizedVendorEmail || '').trim().toLowerCase();
+      if (!candidateEmail) return { vendor: null, missingEmail: true };
+      vendor = await storeService.getVendorByIdWithDBFallback(candidateEmail, buyerScope, { fresh: true });
+      if (!vendor) {
+        vendor = await empanelFallbackVendorForEvaluation({
+          candidate: {
+            ...masterRec,
+            name: masterRec.companyName,
+            email: candidateEmail,
+            source: 'vendor_master_ingestion',
+          },
+          buyerAccount,
+          resolvedOrgId,
+          user,
+          buyerCompany,
+        });
+      }
+      return { vendor, missingEmail: false };
+    }
+  }
+
+  if (id.startsWith(SYNTHETIC_LOCAL_HISTORY_PREFIX) && user.role === 'buyer') {
+    if (!sanitizedVendorEmail) return { vendor: null, missingEmail: true };
+    vendor = await empanelFallbackVendorForEvaluation({
+      candidate: {
+        name: bodyData.vendorName || sanitizedVendorEmail,
+        email: sanitizedVendorEmail,
+        contactPerson: bodyData.contactPerson || null,
+        source: 'buyer_uploaded',
+      },
+      buyerAccount,
+      resolvedOrgId,
+      user,
+      buyerCompany,
+    });
+    return { vendor, missingEmail: false };
+  }
+
+  return { vendor: null, missingEmail: false };
+}
+
 async function requestEvaluation(req, res, next) {
   try {
     const { id } = req.params;
@@ -1144,14 +1249,27 @@ async function requestEvaluation(req, res, next) {
     }
 
     // A buyer may request an evaluation only from a supplier on that buyer's roster. The roster and this check read the
-    // same buyer identifiers, and a supplier that is stored but not in the in-memory list is read from storage.
+    // same buyer identifiers, and a supplier that is stored in vendor_master_records or storage is resolved cleanly.
     const buyerAccount = req.user.role === 'buyer' ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
-    const buyerScope = req.user.role === 'buyer' ? buyerScopeIdsFor(req.user, buyerAccount) : 'all';
+    const resolvedOrgId = req.user.role === 'buyer' ? await resolveBuyerOrgIdForScope(req.user, buyerAccount) : null;
+    const buyerScope = req.user.role === 'buyer' ? buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId) : 'all';
     const buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
     const buyerName = buyerAccount?.contactPerson || req.user.name || '';
     const buyerEmail = req.user.email || '';
 
-    const vendor = await storeService.getVendorByIdWithDBFallback(id, buyerScope, { fresh: true });
+    const { vendor, missingEmail } = await resolveVendorForEvaluationRequest({
+      id,
+      user: req.user,
+      buyerAccount,
+      buyerScope,
+      resolvedOrgId,
+      buyerCompany,
+      bodyData: bodyValidation.sanitizedData,
+    });
+    if (missingEmail) {
+      logger.warn(`Cannot request evaluation: Vendor ${id} has no email`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'Vendor does not have a registered email address to receive an evaluation request.' });
+    }
     if (!vendor) {
       logger.warn(`Vendor not found for evaluation request: ${id}`, { id, role: req.user.role }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });

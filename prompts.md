@@ -6131,3 +6131,14 @@ Remove the "Packages requirement specification" text after Line items 5
 the Excel template has been updated, but the PO Dump upload page is still displaying the old field names and instructions. Please update the page UI to match the latest Excel template, showing only the 3 fields: Vendor/Supplier Name, Item Description, and Specifications (Optional)
 ```
 ---
+
+### Prompt 248
+**Timestamp**: 2026-11-16T15:12:37+05:30
+```text
+Request Vendor Evaluation functionality is not working as expected.
+
+After clicking Request Vendor Evaluation, the request should be sent to the vendor, as it was working previously.
+
+After clicking the button, the popup should close automatically once the request is successfully submitted.
+```
+---

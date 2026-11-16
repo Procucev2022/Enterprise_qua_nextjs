@@ -261,6 +261,9 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 const VALIDATION_SCHEMAS = {
   requestVendorEvaluation: {
     notes: { type: 'string', required: false, maxLength: 1000 },
+    vendorEmail: { type: 'string', required: false, maxLength: 320 },
+    vendorName: { type: 'string', required: false, maxLength: 512 },
+    contactPerson: { type: 'string', required: false, maxLength: 255 },
   },
   evaluationListQuery: {
     vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },

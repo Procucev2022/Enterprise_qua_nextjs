@@ -59,6 +59,8 @@ import {
   STORE_MESSAGES,
   AI_FEED_VIEWER_ROLES,
   REQUEST_ID_HEADER,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
 } from './constants';
 
 function logApiResponseFailure(
@@ -268,7 +270,7 @@ interface AppContextType {
 
   // Buyer Vendor Rating Revision Engine
   reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => Promise<VendorRatingRevisionRecord | null>;
-  requestVendorEvaluation: (vendorId: string, notes?: string) => Promise<VendorEvaluationRequestResult>;
+  requestVendorEvaluation: (vendorId: string, notes?: string, vendorDetails?: Partial<VendorEntry>) => Promise<VendorEvaluationRequestResult>;
   selectedRatingRevisionEmail: VendorRatingRevisionEmailPayload | null;
   setSelectedRatingRevisionEmail: (email: VendorRatingRevisionEmailPayload | null) => void;
   ratingRevisionEmailModalOpen: boolean;
@@ -1957,12 +1959,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const requestVendorEvaluation = async (
     vendorId: string,
-    notes?: string
+    notes?: string,
+    vendorDetails?: Partial<VendorEntry>
   ): Promise<VendorEvaluationRequestResult> => {
-    const targetVendor = buyerVendors.find((v) => v.id === vendorId);
-    if (!targetVendor) {
+    const directVendor = buyerVendors.find((v) => v.id === vendorId);
+    const reconciledList = !directVendor
+      ? reconcileBuyerVendorsWithUploadHistory(
+          buyerVendors,
+          loadVendorUploadHistoryFromStorage(),
+          activeBuyerAccount
+        )
+      : buyerVendors;
+    const resolvedVendor =
+      directVendor ||
+      reconciledList.find((v) => v.id === vendorId) ||
+      (vendorDetails
+        ? ({
+            ...vendorDetails,
+            id: vendorDetails.id || vendorId,
+            name: vendorDetails.name || vendorDetails.email || vendorId,
+          } as VendorEntry)
+        : undefined);
+    if (!resolvedVendor) {
       showToast(UI_STRINGS.vendorEvaluationRequest.vendorNotFoundTitle, UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody, 'warning');
       return { success: false, message: 'Vendor not found' };
+    }
+
+    const isSyntheticId =
+      vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
+    const resolvedEmailLower = String(resolvedVendor.email || '').trim().toLowerCase();
+    const persistedByEmail =
+      isSyntheticId && resolvedEmailLower
+        ? buyerVendors.find(
+            (v) =>
+              !v.id.startsWith('v-master-') &&
+              !v.id.startsWith('v-hist-local-') &&
+              String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+          )
+        : undefined;
+    const targetVendor = persistedByEmail || resolvedVendor;
+    const requestPayload: Record<string, string> = { notes: notes || '' };
+    if (targetVendor.id.startsWith('v-master-') || targetVendor.id.startsWith('v-hist-local-')) {
+      if (targetVendor.email) requestPayload.vendorEmail = targetVendor.email;
+      if (targetVendor.name) requestPayload.vendorName = targetVendor.name;
+      if (targetVendor.contactPerson) requestPayload.contactPerson = targetVendor.contactPerson;
     }
 
     try {
@@ -1971,7 +2011,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`/api/vendors/${encodeURIComponent(targetVendor.id)}/request-evaluation`, {
         method: 'POST',
         headers: authFetchHeaders(),
-        body: JSON.stringify({ notes: notes || '' }),
+        body: JSON.stringify(requestPayload),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
@@ -1994,7 +2034,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return [savedEvaluation, ...filtered];
         });
         logger.log('INFO', 'Saved vendor evaluation returned; no evaluation request sent', {
-          vendorId,
+          vendorId: targetVendor.id,
           evaluationId: savedEvaluation.id,
         }, 'EVALUATION');
         showToast(
@@ -2007,21 +2047,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // The server's record of the request is the source for the time, the buyer and the status shown on the row.
       const sent = data.data && typeof data.data === 'object' ? data.data : {};
+      const persistedVendorId = typeof sent.vendorId === 'string' && sent.vendorId ? sent.vendorId : targetVendor.id;
       const requestedAt = typeof sent.evaluationRequestedAt === 'string' ? sent.evaluationRequestedAt : new Date().toISOString();
       const requestedBy = typeof sent.evaluationRequestedBy === 'string' ? sent.evaluationRequestedBy : activeBuyerAccount?.organizationName || 'Buyer';
-      setBuyerVendors((prev) =>
-        prev.map((v) =>
-          v.id === vendorId
-            ? {
-                ...v,
-                evaluationRequested: true,
-                evaluationRequestedAt: requestedAt,
-                evaluationRequestedBy: requestedBy,
-                status: typeof sent.status === 'string' ? sent.status : v.status,
-              }
-            : v
-        )
-      );
+      setBuyerVendors((prev) => {
+        const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendor.id || v.id === persistedVendorId);
+        if (hasMatch) {
+          return prev.map((v) =>
+            v.id === vendorId || v.id === targetVendor.id || v.id === persistedVendorId
+              ? {
+                  ...v,
+                  id: persistedVendorId,
+                  evaluationRequested: true,
+                  evaluationRequestedAt: requestedAt,
+                  evaluationRequestedBy: requestedBy,
+                  status: typeof sent.status === 'string' ? sent.status : v.status,
+                }
+              : v
+          );
+        }
+        return [
+          {
+            ...targetVendor,
+            id: persistedVendorId,
+            evaluationRequested: true,
+            evaluationRequestedAt: requestedAt,
+            evaluationRequestedBy: requestedBy,
+            status: typeof sent.status === 'string' ? sent.status : targetVendor.status,
+          },
+          ...prev,
+        ];
+      });
 
       void addFeedItem(
         `Evaluation Requested: ${targetVendor.name}`,
