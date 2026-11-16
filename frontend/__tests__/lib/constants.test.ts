@@ -774,4 +774,19 @@ describe('Indian address location extraction helpers', () => {
       pincode: '78701',
     });
   });
+
+  it('defines PO_DUMP_TEMPLATE_HEADERS matching the Step 3 upload screen fields without legacy PO columns', () => {
+    const { PO_DUMP_TEMPLATE_HEADERS } = require('@/lib/constants');
+    const { UI_STRINGS } = require('@/lib/uiStrings');
+    expect(PO_DUMP_TEMPLATE_HEADERS).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional,
+    ]);
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('PO Number');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('PO Date');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Quantity');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Unit Price (INR)');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Total Spend (INR)');
+  });
 });

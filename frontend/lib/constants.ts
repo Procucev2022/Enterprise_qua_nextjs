@@ -2100,6 +2100,13 @@ export const PERIOD_BY_VENDOR_INGESTION_HORIZON: Partial<Record<string, '1_year'
 /** Suppliers requested per page when the wizard loads AI category results. Matches the server's page cap. */
 export const VENDOR_MAPPING_PAGE_SIZE = 200;
 
+/** Headers written into the downloadable Step 3 PO Dump Excel template, matching the upload screen fields. */
+export const PO_DUMP_TEMPLATE_HEADERS: readonly string[] = [
+  UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+  UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+  UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional,
+];
+
 /**
  * Canonical MIME types by lowercase file extension for RFQ supporting documents.
  * Used as a fallback when browsers or object storage omit or generalize Content-Type.

@@ -6051,3 +6051,10 @@ gmtrfq@procucev.com, anshul , veerababu, remove quateam
 the Buyer Uploaded Vendor section, the City, State, and Pincode fields are not being populated. Please check and fix this issue.
 ```
 ---
+
+### Prompt 237
+**Timestamp**: 2026-11-16T10:13:19+05:30
+```text
+the downloaded sample PO Dump Excel template still contains the old columns (PO Number, PO Date, Quantity, Unit Price, Total Spend, etc.). The upload screen says only Vendor/Supplier Name and Item Description are mandatory. Please update the sample downloadable template to match the fields displayed on the upload screen.
+```
+---

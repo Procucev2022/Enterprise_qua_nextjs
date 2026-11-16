@@ -6,6 +6,7 @@ import { useApp, getLastHistoricalDataError } from '@/lib/store';
 import {
   formatCurrency,
   normalizePoDate,
+  PO_DUMP_TEMPLATE_HEADERS,
   resolveVendorLocationFields,
   PERIOD_BY_VENDOR_INGESTION_HORIZON,
   VENDOR_INGESTION_HORIZON_BY_PERIOD,
@@ -1609,20 +1610,11 @@ export default function InitialSetupModal() {
 
   // Download the PO Purchase Dump template (.xlsx)
   const handleDownloadPoDataExcel = () => {
-    // Headers only. The template carries no sample purchase orders, so nothing is pre-filled.
-    const worksheet = XLSX.utils.aoa_to_sheet([
-      [
-        'PO Number',
-        'PO Date',
-        'Vendor Name',
-        'Item Description',
-        'Specifications',
-        'Quantity',
-        'Unit',
-        'Unit Price (INR)',
-        'Total Spend (INR)',
-      ],
-    ]);
+    // Headers only, matching the mandatory & optional fields displayed on the Step 3 upload screen.
+    const worksheet = XLSX.utils.aoa_to_sheet([[...PO_DUMP_TEMPLATE_HEADERS]]);
+    worksheet['!cols'] = PO_DUMP_TEMPLATE_HEADERS.map((header) => ({
+      wch: Math.max(header.length + 4, 24),
+    }));
     const workbook: XLSX.WorkBook = {
       Sheets: { 'PO Purchase Dump': worksheet },
       SheetNames: ['PO Purchase Dump'],
