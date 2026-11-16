@@ -1433,7 +1433,11 @@ describe('rfqController Comprehensive Branch Coverage', () => {
           quotesCount: 1,
           buyerAccountId: 'acc-1',
           buyerAccountName: 'Acme',
-          assignedVendors: [{ vendorId: 'v-1', vendorName: 'V1', status: 'Invited' }],
+          assignedVendors: [
+            { vendorId: 'v-1', vendorName: 'V1', corporateEmail: 'v1@corp.test', status: 'Invited' },
+            { vendorId: 'v-2', vendorName: 'V2', email: 'v2@direct.test', status: 'Invited' },
+            { vendorId: 'v-3', vendorName: 'V3', status: 'Invited' },
+          ],
           quotes: [{ id: 'q-1', vendorId: 'v-1', vendorName: 'V1', submittedAt: '2026-01-02', totalAmount: 45000 }],
         },
       ];
@@ -1447,6 +1451,9 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(res.data.success).toBe(true);
       expect(res.data.data[0].id).toBe('rfq-sum-1');
       expect(res.data.data[0].assignedVendors[0].vendorName).toBe('V1');
+      expect(res.data.data[0].assignedVendors[0].email).toBe('v1@corp.test');
+      expect(res.data.data[0].assignedVendors[1].email).toBe('v2@direct.test');
+      expect(res.data.data[0].assignedVendors[2].email).toBeNull();
       expect(res.data.data[0].quotes[0].id).toBe('q-1');
       storeService.getRFQs.mockRestore();
     });

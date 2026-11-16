@@ -6093,3 +6093,10 @@ Here also, "0 minor vendors found" data displayed, please check & fix it.
 Please check & fix this
 ```
 ---
+
+### Prompt 243
+**Timestamp**: 2026-11-16T10:53:20+05:30
+```text
+the Invite Vendors button is not working. After selecting vendors and clicking the button, no response or confirmation is displayed. However, in the GMTRFQ email account, this RFQ is showing as assigned to 125 vendors, but no invitation emails have been sent or received today.
+```
+---

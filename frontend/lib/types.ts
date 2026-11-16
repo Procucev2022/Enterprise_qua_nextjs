@@ -403,9 +403,22 @@ export type RFQVendorPageResult =
   | { success: true; candidates: RFQVendorCandidate[]; pagination: VendorPageMeta }
   | { success: false; reason: RFQTransportFailure; error: string };
 
+/** Exclusion summary returned when one or more selected vendors could not be invited. */
+export interface RFQExcludedVendor {
+  id: string;
+  name?: string;
+  reason?: string;
+}
+
 /** Outcome of inviting vendors to an RFQ. */
 export type RFQInviteVendorsResult =
-  | { success: true; rfq: RFQItem; invitedCount: number }
+  | {
+      success: true;
+      rfq: RFQItem;
+      invitedCount: number;
+      excludedCount?: number;
+      excludedVendors?: RFQExcludedVendor[];
+    }
   | { success: false; reason: RFQTransportFailure; error: string };
 
 /**

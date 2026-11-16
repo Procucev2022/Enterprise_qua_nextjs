@@ -512,6 +512,7 @@ async function getAllRFQs(req, res, next) {
           assignedVendors: (r.assignedVendors || []).map((av) => ({
             id: av.id || av.vendorId,
             name: av.name || av.vendorName || av.companyName || '',
+            email: av.email || av.corporateEmail || null,
             vendorId: av.vendorId || av.id,
             vendorName: av.vendorName || av.name || av.companyName || '',
             majorCategory: av.majorCategory || '',

@@ -20,6 +20,7 @@ import type {
   RFQMutationResult,
   RFQUpdatePayload,
   RFQExtensionResult,
+  RFQExcludedVendor,
   RFQQuoteAttachment,
   RFQVendorCandidate,
   RFQVendorCandidatesResult,
@@ -800,7 +801,14 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  let body: { success?: boolean; data?: RFQItem; invitedCount?: number; error?: string } = {};
+  let body: {
+    success?: boolean;
+    data?: RFQItem;
+    invitedCount?: number;
+    excludedCount?: number;
+    excludedVendors?: RFQExcludedVendor[];
+    error?: string;
+  } = {};
   try {
     body = await res.json();
   } catch {
@@ -828,7 +836,15 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
   if (typeof body.invitedCount !== 'number') {
     return { success: false, reason: 'SERVER', error: UI_STRINGS.dataLoad.inviteCountMissing };
   }
-  return { success: true, rfq: body.data, invitedCount: body.invitedCount };
+  return {
+    success: true,
+    rfq: body.data,
+    invitedCount: body.invitedCount,
+    ...(typeof body.excludedCount === 'number' && body.excludedCount > 0 ? { excludedCount: body.excludedCount } : {}),
+    ...(Array.isArray(body.excludedVendors) && body.excludedVendors.length > 0
+      ? { excludedVendors: body.excludedVendors }
+      : {}),
+  };
 }
 
 /**
