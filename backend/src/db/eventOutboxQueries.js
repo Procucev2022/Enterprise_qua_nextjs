@@ -286,13 +286,19 @@ async function purgeEventOutboxInDB(completedBefore, deadBefore) {
        SELECT id FROM event_outbox
        WHERE (status = 'completed' AND completed_at < $1)
           OR (status = 'dead' AND updated_at < $2)
-          OR (status = $3 AND created_at < $2)
-       LIMIT $4
+          OR (status IN ($3, $4) AND created_at < $2)
+       LIMIT $5
      )`;
   const result = await execute(
     'purge-expired',
     purgeSql,
-    [completedBefore, deadBefore, EVENT_OUTBOX_DEFERRED_STATUS.BUYER_ONBOARDING, EVENT_OUTBOX_PURGE_BATCH_SIZE],
+    [
+      completedBefore,
+      deadBefore,
+      EVENT_OUTBOX_DEFERRED_STATUS.BUYER_ONBOARDING,
+      EVENT_OUTBOX_DEFERRED_STATUS.VENDOR_PLAN,
+      EVENT_OUTBOX_PURGE_BATCH_SIZE,
+    ],
     { d1Text: purgeSql }
   );
   return result.rowCount || 0;

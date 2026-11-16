@@ -327,6 +327,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
 
 const EVENT_OUTBOX_DEFERRED_STATUS = Object.freeze({
   BUYER_ONBOARDING: 'onboarding',
+  VENDOR_PLAN: 'planning',
 });
 const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
 const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;

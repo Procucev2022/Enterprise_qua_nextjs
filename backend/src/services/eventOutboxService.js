@@ -695,6 +695,10 @@ async function dispatchEvent(job) {
         qty: item.quantity != null ? item.quantity : item.qty,
         uom: item.unit || item.uom,
       }));
+      const assignedVendorsCount = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors.length : 0;
+      const suppliersInvited = assignedVendorsCount > 0
+        ? assignedVendorsCount
+        : (Number.isFinite(rfq.procucevVendorCount) ? rfq.procucevVendorCount : 0);
       const delivery = await mailerService.sendRfqAcknowledgementEmail({
         to: recipient,
         buyerName: rfq.raisedByName || rfq.buyerAccountName,
@@ -707,8 +711,8 @@ async function dispatchEvent(job) {
         requiredBy: rfq.targetDeliveryDate,
         quoteDeadline: rfq.deadline,
         deadline: rfq.deadline,
-        // The real number of suppliers assigned to this RFQ. No fixed fallback.
-        suppliersInvited: Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors.length : rfq.procucevVendorCount,
+        // The real number of suppliers assigned/matched to this RFQ. No fixed fallback.
+        suppliersInvited,
         items,
       });
       if (!delivery?.sent) {

@@ -6072,3 +6072,10 @@ there are currently in my buyer account 11 vendors in the Vendor Directory, but 
 In RFQ invitations process, an RFQ created for the Pin code 110002, but RFQ invitations sent to some other pincode vendors, Can you please check & fix.
 ```
 ---
+
+### Prompt 240
+**Timestamp**: 2026-11-16T10:34:02+05:30
+```text
+During RFQ creation, 25 matching vendors are displayed for the selected category, but the email acknowledgement shows 0 matched suppliers and 0 invited suppliers. I verified the category mapping in Category Manager, including different locations, it went to certain vendors
+```
+---

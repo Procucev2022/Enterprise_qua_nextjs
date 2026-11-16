@@ -375,6 +375,7 @@ describe('PostgreSQL migration runner', () => {
         '0035_vendor_category_created_at_index',
         '0036_mail_provider_cooldowns',
         '0037_vendor_pincode_indexes',
+        '0038_rfq_created_email_vendor_plan_gate',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

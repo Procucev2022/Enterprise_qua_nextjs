@@ -254,10 +254,13 @@ function vendorMajorKeys(vendor) {
   return extractCategories(vendor?.majorCategory || vendor?.category).map((name) => name.toLowerCase());
 }
 
+const deferredVendorPlanRfqs = new WeakSet();
+
 function normalizeRFQForRead(rfq) {
   const normalized = { ...rfq };
   delete normalized.vendorInvitationTargets;
   delete normalized.gatewayNotificationTarget;
+  delete normalized.vendorPlanPending;
   if ((normalized.poFinalised || normalized.poNumber) && normalized.status === 'Closed') {
     normalized.status = 'PO Generated';
     normalized.poFinalised = true;
@@ -656,11 +659,20 @@ class StoreService {
     this._background(domainQueries.upsertPaymentLinkInDB(link), 'Failed to persist payment link');
   }
 
+  isVendorPlanDeferred(rfq) {
+    return Boolean(rfq && deferredVendorPlanRfqs.has(rfq));
+  }
+
   async confirmRfqPersisted(rfq) {
     this._lastRfqSyncTime = 0;
     if (!pool.hasStorage()) return { persisted: null };
     try {
-      await domainQueries.upsertRFQInDB(rfq);
+      const deferred = this.isVendorPlanDeferred(rfq);
+      const payload = deferred ? { ...rfq, vendorPlanPending: true } : rfq;
+      await domainQueries.upsertRFQInDB(payload);
+      if (!deferred) {
+        this._dispatchRFQCreatedEmailOutbox(rfq);
+      }
       return { persisted: true };
     } catch (err) {
       logger.error('Failed to confirm RFQ persisted in database', err, 'STORE_SERVICE');
@@ -676,7 +688,8 @@ class StoreService {
   async persistRFQDurably(rfq) {
     try {
       const storageConfigured = pool.hasStorage();
-      const persistedRFQ = await domainQueries.upsertRFQInDB(rfq);
+      const payload = this.isVendorPlanDeferred(rfq) ? { ...rfq, vendorPlanPending: true } : rfq;
+      const persistedRFQ = await domainQueries.upsertRFQInDB(payload);
       if (storageConfigured && !persistedRFQ) {
         throw new Error('RFQ upsert completed without a persisted row');
       }
@@ -4278,6 +4291,7 @@ class StoreService {
       buyerEmail,
       raisedByName: rfqData.raisedByName || null,
       creationAcknowledgementRequested: rfqData.creationAcknowledgementRequested === true,
+      ...(rfqData.vendorPlanPending === true || deferVendorPlan ? { vendorPlanPending: true } : {}),
       ...(rfqData.gatewayNotificationTarget && typeof rfqData.gatewayNotificationTarget === 'object' ? {
         gatewayNotificationTarget: {
           recipientEmail: String(rfqData.gatewayNotificationTarget.recipientEmail || '').trim(),
@@ -5226,12 +5240,29 @@ class StoreService {
     return true;
   }
 
+  _dispatchRFQCreatedEmailOutbox(rfq) {
+    if (!pool.hasStorage() || !rfq || !rfq.id || rfq.creationAcknowledgementRequested !== true) {
+      return false;
+    }
+    this._background(
+      eventOutboxService.dispatchDueEventOutboxJobs(1, [`rfq-created-email:${rfq.id}`]),
+      'Failed to dispatch durable RFQ creation acknowledgement event',
+      {
+        operation: 'rfq-created-email-outbox',
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+      }
+    );
+    return true;
+  }
+
   async _appendRFQAssignmentsDurably(id, additions, {
     ensureFollowUpData = false,
     clearCategoryManagerAssignment = false,
     clearCategoryNotAvailable = false,
     advanceStatus = false,
     includeBuyerEmailInInvite = false,
+    clearVendorPlanPending = false,
   } = {}) {
     let committedAdditions = [];
     const updatedRFQ = await this.updateRFQDurably(id, (current) => {
@@ -5270,6 +5301,7 @@ class StoreService {
       }
       if (clearCategoryManagerAssignment) updates.needsCategoryManagerAssignment = false;
       if (clearCategoryNotAvailable) updates.categoryNotAvailable = false;
+      if (clearVendorPlanPending) updates.vendorPlanPending = false;
       if (advanceStatus && (current.status === 'Parsing' || current.status === 'Draft' || !current.status)) {
         updates.status = 'Quotes Pending';
       }
@@ -7330,14 +7362,31 @@ class StoreService {
    * @returns {Promise<Object>} The RFQ with its assigned vendors.
    */
   async completeRFQVendorPlan(rfq, { notifyShortfall = false, rethrowOnDatabaseError = false } = {}) {
-    if (!rfq || !this._isDbPlannedRFQ(rfq)) return rfq;
-    // Only the outbox retry asks for rethrowOnDatabaseError. The other callers pass the options they always did.
-    const options = rethrowOnDatabaseError ? { notifyShortfall, rethrowOnDatabaseError } : { notifyShortfall };
-    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
-    if (mode === 'mode_0' || mode === 'v0' || mode === 'version_0') {
-      return this.augmentV0AssignmentsFromDB(rfq, options);
+    if (!rfq) return rfq;
+    const planned = this._isDbPlannedRFQ(rfq);
+    if (!planned && rfq.vendorPlanPending !== true) return rfq;
+    let completed = rfq;
+    if (planned) {
+      // Only the outbox retry asks for rethrowOnDatabaseError. The other callers pass the options they always did.
+      const options = rethrowOnDatabaseError ? { notifyShortfall, rethrowOnDatabaseError } : { notifyShortfall };
+      const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+      completed = (mode === 'mode_0' || mode === 'v0' || mode === 'version_0')
+        ? await this.augmentV0AssignmentsFromDB(rfq, options)
+        : await this.autoAssignVendorsFromDB(rfq, options);
     }
-    return this.autoAssignVendorsFromDB(rfq, options);
+    const shouldReleaseAck = !this.isVendorPlanDeferred(completed) && (
+      rfq.vendorPlanPending === true
+      || completed.vendorPlanPending === true
+      || (planned && pool.hasStorage() && rfq.creationAcknowledgementRequested === true)
+    );
+    if (shouldReleaseAck) {
+      if (completed === rfq || completed.vendorPlanPending === true) {
+        const released = await this.updateRFQDurably(completed.id, { vendorPlanPending: false });
+        if (released) completed = released;
+      }
+      this._dispatchRFQCreatedEmailOutbox(completed);
+    }
+    return completed;
   }
 
   /**
@@ -7354,6 +7403,7 @@ class StoreService {
    */
   async _deferMinorVendorPlan(rfq, path, error, { rethrowOnDatabaseError = false } = {}) {
     if (rethrowOnDatabaseError) throw error;
+    deferredVendorPlanRfqs.add(rfq);
     logger.error(
       'RFQ vendor plan could not read the database; queued a retry instead of planning from the in-memory subset',
       { rfqNumber: rfq.rfqNumber, path, error: error?.message },
@@ -7809,6 +7859,7 @@ class StoreService {
       const updated = await this.updateRFQDurably(rfq.id, (current) => ({
         needsCategoryManagerAssignment: !Array.isArray(current.assignedVendors) || current.assignedVendors.length === 0,
         procucevVendorCount: 0,
+        vendorPlanPending: false,
       }));
       return updated || rfq;
     }
@@ -7847,7 +7898,7 @@ class StoreService {
     const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
-      { ensureFollowUpData: true, advanceStatus: minorScoped }
+      { ensureFollowUpData: true, advanceStatus: minorScoped, clearVendorPlanPending: true }
     );
     if (!updated) return rfq;
     if (committedAdditions.length === 0) return updated;
@@ -7986,7 +8037,7 @@ class StoreService {
    * @param {Object} rfq The RFQ to assign vendors to.
    * @returns {Promise<Object>} The updated RFQ with assigned vendors.
    */
-  async autoAssignVendorsFromDB(rfq, { deferChasers = false, notifyShortfall, rethrowOnDatabaseError = false } = {}) {
+  async autoAssignVendorsFromDB(rfq, { deferChasers = false, notifyShortfall, rethrowOnDatabaseError = false, preserveVendorPlanPending = false } = {}) {
     if (!rfq) return rfq;
     const mode = String(rfq.sourcingMode || '');
     const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
@@ -8196,7 +8247,7 @@ class StoreService {
     const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
-      { ensureFollowUpData: true, advanceStatus: minorScoped }
+      { ensureFollowUpData: true, advanceStatus: minorScoped, clearVendorPlanPending: !preserveVendorPlanPending }
     );
     if (!updated) return rfq;
     if (committedAdditions.length === 0) return updated;
@@ -8345,7 +8396,7 @@ class StoreService {
       updated.followUpData.whatsappStats.total = Math.max(updated.followUpData.whatsappStats.total || 0, assignedCount);
     }
 
-    this._persistRFQ(updated);
+    this._persistRFQ(preserveVendorPlanPending ? { ...updated, vendorPlanPending: true } : updated);
     this._dispatchRFQVendorInviteOutbox(updated, 'rfq-auto-assigned-vendor-invites');
     logger.info(
       `RFQ ${rfq.rfqNumber}: auto-assigned ${updated.assignedVendors.length} vendors from DB (${committedAdditions.length} added)`,
@@ -9066,7 +9117,9 @@ class StoreService {
     const allEmails = new Set();
 
     if (pool.hasStorage()) {
-      this._dispatchRFQVendorInviteOutbox(rfq, 'rfq-creation-vendor-invites');
+      if (Array.isArray(rfq.vendorInvitationTargets) && rfq.vendorInvitationTargets.length > 0) {
+        this._dispatchRFQVendorInviteOutbox(rfq, 'rfq-creation-vendor-invites');
+      }
       return Array.isArray(rfq.vendorInvitationTargets) ? rfq.vendorInvitationTargets.length : 0;
     }
 

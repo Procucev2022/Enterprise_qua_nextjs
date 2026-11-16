@@ -1179,6 +1179,38 @@ describe('background event retry outbox', () => {
     });
   });
 
+  test('uses procucevVendorCount in RFQ creation acknowledgement when assignedVendors is empty', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const rfq = {
+      id: 'rfq-created-ack-empty-assigned',
+      rfqNumber: 'RFQ-ACK-25',
+      title: 'Semiconductors',
+      category: 'Engineering Spares - Electrical',
+      buyerEmail: 'buyer@example.test',
+      buyerAccountName: 'Buyer Co',
+      creationAcknowledgementRequested: true,
+      extractedEntities: [],
+      assignedVendors: [],
+      procucevVendorCount: 25,
+    };
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'rfq-created-email:rfq-created-ack-empty-assigned',
+      event_type: EVENT_OUTBOX_TYPES.RFQ_CREATED_EMAIL,
+      raw: { rfqId: rfq.id },
+      attempts: 1,
+      lease_token: 'lease-rfq-ack-empty',
+    }]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(rfq);
+    const sendSpy = jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(sendSpy).toHaveBeenCalledWith(expect.objectContaining({
+      rfqNumber: 'RFQ-ACK-25',
+      suppliersInvited: 25,
+    }));
+  });
+
   test('dispatches scheduled daily RFQ reports from a durable outbox event', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     const event = {

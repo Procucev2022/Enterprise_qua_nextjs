@@ -1090,6 +1090,7 @@ async function createRFQ(req, res, next) {
         sourceEmail: body.sourceEmail || (req.user && req.user.email) || null,
       }
       : null;
+    const shouldDeferAckUntilVendorPlan = Boolean(shouldSendBuyerAcknowledgement && pool.hasStorage());
     const created = await storeService.createRFQDurably({
       ...body,
       extractedEntities: lineItems,
@@ -1097,6 +1098,7 @@ async function createRFQ(req, res, next) {
       ...(buyerAcknowledgementRecipient ? { buyerEmail: buyerAcknowledgementRecipient } : {}),
       ...(req.user && req.user.name ? { raisedByName: req.user.name } : {}),
       creationAcknowledgementRequested: shouldSendBuyerAcknowledgement,
+      ...(shouldDeferAckUntilVendorPlan ? { vendorPlanPending: true } : {}),
       ...(gatewayNotificationTarget ? { gatewayNotificationTarget } : {}),
     }, requestingBuyerAccount);
 
@@ -1131,7 +1133,10 @@ async function createRFQ(req, res, next) {
       const needsTopUp = !createdIsV1 || !Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0;
       if (needsTopUp && typeof storeService.autoAssignVendorsFromDB === 'function') {
         try {
-          finalRFQ = await storeService.autoAssignVendorsFromDB(finalRFQ || created, { notifyShortfall: true });
+          finalRFQ = await storeService.autoAssignVendorsFromDB(finalRFQ || created, {
+            notifyShortfall: true,
+            ...(shouldDeferAckUntilVendorPlan ? { preserveVendorPlanPending: true } : {}),
+          });
         } catch (err) {
           logger.warn('Could not apply DB-backed vendor auto-assignment', { error: err.message }, 'RFQ_CONTROLLER');
         }
