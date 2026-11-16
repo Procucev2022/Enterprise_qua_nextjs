@@ -360,6 +360,7 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
               totalVendors,
             }, 'DATABASE_MIGRATION');
             console.log(`  ~  (skipped synchronous FTS rebuild on ${totalVendors} vendors to avoid D1 CPU limit 429)`);
+            await dropDeprecatedVendorFts(query);
           }
         } catch {
           // If vendor count check fails, continue to statement execution
@@ -367,11 +368,34 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
         if (skipRebuild) continue;
       }
 
+      const isVendorUpdateStmt = /^\s*UPDATE\s+["`]?vendors["`]?\b/i.test(statement);
+      if (isVendorUpdateStmt) {
+        await dropDeprecatedVendorFts(query);
+      }
+
       try {
         await query(statement);
       } catch (error) {
+        let activeError = error;
+        let errMsg = activeError?.message || '';
+        if (/SQLITE_CORRUPT_VTAB|SQLITE_CORRUPT/i.test(errMsg)) {
+          logger.warn('D1 SQLite virtual table corruption detected; dropping deprecated vendors_search_fts and retrying statement', {
+            migrationVersion: version,
+            error: errMsg,
+          }, 'DATABASE_MIGRATION');
+          console.warn('  ~  (SQLITE_CORRUPT_VTAB detected; dropping vendors_search_fts and retrying statement)');
+          await dropDeprecatedVendorFts(query);
+          try {
+            await query(statement);
+            continue;
+          } catch (retryError) {
+            activeError = retryError;
+            errMsg = activeError?.message || '';
+          }
+        }
+
         const addedColumn = statement.match(/^\s*ALTER\s+TABLE\s+["`]?([\w]+)["`]?\s+ADD\s+COLUMN\s+["`]?([\w]+)/i);
-        const duplicateColumn = String(error?.message || '').match(/duplicate column name:\s*["`]?([\w]+)/i);
+        const duplicateColumn = errMsg.match(/duplicate column name:\s*["`]?([\w]+)/i);
         if (addedColumn && duplicateColumn && addedColumn[2].toLowerCase() === duplicateColumn[1].toLowerCase()) {
           logger.info('D1 migration column already exists; skipping idempotent add', {
             migrationVersion: version,
@@ -383,19 +407,20 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
 
         const isFtsRebuildStmt = /vendors_search_fts/i.test(statement) && /rebuild/i.test(statement);
         const isVendorIndexStmt = /^\s*CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+[\w"`]+\s+ON\s+["`]?vendors["`]?\b/i.test(statement);
-        const isCpuReset = /exceeded its CPU time limit|database isolate was reset/i.test(error?.message || '');
-        if ((isFtsRebuildStmt || isVendorIndexStmt) && isCpuReset) {
+        const isCpuReset = /exceeded its CPU time limit|database isolate was reset/i.test(errMsg);
+        if ((isFtsRebuildStmt || isVendorIndexStmt || isVendorUpdateStmt) && isCpuReset) {
           logger.warn('D1 migration statement exceeded CPU limits; skipping idempotent step', {
             migrationVersion: version,
             isFtsRebuildStmt,
             isVendorIndexStmt,
-            error: error.message,
+            isVendorUpdateStmt,
+            error: errMsg,
           }, 'DATABASE_MIGRATION');
           console.warn('  ~  (D1 CPU limit reached during statement; skipped idempotently)');
           continue;
         }
 
-        const missingAuditLogs = /no such table:\s*["`]?audit_logs["`]?/i.test(error?.message || '');
+        const missingAuditLogs = /no such table:\s*["`]?audit_logs["`]?/i.test(errMsg);
         if (missingAuditLogs) {
           logger.info('D1 audit_logs table does not exist; skipping legacy audit log backfill', {
             migrationVersion: version,
@@ -404,7 +429,7 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
           continue;
         }
 
-        throw error;
+        throw activeError;
       }
     }
 
@@ -468,14 +493,33 @@ async function reportRowCounts(query = d1Query) {
   }
 }
 
+/**
+ * Drop the deprecated FTS5 virtual table and its write triggers on `vendors`.
+ * Safe to invoke repeatedly before `UPDATE vendors` or when skipping an FTS rebuild.
+ */
+async function dropDeprecatedVendorFts(query) {
+  const statements = [
+    'DROP TRIGGER IF EXISTS vendors_search_fts_insert',
+    'DROP TRIGGER IF EXISTS vendors_search_fts_delete',
+    'DROP TRIGGER IF EXISTS vendors_search_fts_update',
+    'DROP TABLE IF EXISTS "vendors_search_fts"',
+  ];
+  for (const stmt of statements) {
+    try {
+      await query(stmt);
+    } catch {
+      // Ignore errors when triggers or virtual table are already removed or unreadable
+    }
+  }
+}
+
 async function purgeDeprecatedTables(query = d1Query) {
   const { DEPRECATED_DATABASE_TABLES } = require('../src/config/constants');
   for (const table of DEPRECATED_DATABASE_TABLES) {
     try {
       if (table === 'vendors_search_fts') {
-        await query('DROP TRIGGER IF EXISTS vendors_search_fts_insert');
-        await query('DROP TRIGGER IF EXISTS vendors_search_fts_delete');
-        await query('DROP TRIGGER IF EXISTS vendors_search_fts_update');
+        await dropDeprecatedVendorFts(query);
+        continue;
       }
       await query(`DROP TABLE IF EXISTS "${table}"`);
     } catch {
@@ -633,5 +677,6 @@ module.exports = {
   REPORTED_TABLES,
   acquireMigrationLock,
   resolveD1Config,
+  dropDeprecatedVendorFts,
   purgeDeprecatedTables,
 };

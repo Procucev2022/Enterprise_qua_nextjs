@@ -1236,4 +1236,108 @@ describe('D1 migration SQL handling', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test('drops vendors_search_fts triggers before UPDATE vendors, recovers from SQLITE_CORRUPT_VTAB, and skips CPU-limited vendor updates', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-vtab-corrupt-'));
+    const migrationsPath = path.join(root, 'migrations');
+    fs.mkdirSync(migrationsPath, { recursive: true });
+    const sql0009 = "UPDATE vendors SET raw = json_remove(raw, '$.tempPassword') WHERE json_valid(raw);";
+    const sql0010 = 'ALTER TABLE other_tbl ADD COLUMN extra_col TEXT;';
+    fs.writeFileSync(path.join(migrationsPath, '0009_remove_vendor_temporary_passwords.d1.sql'), sql0009);
+    fs.writeFileSync(path.join(migrationsPath, '0010_other.d1.sql'), sql0010);
+    const hash0009 = crypto.createHash('sha256').update(sql0009).digest('hex');
+    const hash0010 = crypto.createHash('sha256').update(sql0010).digest('hex');
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      // Scenario 1: UPDATE vendors pre-drops FTS triggers/table, and SQLITE_CORRUPT_VTAB on another statement triggers drop + successful retry
+      const executed = [];
+      let altAttempts = 0;
+      const versionMap = {
+        '0009_remove_vendor_temporary_passwords': hash0009,
+        '0010_other': hash0010,
+      };
+      const appliedVersions = new Set();
+      const corruptRetryQuery = jest.fn(async (sql, params = []) => {
+        executed.push(sql);
+        if (sql.startsWith('INSERT INTO schema_migrations')) {
+          appliedVersions.add(params[0]);
+          return { result: [{ results: [] }] };
+        }
+        if (sql.includes('SELECT checksum FROM schema_migrations')) {
+          const ver = params[0];
+          return { result: [{ results: appliedVersions.has(ver) ? [{ checksum: versionMap[ver] }] : [] }] };
+        }
+        if (sql.includes('extra_col')) {
+          altAttempts += 1;
+          if (altAttempts === 1) {
+            throw new Error('D1 query failed (400): database disk image is malformed: SQLITE_CORRUPT (extended: SQLITE_CORRUPT_VTAB)');
+          }
+        }
+        if (sql.includes('DROP TRIGGER IF EXISTS vendors_search_fts_insert')) {
+          throw new Error('trigger already gone');
+        }
+        return { result: [{ results: [] }] };
+      });
+
+      const res1 = await applyD1Migrations({ query: corruptRetryQuery, migrationsPath });
+      expect(res1).toEqual({ applied: 2, skipped: 0 });
+      expect(executed.some((s) => s.includes('DROP TRIGGER IF EXISTS vendors_search_fts_update'))).toBe(true);
+      expect(executed.some((s) => s.includes('DROP TABLE IF EXISTS "vendors_search_fts"'))).toBe(true);
+      expect(altAttempts).toBe(2);
+
+      // Scenario 2: SQLITE_CORRUPT_VTAB followed by retry throwing CPU limit on UPDATE vendors is skipped idempotently
+      appliedVersions.clear();
+      let updateAttempts = 0;
+      const cpuRetryQuery = jest.fn(async (sql, params = []) => {
+        if (sql.startsWith('INSERT INTO schema_migrations')) {
+          appliedVersions.add(params[0]);
+          return { result: [{ results: [] }] };
+        }
+        if (sql.includes('SELECT checksum FROM schema_migrations')) {
+          const ver = params[0];
+          return { result: [{ results: appliedVersions.has(ver) ? [{ checksum: versionMap[ver] }] : [] }] };
+        }
+        if (sql.startsWith('UPDATE vendors')) {
+          updateAttempts += 1;
+          if (updateAttempts === 1) {
+            throw new Error('D1 query failed (400): SQLITE_CORRUPT_VTAB');
+          }
+          throw new Error('D1 query failed (429): D1 DB exceeded its CPU time limit and was reset.');
+        }
+        return { result: [{ results: [] }] };
+      });
+      const res2 = await applyD1Migrations({ query: cpuRetryQuery, migrationsPath });
+      expect(res2).toEqual({ applied: 2, skipped: 0 });
+      expect(updateAttempts).toBe(2);
+
+      // Scenario 3: Corrupt error with undefined error object retries and rethrows non-recoverable retry failure cleanly
+      appliedVersions.clear();
+      let plainRetryCount = 0;
+      const nonRecoverableRetryQuery = jest.fn(async (sql, params = []) => {
+        if (sql.startsWith('INSERT INTO schema_migrations')) {
+          appliedVersions.add(params[0]);
+          return { result: [{ results: [] }] };
+        }
+        if (sql.includes('SELECT checksum FROM schema_migrations')) {
+          return { result: [{ results: [] }] };
+        }
+        if (sql.startsWith('UPDATE vendors')) {
+          plainRetryCount += 1;
+          if (plainRetryCount === 1) {
+            throw new Error('SQLITE_CORRUPT');
+          }
+          return Promise.reject(null);
+        }
+        return { result: [{ results: [] }] };
+      });
+      await expect(applyD1Migrations({ query: nonRecoverableRetryQuery, migrationsPath })).rejects.toBeNull();
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
