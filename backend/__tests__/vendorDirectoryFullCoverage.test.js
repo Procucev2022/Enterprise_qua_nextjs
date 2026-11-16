@@ -946,6 +946,31 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       }
     });
 
+    test('getVendors: an en/em dash category is queried with the stored plain hyphen', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [], total: 0 });
+
+      try {
+        for (const dash of ['–', '—']) {
+          pageSpy.mockClear();
+          const res = mockRes();
+          await vendorController.getVendors(
+            { query: { buyerId: 'all', page: '1', pageSize: '20', category: `Others ${dash} New Product` } },
+            res,
+            next
+          );
+          expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ category: 'Others - New Product' }));
+          expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+        }
+      } finally {
+        pool.pool = originalPool;
+        pageSpy.mockRestore();
+      }
+    });
+
     test('getVendors: buyerId=all falls back to the in-memory path when no DB pool is configured', async () => {
       const next = jest.fn();
       const originalPool = pool.pool;
