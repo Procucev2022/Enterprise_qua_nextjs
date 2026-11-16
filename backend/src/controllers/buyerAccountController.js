@@ -513,7 +513,9 @@ async function ingestHistoricalData(req, res, next) {
       return res.status(400).json({ success: false, error: 'period is required.' });
     }
     logger.info(`Ingesting historical purchase data for period: ${period}`, { period }, 'BUYER_ACCOUNT_CONTROLLER');
-    const requestingBuyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+    const requestingBuyerAccount =
+      (await storeService.ensureBuyerAccountForUser?.(req.user)) ||
+      (await storeService.getBuyerAccountByEmail(req.user.email));
     const result = await storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
     res.json(result);
   } catch (err) {

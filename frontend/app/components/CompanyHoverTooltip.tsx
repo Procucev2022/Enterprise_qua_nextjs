@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { User, Phone, Mail, MapPin, Building2, ShieldCheck } from 'lucide-react';
 
 // Real per-company contact details the caller already has from an actual
@@ -19,6 +19,7 @@ export interface CompanyContactInfo {
   mobile?: string;
   email?: string;
   location?: string;
+  pincode?: string;
   verified?: boolean;
 }
 
@@ -114,10 +115,12 @@ export default function CompanyHoverTooltip({
                 </div>
               )}
 
-              {contact?.location && (
+              {(contact?.location || contact?.pincode) && (
                 <div className="flex items-center gap-2 text-slate-500 dark:text-gray-400 text-[10px]">
                   <MapPin size={13} className="text-rose-500 shrink-0" />
-                  <span className="truncate">{contact.location}</span>
+                  <span className="truncate">
+                    {[contact?.location, contact?.pincode ? formatString(UI_STRINGS.inviteVendors.pincodeBadge, { pincode: contact.pincode }) : ''].filter(Boolean).join(' — ')}
+                  </span>
                 </div>
               )}
             </div>

@@ -1174,6 +1174,161 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(newService.minorCategories).toContain('Maintenance & AMC');
     });
   });
+
+  describe('D1 overload fallback cache', () => {
+    const d1Bridge = require('../src/db/d1Bridge');
+
+    beforeEach(() => {
+      buyerProfileQueries.resetProfileFallbackCache();
+      d1Bridge.resetD1OverloadState();
+    });
+
+    afterEach(() => {
+      buyerProfileQueries.resetProfileFallbackCache();
+      d1Bridge.resetD1OverloadState();
+    });
+
+    test('findProfileByUserId caches hydrated profile and serves it on retryable D1 errors and category overload failures', async () => {
+      const baseRow = {
+        user_uuid: 'cache-u-1',
+        org_uuid: 'cache-org-1',
+        organization_name: 'Cache Corp',
+        username: 'cache.buyer@acme.com',
+      };
+
+      jest
+        .spyOn(dbPool, 'rows')
+        .mockResolvedValueOnce([baseRow])
+        .mockResolvedValueOnce([{ division: 'IT', category: 'Laptop' }]);
+
+      const warmed = await buyerProfileQueries.findProfileByUserId('cache-u-1');
+      expect(warmed.found).toBe(true);
+      expect(warmed.profile.categories).toEqual([{ major: 'IT', minor: 'Laptop' }]);
+
+      // Transient overload on primary profile query returns a clone from cache
+      jest.spyOn(dbPool, 'rows').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      const overloadHit = await buyerProfileQueries.findProfileByUserId('cache-u-1');
+      expect(overloadHit.found).toBe(true);
+      expect(overloadHit.profile.companyName).toBe('Cache Corp');
+      expect(overloadHit.profile.categories).toEqual([{ major: 'IT', minor: 'Laptop' }]);
+
+      // Overload on loadCategories falls back to cached categories
+      jest
+        .spyOn(dbPool, 'rows')
+        .mockResolvedValueOnce([baseRow])
+        .mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      const catOverloadHit = await buyerProfileQueries.findProfileByUserId('cache-u-1');
+      expect(catOverloadHit.found).toBe(true);
+      expect(catOverloadHit.profile.categories).toEqual([{ major: 'IT', minor: 'Laptop' }]);
+
+      // Non-retryable loadCategories error still rethrows when D1 is not overloaded
+      d1Bridge.resetD1OverloadState();
+      jest
+        .spyOn(dbPool, 'rows')
+        .mockResolvedValueOnce([baseRow])
+        .mockRejectedValueOnce(new Error('syntax error in categories SQL'));
+      await expect(buyerProfileQueries.findProfileByUserId('cache-u-1')).rejects.toThrow('syntax error in categories SQL');
+
+      // Overload miss rethrows when cache was reset
+      buyerProfileQueries.resetProfileFallbackCache();
+      jest.spyOn(dbPool, 'rows').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      await expect(buyerProfileQueries.findProfileByUserId('cache-u-1')).rejects.toThrow('D1 DB is overloaded');
+    });
+
+    test('findProfileByIdentifier serves email cache during overload and skips unindexed org-email scans while overloaded', async () => {
+      const row = {
+        user_uuid: 'ident-u-1',
+        org_uuid: 'ident-org-1',
+        organization_name: 'Ident Corp',
+        username: 'ident.buyer@acme.com',
+      };
+
+      jest
+        .spyOn(dbPool, 'rows')
+        .mockResolvedValueOnce([row])
+        .mockResolvedValueOnce([{ division: 'Electrical', category: 'Cables' }]);
+
+      const warmed = await buyerProfileQueries.findProfileByUserId('ident-u-1');
+      expect(warmed.found).toBe(true);
+
+      // Pass 1 rejects with retryable D1 overload -> serves cached profile by email
+      jest.spyOn(dbPool, 'rows').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      const pass1ErrorCached = await buyerProfileQueries.findProfileByIdentifier({ email: 'IDENT.BUYER@acme.com' });
+      expect(pass1ErrorCached.found).toBe(true);
+      expect(pass1ErrorCached.profile.companyName).toBe('Ident Corp');
+
+      // Pass 1 returns empty while D1 overload window is active -> serves cached email hit and skips Pass 2 org scan
+      d1Bridge.markD1Overloaded();
+      const rowsSpy = jest.spyOn(dbPool, 'rows');
+      rowsSpy.mockClear();
+      rowsSpy.mockResolvedValueOnce([]);
+      const pass1EmptyCached = await buyerProfileQueries.findProfileByIdentifier({ email: 'ident.buyer@acme.com' });
+      expect(pass1EmptyCached.found).toBe(true);
+      expect(rowsSpy).toHaveBeenCalledTimes(1);
+
+      // With cache cleared and D1 overloaded, Pass 2 unindexed org-email scan is skipped and returns USER_NOT_FOUND
+      buyerProfileQueries.resetProfileFallbackCache();
+      rowsSpy.mockClear();
+      rowsSpy.mockResolvedValueOnce([]);
+      const overloadMiss = await buyerProfileQueries.findProfileByIdentifier({ email: 'ident.buyer@acme.com' });
+      expect(overloadMiss).toEqual({ found: false, reason: 'USER_NOT_FOUND' });
+      expect(rowsSpy).toHaveBeenCalledTimes(1);
+
+      // When D1 is healthy, Pass 2 falls back to o.email lookup if Pass 1 returns empty
+      d1Bridge.resetD1OverloadState();
+      rowsSpy.mockClear();
+      rowsSpy
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{
+          user_uuid: 'org-mail-u-1',
+          org_uuid: 'org-mail-1',
+          organization_name: 'Org Mail Corp',
+          email: 'orgmail@acme.com',
+        }])
+        .mockResolvedValueOnce([]);
+      const pass2OrgEmail = await buyerProfileQueries.findProfileByIdentifier({ email: 'orgmail@acme.com' });
+      expect(pass2OrgEmail.found).toBe(true);
+      expect(pass2OrgEmail.profile.companyName).toBe('Org Mail Corp');
+    });
+
+    test('evicts oldest userId and email cache entries when exceeding 250 cached profiles', async () => {
+      jest.spyOn(dbPool, 'rows').mockImplementation((sql, params) => {
+        if (sql.includes('from "user" u')) {
+          const id = params[0];
+          const email = id === 'u-no-email' ? '' : `${id}@bulk.example.com`;
+          return Promise.resolve([{
+            user_uuid: id,
+            org_uuid: `org-${id}`,
+            organization_name: `Org ${id}`,
+            username: email,
+          }]);
+        }
+        return Promise.resolve([]);
+      });
+
+      // Seed one entry without an email key and 251 entries with distinct emails
+      await buyerProfileQueries.findProfileByUserId('u-no-email');
+      for (let i = 0; i <= 250; i += 1) {
+        await buyerProfileQueries.findProfileByUserId(`bulk-u-${i}`);
+      }
+
+      // Trigger overload so only cached profiles can be resolved
+      jest.spyOn(dbPool, 'rows').mockRejectedValue(new Error('D1 DB is overloaded'));
+
+      // Entry 250 remains cached, while early entries (u-no-email / bulk-u-0) were evicted
+      const newestHit = await buyerProfileQueries.findProfileByUserId('bulk-u-250');
+      expect(newestHit.found).toBe(true);
+      expect(newestHit.profile.companyName).toBe('Org bulk-u-250');
+
+      await expect(buyerProfileQueries.findProfileByUserId('u-no-email')).rejects.toThrow('D1 DB is overloaded');
+
+      // Early email entry bulk-u-0@bulk.example.com was also evicted by trimProfileCache
+      d1Bridge.markD1Overloaded();
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
+      const evictedEmail = await buyerProfileQueries.findProfileByIdentifier({ email: 'bulk-u-0@bulk.example.com' });
+      expect(evictedEmail).toEqual({ found: false, reason: 'USER_NOT_FOUND' });
+    });
+  });
 });
 
 

@@ -318,7 +318,7 @@ describe('RFQ invitations follow the minor category', () => {
       storeService.vendors = [];
       jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([]);
       jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
-      const lookup = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+      const lookup = jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([
         vendorById('v-major'),
         vendorById('v-minor'),
       ]);
@@ -326,7 +326,11 @@ describe('RFQ invitations follow the minor category', () => {
 
       const updated = await storeService.autoAssignVendorsFromDB(created, { deferChasers: true });
 
-      expect(lookup).toHaveBeenCalledWith(['bearings & accessories', 'bearings & accessori'], expect.any(Number));
+      expect(lookup).toHaveBeenCalledWith(
+        ['bearings & accessories', 'bearings & accessori'],
+        expect.arrayContaining(['engineering spares - mechanical']),
+        expect.any(Number)
+      );
       expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major']);
     });
 
@@ -334,7 +338,7 @@ describe('RFQ invitations follow the minor category', () => {
       storeService.vendors = [];
       jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([]);
       jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
-      jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+      jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([
         vendorById('v-major'),
         vendorById('v-other'),
       ]);

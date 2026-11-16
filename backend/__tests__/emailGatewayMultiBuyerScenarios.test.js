@@ -751,6 +751,42 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
       expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     });
 
+    test('preserves assignedVendors returned by autoAssignVendorsFromDB when calling confirmRfqPersisted', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(REG_BUYER_1);
+      const initialRfq = {
+        id: 'rfq-preserve-assign',
+        rfqNumber: 'RFQ-PRESERVE-1',
+        title: 'IT Hardware',
+        category: 'IT',
+        status: 'Quotes Pending',
+        buyerAccountId: REG_BUYER_1.id,
+        assignedVendors: [],
+      };
+      jest.spyOn(storeService, 'createRFQ').mockReturnValue(initialRfq);
+      const assignedVendors = [
+        { id: 'v-lat-1', name: 'Laptop Co 1', email: 'v1@it.test', category: 'Laptop' },
+        { id: 'v-lat-2', name: 'Laptop Co 2', email: 'v2@it.test', category: 'Laptop' },
+      ];
+      jest.spyOn(storeService, 'autoAssignVendorsFromDB').mockResolvedValue({
+        ...initialRfq,
+        assignedVendors,
+        procucevVendorCount: assignedVendors.length,
+      });
+      const confirmSpy = jest.spyOn(storeService, 'confirmRfqPersisted').mockResolvedValue(true);
+      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue(true);
+
+      const emlSource = `From: ${REG_BUYER_1.corporateEmail}\r\nTo: rfq@procucev.com\r\nSubject: Need Laptops\r\n\r\n10 Laptops`;
+      const result = await emailGatewayService.processMessage(Buffer.from(emlSource, 'utf8'), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'rfq-preserve-assign',
+        assignedVendors,
+      }));
+      expect(result.rfq.assignedVendors).toEqual(assignedVendors);
+    });
+
     test('covers sendBuyerOnboardingWithRfqEmail failure leading to queueAcknowledgement', async () => {
       mockExtraction();
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);

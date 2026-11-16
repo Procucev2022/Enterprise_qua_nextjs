@@ -5942,3 +5942,105 @@ enable a filter here in category manager login based on major dategory (division
 Analyse all errors in this logs csv file, please fix them.
 ```
 ---
+
+### Prompt 224
+**Timestamp**: 2026-11-15T16:30:00+05:30
+```text
+Please Check & fix this issue. We keep on getting the D1 issue, please check how we can avoid this kind of issue
+
+https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/43705709617/job/132786205744
+
+/browser 
+```
+---
+
+### Prompt 225
+**Timestamp**: 2026-11-15T16:56:01+05:30
+```text
+Please find the details
+```
+[Attached image: image/png (media_1794741929138_090e40bd.png)]
+[Attached image: image/jpeg (media_1794741954944_cac406c7.jpg)]
+---
+
+### Prompt 226
+**Timestamp**: 2026-11-15T17:18:00+05:30
+```text
+invite 25 vendors for submitting quotations per each unique minor category per respective pincode. In case of a fallback, I.e.,, less minor category vendors are there such as 21 minor category vendors, the remaining 4 should be from major category. Also in case less number of minor category vendors are not there. sent an notification email at quateam@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com 
+
+But seems like vendors are not getting invited all together properly even if they are invited, they are getting invited based on respective minor properly. Please check all issues, seems like minor category is not even getting fetched properly. Please analyse & fix it properly. 
+
+in one case, it didn't sent the RFQ invitations to any vendors at all. 
+in one another case, it detected zero minor category vendors for all unique distinct category for that pincode , & sent to all major category vendors. Please check & fix 
+```
+[Attached image: image/png (media_1794742970605_68b1444c.jpg)]
+[Attached image: image/png (media_1794743095975_ea75bba6.jpg)]
+---
+
+### Prompt 227
+**Timestamp**: 2026-11-15T18:22:14+05:30
+```text
+Add filter major or minor category as well.
+```
+[Attached image: image/jpeg (media_1794747107987_31b2c3c8.jpg)]
+---
+
+### Prompt 228
+**Timestamp**: 2026-11-15T18:24:22+05:30
+```text
+In the vendors detailed displayed, we should see the vendor pincode as well. so that we can recognise, which vendor belongs to which pincode
+```
+[Attached image: image/jpeg (media_1794747223533_c65e201d.jpg)]
+---
+
+### Prompt 229
+**Timestamp**: 2026-11-15T18:39:28+05:30
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-15T13_08_34.507Z.csv] 
+
+Please resolve the error mentioned or occcured in these logs
+```
+---
+
+### Prompt 230
+**Timestamp**: 2026-11-15T18:42:06+05:30
+```text
+have uploaded vendors in past, but can't see the vendors, Can you please check once the issue
+```
+---
+
+### Prompt 231
+**Timestamp**: 2026-11-15T21:12:50+05:30
+```text
+keep commiting &  pushing the change as well
+```
+---
+
+### Prompt 232
+**Timestamp**: 2026-11-16T06:17:50+05:30
+```text
+Please check this github actions error
+```
+---
+
+### Prompt 233
+**Timestamp**: 2026-11-16T06:54:59+05:30
+```text
+Why is production deployment having multiple unneccessary CI-CD actions are happening such as deployment to test landscape in production deployment, Can you check once 
+```
+---
+
+### Prompt 234
+**Timestamp**: 2026-11-16T08:06:29+05:30
+```text
+Can you please check these warnings.
+```
+---
+
+### Prompt 235
+**Timestamp**: 2026-11-16T08:13:04+05:30
+```text
+This email should go to 	
+gmtrfq@procucev.com, anshul , veerababu, remove quateam
+```
+---

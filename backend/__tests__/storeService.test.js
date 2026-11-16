@@ -1562,6 +1562,97 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
+    test('processHistoricalPurchaseData links existing DB vendor on 409 conflict without ReferenceError and updates vendorCode/gstin', async () => {
+      const requestingBuyerAccount = storeService.addBuyerAccount({
+        organizationName: 'Conflict Link Org',
+        corporateEmail: 'conflict-link-buyer@example.com',
+      });
+      const existingSameBuyer = await storeService.addVendor({
+        name: 'Preexisting Buyer Vendor',
+        email: 'preexisting-update@example.com',
+        buyerId: requestingBuyerAccount.id,
+        buyerAccountId: requestingBuyerAccount.id,
+        buyerEmail: requestingBuyerAccount.corporateEmail,
+        majorCategory: 'Mechanical',
+      });
+      const originalPool = domainPool.pool;
+      domainPool.pool = { query: jest.fn() };
+      const conflictErr = new Error('duplicate key value violates unique constraint "vendors_email_key"');
+      conflictErr.code = '23505';
+
+      const existingDbVendor = {
+        id: 'v-db-existing-409',
+        name: 'Existing DB Supplier',
+        email: 'link-409@example.com',
+        buyerId: null,
+        buyerAccountId: null,
+        buyerEmail: null,
+        addedByBuyerCompany: null,
+        vendorCode: null,
+        gstin: null,
+        majorCategory: 'Electrical',
+        minorCategories: ['Cables'],
+      };
+
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockImplementation(async (v) => {
+        if (String(v.id || '').startsWith('v-hist-')) {
+          throw conflictErr;
+        }
+        return v;
+      });
+      const lookupSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(existingDbVendor);
+
+      try {
+        const res = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [
+            {
+              companyName: 'Preexisting Buyer Vendor Updated',
+              email: 'preexisting-update@example.com',
+              vendorCode: 'VC-UPD-1',
+              gstNumber: '27aaaca1928k1z4',
+            },
+            {
+              companyName: 'Link Conflict Supplier',
+              email: 'link-409@example.com',
+              vendorCode: 'VC-409',
+              gstin: '29bbbbb0000b1z6',
+              majorCategory: 'Mechanical',
+              minorCategories: ['Pumps'],
+            },
+          ],
+          requestingBuyerAccount
+        );
+        expect(res.skippedCount).toBe(0);
+        const linked = storeService.vendors.find((v) => v.id === 'v-db-existing-409');
+        expect(linked).toMatchObject({
+          buyerId: requestingBuyerAccount.id,
+          buyerAccountId: requestingBuyerAccount.id,
+          buyerEmail: 'conflict-link-buyer@example.com',
+          addedByBuyerCompany: 'Conflict Link Org',
+          vendorCode: 'VC-409',
+          gstin: '29BBBBB0000B1Z6',
+          majorCategory: 'Mechanical',
+          minorCategories: ['Pumps'],
+        });
+        expect(existingSameBuyer.vendorCode).toBe('VC-UPD-1');
+        expect(existingSameBuyer.gstin).toBe('27AAACA1928K1Z4');
+
+        // Also cover linkErr catch when upsertVendorInDB rejects while linking existingInDB
+        upsertSpy.mockRejectedValue(conflictErr);
+        const failRes = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: 'Link Fail Supplier', email: 'link-fail-409@example.com' }],
+          requestingBuyerAccount
+        );
+        expect(failRes.skippedCount).toBe(1);
+      } finally {
+        domainPool.pool = originalPool;
+        upsertSpy.mockRestore();
+        lookupSpy.mockRestore();
+      }
+    });
+
     test('processHistoricalPurchaseData rolls back a row on an unrelated DB failure (500) and reports it as skipped', async () => {
       const requestingBuyerAccount = storeService.addBuyerAccount({
         organizationName: 'DB Down Ingest Test Co',

@@ -154,11 +154,13 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
     openUploadHistory();
     fireEvent.click(screen.getByRole('button', { name: /View Records/i }));
 
-    expect(screen.getByText('Alpha Industrial')).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText('Search this batch...'), {
+    expect(screen.getByText('Vendor Template Upload Batch Details')).toBeInTheDocument();
+    const historyModal = screen.getByTestId('upload-history-modal');
+    expect(within(historyModal).getByText('Alpha Industrial')).toBeInTheDocument();
+    fireEvent.change(within(historyModal).getByPlaceholderText('Search this batch...'), {
       target: { value: 'only a contact' },
     });
-    expect(screen.queryByText('Alpha Industrial')).not.toBeInTheDocument();
+    expect(within(historyModal).queryByText('Alpha Industrial')).not.toBeInTheDocument();
   });
 
   it('shows dashes for a batch with no id, file name, timestamp, counts or records', () => {
@@ -197,5 +199,58 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
     fireEvent.change(rating, { target: { value: '4.5' } });
     fireEvent.change(rating, { target: { value: '' } });
     expect(rating.value).toBe('');
+  });
+
+  it('reconciles uploaded history batches into the buyer directory on mount and handles deduplication and corrupt history', () => {
+    seedUploadHistory([
+      {
+        id: 'batch-reconcile-1',
+        fileName: 'Testing data.csv',
+        records: [
+          {
+            vendorName: 'Reconciled Mfg Co',
+            email: 'reconciled@mfg.test',
+            phone: '9876543210',
+            gstin: '36ABCDE1234F1Z5',
+            city: 'Hyderabad',
+            state: 'Telangana',
+            pincode: '500037',
+            rating: 4.5,
+            majorCategory: 'Mechanical',
+            minorCategories: ['Pumps'],
+          },
+          {
+            email: 'emailonly@history.test',
+          },
+          {
+            name: 'Duplicate Email Co',
+            email: 'RECONCILED@MFG.TEST',
+          },
+          {
+            name: 'Failed Row Co',
+            email: 'failed@history.test',
+            status: 'FAILED',
+          },
+          {
+            name: '',
+            email: '',
+          },
+        ],
+      },
+      {
+        records: null,
+      },
+    ]);
+
+    renderSummary();
+    expect(screen.getByText('Reconciled Mfg Co')).toBeInTheDocument();
+    expect(screen.getByText('emailonly@history.test')).toBeInTheDocument();
+    expect(screen.queryByText('Failed Row Co')).not.toBeInTheDocument();
+
+    localStorage.setItem('procucev_vendor_upload_history', JSON.stringify({ not: 'an-array' }));
+    renderSummary();
+
+    localStorage.setItem('procucev_vendor_upload_history', '{invalid-json');
+    renderSummary();
   });
 });

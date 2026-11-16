@@ -27,11 +27,11 @@ import { useApp } from '@/lib/store';
 import { fetchAllVendors, fetchVendorCandidates, inviteVendorsToRFQ } from '@/lib/rfqClient';
 import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
-import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
-import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
+import type { MajorMinorCategory, RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 
 // "All Vendors" can legitimately span tens of thousands of rows (the real
@@ -93,6 +93,81 @@ function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[], mi
   return signals.some((s) => pools.includes(String(s || '').trim().toLowerCase()));
 }
 
+/** Collect sorted distinct minor categories from taxonomy, RFQ line items, and loaded vendors. */
+function buildMinorCategoryOptions({
+  selectedMajor,
+  taxonomyGroups,
+  categoryTaxonomy,
+  effectiveCategoryOptions,
+  rfq,
+  vendors,
+}: {
+  selectedMajor: string;
+  taxonomyGroups: MajorMinorCategory[];
+  categoryTaxonomy: MajorMinorCategory[];
+  effectiveCategoryOptions: string[];
+  rfq: RFQItem | null;
+  vendors: RFQVendorCandidate[];
+}): string[] {
+  const byNorm = new Map<string, string>();
+  const addMinor = (val?: string | null) => {
+    const trimmed = String(val || '').trim();
+    const norm = normalizeCategory(trimmed);
+    if (norm && !byNorm.has(norm)) {
+      byNorm.set(norm, trimmed);
+    }
+  };
+
+  const selectedMajorNorm = normalizeCategory(selectedMajor);
+  const allGroups = [...taxonomyGroups, ...categoryTaxonomy];
+
+  if (selectedMajorNorm) {
+    allGroups.forEach((group) => {
+      if (normalizeCategory(group?.majorCategory) === selectedMajorNorm && Array.isArray(group?.minorCategories)) {
+        group.minorCategories.forEach(addMinor);
+      }
+    });
+    if (typeof getMinorCategories === 'function') {
+      getMinorCategories(selectedMajor).forEach(addMinor);
+    }
+    if (rfq) {
+      if (normalizeCategory(rfq.category) === selectedMajorNorm) {
+        addMinor(rfq.minorCategory);
+      }
+      for (const ent of rfq.extractedEntities || []) {
+        const entityMajorNorm = normalizeCategory(ent.majorCategory || ent.category || rfq.category);
+        if (entityMajorNorm === selectedMajorNorm) {
+          addMinor(ent.minorCategory);
+        }
+      }
+    }
+    vendors.forEach((v) => {
+      if (normalizeCategory(v?.majorCategory) === selectedMajorNorm && Array.isArray(v?.minorCategories)) {
+        v.minorCategories.forEach(addMinor);
+      }
+    });
+  } else {
+    allGroups.forEach((group) => {
+      if (Array.isArray(group?.minorCategories)) {
+        group.minorCategories.forEach(addMinor);
+      }
+    });
+    if (typeof getMinorCategories === 'function') {
+      effectiveCategoryOptions.forEach((major) => getMinorCategories(major).forEach(addMinor));
+    }
+    if (rfq) {
+      rfqMinorCategories(rfq).forEach(addMinor);
+    }
+    vendors.forEach((v) => {
+      if (Array.isArray(v?.minorCategories)) {
+        v.minorCategories.forEach(addMinor);
+      }
+    });
+  }
+
+  return Array.from(byNorm.values()).sort((a, b) => a.localeCompare(b));
+}
+
 export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: InviteVendorsModalProps) {
   const { showToast, categoryTaxonomy } = useApp();
 
@@ -108,9 +183,11 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [minorCategoryFilter, setMinorCategoryFilter] = useState('');
   const [stateFilter, setStateFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
   const [categoryOptions, setCategoryOptions] = useState<string[]>(() => getMajorCategories());
+  const [taxonomyGroups, setTaxonomyGroups] = useState<MajorMinorCategory[]>([]);
   const [categoryLoadError, setCategoryLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -139,6 +216,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     setSearch('');
     setDebouncedSearch('');
     setCategoryFilter('');
+    setMinorCategoryFilter('');
     setStateFilter('');
     setCityFilter('');
     setLoading(true);
@@ -165,10 +243,10 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     // A failed category load keeps the options already known and says so, instead of hiding the failure.
     void fetchCategoryTaxonomy()
       .then((result) => {
-        const fetched = result.success && Array.isArray(result.data)
-          ? result.data.map((c) => c.majorCategory).filter(Boolean)
-          : [];
+        const fetchedGroups = result.success && Array.isArray(result.data) ? result.data : [];
+        const fetched = fetchedGroups.map((c) => c.majorCategory).filter(Boolean);
         if (fetched.length > 0) {
+          setTaxonomyGroups(fetchedGroups);
           setCategoryOptions(fetched);
           setCategoryLoadError(null);
         } else {
@@ -218,7 +296,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       allVendorsAbortRef.current?.abort();
       return;
     }
-    const key = `${debouncedSearch}|${categoryFilter}|${stateFilter}|${cityFilter}`;
+    const key = `${debouncedSearch}|${categoryFilter}|${minorCategoryFilter}|${stateFilter}|${cityFilter}`;
     if (allVendors !== null && lastFetchedKeyRef.current === key) return;
     lastFetchedKeyRef.current = key;
     allVendorsAbortRef.current?.abort();
@@ -233,6 +311,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         pageSize: ALL_VENDORS_PAGE_SIZE,
         search: debouncedSearch,
         category: categoryFilter,
+        ...(minorCategoryFilter ? { minors: [minorCategoryFilter] } : {}),
         state: stateFilter,
         city: cityFilter,
       })
@@ -249,7 +328,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       setAllVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rfq.assignedVendors is only read via stampInvited at fetch time, not a re-fetch trigger
-  }, [isOpen, rfq, tab, debouncedSearch, categoryFilter, stateFilter, cityFilter]);
+  }, [isOpen, rfq, tab, debouncedSearch, categoryFilter, minorCategoryFilter, stateFilter, cityFilter]);
 
   const loadMoreAllVendors = () => {
     if (!allVendorsPagination || allVendorsLoadingMore) return;
@@ -262,6 +341,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       pageSize: ALL_VENDORS_PAGE_SIZE,
       search: debouncedSearch,
       category: categoryFilter,
+      ...(minorCategoryFilter ? { minors: [minorCategoryFilter] } : {}),
       state: stateFilter,
       city: cityFilter,
     }).then((result) => {
@@ -317,6 +397,40 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [categoryOptions, categoryTaxonomy, rfq, allVendors, candidates]);
 
+  const effectiveMinorCategoryOptions = useMemo(() => {
+    const options = buildMinorCategoryOptions({
+      selectedMajor: categoryFilter,
+      taxonomyGroups,
+      categoryTaxonomy: Array.isArray(categoryTaxonomy) ? categoryTaxonomy : [],
+      effectiveCategoryOptions,
+      rfq,
+      vendors: [...candidates, ...(allVendors || [])],
+    });
+    const selectedMinorNorm = normalizeCategory(minorCategoryFilter);
+    if (selectedMinorNorm && !options.some((m) => normalizeCategory(m) === selectedMinorNorm)) {
+      return [...options, minorCategoryFilter.trim()].sort((a, b) => a.localeCompare(b));
+    }
+    return options;
+  }, [categoryFilter, minorCategoryFilter, taxonomyGroups, categoryTaxonomy, effectiveCategoryOptions, rfq, candidates, allVendors]);
+
+  const handleCategoryChange = (newMajor: string) => {
+    setCategoryFilter(newMajor);
+    if (newMajor.trim() && minorCategoryFilter.trim()) {
+      const validMinors = buildMinorCategoryOptions({
+        selectedMajor: newMajor,
+        taxonomyGroups,
+        categoryTaxonomy: Array.isArray(categoryTaxonomy) ? categoryTaxonomy : [],
+        effectiveCategoryOptions,
+        rfq,
+        vendors: [...candidates, ...(allVendors || [])],
+      });
+      const selectedMinorNorm = normalizeCategory(minorCategoryFilter);
+      if (!validMinors.some((m) => normalizeCategory(m) === selectedMinorNorm)) {
+        setMinorCategoryFilter('');
+      }
+    }
+  };
+
   // Dynamic available states from taxonomy + loaded vendors
   const availableStates = useMemo(() => {
     const set = new Set<string>();
@@ -370,12 +484,24 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
           if (!matchesAnyToken) return false;
         }
       }
-      // 2. Category filter
+      // 2. Category filter (Major Category)
       if (categoryFilter.trim()) {
         const cat = categoryFilter.trim().toLowerCase();
         const matchMajor = String(c.majorCategory || '').toLowerCase() === cat;
         const matchMinors = Array.isArray(c.minorCategories) && c.minorCategories.some((m) => String(m || '').toLowerCase() === cat);
         if (!matchMajor && !matchMinors) return false;
+      }
+      // 2b. Minor Category filter
+      if (minorCategoryFilter.trim()) {
+        const selectedMinorNorm = normalizeCategory(minorCategoryFilter);
+        const matchMinors =
+          Array.isArray(c.minorCategories) &&
+          c.minorCategories.some((m) => {
+            const normM = normalizeCategory(m);
+            return Boolean(normM && (normM === selectedMinorNorm || minorNamesMatch(normM, selectedMinorNorm)));
+          });
+        const matchMajor = normalizeCategory(c.majorCategory) === selectedMinorNorm;
+        if (!matchMinors && !matchMajor) return false;
       }
       // 3. State filter
       if (stateFilter.trim()) {
@@ -398,7 +524,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       }
       return true;
     });
-  }, [candidates, debouncedSearch, categoryFilter, stateFilter, cityFilter]);
+  }, [candidates, debouncedSearch, categoryFilter, minorCategoryFilter, stateFilter, cityFilter]);
 
   const visibleVendors = tab === 'category' ? filteredCategoryCandidates : allVendors || [];
   const hasMoreAllVendors = !!allVendorsPagination && allVendorsPagination.page < allVendorsPagination.totalPages;
@@ -726,7 +852,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         <div className="px-6 py-3 bg-slate-50/80 dark:bg-gray-950/40 border-y border-slate-200 dark:border-gray-800 shrink-0">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
             {/* Search Bar: Name or Email */}
-            <div className="relative sm:col-span-1 lg:col-span-4">
+            <div className="relative sm:col-span-2 lg:col-span-3">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
@@ -749,12 +875,12 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               )}
             </div>
 
-            {/* Category Filter */}
+            {/* Major Category Filter */}
             <div className="sm:col-span-1 lg:col-span-3">
               <select
                 data-testid="invite-vendors-category-filter"
                 value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
+                onChange={(e) => handleCategoryChange(e.target.value)}
                 aria-label={S.categoryLabel}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm transition-all"
               >
@@ -772,8 +898,26 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               )}
             </div>
 
+            {/* Minor Category Filter */}
+            <div className="sm:col-span-1 lg:col-span-2">
+              <select
+                data-testid="invite-vendors-minor-category-filter"
+                value={minorCategoryFilter}
+                onChange={(e) => setMinorCategoryFilter(e.target.value)}
+                aria-label={S.minorCategoryLabel}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm transition-all"
+              >
+                <option value="">{S.allMinorCategories}</option>
+                {effectiveMinorCategoryOptions.map((minor) => (
+                  <option key={minor} value={minor}>
+                    {minor}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* State Filter */}
-            <div className="sm:col-span-1 lg:col-span-3">
+            <div className="sm:col-span-1 lg:col-span-2">
               <select
                 data-testid="invite-vendors-state-filter"
                 value={stateFilter}
@@ -990,12 +1134,28 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                             </div>
                             <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-gray-400 flex-wrap mt-0.5">
                               <span className="font-medium text-indigo-600 dark:text-indigo-400">{c.majorCategory}</span>
+                              {Array.isArray(c.minorCategories) && c.minorCategories.length > 0 && (
+                                <span
+                                  data-testid={`vendor-minor-categories-${c.id}`}
+                                  className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 text-[10px]"
+                                >
+                                  {c.minorCategories.join(', ')}
+                                </span>
+                              )}
                               {(c.city || c.state || c.location) && (
                                 <span className="inline-flex items-center gap-0.5 text-slate-500 dark:text-gray-400">
                                   <MapPin size={10} className="shrink-0" />
                                   <span className="truncate max-w-[220px]">
                                     {[c.city, c.state].filter(Boolean).join(', ') || c.location}
                                   </span>
+                                </span>
+                              )}
+                              {c.pincode && (
+                                <span
+                                  data-testid={`invite-candidate-pincode-${c.id}`}
+                                  className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60 font-semibold"
+                                >
+                                  {formatString(S.pincodeBadge, { pincode: c.pincode })}
                                 </span>
                               )}
                             </div>

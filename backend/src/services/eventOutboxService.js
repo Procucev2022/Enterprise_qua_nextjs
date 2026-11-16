@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const pool = require('../db/pool');
+const d1Bridge = require('../db/d1Bridge');
 const domainQueries = require('../db/domainQueries');
 const identityQueries = require('../db/identityQueries');
 const enterpriseInquiryQueries = require('../db/enterpriseInquiryQueries');
@@ -71,6 +72,11 @@ async function enqueueWithRetry(event, operation) {
         enqueueAttempts: EVENT_OUTBOX_ENQUEUE_ATTEMPTS,
       };
       // Only the final failure is an error. Earlier attempts are retried, so they log as warnings.
+      // When D1 is overloaded (10s window limit), fail fast instead of amplifying load with back-to-back retries.
+      if (d1Bridge.isD1OverloadError(error) || d1Bridge.isD1Overloaded()) {
+        logger.warn('Aborted event-outbox enqueue retries because D1 is overloaded', attemptFields, 'EVENT_OUTBOX');
+        break;
+      }
       if (attempt < EVENT_OUTBOX_ENQUEUE_ATTEMPTS) {
         logger.warn('Failed to record a background event for retry', attemptFields, 'EVENT_OUTBOX');
         await delay(EVENT_OUTBOX_ENQUEUE_RETRY_MS * attempt);

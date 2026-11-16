@@ -14,7 +14,7 @@ jest.mock('@/lib/categoryTaxonomy', () => ({ getMajorCategories: jest.fn(), getM
 
 const candidate: RFQVendorCandidate = {
   id: 'network-vendor', name: 'Acme', contactPerson: 'Network Contact', email: 'acme@example.com',
-  phone: '9876543210', majorCategory: 'Cables', minorCategories: [], location: 'Pune',
+  phone: '9876543210', majorCategory: 'Cables', minorCategories: [], location: 'Pune', pincode: '560037',
   rating: 4.5, source: 'procucev_network', alreadyInvited: false,
 };
 const page = (candidates: RFQVendorCandidate[], pageNumber = 1, totalPages = 1) => ({
@@ -87,16 +87,19 @@ test('filters the two supplier streams and audits a quotation with real metrics 
     candidate,
     { ...candidate, id: 'self-vendor', name: 'Self Supplier', contactPerson: '', source: 'self_onboarded' },
     { ...candidate, id: 'buyer-vendor', name: 'Buyer Supplier', source: 'buyer_manual', addedByBuyerCompany: 'Owner company' },
-    { ...candidate, id: 'cm-vendor', name: ' ', contactPerson: '', email: '', phone: '', location: '', source: 'category_manager_upload' },
+    { ...candidate, id: 'cm-vendor', name: ' ', contactPerson: '', email: '', phone: '', location: '', pincode: '', source: 'category_manager_upload' },
   ]));
   const navigate = jest.fn();
   render(<VendorConsole onNavigateToMatrix={navigate} />);
   const card = await screen.findByTestId(`vendor-card-${candidate.id}`);
   expect(within(card).getByText(candidate.email)).toBeInTheDocument();
+  expect(within(card).getByTestId(`vendor-pincode-${candidate.id}`)).toHaveTextContent('PIN: 560037');
+  expect(screen.getByTestId(`scorecard-vendor-pincode-${candidate.id}`)).toHaveTextContent('560037');
   expect(screen.getByRole('option', { name: 'API Category' })).toBeInTheDocument();
   expect(screen.getByRole('option', { name: 'Store Category' })).toBeInTheDocument();
   fireEvent.click(within(card).getByRole('button', { name: UI_STRINGS.actions.reviewVendorPerformance }));
   const dialog = screen.getByRole('dialog');
+  expect(within(dialog).getByTestId('vendor-modal-pincode')).toHaveTextContent('560037');
   fireEvent.click(within(dialog).getByText(rfq.title));
   expect(within(dialog).getByText(rfq.quotes[0].remarks || '')).toBeInTheDocument();
   fireEvent.click(within(dialog).getByRole('button', { name: /Go to Central Quote Matrix/ }));
@@ -116,6 +119,7 @@ test('filters the two supplier streams and audits a quotation with real metrics 
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /All Suppliers/ }));
   fireEvent.click(within(screen.getByTestId('vendor-card-cm-vendor')).getByRole('button', { name: UI_STRINGS.actions.reviewVendorPerformance }));
+  expect(within(screen.getByRole('dialog')).getByTestId('vendor-modal-pincode')).toHaveTextContent(UI_STRINGS.dataLoad.emptyCell);
   fireEvent.click(screen.getByRole('dialog'));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   fireEvent.click(within(screen.getByTestId(`vendor-card-${candidate.id}`)).getByRole('button', { name: UI_STRINGS.actions.reviewVendorPerformance }));

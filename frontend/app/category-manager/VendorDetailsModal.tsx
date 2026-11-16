@@ -23,6 +23,7 @@ import {
 import { useApp } from '@/lib/store';
 import type { QuoteComparison, RFQAssignedVendor, RFQItem, VendorEntry } from '@/lib/types';
 import { formatCurrency, formatIndianDateTime } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { isDummyPan } from '@/lib/validationSchemas';
 
 interface VendorDetailsModalProps {
@@ -155,6 +156,12 @@ export default function VendorDetailsModal({
     matchedAssignedVendor?.location ||
     matchedAssignedVendor?.city ||
     (rfq?.deliveryLocation ? rfq.deliveryLocation.split(',')[0]?.trim() : null) ||
+    null;
+
+  const displayPincode =
+    matchedVendor?.pincode ||
+    matchedAssignedVendor?.pincode ||
+    assignedVendor?.pincode ||
     null;
 
   const displayMajorCategory =
@@ -498,6 +505,14 @@ export default function VendorDetailsModal({
                       </>
                     ) : (
                       <span className="text-slate-400 dark:text-gray-500 italic text-xs">Location Not Provided</span>
+                    )}
+                    {displayPincode && (
+                      <span
+                        data-testid="vendor-details-modal-pincode"
+                        className="inline-block mt-1 px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60 text-[10px] font-bold"
+                      >
+                        {formatString(UI_STRINGS.inviteVendors.pincodeBadge, { pincode: displayPincode })}
+                      </span>
                     )}
                   </div>
                 </div>

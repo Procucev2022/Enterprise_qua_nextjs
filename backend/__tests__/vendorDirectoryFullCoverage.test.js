@@ -384,6 +384,11 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
       expect(res.status).toHaveBeenCalledWith(400);
 
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({
+        id: 'ba-hist-1',
+        corporateEmail: 'b@b.com',
+        organizationName: 'Buyer Hist Org',
+      });
       await buyerAccountController.ingestHistoricalData(
         {
           user: { role: 'buyer', email: 'b@b.com' },
@@ -396,6 +401,17 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'ba-hist-2',
+        corporateEmail: 'b@b.com',
+      });
+      await buyerAccountController.ingestHistoricalData(
+        { user: { role: 'buyer', email: 'b@b.com' }, body: { period: 'FY2025-Q1', vendorRecords: [] } },
+        res,
+        next
+      );
 
       jest.spyOn(storeService, 'processHistoricalPurchaseData').mockImplementation(() => {
         throw new Error('err');
@@ -1139,7 +1155,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
     });
 
-    test('getVendors: publicOnly indexed lookup for minor categories supplements sparse hits and tops up from parent major without leaking buyer-private vendors', async () => {
+    test('getVendors: publicOnly indexed lookup for minor categories skips unindexed legacy scan when majors are known and tops up from parent major without leaking buyer-private vendors', async () => {
       const next = jest.fn();
       const domainQueries = require('../src/db/domainQueries');
       const originalPool = pool.pool;
@@ -1170,17 +1186,53 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
         expect(getBuyerSpy).not.toHaveBeenCalled();
         expect(minorSpy).toHaveBeenCalled();
-        expect(fallbackMinorSpy).toHaveBeenCalledWith(['laptop'], 20);
+        expect(fallbackMinorSpy).not.toHaveBeenCalled();
         expect(majorSpy).toHaveBeenCalled();
         const body = res.json.mock.calls[0][0];
         expect(body.success).toBe(true);
-        expect(body.data.map((v) => v.id)).toEqual(['v-pub-minor', 'v-pub-legacy', 'v-pub-major-1']);
+        expect(body.data.map((v) => v.id)).toEqual(['v-pub-minor', 'v-pub-major-1']);
       } finally {
         pool.pool = originalPool;
         getBuyerSpy.mockRestore();
         minorSpy.mockRestore();
         fallbackMinorSpy.mockRestore();
         majorSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: publicOnly indexed lookup for unmapped minor categories falls back to getPublicVendorsMatchingCategories when lookupMajors is empty', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const minorSpy = jest.spyOn(domainQueries, 'getPublicVendorsByMinorCategoryFromDB').mockResolvedValue([
+        { id: 'v-pub-minor', name: 'Public Minor Supplier', minorCategories: ['Custom Bespoke Widget'] },
+      ]);
+      const fallbackMinorSpy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+        { id: 'v-pub-minor', name: 'Public Minor Supplier', minorCategories: ['Custom Bespoke Widget'] },
+        { id: 'v-pub-legacy', name: 'Legacy Minor Supplier', categories: ['Custom Bespoke Widget'] },
+      ]);
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          {
+            user: { role: 'buyer', email: 'buyer@enterprise.com' },
+            query: { page: '1', pageSize: '10', publicOnly: 'true', minors: 'Custom Bespoke Widget' },
+          },
+          res,
+          next
+        );
+
+        expect(minorSpy).toHaveBeenCalled();
+        expect(fallbackMinorSpy).toHaveBeenCalledWith(['custom bespoke widget'], 20);
+        const body = res.json.mock.calls[0][0];
+        expect(body.success).toBe(true);
+        expect(body.data.map((v) => v.id)).toEqual(['v-pub-minor', 'v-pub-legacy']);
+      } finally {
+        pool.pool = originalPool;
+        minorSpy.mockRestore();
+        fallbackMinorSpy.mockRestore();
       }
     });
 

@@ -48,8 +48,8 @@ describe('getPublicVendorsByMinorCategoryFromDB', () => {
     expect(sql).toContain('ORDER BY created_at DESC LIMIT $4');
     expect(params).toEqual([
       ['engineering spares - mechanical', 'mechanical'],
-      '%"bearings & accessories',
-      '%"bearings & accessorie',
+      '%"bearings & accessories%',
+      '%"bearings & accessorie%',
       500,
     ]);
   });
@@ -73,6 +73,32 @@ describe('getPublicVendorsByMinorCategoryFromDB', () => {
     expect(sql).toContain('major_category COLLATE NOCASE IN (?)');
     expect(sql).toContain('raw LIKE ?');
     expect(sql).toContain('ORDER BY created_at DESC LIMIT ?');
-    expect(bind).toHaveBeenCalledWith('engineering spares - mechanical', '%"bearings & accessories', 5);
+    expect(bind).toHaveBeenCalledWith('engineering spares - mechanical', '%"bearings & accessories%', 5);
+  });
+
+  test('produces wildcard LIKE patterns that match serialized JSON minorCategories payloads', async () => {
+    const vendorRaw = JSON.stringify({
+      id: 'v-laptop-json',
+      name: 'Laptop Dealer',
+      majorCategory: 'IT',
+      minorCategories: ['Laptop', 'Computer'],
+    });
+    const all = jest.fn().mockImplementation(function () {
+      const boundPattern = this._pattern;
+      const regex = new RegExp(`^${String(boundPattern).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*')}$`, 'i');
+      return Promise.resolve({
+        results: regex.test(vendorRaw) ? [{ raw: vendorRaw }] : [],
+        meta: {},
+      });
+    });
+    const bind = jest.fn((...args) => ({ _pattern: args[1], all }));
+    const prepare = jest.fn(() => ({ bind }));
+    pool.pool = null;
+    globalThis.__CF_ENV__ = { DB: { prepare } };
+
+    const rows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(['laptop'], ['it'], 25);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe('v-laptop-json');
   });
 });

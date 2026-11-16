@@ -859,4 +859,95 @@ describe('Buyer profile service', () => {
       expect(res.profile).toEqual(STORED_PROFILE);
     });
   });
+
+  describe('D1 overload fallbacks', () => {
+    const d1Bridge = require('../src/db/d1Bridge');
+    const { DEFAULT_CATEGORY_TAXONOMY } = require('../src/config/constants');
+
+    afterEach(() => {
+      d1Bridge.resetD1OverloadState();
+    });
+
+    test('getProfile falls back to storeService buyer account when D1 is overloaded', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        organizationId: 'org-fallback-1',
+        organizationName: 'Fallback Industries Pvt Ltd',
+        contactPerson: 'Ananya Rao',
+        phone: '9820011223',
+        street: '14 MG Road',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560001',
+        country: 'India',
+        gstin: '29aaacl1234f1z5',
+        pan: 'aaacl1234f',
+      });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+
+      expect(profile).toEqual({
+        userId: 'user-1',
+        email: 'buyer@procucev.com',
+        organizationId: 'org-fallback-1',
+        companyName: 'Fallback Industries Pvt Ltd',
+        contactName: 'Ananya Rao',
+        contactEmail: 'buyer@procucev.com',
+        contactPhone: '9820011223',
+        phone: '9820011223',
+        street: '14 MG Road',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560001',
+        country: 'India',
+        gstNumber: '29AAACL1234F1Z5',
+        panNumber: 'AAACL1234F',
+        categories: [],
+      });
+    });
+
+    test('getProfile maps alternate buyer-account fields and defaults in D1 overload fallback', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        companyName: 'Alt Co',
+        name: 'Vikram Seth',
+        mobile: '9811122233',
+        address: 'Plot 9',
+        zipCode: '110001',
+        gstNumber: '07aaacl1234f1z9',
+        panNumber: 'aaacl1234f',
+      });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+
+      expect(profile.organizationId).toBe('user-1');
+      expect(profile.companyName).toBe('Alt Co');
+      expect(profile.contactName).toBe('Vikram Seth');
+      expect(profile.contactPhone).toBe('9811122233');
+      expect(profile.street).toBe('Plot 9');
+      expect(profile.pincode).toBe('110001');
+      expect(profile.country).toBe('India');
+      expect(profile.gstNumber).toBe('07AAACL1234F1Z9');
+      expect(profile.panNumber).toBe('AAACL1234F');
+    });
+
+    test('getProfile throws 503 when D1 is overloaded and buyer-account lookup rejects', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockRejectedValueOnce(new Error('store lookup failed'));
+
+      await expect(buyerProfileService.getProfile(SESSION)).rejects.toMatchObject({
+        status: 503,
+        message: BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED,
+      });
+    });
+
+    test('getCategoryTaxonomy returns cloned DEFAULT_CATEGORY_TAXONOMY when D1 is overloaded', async () => {
+      jest.spyOn(buyerProfileQueries, 'findCategoryTaxonomy').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+
+      const taxonomy = await buyerProfileService.getCategoryTaxonomy();
+
+      expect(taxonomy).toEqual(DEFAULT_CATEGORY_TAXONOMY);
+      expect(taxonomy).not.toBe(DEFAULT_CATEGORY_TAXONOMY);
+    });
+  });
 });

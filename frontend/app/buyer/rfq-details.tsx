@@ -2036,6 +2036,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               majorCategory,
               minorCategory,
               location: found?.location || null,
+              pincode: found?.pincode ? String(found.pincode).trim() : null,
               matchScore: null,
             };
           }
@@ -2075,6 +2076,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             majorCategory,
             minorCategory,
             location: resolvedLocation,
+            pincode: (v.pincode || found?.pincode) ? String(v.pincode || found?.pincode).trim() : null,
             matchScore: resolvedScore,
           };
         });
@@ -2152,6 +2154,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                     <span className="mono">{v.phone}</span>
                   </div>
                 )}
+                {(v.location || v.pincode) && (
+                  <div className="flex items-center gap-1.5 truncate" data-testid="assigned-vendor-location-pincode">
+                    <MapPin size={12} className="text-slate-400 shrink-0" />
+                    <span className="truncate">
+                      {[v.location, v.pincode ? formatString(UI_STRINGS.inviteVendors.pincodeBadge, { pincode: v.pincode }) : ''].filter(Boolean).join(' • ')}
+                    </span>
+                  </div>
+                )}
                 {typeof v.matchScore === 'number' && (
                   <p className="font-semibold text-emerald-600 dark:text-emerald-400 pt-0.5">
                     {v.matchScore}% match
@@ -2204,6 +2214,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
                 <span className="sr-only">Category:</span>
                 <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
+                {v.pincode && (
+                  <p className="truncate font-semibold text-indigo-600 dark:text-indigo-400" data-testid="assigned-vendor-pincode">
+                    {formatString(UI_STRINGS.inviteVendors.pincodeBadge, { pincode: v.pincode })}
+                  </p>
+                )}
                 <p className="font-semibold text-emerald-600 dark:text-emerald-400">
                   {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
                 </p>

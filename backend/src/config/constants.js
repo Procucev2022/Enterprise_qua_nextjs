@@ -1125,10 +1125,6 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     valves: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
     hose: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
     pipe: { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
-    panel: { major: 'Engineering Spares - Electrical', minor: 'Panels' },
-    cable: { major: 'Engineering Spares - Electrical', minor: 'Cables' },
-    sensor: { major: 'Engineering Spares - Electrical', minor: 'Sensors' },
-    motor: { major: 'Engineering Spares - Electrical', minor: 'Motors' },
     pipes: { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
     gasket: { major: 'Engineering Spares - Mechanical', minor: 'O-Rings / Gasket / Seals' },
     'o-ring': { major: 'Engineering Spares - Mechanical', minor: 'O-Rings / Gasket / Seals' },
@@ -1187,8 +1183,6 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     plumbing: { major: 'Civil Works', minor: 'Plumbing' },
     peb: { major: 'Civil Works', minor: 'PEB Structure' },
     tmt: { major: 'Civil Works', minor: 'TMT BARS' },
-    steel: { major: 'Raw Material', minor: 'Steels' },
-    tool: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
     'tmt bar': { major: 'Civil Works', minor: 'TMT BARS' },
     'tmt bars': { major: 'Civil Works', minor: 'TMT BARS' },
     bricks: { major: 'Civil Works', minor: 'Bricks' },
@@ -1217,7 +1211,6 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
     glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
     gloves: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
-    filter: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
 
     // ── Packaging & Materials ──
     'corrugated box': { major: 'Packing Material', minor: 'Corrugated Boxes' },
@@ -1445,18 +1438,26 @@ const RFQ_MINOR_INVITE_LOOKUP = Object.freeze({
   MAX_ROWS: PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT,
 });
 
-// Recipients of the alert sent when an RFQ's minor category has fewer network vendors than the target.
-// RFQ_MINOR_SHORTFALL_ALERT_EMAILS (comma-separated) replaces the default list. A blank value keeps it.
-const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = Object.freeze([
+// Recipients for internal team alerts & failure CCs. RFQ_MINOR_SHORTFALL_ALERT_EMAILS /
+// QUOTE_FAILURE_CC_EMAILS (comma-separated) override the default list; excluded addresses are always stripped.
+const INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS = Object.freeze([
   'gmtrfq@procucev.com',
-  'quateam@procucev.com',
   'anshul.goel@procucev.com',
   'veerababu.v@procucev.com',
 ]);
+const EXCLUDED_NOTIFICATION_RECIPIENTS = Object.freeze(['quateam@procucev.com']);
+
+function resolveActiveNotificationRecipients(envKey) {
+  const filtered = getEnvList(envKey, INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS)
+    .filter((email) => !EXCLUDED_NOTIFICATION_RECIPIENTS.includes(email.toLowerCase()));
+  return filtered.length > 0 ? filtered : [...INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS];
+}
+
+const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS;
 
 const RFQ_MINOR_SHORTFALL_ALERT = Object.freeze({
   get RECIPIENTS() {
-    return getEnvList('RFQ_MINOR_SHORTFALL_ALERT_EMAILS', RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS);
+    return resolveActiveNotificationRecipients('RFQ_MINOR_SHORTFALL_ALERT_EMAILS');
   },
   MESSAGES: Object.freeze({
     SUBJECT: '[Action Required] RFQ {rfqNumber}: minor category vendor shortfall',
@@ -2542,7 +2543,17 @@ const QUA_AI_EMAIL_SUPPORT = {
   COMPANY_NAME: 'Procucev Enterprise Solutions',
 };
 
-const VENDOR_QUOTE_SUPPORT_CC = process.env.VENDOR_QUOTE_SUPPORT_CC || '';
+const VENDOR_QUOTE_SUPPORT_CC = (process.env.VENDOR_QUOTE_SUPPORT_CC || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s && !EXCLUDED_NOTIFICATION_RECIPIENTS.includes(s.toLowerCase()))
+  .join(', ');
+
+const QUOTE_FAILURE_ALERT = Object.freeze({
+  get CC_RECIPIENTS() {
+    return resolveActiveNotificationRecipients('QUOTE_FAILURE_CC_EMAILS');
+  },
+});
 
 const PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES = [
   'Not Notified',
@@ -3816,7 +3827,10 @@ module.exports = {
   VENDOR_ASSIGNMENT_LIMITS,
   VENDOR_DIRECTORY_QUERY_CONFIG,
   RFQ_MINOR_INVITE_LOOKUP,
+  INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS,
+  EXCLUDED_NOTIFICATION_RECIPIENTS,
   RFQ_MINOR_SHORTFALL_ALERT,
+  QUOTE_FAILURE_ALERT,
   MAX_INVITE_VENDORS_PER_REQUEST,
   RFQ_MODES,
   RFQ_MODE_LABELS,

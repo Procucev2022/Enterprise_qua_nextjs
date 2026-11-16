@@ -91,6 +91,7 @@ export interface SupplierDossierSeller {
   email?: string;
   phone?: string;
   location?: string;
+  pincode?: string;
   deliveryLocation?: string;
   category?: string;
   majorCategory?: string;
@@ -990,6 +991,10 @@ export default function SupplierDossierDrawer({
                   <div className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
                     <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                     <span>Company Location: {seller.location || EMPTY_VALUE}</span>
+                  </div>
+                  <div className="flex items-start gap-2 text-slate-700 dark:text-slate-300" data-testid="dossier-vendor-pincode">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
+                    <span>{strings.pincodeLabel}: {seller.pincode || EMPTY_VALUE}</span>
                   </div>
                   <div className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
                     <Truck className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />

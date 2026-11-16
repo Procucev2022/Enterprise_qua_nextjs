@@ -8,7 +8,7 @@ import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { formatCurrency } from '@/lib/constants';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   Building2,
   Users,
@@ -424,6 +424,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         avatarColor: style.avatar,
         category: vendor.majorCategory,
         location: vendor.location,
+        pincode: vendor.pincode ? String(vendor.pincode).trim() : '',
         rating: vendor.rating,
         leadTimeDays: avgLeadTimeDays,
         complianceRate,
@@ -558,7 +559,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 <CompanyHoverTooltip
                   name={v.company}
                   type="vendor"
-                  contact={{ contactPerson: v.name, email: v.email, location: v.location }}
+                  contact={{ contactPerson: v.name, email: v.email, location: v.location, pincode: v.pincode }}
                 />
               </h4>
 
@@ -590,6 +591,14 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 {v.location && (
                   <span className="text-[9px] text-slate-400 dark:text-gray-500 flex items-center gap-0.5">
                     📍 {v.location}
+                  </span>
+                )}
+                {v.pincode && (
+                  <span
+                    data-testid={`vendor-pincode-${v.id}`}
+                    className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-[9px] font-bold border border-indigo-200/70 dark:border-indigo-800/70 flex items-center gap-0.5"
+                  >
+                    {formatString(UI_STRINGS.inviteVendors.pincodeBadge, { pincode: v.pincode })}
                   </span>
                 )}
               </div>
@@ -962,6 +971,17 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                         <span className="text-slate-400 dark:text-gray-500 italic">{EMPTY_VALUE}</span>
                       )}
                     </span>
+                    {v.pincode && (
+                      <>
+                        <span className="text-slate-300 dark:text-gray-700">•</span>
+                        <span className="flex items-center gap-1" data-testid={`scorecard-vendor-pincode-${v.id}`}>
+                          <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">
+                            {UI_STRINGS.inviteVendors.pincodeLabel}:
+                          </span>
+                          <span className="text-slate-800 dark:text-gray-200 font-semibold">{v.pincode}</span>
+                        </span>
+                      </>
+                    )}
                   </div>
 
                   <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
@@ -1277,7 +1297,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               </div>
 
               {/* Vendor Profile Contact Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 p-3 rounded-xl bg-slate-50/70 dark:bg-gray-950/70 border border-slate-200 dark:border-gray-800 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-3 rounded-xl bg-slate-50/70 dark:bg-gray-950/70 border border-slate-200 dark:border-gray-800 text-xs">
                 <div className="flex items-center gap-2">
                   <Users size={14} className="text-indigo-500 shrink-0" />
                   <span className="truncate">Contact: <strong className="text-slate-900 dark:text-white">{selectedVendor.name}</strong></span>
@@ -1289,6 +1309,10 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 <div className="flex items-center gap-2">
                   <Phone size={14} className="text-indigo-500 shrink-0" />
                   <span className="truncate">Phone: <strong className="text-slate-900 dark:text-white">{selectedVendor.phone || EMPTY_VALUE}</strong></span>
+                </div>
+                <div className="flex items-center gap-2" data-testid="vendor-modal-pincode">
+                  <Tag size={14} className="text-indigo-500 shrink-0" />
+                  <span className="truncate">{UI_STRINGS.inviteVendors.pincodeLabel}: <strong className="text-slate-900 dark:text-white">{selectedVendor.pincode || EMPTY_VALUE}</strong></span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Tag size={14} className="text-indigo-500 shrink-0" />

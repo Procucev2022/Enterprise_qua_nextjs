@@ -37,6 +37,7 @@ const {
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   RFQ_MINOR_INVITE_LOOKUP,
   RFQ_MINOR_SHORTFALL_ALERT,
+  PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
   EXTENSION_HOURS_PER_DAY,
   clearDummyPanFields,
 } = require('../config/constants');
@@ -49,7 +50,7 @@ const auditLogQueries = require('../db/auditLogQueries');
 const paymentActivationQueries = require('../db/paymentActivationQueries');
 const identityQueries = require('../db/identityQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const { getWaitUntil } = require('../db/d1Bridge');
+const { getWaitUntil, isD1Overloaded, isRetryableD1Error } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 // Called through the namespace so tests can stub the senders without rewiring
@@ -481,7 +482,11 @@ class StoreService {
       );
       return { hydrated: true, source: 'postgres' };
     } catch (err) {
-      logger.error('Failed to load domain records from the configured database', err, 'STORE_SERVICE');
+      if (isRetryableD1Error(err) || isD1Overloaded()) {
+        logger.warn('Failed to load domain records from the configured database', err, 'STORE_SERVICE');
+      } else {
+        logger.error('Failed to load domain records from the configured database', err, 'STORE_SERVICE');
+      }
       this.isHydratedFromDB = false;
       this._setDatabaseHealthRow({
         status: INFRASTRUCTURE_HEALTH.STATUS.UNREACHABLE,
@@ -4173,10 +4178,10 @@ class StoreService {
       requestingBuyerAccount ||
       (rfqData.buyerEmail
         ? this.buyerAccounts.find(
-            (a) =>
-              a.corporateEmail &&
-              a.corporateEmail.toLowerCase() === String(rfqData.buyerEmail).trim().toLowerCase()
-          )
+          (a) =>
+            a.corporateEmail &&
+            a.corporateEmail.toLowerCase() === String(rfqData.buyerEmail).trim().toLowerCase()
+        )
         : null);
 
     const buyerEmail =
@@ -4204,13 +4209,13 @@ class StoreService {
       deadline: rfqData.deadline
         ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
         : (rfqData.targetDeliveryDate
-            ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
-            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+          ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
       targetDeliveryDate: rfqData.targetDeliveryDate
         ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
         : (rfqData.deadline
-            ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
-            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+          ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
       // Budget is optional (VALIDATION_SCHEMAS.createRFQ). An RFQ that states none keeps
       // null, and the UI shows it as not stated. Zero is never stored in its place.
       budget: budgetAmount,
@@ -4426,7 +4431,7 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
-newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? selected : shortlisted;
+        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? selected : shortlisted;
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -4544,6 +4549,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
             email: v.email || null,
             contactPerson: v.contactPerson || null,
             phone: v.phone || null,
+            pincode: v.pincode || null,
             source: v.source || 'procucev_network',
           }));
 
@@ -4683,8 +4689,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       !newRFQ.needsCategoryManagerAssignment &&
       !newRFQ.categoryNotAvailable &&
       (newRFQ.sourcingMode === 'mode_3' ||
-      newRFQ.sourcingMode === 'v3' ||
-      newRFQ.sourcingMode === 'version_3')
+        newRFQ.sourcingMode === 'v3' ||
+        newRFQ.sourcingMode === 'version_3')
     ) {
       const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
       const categories = this._rfqDistinctCategories(newRFQ);
@@ -4739,8 +4745,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       procucevVendorCount = procucevAssigned.length > 0
         ? procucevAssigned.length
         : mode3ProcucevCount > 0
-        ? mode3ProcucevCount
-        : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
+          ? mode3ProcucevCount
+          : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
     }
 
     newRFQ.procucevVendorCount = procucevVendorCount;
@@ -5208,9 +5214,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       const procucevCount = isV1
         ? 0
         : assignedVendors.filter((v) => {
-            const resolved = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
-            return v.vendorCategory === 'Procucev Network' || (!v.vendorCategory && this.isProcucevVendor(resolved));
-          }).length;
+          const resolved = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
+          return v.vendorCategory === 'Procucev Network' || (!v.vendorCategory && this.isProcucevVendor(resolved));
+        }).length;
       const updates = {
         assignedVendors,
         procucevVendorCount: procucevCount,
@@ -5388,9 +5394,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     // Update followUpData telemetry if present
     let followUpData = rfq.followUpData
       ? {
-          ...rfq.followUpData,
-          ...(Array.isArray(rfq.followUpData.vendors) ? { vendors: [...rfq.followUpData.vendors] } : {}),
-        }
+        ...rfq.followUpData,
+        ...(Array.isArray(rfq.followUpData.vendors) ? { vendors: [...rfq.followUpData.vendors] } : {}),
+      }
       : rfq.followUpData;
     if (followUpData) {
       if (Array.isArray(followUpData.vendors)) {
@@ -6032,26 +6038,26 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
         ? target.messages
         : [
-            {
-              id: `msg-${target.id}-orig`,
-              senderRole: 'vendor',
-              senderName: target.vendorName,
-              senderEmail: target.vendorEmail,
-              message: target.message,
-              timestamp: target.createdAt,
-            },
-            ...(target.reply
-              ? [
-                  {
-                    id: `msg-${target.id}-reply`,
-                    senderRole: 'buyer',
-                    senderName: target.repliedBy || 'Procurement Team',
-                    message: target.reply,
-                    timestamp: target.repliedAt || target.createdAt,
-                  },
-                ]
-              : []),
-          ];
+          {
+            id: `msg-${target.id}-orig`,
+            senderRole: 'vendor',
+            senderName: target.vendorName,
+            senderEmail: target.vendorEmail,
+            message: target.message,
+            timestamp: target.createdAt,
+          },
+          ...(target.reply
+            ? [
+              {
+                id: `msg-${target.id}-reply`,
+                senderRole: 'buyer',
+                senderName: target.repliedBy || 'Procurement Team',
+                message: target.reply,
+                timestamp: target.repliedAt || target.createdAt,
+              },
+            ]
+            : []),
+        ];
 
       if (prevMsgs.some((message) => message.id === chatMsg.id)) {
         return { updatedRfq: rfq, inquiry: target, inquiryMessageId: chatMsg.id, duplicate: true };
@@ -6086,17 +6092,17 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const outboxResult = {};
     const outboxEvent = shouldQueueAcknowledgement
       ? {
-          id: eventOutboxService.buildEventOutboxId(
-            EVENT_OUTBOX_TYPES.RFQ_VENDOR_INQUIRY_ACK_EMAIL,
-            `${rfq.id}:${chatMsg.id}`
-          ),
-          eventType: EVENT_OUTBOX_TYPES.RFQ_VENDOR_INQUIRY_ACK_EMAIL,
-          payload: {
-            rfqId: rfq.id,
-            inquiryId: updatedInquiry.id,
-            messageId: chatMsg.id,
-          },
-        }
+        id: eventOutboxService.buildEventOutboxId(
+          EVENT_OUTBOX_TYPES.RFQ_VENDOR_INQUIRY_ACK_EMAIL,
+          `${rfq.id}:${chatMsg.id}`
+        ),
+        eventType: EVENT_OUTBOX_TYPES.RFQ_VENDOR_INQUIRY_ACK_EMAIL,
+        payload: {
+          rfqId: rfq.id,
+          inquiryId: updatedInquiry.id,
+          messageId: chatMsg.id,
+        },
+      }
       : null;
     const updated = await this.updateRFQDurably(
       rfq.id,
@@ -6131,9 +6137,9 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       inquiryMessageId: chatMsg.id,
       ...(shouldQueueAcknowledgement
         ? {
-            acknowledgementOutboxEvent: outboxResult.event || null,
-            acknowledgementAtomicUnsupported: outboxResult.atomicUnsupported === true,
-          }
+          acknowledgementOutboxEvent: outboxResult.event || null,
+          acknowledgementAtomicUnsupported: outboxResult.atomicUnsupported === true,
+        }
         : {}),
     };
   }
@@ -6153,26 +6159,26 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
       ? target.messages
       : [
-          {
-            id: `msg-${target.id}-orig`,
-            senderRole: 'vendor',
-            senderName: target.vendorName,
-            senderEmail: target.vendorEmail,
-            message: target.message,
-            timestamp: target.createdAt,
-          },
-          ...(target.reply
-            ? [
-                {
-                  id: `msg-${target.id}-reply`,
-                  senderRole: 'buyer',
-                  senderName: target.repliedBy || 'Procurement Team',
-                  message: target.reply,
-                  timestamp: target.repliedAt || target.createdAt,
-                },
-              ]
-            : []),
-        ];
+        {
+          id: `msg-${target.id}-orig`,
+          senderRole: 'vendor',
+          senderName: target.vendorName,
+          senderEmail: target.vendorEmail,
+          message: target.message,
+          timestamp: target.createdAt,
+        },
+        ...(target.reply
+          ? [
+            {
+              id: `msg-${target.id}-reply`,
+              senderRole: 'buyer',
+              senderName: target.repliedBy || 'Procurement Team',
+              message: target.reply,
+              timestamp: target.repliedAt || target.createdAt,
+            },
+          ]
+          : []),
+      ];
 
     const replyMsg = {
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -6830,8 +6836,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     const items = Array.isArray(rfq.extractedEntities)
       ? rfq.extractedEntities
       : Array.isArray(rfq.lineItems)
-      ? rfq.lineItems
-      : [];
+        ? rfq.lineItems
+        : [];
     for (const ent of items) {
       const c = ent.majorCategory || ent.category;
       if (c && typeof c === 'string' && c.trim()) {
@@ -7307,11 +7313,12 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
         { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, path }
       );
     } catch (queueError) {
-      logger.error(
-        'Failed to queue the RFQ vendor plan retry',
-        { rfqNumber: rfq.rfqNumber, path, error: queueError?.message },
-        'STORE_SERVICE'
-      );
+      const details = { rfqNumber: rfq.rfqNumber, path, error: queueError?.message };
+      if (isRetryableD1Error(queueError) || isD1Overloaded()) {
+        logger.warn('Failed to queue the RFQ vendor plan retry', details, 'STORE_SERVICE');
+      } else {
+        logger.error('Failed to queue the RFQ vendor plan retry', details, 'STORE_SERVICE');
+      }
     }
     return rfq;
   }
@@ -7429,8 +7436,8 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     });
     if (procucevAssigned.length > 0) return procucevAssigned.length;
 
-    // No DB configured (dev/in-memory): the capped-subset count is all we have.
-    if (!pool.hasStorage()) return this.getProcucevVendorCount(rfq);
+    // No DB configured (dev/in-memory) or D1 transiently overloaded: avoid hammering D1 with count scans.
+    if (!pool.hasStorage() || isD1Overloaded()) return this.getProcucevVendorCount(rfq);
 
     // Every category string the RFQ carries — its header `category` plus each
     // line item's major/minor/category (an email/BOQ-ingested RFQ often tags
@@ -7464,17 +7471,21 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     // so it is the honest "Procucev vendors available for this version" figure.
     // For V0 without categories, do NOT fallback to the directory-wide count!
     if (dbCount === 0 && !isV0) {
-      try {
-        const page = await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 0, publicOnly: true });
-        if (page && typeof page.total === 'number') {
-          dbCount = page.total;
+      if (this.vendorsTotal > 0) {
+        dbCount = this.vendorsTotal;
+      } else if (!isD1Overloaded()) {
+        try {
+          const page = await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 0, publicOnly: true });
+          if (page && typeof page.total === 'number') {
+            dbCount = page.total;
+          }
+        } catch (err) {
+          logger.warn(
+            'Procucev network total count DB query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
         }
-      } catch (err) {
-        logger.warn(
-          'Procucev network total count DB query failed',
-          { rfqNumber: rfq.rfqNumber, error: err.message },
-          'STORE_SERVICE'
-        );
       }
     }
 
@@ -7505,10 +7516,15 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
    */
   async _fetchMinorCandidatesFromDB(minors, fetchMatches) {
     const perMinor = this._minorLookupLimit();
+    const terms = minorSearchTerms(minors);
+    const exceedsSignalCap = terms.length > PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS;
     const combinedLimit = Math.min(perMinor * minors.length, RFQ_MINOR_INVITE_LOOKUP.MAX_ROWS);
-    const combined = await fetchMatches(minors, combinedLimit);
-    const rows = Array.isArray(combined) ? [...combined] : [];
-    if (minors.length < 2 || rows.length < combinedLimit) return rows;
+    const rows = [];
+    if (!exceedsSignalCap) {
+      const combined = await fetchMatches(minors, combinedLimit);
+      if (Array.isArray(combined)) rows.push(...combined);
+      if (minors.length < 2 || rows.length < combinedLimit) return rows;
+    }
     for (const minor of minors) {
       const minorRows = await fetchMatches([minor], perMinor);
       if (Array.isArray(minorRows)) rows.push(...minorRows);
@@ -7518,21 +7534,27 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
 
   /**
    * Network vendors filed under the parent major of each minor, read for the top-up. One lookup per
-   * distinct parent major, so a large major cannot crowd out a smaller one.
+   * distinct parent major, scaled by how many distinct minor categories share that major set.
    *
    * @param {string[]} minors
    * @returns {Promise<Object[]>}
    */
   async _fetchMajorFallbackFromDB(minors) {
     const perMinor = this._minorLookupLimit();
-    const seenMajorSets = new Set();
-    const rows = [];
+    const majorBuckets = new Map();
     for (const minor of minors) {
       const majors = this._majorCategoriesForMinors([minor]);
       const setKey = majors.slice().sort().join('|');
-      if (majors.length === 0 || seenMajorSets.has(setKey)) continue;
-      seenMajorSets.add(setKey);
-      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, perMinor);
+      if (majors.length === 0) continue;
+      if (!majorBuckets.has(setKey)) {
+        majorBuckets.set(setKey, { majors, minorKeys: new Set() });
+      }
+      majorBuckets.get(setKey).minorKeys.add(taxonomyKeyOf(minor));
+    }
+    const rows = [];
+    for (const { majors, minorKeys } of majorBuckets.values()) {
+      const majorLimit = Math.min(perMinor * minorKeys.size, RFQ_MINOR_INVITE_LOOKUP.MAX_ROWS);
+      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit);
       if (Array.isArray(majorRows)) rows.push(...majorRows);
     }
     return rows;
@@ -7814,7 +7836,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
           vEntry = { ...vendor, id: vendor.id, vendorId: vendor.id };
           updated.followUpData.vendors.push(vEntry);
         }
-      if (vendor.email) {
+        if (vendor.email) {
           vEntry.email = vendor.email;
           vEntry.emailSent = false;
           vEntry.email24h = { status: 'pending' };
@@ -7885,6 +7907,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
     }
 
     this._persistRFQ(updated);
+    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-v0-augmented-vendor-invites');
 
     logger.info(
       `V0 RFQ ${rfq.rfqNumber}: assigned ${updated.assignedVendors.length} Procucev vendors from DB match (${committedAdditions.length} added)`,
@@ -7912,7 +7935,11 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
 
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
     if (isV0) {
-      return await this.augmentV0AssignmentsFromDB(rfq, { deferChasers, notifyShortfall });
+      return await this.augmentV0AssignmentsFromDB(rfq, {
+        deferChasers,
+        notifyShortfall,
+        ...(rethrowOnDatabaseError ? { rethrowOnDatabaseError } : {}),
+      });
     }
 
     const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY || 5;
@@ -7933,7 +7960,7 @@ newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? select
       pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
       location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
-let clientCandidates = [];
+    let clientCandidates = [];
     if (isV1 || isV2) {
       let clientDbMatches = [];
       if (pool.hasStorage()) {
@@ -8000,11 +8027,23 @@ let clientCandidates = [];
       if (pool.hasStorage()) {
         try {
           if (minorScoped) {
-            // Each minor is read on its own, plus the network vendors under its parent major for the top-up.
-            const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => domainQueries.getPublicVendorsMatchingCategories(
-              minorSearchTerms(subset),
-              rowLimit
-            ));
+            // Query the indexed minor lookup under the parent major(s) so D1 scans only those
+            // major categories via idx_vendors_major_category_created_at; fall back to the
+            // broader category lookup only for unmapped minors with no parent major.
+            const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => {
+              const lookupMajors = this._majorCategoriesForMinors(subset, { allMajors: true });
+              if (lookupMajors.length > 0 && typeof domainQueries.getPublicVendorsByMinorCategoryFromDB === 'function') {
+                return domainQueries.getPublicVendorsByMinorCategoryFromDB(
+                  minorSearchTerms(subset),
+                  lookupMajors,
+                  rowLimit
+                );
+              }
+              return domainQueries.getPublicVendorsMatchingCategories(
+                minorSearchTerms(subset),
+                rowLimit
+              );
+            });
             const majorRows = await this._fetchMajorFallbackFromDB(minors);
             dbMatches = [...minorRows, ...majorRows];
           } else {
@@ -8126,94 +8165,94 @@ let clientCandidates = [];
       const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
       try {
         for (const vendor of resolvedAdditions) {
-        const isBuyerUploaded = this.isBuyerUploaded(vendor);
-        const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
-        const notification = this._buildNotification({
-          recipientType: 'vendor',
-          recipientId: vendor.id,
-          kind: 'rfq_category_match',
-          rfq: updated,
-          title: `New RFQ in ${categoryLabel}`,
-          message: `${buyerDisplayName} invited you to ${updated.rfqNumber} — ${updated.title}.`,
-          meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updated.buyerAccountName || null) : null },
-        });
-        this.notifications.unshift(notification);
-        this._persistNotification(notification);
+          const isBuyerUploaded = this.isBuyerUploaded(vendor);
+          const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
+          const notification = this._buildNotification({
+            recipientType: 'vendor',
+            recipientId: vendor.id,
+            kind: 'rfq_category_match',
+            rfq: updated,
+            title: `New RFQ in ${categoryLabel}`,
+            message: `${buyerDisplayName} invited you to ${updated.rfqNumber} — ${updated.title}.`,
+            meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updated.buyerAccountName || null) : null },
+          });
+          this.notifications.unshift(notification);
+          this._persistNotification(notification);
 
-        if (updated.followUpData && Array.isArray(updated.followUpData.vendors)) {
-          let vEntry = updated.followUpData.vendors.find((fv) => fv && (fv.id === vendor.id || fv.vendorId === vendor.id || fv.name === vendor.name));
-          if (!vEntry) {
-            vEntry = { ...vendor, id: vendor.id, vendorId: vendor.id };
-            updated.followUpData.vendors.push(vEntry);
+          if (updated.followUpData && Array.isArray(updated.followUpData.vendors)) {
+            let vEntry = updated.followUpData.vendors.find((fv) => fv && (fv.id === vendor.id || fv.vendorId === vendor.id || fv.name === vendor.name));
+            if (!vEntry) {
+              vEntry = { ...vendor, id: vendor.id, vendorId: vendor.id };
+              updated.followUpData.vendors.push(vEntry);
+            }
+            if (vendor.email) {
+              vEntry.email = vendor.email;
+              vEntry.emailSent = false;
+              vEntry.email24h = { status: 'pending' };
+            }
+            if (vendor.phone) {
+              vEntry.sms = { status: 'pending' };
+              vEntry.whatsapp = { status: 'pending' };
+            }
           }
-        if (vendor.email) {
-            vEntry.email = vendor.email;
-            vEntry.emailSent = false;
-            vEntry.email24h = { status: 'pending' };
-          }
-          if (vendor.phone) {
-            vEntry.sms = { status: 'pending' };
-            vEntry.whatsapp = { status: 'pending' };
-          }
-        }
 
-        if (vendor.email) {
-          const creditInfo = this.checkVendorQuotationEligibility(vendor);
-          this._sendWithFeedOutcome(
-            mailerService.sendRfqInviteEmail(vendor.email, {
-              rfq: updated,
-              recipientName: vendor.contactPerson || vendor.name,
-              freeCreditsRemaining: creditInfo.freeCreditsRemaining,
-              isSubscribed: creditInfo.isSubscribed,
-              vendor,
-              isBuyerUploaded,
-            }),
-            'Failed to email RFQ invite to DB auto-assigned vendor',
-            {
-              deliveryChannel: 'email',
-              operation: 'rfq-db-auto-assigned-vendor-invite',
-              rfqId: updated.id,
-              rfqNumber: updated.rfqNumber,
-              vendorId: vendor.id,
-            },
-            { channel: 'email', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-          );
-        }
-
-        if (vendor.phone) {
-          const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-          this._sendWithFeedOutcome(
-            smsService.sendRFQChaserSms({
-              mobile: vendor.phone,
-              vendorName: vendor.name,
-              rfqNumber: updated.rfqNumber,
-              rfqTitle: updated.title,
-              bidLink: bidUrl,
-            }),
-            'Failed to dispatch initial SMS alert',
-            {},
-            { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-          );
-
-          if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
+          if (vendor.email) {
+            const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
-              whatsAppService.sendRFQInvitationWhatsApp({
-                phone: vendor.phone,
+              mailerService.sendRfqInviteEmail(vendor.email, {
+                rfq: updated,
+                recipientName: vendor.contactPerson || vendor.name,
+                freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+                isSubscribed: creditInfo.isSubscribed,
+                vendor,
+                isBuyerUploaded,
+              }),
+              'Failed to email RFQ invite to DB auto-assigned vendor',
+              {
+                deliveryChannel: 'email',
+                operation: 'rfq-db-auto-assigned-vendor-invite',
+                rfqId: updated.id,
+                rfqNumber: updated.rfqNumber,
+                vendorId: vendor.id,
+              },
+              { channel: 'email', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
+            );
+          }
+
+          if (vendor.phone) {
+            const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+            this._sendWithFeedOutcome(
+              smsService.sendRFQChaserSms({
+                mobile: vendor.phone,
                 vendorName: vendor.name,
-                contactPerson: vendor.contactPerson,
                 rfqNumber: updated.rfqNumber,
                 rfqTitle: updated.title,
-                vendorEmail: vendor.email,
-                deliveryDate: updated.targetDeliveryDate || updated.deadline,
-                deliveryLocation: updated.deliveryLocation || updated.deliveryCity,
+                bidLink: bidUrl,
               }),
-              'Failed to dispatch initial WhatsApp prompt',
+              'Failed to dispatch initial SMS alert',
               {},
-              { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
+              { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
             );
+
+            if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
+              this._sendWithFeedOutcome(
+                whatsAppService.sendRFQInvitationWhatsApp({
+                  phone: vendor.phone,
+                  vendorName: vendor.name,
+                  contactPerson: vendor.contactPerson,
+                  rfqNumber: updated.rfqNumber,
+                  rfqTitle: updated.title,
+                  vendorEmail: vendor.email,
+                  deliveryDate: updated.targetDeliveryDate || updated.deadline,
+                  deliveryLocation: updated.deliveryLocation || updated.deliveryCity,
+                }),
+                'Failed to dispatch initial WhatsApp prompt',
+                {},
+                { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
+              );
+            }
+          }
         }
-      }
-      }
       } catch (dispatchError) {
         logger.error('RFQ assignments were saved but automatic vendor dispatch failed', {
           rfqId: updated.id,
@@ -8225,23 +8264,23 @@ let clientCandidates = [];
     }
 
     if (updated.followUpData) {
-        const assignedCount = Array.isArray(updated.assignedVendors) ? updated.assignedVendors.length : 0;
-        updated.followUpData.totalInvited = Math.max(updated.followUpData.totalInvited || 0, assignedCount);
-        if (!updated.followUpData.emailStats) {
-          updated.followUpData.emailStats = { total: assignedCount, delivered: 0, sent24h: 0, opened: 0 };
-        }
-        updated.followUpData.emailStats.total = Math.max(updated.followUpData.emailStats.total || 0, assignedCount);
-
-        if (!updated.followUpData.smsStats) {
-          updated.followUpData.smsStats = { total: assignedCount, delivered: 0, clicked: 0 };
-        }
-        updated.followUpData.smsStats.total = Math.max(updated.followUpData.smsStats.total || 0, assignedCount);
-
-        if (!updated.followUpData.whatsappStats) {
-          updated.followUpData.whatsappStats = { total: assignedCount, delivered: 0, read: 0, replied: 0 };
-        }
-        updated.followUpData.whatsappStats.total = Math.max(updated.followUpData.whatsappStats.total || 0, assignedCount);
+      const assignedCount = Array.isArray(updated.assignedVendors) ? updated.assignedVendors.length : 0;
+      updated.followUpData.totalInvited = Math.max(updated.followUpData.totalInvited || 0, assignedCount);
+      if (!updated.followUpData.emailStats) {
+        updated.followUpData.emailStats = { total: assignedCount, delivered: 0, sent24h: 0, opened: 0 };
       }
+      updated.followUpData.emailStats.total = Math.max(updated.followUpData.emailStats.total || 0, assignedCount);
+
+      if (!updated.followUpData.smsStats) {
+        updated.followUpData.smsStats = { total: assignedCount, delivered: 0, clicked: 0 };
+      }
+      updated.followUpData.smsStats.total = Math.max(updated.followUpData.smsStats.total || 0, assignedCount);
+
+      if (!updated.followUpData.whatsappStats) {
+        updated.followUpData.whatsappStats = { total: assignedCount, delivered: 0, read: 0, replied: 0 };
+      }
+      updated.followUpData.whatsappStats.total = Math.max(updated.followUpData.whatsappStats.total || 0, assignedCount);
+    }
 
     this._persistRFQ(updated);
     this._dispatchRFQVendorInviteOutbox(updated, 'rfq-auto-assigned-vendor-invites');
@@ -9321,10 +9360,10 @@ let clientCandidates = [];
 
     const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === rfq.buyerAccountId)) ||
       (this.buyerAccounts && this.buyerAccounts.find((account) => String(account.corporateEmail || '').trim().toLowerCase() === String(buyerEmail).trim().toLowerCase())) || {
-        id: rfq.buyerAccountId || null,
-        corporateEmail: buyerEmail,
-        organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
-      };
+      id: rfq.buyerAccountId || null,
+      corporateEmail: buyerEmail,
+      organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
+    };
 
     return {
       buyer,
@@ -9988,10 +10027,15 @@ let clientCandidates = [];
         updatedVendor.buyerId = buyerId || updatedVendor.buyerId || null;
         updatedVendor.buyerAccountId = buyerId || updatedVendor.buyerAccountId || null;
         updatedVendor.buyerEmail = buyerEmail || updatedVendor.buyerEmail || null;
+        updatedVendor.addedByBuyerCompany =
+          (attributedAccount && attributedAccount.organizationName) || updatedVendor.addedByBuyerCompany || null;
         if (name) updatedVendor.name = name;
         if (rec.contactPerson) updatedVendor.contactPerson = (rec.contactPerson || '').trim();
         if (rec.phone) updatedVendor.phone = (rec.phone || '').trim();
         if (rec.location || rec.address) updatedVendor.location = (rec.location || rec.address || '').trim();
+        if (rec.vendorCode) updatedVendor.vendorCode = String(rec.vendorCode).trim();
+        const rawGstin = rec.gstin || rec.gstNumber;
+        if (rawGstin) updatedVendor.gstin = String(rawGstin).trim().toUpperCase();
         if (majorCategory) updatedVendor.majorCategory = majorCategory;
         if (minorCategories.length > 0) {
           updatedVendor.minorCategories = minorCategories;
@@ -10026,11 +10070,15 @@ let clientCandidates = [];
         continue;
       }
 
+      const rawNewGstin = rec.gstin || rec.gstNumber;
       const newVendor = {
         id: `v-hist-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         buyerId: buyerId || null,
         buyerAccountId: buyerId || null,
         buyerEmail: buyerEmail || null,
+        addedByBuyerCompany: (attributedAccount && attributedAccount.organizationName) || null,
+        vendorCode: rec.vendorCode ? String(rec.vendorCode).trim() : null,
+        gstin: rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null,
         name,
         email,
         contactPerson: (rec.contactPerson || '').trim() || null,
@@ -10075,14 +10123,18 @@ let clientCandidates = [];
               const updated = {
                 ...existingInDB,
                 buyerId: buyerId || existingInDB.buyerId,
-                buyerAccountId: buyerAccountId || existingInDB.buyerAccountId,
+                buyerAccountId: buyerId || existingInDB.buyerAccountId,
                 buyerEmail: buyerEmail || existingInDB.buyerEmail,
-                addedByBuyerCompany: buyerAccount?.organizationName || existingInDB.addedByBuyerCompany,
+                addedByBuyerCompany:
+                  (attributedAccount && attributedAccount.organizationName) || existingInDB.addedByBuyerCompany,
+                vendorCode: vendor.vendorCode || existingInDB.vendorCode,
+                gstin: vendor.gstin || existingInDB.gstin,
                 minorCategories: vendor.minorCategories?.length ? vendor.minorCategories : existingInDB.minorCategories,
                 majorCategory: vendor.majorCategory || existingInDB.majorCategory,
               };
               // eslint-disable-next-line no-await-in-loop
               await domainQueries.upsertVendorInDB(updated);
+              this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
               const memIdx = this.vendors.findIndex((v) => v.id === existingInDB.id);
               if (memIdx !== -1) this.vendors[memIdx] = { ...this.vendors[memIdx], ...updated };
               else this.vendors.push(updated);
@@ -11037,12 +11089,17 @@ let clientCandidates = [];
       try {
         return await read();
       } catch (error) {
-        logger.error('Configured vendor read failed while building bootstrap data', {
+        const details = {
           error,
           operation,
           buyerScopePresent: Boolean(scopedBuyerId),
           sessionEmailPresent: Boolean(sessionEmail),
-        }, 'STORE_SERVICE');
+        };
+        if (isRetryableD1Error(error) || isD1Overloaded()) {
+          logger.warn('Configured vendor read failed while building bootstrap data', details, 'STORE_SERVICE');
+        } else {
+          logger.error('Configured vendor read failed while building bootstrap data', details, 'STORE_SERVICE');
+        }
         throw error;
       }
     };
@@ -11123,17 +11180,17 @@ let clientCandidates = [];
 
       const ownVendors = candidateIds.size > 0
         ? allVendors.filter((v) =>
-            candidateIds.has(String(v.buyerId || '').toLowerCase()) ||
-            candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) ||
-            candidateIds.has(String(v.buyerEmail || '').toLowerCase())
-          )
+          candidateIds.has(String(v.buyerId || '').toLowerCase()) ||
+          candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) ||
+          candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+        )
         : [];
       const publicVendors = candidateIds.size > 0
         ? allVendors.filter((v) =>
-            !candidateIds.has(String(v.buyerId || '').toLowerCase()) &&
-            !candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) &&
-            !candidateIds.has(String(v.buyerEmail || '').toLowerCase())
-          )
+          !candidateIds.has(String(v.buyerId || '').toLowerCase()) &&
+          !candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) &&
+          !candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+        )
         : allVendors;
       vendors = [...ownVendors, ...publicVendors].slice(0, MAX_BOOTSTRAP_VENDORS);
       if (sessionEmail) {
