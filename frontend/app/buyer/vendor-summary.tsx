@@ -6,6 +6,7 @@ import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import { getMinorCategories } from '@/lib/categoryTaxonomy';
+import { resolveVendorLocationFields } from '@/lib/constants';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import {
   Search,
@@ -259,10 +260,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             const offices = res.postOffices || [];
             setFormPincodeError(null);
             setFormPincodePostOffices(offices);
+            const { city, state } = resolveCityAndStateFromPostalResult(raw, offices);
             if (pincodeFillsLocationRef.current) {
-              const { city, state } = resolveCityAndStateFromPostalResult(raw, offices);
               if (city) setFormCity(city);
               if (state) setFormState(state);
+            } else {
+              if (city) setFormCity((prev) => (prev.trim() ? prev : city));
+              if (state) setFormState((prev) => (prev.trim() ? prev : state));
             }
           }
         } catch {
@@ -497,12 +501,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormContactDesignation(vendor.contactDesignation || '');
     setFormEmail(vendor.email || '');
     setFormPhone(vendor.phone || '');
-    setFormLocation(vendor.location || `${vendor.city || ''}, ${vendor.state || ''}`);
-    setFormCity(vendor.city || '');
-    setFormState(vendor.state || '');
+    const normalizedLoc = resolveVendorLocationFields({
+      location: vendor.location,
+      factoryAddress: vendor.factoryAddress,
+      city: vendor.city,
+      state: vendor.state,
+      pincode: vendor.pincode,
+    });
+    setFormLocation(normalizedLoc.location || `${normalizedLoc.city || ''}, ${normalizedLoc.state || ''}`);
+    setFormCity(normalizedLoc.city);
+    setFormState(normalizedLoc.state);
     setFormCountry(vendor.country || 'India');
     pincodeFillsLocationRef.current = false;
-    setFormPincode(vendor.pincode || '');
+    setFormPincode(normalizedLoc.pincode);
     setFormRating(typeof vendor.rating === 'number' ? vendor.rating : null);
     setEditModalOpen(true);
   };
@@ -871,8 +882,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         if (emailKey) seenEmails.add(emailKey);
         if (nameKey) seenNames.add(nameKey);
 
-        const city = String(rec.city || '').trim();
-        const state = String(rec.state || '').trim();
+        const loc = resolveVendorLocationFields({
+          address: rec.address ? String(rec.address) : '',
+          location: rec.location ? String(rec.location) : '',
+          factoryAddress: rec.factoryAddress ? String(rec.factoryAddress) : '',
+          city: rec.city ? String(rec.city) : '',
+          state: rec.state ? String(rec.state) : '',
+          pincode: rec.pincode ? String(rec.pincode) : '',
+        });
+        const city = loc.city;
+        const state = loc.state;
         const rawCategory = String(rec.category || rec.majorCategory || '').trim();
         const numericRating = Number(rec.rating);
         const rating =
@@ -888,7 +907,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           email: rawEmail,
           majorCategory: rawCategory,
           minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
-          location: [city, state].filter(Boolean).join(', '),
+          location: loc.location || [city, state].filter(Boolean).join(', '),
           rating,
           source: 'buyer_uploaded',
           status: 'REGISTERED / NOT EVALUATED',
@@ -900,7 +919,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
           ...(city ? { city } : {}),
           ...(state ? { state } : {}),
-          ...(rec.pincode ? { pincode: String(rec.pincode) } : {}),
+          ...(loc.pincode ? { pincode: loc.pincode } : {}),
         });
       });
     });
@@ -908,7 +927,31 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return extras.length > 0 ? [...buyerVendors, ...extras] : buyerVendors;
   }, [buyerVendors, uploadHistoryList, activeBuyerAccount]);
 
-  const mergedVendors = mergeWithEvaluations(reconciledBuyerVendors);
+  const normalizeBuyerVendorEntry = (vendor: VendorEntry): VendorEntry => {
+    const loc = resolveVendorLocationFields({
+      location: vendor.location,
+      factoryAddress: vendor.factoryAddress,
+      city: vendor.city,
+      state: vendor.state,
+      pincode: vendor.pincode,
+    });
+    if (
+      loc.location === (vendor.location || '') &&
+      loc.city === (vendor.city || '') &&
+      loc.state === (vendor.state || '') &&
+      loc.pincode === (vendor.pincode || '')
+    ) {
+      return vendor;
+    }
+    return {
+      ...vendor,
+      ...(loc.location ? { location: loc.location } : {}),
+      ...(loc.city ? { city: loc.city } : {}),
+      ...(loc.state ? { state: loc.state } : {}),
+      ...(loc.pincode ? { pincode: loc.pincode } : {}),
+    };
+  };
+  const mergedVendors = mergeWithEvaluations(reconciledBuyerVendors.map(normalizeBuyerVendorEntry));
   const buyerUploadedVendorsList = mergedVendors.filter(isBuyerUploaded);
 
   // Filter categories dynamically

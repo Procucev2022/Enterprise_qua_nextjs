@@ -6,6 +6,7 @@ import { useApp, getLastHistoricalDataError } from '@/lib/store';
 import {
   formatCurrency,
   normalizePoDate,
+  resolveVendorLocationFields,
   PERIOD_BY_VENDOR_INGESTION_HORIZON,
   VENDOR_INGESTION_HORIZON_BY_PERIOD,
   VENDOR_MAPPING_PAGE_SIZE,
@@ -395,6 +396,12 @@ export default function InitialSetupModal() {
           (mapping.vendorCode !== '' && v.vendorCode === mapping.vendorCode) ||
           (mapping.email !== '' && (v.email || '').toLowerCase() === mapping.email.toLowerCase())
       );
+      const locFields = resolveVendorLocationFields({
+        address: local?.address,
+        city: local?.city,
+        state: local?.state,
+        pincode: local?.pincode,
+      });
       return {
         id: mapping.vendorRecordId,
         vendorCode: mapping.vendorCode || undefined,
@@ -402,7 +409,10 @@ export default function InitialSetupModal() {
         email: mapping.email,
         contactPerson: local?.contactPerson,
         phone: local?.phone ?? '',
-        address: local?.address ?? '',
+        address: locFields.location,
+        ...(locFields.city ? { city: locFields.city } : {}),
+        ...(locFields.state ? { state: locFields.state } : {}),
+        ...(locFields.pincode ? { pincode: locFields.pincode } : {}),
         gstNumber: local?.gstNumber ?? '',
         vendorRatingScore: local?.vendorRatingScore,
         hasPoHistory: mapping.hasPoHistory,
@@ -632,6 +642,9 @@ export default function InitialSetupModal() {
                     email: String(rec.email || ''),
                     phone: String(rec.phone || ''),
                     address: String(rec.address || ''),
+                    ...(rec.city ? { city: String(rec.city) } : {}),
+                    ...(rec.state ? { state: String(rec.state) } : {}),
+                    ...(rec.pincode ? { pincode: String(rec.pincode) } : {}),
                     gstNumber: String(rec.gstin || ''),
                     vendorRatingScore: typeof rec.rating === 'number' ? rec.rating : undefined,
                   }))
@@ -871,7 +884,20 @@ export default function InitialSetupModal() {
             const phone = parsedPhone.isValid && parsedPhone.nationalNumber
               ? `+91 ${parsedPhone.nationalNumber}`
               : rawPhone;
-            const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address', 'plant', 'state', 'pincode', 'pin code']);
+            const explicitAddress = getVal(['address', 'location', 'plant location', 'street', 'office address', 'plant']);
+            const explicitCity = getVal(['city', 'town', 'district']);
+            const explicitState = getVal(['state', 'province', 'region']);
+            const explicitPincode = getVal(['pincode', 'pin code', 'pin', 'zip', 'zipcode', 'zip code', 'postal code']);
+            const resolvedLoc = resolveVendorLocationFields({
+              address: explicitAddress || explicitCity || explicitState || explicitPincode,
+              city: explicitCity,
+              state: explicitState,
+              pincode: explicitPincode,
+            });
+            const address = resolvedLoc.location;
+            const city = resolvedLoc.city;
+            const state = resolvedLoc.state;
+            const pincode = resolvedLoc.pincode;
             const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']);
             const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
             let vendorRatingScore: number | undefined = undefined;
@@ -892,6 +918,9 @@ export default function InitialSetupModal() {
               email,
               phone,
               address,
+              ...(city ? { city } : {}),
+              ...(state ? { state } : {}),
+              ...(pincode ? { pincode } : {}),
               gstNumber,
               vendorRatingScore,
             };
@@ -1000,17 +1029,28 @@ export default function InitialSetupModal() {
               imported: parsedVendors.length,
               duplicates: 0,
               failed: 0,
-              records: parsedVendors.slice(0, 100).map((v) => ({
-                vendorCode: v.vendorCode,
-                name: v.companyName,
-                contactPerson: v.contactPerson,
-                email: v.email,
-                phone: v.phone,
-                gstin: v.gstNumber,
-                category: 'Vendor Master',
-                city: v.address,
-                rating: v.vendorRatingScore,
-              })),
+              records: parsedVendors.slice(0, 100).map((v) => {
+                const loc = resolveVendorLocationFields({
+                  address: v.address,
+                  city: v.city,
+                  state: v.state,
+                  pincode: v.pincode,
+                });
+                return {
+                  vendorCode: v.vendorCode,
+                  name: v.companyName,
+                  contactPerson: v.contactPerson,
+                  email: v.email,
+                  phone: v.phone,
+                  gstin: v.gstNumber,
+                  category: 'Vendor Master',
+                  address: loc.address || v.address,
+                  city: loc.city,
+                  ...(loc.state ? { state: loc.state } : {}),
+                  ...(loc.pincode ? { pincode: loc.pincode } : {}),
+                  rating: v.vendorRatingScore,
+                };
+              }),
             };
             const updatedHistory = [historyEntry, ...existingHistory.filter((x: any) => x.fileName !== file.name)].slice(0, 30);
             localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
@@ -1453,6 +1493,12 @@ export default function InitialSetupModal() {
       const parsedP = parseVendorMobile(v.phone);
       const cleanPhone = parsedP.isValid && parsedP.nationalNumber ? `+91 ${parsedP.nationalNumber}` : v.phone;
 
+      const locFields = resolveVendorLocationFields({
+        address: v.address,
+        city: v.city,
+        state: v.state,
+        pincode: v.pincode,
+      });
       return {
         id: v.id,
         vendorCode: v.vendorCode,
@@ -1460,7 +1506,10 @@ export default function InitialSetupModal() {
         email: v.email,
         contactPerson: v.contactPerson,
         phone: cleanPhone,
-        address: v.address,
+        address: locFields.location || v.address,
+        ...(locFields.city ? { city: locFields.city } : {}),
+        ...(locFields.state ? { state: locFields.state } : {}),
+        ...(locFields.pincode ? { pincode: locFields.pincode } : {}),
         gstNumber: v.gstNumber,
         vendorRatingScore: v.vendorRatingScore,
         hasPoHistory: hasMatchingPOs,
@@ -1480,7 +1529,21 @@ export default function InitialSetupModal() {
   // Editable Vendor Master Table Handlers
   const handleUpdateVendorField = (id: string, field: keyof VendorMasterUploadRecord, value: any) => {
     setStoredVendors((prev) =>
-      prev.map((v) => (v.id === id ? { ...v, [field]: value } : v))
+      prev.map((v) => {
+        if (v.id !== id) return v;
+        if (field === 'address') {
+          const nextAddress = String(value || '');
+          const loc = resolveVendorLocationFields({ address: nextAddress });
+          return {
+            ...v,
+            address: nextAddress,
+            city: loc.city,
+            state: loc.state,
+            pincode: loc.pincode,
+          };
+        }
+        return { ...v, [field]: value };
+      })
     );
   };
 

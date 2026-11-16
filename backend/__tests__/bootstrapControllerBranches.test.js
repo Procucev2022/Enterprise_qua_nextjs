@@ -359,6 +359,7 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
       { id: 'rec-existing-code', vendorCode: 'VC-DUP', companyName: 'Existing Code Co', email: 'newemail@co.test' },
       { id: 'rec-empty', vendorCode: '', companyName: '', email: '' },
       { id: 'rec-new-1', vendorCode: 'VC-10', companyName: 'Testing CSV Co', email: 'csv@co.test', contactPerson: 'Veera', phone: '9999999999', address: 'Hyderabad', gstin: '36ABCDE1234F1Z5', rating: 4.6 },
+      { id: 'rec-new-pin', vendorCode: 'VC-11', companyName: 'Veera Solutions Pvt LTD', email: 'veerababu@procucev.com', contactPerson: 'Veera', phone: '9381877013', address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037', gstin: '27AAACK3921P1Z9', rating: null },
       { id: 'rec-new-2', vendorCode: '', companyName: '', email: 'emailonly@co.test', rating: null },
     ]);
     jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
@@ -375,14 +376,25 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     await bootstrapController.getBootstrap(req, res, jest.fn());
 
     expect(res.statusCode).toBe(200);
-    expect(res.data.data.vendorsTotal).toBe(4);
+    expect(res.data.data.vendorsTotal).toBe(5);
     const csvVendor = res.data.data.vendors.find((v) => v.id === 'v-master-rec-new-1');
+    const pinVendor = res.data.data.vendors.find((v) => v.id === 'v-master-rec-new-pin');
     const emailOnlyVendor = res.data.data.vendors.find((v) => v.id === 'v-master-rec-new-2');
     expect(csvVendor).toMatchObject({
       name: 'Testing CSV Co',
+      city: 'Hyderabad',
+      state: 'Telangana',
+      pincode: null,
       rating: 4.6,
       source: 'vendor_master_ingestion',
       addedByBuyerCompany: 'Veera solutions pvt ltd',
+    });
+    expect(pinVendor).toMatchObject({
+      name: 'Veera Solutions Pvt LTD',
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
     });
     expect(emailOnlyVendor).toMatchObject({ name: 'emailonly@co.test', rating: null });
     expect(res.data.data.evaluations.map((e) => e.id)).toEqual(['ev-1']);

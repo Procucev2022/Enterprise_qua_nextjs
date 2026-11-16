@@ -654,3 +654,124 @@ describe('parseRfqTimestamp', () => {
     expect(parseRfqTimestamp(value)).toBeNull();
   });
 });
+
+describe('Indian address location extraction helpers', () => {
+  const {
+    looksLikeCombinedAddress,
+    extractIndianAddressLocation,
+    resolveVendorLocationFields,
+  } = require('@/lib/constants');
+
+  it('detects combined address strings vs plain city names', () => {
+    expect(looksLikeCombinedAddress('')).toBe(false);
+    expect(looksLikeCombinedAddress(null)).toBe(false);
+    expect(looksLikeCombinedAddress('Bengaluru')).toBe(false);
+    expect(looksLikeCombinedAddress('Kolkata, WB')).toBe(true);
+    expect(looksLikeCombinedAddress('Bengaluru 560037')).toBe(true);
+    expect(looksLikeCombinedAddress('12 MG Road')).toBe(true);
+    expect(looksLikeCombinedAddress('Navi Mumbai')).toBe(false);
+    expect(looksLikeCombinedAddress('AECS Layout')).toBe(true);
+  });
+
+  it('extracts city, state, and pincode from full Indian street addresses and aliases', () => {
+    expect(extractIndianAddressLocation(null)).toEqual({ city: '', state: '', pincode: '' });
+    expect(
+      extractIndianAddressLocation('302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037')
+    ).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(
+      extractIndianAddressLocation('Plot 18, Chakan MIDC, Pune, Maharashtra - 410501, India')
+    ).toEqual({
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '410501',
+    });
+    expect(extractIndianAddressLocation('Bangalore - 560038')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560038',
+    });
+    expect(extractIndianAddressLocation('Sector 17, Chandigarh - 160017')).toEqual({
+      city: 'Chandigarh',
+      state: 'Chandigarh',
+      pincode: '160017',
+    });
+    expect(extractIndianAddressLocation('New Delhi - 110001')).toEqual({
+      city: 'New Delhi',
+      state: 'Delhi',
+      pincode: '110001',
+    });
+    expect(extractIndianAddressLocation('Kundalahalli Bengaluru 560037')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(extractIndianAddressLocation('Gujarat')).toEqual({
+      city: '',
+      state: 'Gujarat',
+      pincode: '',
+    });
+    expect(extractIndianAddressLocation('12345, CustomTown, MH')).toEqual({
+      city: 'CustomTown',
+      state: 'Maharashtra',
+      pincode: '',
+    });
+    expect(extractIndianAddressLocation('302, Sharada, AECS Layout')).toEqual({
+      city: '',
+      state: '',
+      pincode: '',
+    });
+  });
+
+  it('reconciles stuffed city values and explicit address/city/state/pincode inputs', () => {
+    expect(resolveVendorLocationFields(null)).toEqual({
+      location: '',
+      address: '',
+      city: '',
+      state: '',
+      pincode: '',
+    });
+    expect(
+      resolveVendorLocationFields({
+        city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      })
+    ).toEqual({
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(
+      resolveVendorLocationFields({
+        address: 'Plot 5, Whitefield',
+        city: 'Bengaluru',
+        state: 'ka',
+        pincode: '560 066',
+      })
+    ).toEqual({
+      location: 'Plot 5, Whitefield',
+      address: 'Plot 5, Whitefield',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560066',
+    });
+    expect(resolveVendorLocationFields({ city: 'Nagpur' })).toEqual({
+      location: 'Nagpur, Maharashtra',
+      address: '',
+      city: 'Nagpur',
+      state: 'Maharashtra',
+      pincode: '',
+    });
+    expect(resolveVendorLocationFields({ state: 'Texas', pincode: '78701' })).toEqual({
+      location: 'Texas',
+      address: '',
+      city: '',
+      state: 'Texas',
+      pincode: '78701',
+    });
+  });
+});

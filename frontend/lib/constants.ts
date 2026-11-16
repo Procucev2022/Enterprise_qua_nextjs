@@ -1466,6 +1466,270 @@ export function getCitiesForState(state: string): string[] {
   return key ? [...INDIAN_STATES_AND_CITIES[key]].sort((a, b) => a.localeCompare(b)) : [];
 }
 
+const INDIAN_STATE_CODE_ABBREVIATIONS: Record<string, string> = {
+  ap: 'Andhra Pradesh',
+  ar: 'Arunachal Pradesh',
+  as: 'Assam',
+  br: 'Bihar',
+  cg: 'Chhattisgarh',
+  ct: 'Chhattisgarh',
+  ga: 'Goa',
+  gj: 'Gujarat',
+  hr: 'Haryana',
+  hp: 'Himachal Pradesh',
+  jh: 'Jharkhand',
+  jk: 'Jammu and Kashmir',
+  ka: 'Karnataka',
+  kl: 'Kerala',
+  la: 'Ladakh',
+  ld: 'Lakshadweep',
+  mp: 'Madhya Pradesh',
+  mh: 'Maharashtra',
+  mn: 'Manipur',
+  ml: 'Meghalaya',
+  mz: 'Mizoram',
+  nl: 'Nagaland',
+  od: 'Odisha',
+  or: 'Odisha',
+  pb: 'Punjab',
+  py: 'Puducherry',
+  rj: 'Rajasthan',
+  sk: 'Sikkim',
+  tn: 'Tamil Nadu',
+  ts: 'Telangana',
+  tg: 'Telangana',
+  tr: 'Tripura',
+  up: 'Uttar Pradesh',
+  uk: 'Uttarakhand',
+  ua: 'Uttarakhand',
+  wb: 'West Bengal',
+  dl: 'Delhi',
+  ch: 'Chandigarh',
+  an: 'Andaman and Nicobar Islands',
+};
+
+const INDIAN_STATE_SPELLING_ALIASES: Record<string, string> = {
+  orissa: 'Odisha',
+  pondicherry: 'Puducherry',
+  uttaranchal: 'Uttarakhand',
+  tamilnadu: 'Tamil Nadu',
+  maharastra: 'Maharashtra',
+  karnatka: 'Karnataka',
+  telengana: 'Telangana',
+  'nct of delhi': 'Delhi',
+};
+
+const INDIAN_CITY_SPELLING_ALIASES: ReadonlyArray<readonly [string, string, string]> = [
+  ['bangalore', 'Bengaluru', 'Karnataka'],
+  ['gurgaon', 'Gurugram', 'Haryana'],
+  ['bombay', 'Mumbai', 'Maharashtra'],
+  ['calcutta', 'Kolkata', 'West Bengal'],
+  ['madras', 'Chennai', 'Tamil Nadu'],
+  ['cochin', 'Kochi', 'Kerala'],
+  ['trivandrum', 'Thiruvananthapuram', 'Kerala'],
+  ['calicut', 'Kozhikode', 'Kerala'],
+  ['mysore', 'Mysuru', 'Karnataka'],
+  ['mangalore', 'Mangaluru', 'Karnataka'],
+  ['hubli', 'Hubballi', 'Karnataka'],
+  ['belgaum', 'Belagavi', 'Karnataka'],
+  ['baroda', 'Vadodara', 'Gujarat'],
+  ['poona', 'Pune', 'Maharashtra'],
+  ['allahabad', 'Prayagraj', 'Uttar Pradesh'],
+  ['benares', 'Varanasi', 'Uttar Pradesh'],
+  ['vizag', 'Visakhapatnam', 'Andhra Pradesh'],
+];
+
+const CITY_STATE_TERRITORIES = new Set(['Delhi', 'Chandigarh', 'Puducherry']);
+const STREET_FRAGMENT_PATTERN = /\b(plot|flat|floor|flr|door|no\.?|street|st|road|rd|lane|cross|main|sector|sec|phase|layout|colony|enclave|estate|midc|gidc|sez|park|tower|building|bldg|complex|near|opp|behind|beside)\b/i;
+const INDIAN_PINCODE_TOKEN_REGEX = /\b([1-9]\d{5})\b/g;
+
+let cachedAddressIndexes: {
+  stateByLower: Map<string, string>;
+  cityToInfo: Map<string, { city: string; state: string }>;
+} | null = null;
+
+function getIndianAddressIndexes() {
+  if (cachedAddressIndexes) return cachedAddressIndexes;
+  const stateByLower = new Map<string, string>();
+  const cityToInfo = new Map<string, { city: string; state: string }>();
+
+  for (const [stateName, cities] of Object.entries(INDIAN_STATES_AND_CITIES)) {
+    stateByLower.set(stateName.toLowerCase(), stateName);
+    for (const rawCity of cities) {
+      const lower = rawCity.toLowerCase();
+      if (!cityToInfo.has(lower)) {
+        cityToInfo.set(lower, { city: rawCity, state: stateName });
+      }
+      const baseName = rawCity.replace(/\s*\([^)]+\)\s*$/, '').trim();
+      const baseLower = baseName.toLowerCase();
+      if (baseName && baseLower !== lower && !cityToInfo.has(baseLower)) {
+        cityToInfo.set(baseLower, { city: baseName, state: stateName });
+      }
+    }
+  }
+
+  for (const [alias, canonical] of Object.entries(INDIAN_STATE_SPELLING_ALIASES)) {
+    stateByLower.set(alias, canonical);
+  }
+  for (const [abbr, canonical] of Object.entries(INDIAN_STATE_CODE_ABBREVIATIONS)) {
+    stateByLower.set(abbr, canonical);
+  }
+  for (const [alias, canonicalCity, canonicalState] of INDIAN_CITY_SPELLING_ALIASES) {
+    if (!cityToInfo.has(alias)) {
+      cityToInfo.set(alias, { city: canonicalCity, state: canonicalState });
+    }
+  }
+
+  cachedAddressIndexes = { stateByLower, cityToInfo };
+  return cachedAddressIndexes;
+}
+
+/**
+ * Returns true when a single field appears to hold a full multi-segment address
+ * (commas, 6-digit PIN, leading door/plot digits, or street descriptors) rather than a plain city name.
+ */
+export function looksLikeCombinedAddress(value?: string | null): boolean {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return false;
+  if (/[,;]/.test(trimmed)) return true;
+  if (/\b[1-9]\d{5}\b/.test(trimmed)) return true;
+  if (/^\d+[\s,/-]/.test(trimmed)) return true;
+  return STREET_FRAGMENT_PATTERN.test(trimmed);
+}
+
+/**
+ * Extracts structured city, state, and 6-digit PIN code from a free-form Indian
+ * street address or combined location string.
+ */
+export function extractIndianAddressLocation(rawInput?: string | null): {
+  city: string;
+  state: string;
+  pincode: string;
+} {
+  const raw = String(rawInput || '').trim();
+  if (!raw) return { city: '', state: '', pincode: '' };
+
+  const { stateByLower, cityToInfo } = getIndianAddressIndexes();
+  const pinMatches = raw.match(INDIAN_PINCODE_TOKEN_REGEX);
+  const pincode = pinMatches ? pinMatches[pinMatches.length - 1] : '';
+
+  const withoutPins = raw
+    .replace(/[-–—,()\s]*\b[1-9]\d{5}\b[-–—,()\s]*/g, ', ')
+    .replace(/(?:[,;\s]+)(?:india|bharat)\.?$/i, '')
+    .trim();
+
+  const rawSegments = withoutPins
+    .split(/[,;]+/)
+    .flatMap((part) => part.split(/\s+[-–—]\s+/))
+    .map((part) => part.trim())
+    .filter((part) => Boolean(part) && !/^(?:india|bharat)$/i.test(part));
+
+  let city = '';
+  let state = '';
+  let matchedCityState = '';
+  let fallbackCandidate = '';
+
+  for (let i = rawSegments.length - 1; i >= 0; i--) {
+    const segment = rawSegments[i];
+    if (!/[a-z]/i.test(segment)) continue;
+    const lower = segment.toLowerCase();
+
+    const matchedState = stateByLower.get(lower);
+    if (matchedState) {
+      if (!state) state = matchedState;
+      if (CITY_STATE_TERRITORIES.has(matchedState) && lower.length > 2) {
+        matchedCityState = matchedState;
+      }
+      continue;
+    }
+
+    if (!city) {
+      const exactCity = cityToInfo.get(lower);
+      if (exactCity) {
+        city = exactCity.city;
+        if (!state) state = exactCity.state;
+        continue;
+      }
+
+      const words = segment.split(/\s+/).filter(Boolean);
+      for (const size of [2, 1]) {
+        if (words.length > size) {
+          const suffix = words.slice(-size).join(' ').toLowerCase();
+          if (suffix.length >= 4) {
+            const suffixCity = cityToInfo.get(suffix);
+            if (suffixCity) {
+              city = suffixCity.city;
+              if (!state) state = suffixCity.state;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!city && !fallbackCandidate && !/^\d/.test(segment) && !STREET_FRAGMENT_PATTERN.test(segment)) {
+        fallbackCandidate = segment;
+      }
+    }
+  }
+
+  if (!city && matchedCityState) {
+    city = matchedCityState;
+  }
+  if (!city && fallbackCandidate && (state || pincode || (rawSegments.length <= 2 && !/\d/.test(raw)))) {
+    city = fallbackCandidate;
+  }
+
+  return { city, state, pincode };
+}
+
+/**
+ * Reconciles supplier location fields across address, location, factoryAddress, city, state, and pincode,
+ * recovering clean city/state/pincode values even when an earlier import stored the full address inside city.
+ */
+export function resolveVendorLocationFields(input?: {
+  address?: string | null;
+  location?: string | null;
+  factoryAddress?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pincode?: string | null;
+} | null): {
+  location: string;
+  address: string;
+  city: string;
+  state: string;
+  pincode: string;
+} {
+  if (!input) {
+    return { location: '', address: '', city: '', state: '', pincode: '' };
+  }
+  const clean = (val?: string | null) => String(val || '').trim();
+  const rawAddress = clean(input.address || input.location || input.factoryAddress);
+  const rawCity = clean(input.city);
+  const rawState = clean(input.state);
+  const rawPincode = clean(input.pincode).replace(/\s+/g, '');
+
+  const cityIsCombined = looksLikeCombinedAddress(rawCity);
+  const combinedSource = rawAddress || (cityIsCombined ? rawCity : '');
+  const extracted = extractIndianAddressLocation(combinedSource);
+  const cityInfo = rawCity && !cityIsCombined ? extractIndianAddressLocation(rawCity) : { city: '', state: '', pincode: '' };
+
+  let state = '';
+  if (rawState) {
+    const { stateByLower } = getIndianAddressIndexes();
+    state = stateByLower.get(rawState.toLowerCase()) || rawState;
+  } else {
+    state = extracted.state || cityInfo.state || '';
+  }
+
+  const city = !cityIsCombined && rawCity ? rawCity : extracted.city || '';
+  const pincode = rawPincode || extracted.pincode || '';
+  const address = rawAddress || (cityIsCombined ? rawCity : '');
+  const location = address || [city, state].filter(Boolean).join(', ');
+
+  return { location, address, city, state, pincode };
+}
+
 
 /**
  * Parse a raw search query into discrete search tokens.

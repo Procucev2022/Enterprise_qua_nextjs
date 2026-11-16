@@ -35,6 +35,7 @@ const {
   VENDOR_EMAIL_STATUS,
   VENDOR_DISPATCH_STATUS,
   VENDOR_INGESTION_CONFIG,
+  resolveVendorLocationFields,
 } = require('../config/constants');
 
 /** Application-assigned id, matching the VARCHAR(64) convention of every table. */
@@ -507,7 +508,26 @@ const VENDOR_MASTER_SELECT = `
          created_at, updated_at, raw
     from vendor_master_records`;
 
+function parseRawRecord(rawValue) {
+  if (!rawValue) return {};
+  if (typeof rawValue === 'object') return rawValue;
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function mapRowToVendorMaster(row) {
+  const rawMeta = parseRawRecord(row.raw);
+  const address = text(row.address) || text(rawMeta.address) || text(rawMeta.location);
+  const loc = resolveVendorLocationFields({
+    address,
+    city: text(rawMeta.city),
+    state: text(rawMeta.state),
+    pincode: text(rawMeta.pincode),
+  });
   return {
     id: row.id,
     sessionId: row.session_id,
@@ -519,7 +539,10 @@ function mapRowToVendorMaster(row) {
     contactPerson: text(row.contact_person),
     email: text(row.email),
     phone: text(row.phone),
-    address: text(row.address),
+    address,
+    city: loc.city,
+    state: loc.state,
+    pincode: loc.pincode,
     gstin: text(row.gstin),
     rating: numeric(row.rating),
     createdAt: row.created_at,

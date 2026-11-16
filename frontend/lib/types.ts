@@ -1386,6 +1386,9 @@ export interface VendorMasterUploadRecord {
   email: string;
   phone: string;
   address: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   gstNumber: string;
   vendorRatingScore?: number; // 0 to 100 (Optional)
 }
@@ -1415,6 +1418,9 @@ export interface HistoricalPurchaseVendorRecord {
   contactPerson?: string;
   phone: string;
   address: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   gstNumber: string;
   vendorRatingScore?: number; // 0 to 100 (Optional)
   hasPoHistory: boolean; // True if PO line items were found in PO dump

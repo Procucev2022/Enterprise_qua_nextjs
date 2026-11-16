@@ -408,7 +408,10 @@ describe('buyer category review and vendor empanelment', () => {
   });
 
   test('attributes empanelled vendor to resolved buyer account and preserves existing vendor ownership on update', async () => {
-    queries.findVendorMasterRecord.mockResolvedValue(VENDOR_ROW);
+    queries.findVendorMasterRecord.mockResolvedValue({
+      ...VENDOR_ROW,
+      address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+    });
     store.ensureBuyerAccountForUser.mockResolvedValueOnce({ id: 'ba-99', corporateEmail: 'corp@buyer.test' });
     store.getVendorByIdWithDBFallback.mockResolvedValueOnce({ id: 'v-existing-99', buyerId: 'ba-prev', buyerEmail: 'prev@buyer.test' });
     store.updateVendorDurably.mockResolvedValueOnce({ id: 'v-existing-99', buyerId: 'ba-prev' });
@@ -419,6 +422,10 @@ describe('buyer category review and vendor empanelment', () => {
       buyerId: 'ba-prev',
       buyerAccountId: 'ba-99',
       buyerEmail: 'prev@buyer.test',
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
     }));
   });
 });

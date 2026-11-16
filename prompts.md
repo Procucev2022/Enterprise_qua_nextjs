@@ -6044,3 +6044,10 @@ This email should go to
 gmtrfq@procucev.com, anshul , veerababu, remove quateam
 ```
 ---
+
+### Prompt 236
+**Timestamp**: 2026-11-16T10:12:44+05:30
+```text
+the Buyer Uploaded Vendor section, the City, State, and Pincode fields are not being populated. Please check and fix this issue.
+```
+---

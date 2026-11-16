@@ -76,6 +76,29 @@ describe('ingestion value conversion', () => {
     expect(queries.mapRowToSession(RECORD)).toMatchObject({ organizationId: ORG, currentStep: 2, horizonStart: '2026-01-01', meta: { source: 'workbook' } });
     expect(queries.mapRowToSession({})).toMatchObject({ currentStep: 0, meta: {}, horizonStart: null });
     expect(queries.mapRowToVendorMaster(RECORD)).toMatchObject({ companyName: 'Supplier Ltd.', vendorCode: 'V-1', rating: 4.2 });
+    expect(
+      queries.mapRowToVendorMaster({
+        ...RECORD,
+        address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+        raw: JSON.stringify({ city: 'Bengaluru', state: 'Karnataka', pincode: '560037' }),
+      })
+    ).toMatchObject({
+      address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(
+      queries.mapRowToVendorMaster({
+        ...RECORD,
+        address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+        raw: '{broken-json',
+      })
+    ).toMatchObject({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
     expect(queries.mapRowToMapping(RECORD)).toMatchObject({ hasPoHistory: true, isNewCategorySuggestion: true, totalSpend: 1000, aiSuggestion: { minorCategories: ['Valves'] } });
     expect(queries.mapRowToMapping({ has_po_history: true, is_new_category_suggestion: false })).toMatchObject({ hasPoHistory: true, isNewCategorySuggestion: false });
     expect(queries.mapRowToMapping({ has_po_history: '1', is_new_category_suggestion: 0 })).toMatchObject({ hasPoHistory: true, isNewCategorySuggestion: false });
