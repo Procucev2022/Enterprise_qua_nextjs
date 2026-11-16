@@ -1405,5 +1405,36 @@ describe('_updateLiveFollowUpStats coverage', () => {
       storeService.getRFQById.mockReturnValue(null);
       scheduler._updateLiveFollowUpStats('UNKNOWN-RFQ', 'sms', VENDOR);
     });
+
+    test('batch-marks multiple fired chaser jobs in a single DB query and falls back for unhydrated SMS phones', async () => {
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      const storeService = require('../src/services/storeService');
+      const origHydrated = storeService.isHydratedFromDB;
+      storeService.isHydratedFromDB = false;
+      try {
+        jest.spyOn(storeService, 'getVendorById').mockReturnValue(undefined);
+        const fallbackSpy = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue({
+          id: 'v-sms-no-phone',
+          phone: '9988776655',
+        });
+        jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue([
+          { id: 'job-batch-call-1', rfq_number: 'RFQ-B-1', channel: 'call', vendor_id: 'v-call', attempts: 1 },
+          { id: 'job-batch-sms-2', rfq_number: 'RFQ-B-1', channel: 'sms', vendor_id: 'v-sms-no-phone', vendor_name: 'SMS Co', attempts: 1 },
+        ]);
+        jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue({ rfqNumber: 'RFQ-B-1', title: 'Batch Chaser' });
+        jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-fallback' });
+        const batchSpy = jest.spyOn(domainQueries, 'markChaserJobsFiredInDB').mockResolvedValue(2);
+
+        const res = await scheduler.dispatchDueChaserJobs(10);
+
+        expect(res).toEqual({ claimed: 2, sent: 1, failed: 0, skipped: 1 });
+        expect(fallbackSpy).toHaveBeenCalledWith('v-sms-no-phone', 'all');
+        expect(batchSpy).toHaveBeenCalledWith(['job-batch-call-1', 'job-batch-sms-2']);
+      } finally {
+        storeService.isHydratedFromDB = origHydrated;
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+    });
   });
 });

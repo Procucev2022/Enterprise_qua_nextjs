@@ -489,6 +489,8 @@ class StoreService {
       this.auditLogs = auditLogs;
 
       this.isHydratedFromDB = true;
+      this._lastRfqSyncTime = Date.now();
+      this._lastRfqSyncMap.clear();
       // The admin infrastructure list should describe the connection this load
       // just used, not a placeholder, so it is refreshed off the same boot.
       await this.refreshInfrastructureHealth().catch((err) =>
@@ -2716,8 +2718,9 @@ class StoreService {
   /**
    * Retrieves authoritative RFQ download credit balance & stats for a vendor.
    */
-  getVendorRfqCredits(vendorIdOrEmail) {
-    const vendor = this.getVendorById(vendorIdOrEmail, 'all');
+  getVendorRfqCredits(vendorIdOrEmail, resolvedVendor = null) {
+    const vendor = (resolvedVendor && typeof resolvedVendor === 'object' ? resolvedVendor : null)
+      || this.getVendorById(vendorIdOrEmail, 'all');
     if (!vendor) {
       return {
         vendorId: vendorIdOrEmail,
@@ -3942,6 +3945,10 @@ class StoreService {
         }
         return closed;
       }, []);
+    }
+
+    if (pool.hasStorage() && closedList.length > 0 && !this.isHydratedFromDB) {
+      await this.hydrateFromDB().catch(() => {});
     }
 
     for (const updated of closedList) {
@@ -6005,7 +6012,11 @@ class StoreService {
     const freshRfq = this.getRFQById(rfq.id || rfq.rfqNumber) || rfq;
     const quotes = Array.isArray(freshRfq.quotes) ? freshRfq.quotes : [];
     const buyerEmail = this.resolveBuyerEmailForRFQ(freshRfq);
-    const buyer = (freshRfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === freshRfq.buyerAccountId)) || {
+    let matchedBuyer = freshRfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === freshRfq.buyerAccountId);
+    if (!matchedBuyer && buyerEmail && pool.hasStorage()) {
+      matchedBuyer = await this.getBuyerAccountByEmail(buyerEmail).catch(() => null);
+    }
+    const buyer = matchedBuyer || {
       id: freshRfq.buyerAccountId || null,
       corporateEmail: buyerEmail,
       organizationName: freshRfq.buyerAccountName || freshRfq.buyerName || 'Buyer',
@@ -6406,6 +6417,18 @@ class StoreService {
     return this.getNotificationsFor(recipientType, recipientId).filter((n) => !n.read).length;
   }
 
+  /** Direct per-recipient notification query on unhydrated isolates; uses in-memory store once hydrated. */
+  async getNotificationsSummaryForDurably(recipientType, recipientId, limit = 50) {
+    if (!recipientType || !recipientId) return { data: [], unreadCount: 0 };
+    if (pool.hasStorage() && !this.isHydratedFromDB && typeof domainQueries.getNotificationsForRecipientFromDB === 'function') {
+      return domainQueries.getNotificationsForRecipientFromDB(recipientType, recipientId, limit);
+    }
+    return {
+      data: this.getNotificationsFor(recipientType, recipientId, limit),
+      unreadCount: this.getUnreadNotificationCountFor(recipientType, recipientId),
+    };
+  }
+
   // Both producers pass a real RFQ and a meta object; keep it that way so this
   // has no defensive branches to leave uncovered.
   _buildNotification({ recipientType, recipientId, kind, rfq, title, message, meta }) {
@@ -6485,16 +6508,21 @@ class StoreService {
     const notification = this.notifications.find(
       (item) => item.id === id && item.recipientType === recipientType && item.recipientId === recipientId
     );
-    if (!notification) return null;
+    if (!notification && this.isHydratedFromDB) return null;
 
     try {
       const persisted = await domainQueries.markNotificationReadInDB(id, recipientType, recipientId);
       if (!persisted) {
-        this.notifications = this.notifications.filter((item) => item.id !== id);
+        if (notification) {
+          this.notifications = this.notifications.filter((item) => item.id !== id);
+        }
         return null;
       }
-      notification.read = true;
-      return notification;
+      if (notification) {
+        notification.read = true;
+        return notification;
+      }
+      return { id, recipientType, recipientId, read: true };
     } catch (error) {
       logger.error('Failed to persist notification read state', error, 'STORE_SERVICE');
       const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);

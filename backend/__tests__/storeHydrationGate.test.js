@@ -1,4 +1,4 @@
-const { createStoreHydrationGate, isLogIngestionRequest } = require('../src/middleware/storeHydrationGate');
+const { createStoreHydrationGate, isLogIngestionRequest, isDirectDatabaseRead } = require('../src/middleware/storeHydrationGate');
 const { D1_OVERLOAD_CONFIG, STORE_HYDRATION_CONFIG } = require('../src/config/constants');
 
 function makeResponse() {
@@ -287,5 +287,23 @@ describe('createStoreHydrationGate', () => {
     await flushPromises();
     expect(deps.storeService.hydrateFromDB).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test('bypasses full-store hydration for direct single-vendor GET routes', () => {
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/v-123' })).toBe(true);
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/user%40example.com/' })).toBe(true);
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/v-123/rfq-credits' })).toBe(true);
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/v-123/payment-links' })).toBe(true);
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/v-123/payment-links/pl-1/invoice' })).toBe(true);
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/bulk-import/session-1' })).toBe(true);
+    expect(isDirectDatabaseRead({ method: 'POST', path: '/api/vendors/v-123' })).toBe(false);
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors' })).toBe(false);
+    expect(isDirectDatabaseRead(null)).toBe(false);
+
+    const { gate, deps } = buildGate();
+    const next = jest.fn();
+    gate(makeRequest({ method: 'GET', path: '/api/vendors/v-123/payment-links' }), makeResponse(), next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(deps.storeService.hydrateFromDB).not.toHaveBeenCalled();
   });
 });

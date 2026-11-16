@@ -2283,6 +2283,49 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await domainQueries.markChaserJobFiredInDB('job-1'); // safe no-op
     });
 
+    test('markChaserJobsFiredInDB deduplicates, delegates singles, and chunks large batches', async () => {
+      pool.pool = null;
+      await expect(domainQueries.markChaserJobsFiredInDB(['job-1'])).resolves.toBe(0);
+
+      const query = jest.fn().mockResolvedValue({ rowCount: 1 });
+      pool.pool = { query };
+      await expect(domainQueries.markChaserJobsFiredInDB([])).resolves.toBe(0);
+      await expect(domainQueries.markChaserJobsFiredInDB(['  ', null])).resolves.toBe(0);
+      expect(query).not.toHaveBeenCalled();
+
+      await expect(domainQueries.markChaserJobsFiredInDB(['job-single', 'job-single'])).resolves.toBe(1);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('WHERE id=$1'), ['job-single']);
+
+      query.mockClear();
+      const manyIds = Array.from({ length: 81 }, (_, idx) => `job-${idx + 1}`);
+      await expect(domainQueries.markChaserJobsFiredInDB(manyIds)).resolves.toBe(81);
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(query.mock.calls[0][0]).toContain('WHERE id IN (');
+      expect(query.mock.calls[0][1]).toHaveLength(80);
+      expect(query.mock.calls[1][1]).toHaveLength(1);
+    });
+
+    test('getNotificationsForRecipientFromDB reads indexed notifications and unread counts directly', async () => {
+      pool.pool = null;
+      await expect(domainQueries.getNotificationsForRecipientFromDB('vendor', 'v-1')).resolves.toEqual({
+        data: [],
+        unreadCount: 0,
+      });
+
+      const ntf = { id: 'ntf-db-1', recipientType: 'vendor', recipientId: 'v-1', read: false };
+      const query = jest.fn()
+        .mockResolvedValueOnce({ rows: [{ raw: JSON.stringify(ntf) }] })
+        .mockResolvedValueOnce({ rows: [{ unread_count: 3 }] });
+      pool.pool = { query };
+
+      const result = await domainQueries.getNotificationsForRecipientFromDB('vendor', 'v-1', 25);
+      expect(result).toEqual({ data: [ntf], unreadCount: 3 });
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(query.mock.calls[0][1]).toEqual(['vendor', 'v-1', 25]);
+      expect(query.mock.calls[1][1]).toEqual(['vendor', 'v-1']);
+    });
+
     test('markChaserJobFailedInDB schedules retry work and caps the terminal failure attempt', async () => {
       const originalNow = Date.now;
       Date.now = jest.fn(() => Date.parse('2026-11-05T00:00:00.000Z'));

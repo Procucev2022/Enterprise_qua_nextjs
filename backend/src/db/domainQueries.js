@@ -31,6 +31,7 @@ const {
   RFQ_CHASER_RETRY_BASE_MS,
   RFQ_CHASER_RETRY_MAX_MS,
   RFQ_CHASER_ERROR_MAX_LENGTH,
+  RFQ_CHASER_BATCH_UPDATE_SIZE,
   D1_NOTIFICATION_INSERT_BATCH_SIZE,
   DATABASE_QUERY_CACHE,
   PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
@@ -2453,6 +2454,40 @@ async function getNotificationsFromDB(recipientId = null, limit = null) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
+/** Indexed per-recipient notification feed and unread count without loading global tables. */
+async function getNotificationsForRecipientFromDB(recipientType, recipientId, limit = 50) {
+  if (!pool.hasStorage() || !recipientType || !recipientId) return { data: [], unreadCount: 0 };
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const [listResult, countResult] = await Promise.all([
+    pool.query(
+      'SELECT raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY sequence DESC LIMIT $3',
+      [recipientType, recipientId, safeLimit],
+      {
+        d1: true,
+        d1Text: 'SELECT raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY rowid DESC LIMIT $3',
+        useCache: true,
+        tag: 'notifications',
+        ttlMs: 15000,
+      }
+    ),
+    pool.query(
+      'SELECT COUNT(*)::int AS unread_count FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false',
+      [recipientType, recipientId],
+      {
+        d1: true,
+        d1Text: 'SELECT CAST(COUNT(*) AS INTEGER) AS unread_count FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = 0',
+        useCache: true,
+        tag: 'notifications',
+        ttlMs: 15000,
+      }
+    ),
+  ]);
+  return {
+    data: listResult.rows.map((row) => parseRaw(row.raw)),
+    unreadCount: Number(countResult.rows?.[0]?.unread_count) || 0,
+  };
+}
+
 async function insertNotificationInDB(notification) {
   if (!pool.hasStorage()) return null;
   const { id, recipientType, recipientId, kind, rfqId, read } = notification;
@@ -2814,6 +2849,30 @@ async function markChaserJobFiredInDB(id) {
     [id],
     { d1: true }
   );
+}
+
+/** Batch-mark multiple dispatched chaser jobs as fired to minimize D1 write roundtrips. */
+async function markChaserJobsFiredInDB(ids) {
+  if (!pool.hasStorage() || !Array.isArray(ids)) return 0;
+  const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) return 0;
+  if (uniqueIds.length === 1) {
+    await markChaserJobFiredInDB(uniqueIds[0]);
+    return 1;
+  }
+  const chunkSize = Math.max(1, RFQ_CHASER_BATCH_UPDATE_SIZE || 80);
+  let updated = 0;
+  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+    const chunk = uniqueIds.slice(i, i + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    await pool.query(
+      `UPDATE chaser_queue SET status='fired', fired_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    updated += chunk.length;
+  }
+  return updated;
 }
 
 /** Record a failed attempt and schedule bounded retry work while attempts remain. */
@@ -3507,6 +3566,7 @@ module.exports = {
   appendAuditLogInDB: auditLogQueries.appendAuditLogInDB,
   upsertAuditLogInDB,
   getNotificationsFromDB,
+  getNotificationsForRecipientFromDB,
   insertNotificationInDB,
   bulkInsertNotificationsInDB,
   markNotificationReadInDB,
@@ -3523,6 +3583,7 @@ module.exports = {
   insertChaserJobInDB,
   insertChaserJobsInDB,
   markChaserJobFiredInDB,
+  markChaserJobsFiredInDB,
   markChaserJobFailedInDB,
   cancelChaserJobsForRFQInDB,
   getPendingChaserJobsFromDB,
