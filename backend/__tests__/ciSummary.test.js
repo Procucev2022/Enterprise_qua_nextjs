@@ -29,7 +29,7 @@ beforeEach(() => {
 
 afterEach(() => {
   if (path.dirname(path.resolve(workspace)) !== path.resolve(os.tmpdir())
-    || !path.basename(workspace).startsWith('procucev-ci-summary-')) {
+      || !path.basename(workspace).startsWith('procucev-ci-summary-')) {
     throw new Error('Refusing to remove an unexpected CI summary fixture directory');
   }
   fs.rmSync(workspace, { recursive: true, force: true });
@@ -115,11 +115,11 @@ test('weights workspace metrics by the number of instrumented items', () => {
 
 test('prints the report and appends the same content to the GitHub step summary', () => {
   const output = path.join(workspace, 'step-summary.md');
-  const log = jest.spyOn(console, 'log').mockImplementation(() => { });
+  const log = jest.spyOn(console, 'log').mockImplementation(() => {});
   const markdown = summary.runCli(workspace, { GITHUB_STEP_SUMMARY: output });
   expect(log).toHaveBeenCalledWith(markdown);
   expect(fs.readFileSync(output, 'utf8')).toBe(markdown);
-  const error = jest.spyOn(console, 'error').mockImplementation(() => { });
+  const error = jest.spyOn(console, 'error').mockImplementation(() => {});
   expect(() => summary.runCli(workspace, { GITHUB_STEP_SUMMARY: path.join(workspace, 'missing/summary.md') })).not.toThrow();
   expect(error).toHaveBeenCalledWith(expect.stringContaining('Failed to append CI summary'));
 });
